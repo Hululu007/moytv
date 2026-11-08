@@ -76,6 +76,19 @@ jobs:
           cache: true
           cache-dependency-path: native/go.sum
 
+      - name: 安装 Python 3.11（Chaquopy 编译期内嵌依赖需要本机解释器）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 确认 Chaquopy 使用的 Python
+        run: |
+          set -e
+          PY="$(command -v python3.11 || command -v python3)"
+          "$PY" --version
+          "$PY" -c "import venv, ensurepip; print('venv/ensurepip OK')"
+          echo "CHAQUOPY_BUILD_PYTHON=$PY" >> "$GITHUB_ENV"
+
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:

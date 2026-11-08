@@ -10,6 +10,8 @@ plugins {
 chaquopy {
     defaultConfig {
         version = "3.11"
+        // CI 上由 workflow 注入 CHAQUOPY_BUILD_PYTHON；本地不设时沿用 Chaquopy 自动探测
+        System.getenv("CHAQUOPY_BUILD_PYTHON")?.takeIf { it.isNotBlank() }?.let { buildPython(it) }
         pip {
             install("requests")
             install("pycryptodome")
