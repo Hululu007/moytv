@@ -1,0 +1,5 @@
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep class org.jsoup.** { *; }
+-keep class com.google.gson.** { *; }
+-keepattributes Signature

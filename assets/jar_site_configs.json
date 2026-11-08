@@ -1,0 +1,910 @@
+{
+  "sites": [
+    {
+      "key": "youtube",
+      "name": "YouTube",
+      "api": "csp_YouTube",
+      "ext": "{\"proxy\":\"\"}"
+    },
+    {
+      "key": "ZakaMjv011",
+      "name": "🔞mjv011",
+      "api": "csp_ZakaMjv011Amns2",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHuangguo",
+      "name": "🔞黄果",
+      "api": "csp_ZakaHuangguoAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHl365",
+      "name": "🔞黑料不打烊",
+      "api": "csp_ZakaHl365Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaLnkl",
+      "name": "🔞lnkl",
+      "api": "csp_ZakaLnklAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHuangdou",
+      "name": "🔞黄豆短剧",
+      "api": "csp_ZakaHuangdouAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaSex8",
+      "name": "🔞sex8┃视频",
+      "api": "csp_ZakaSex8Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHgdjV",
+      "name": "🔞黄果短剧┃视频",
+      "api": "csp_ZakaHgdjVAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaKm2",
+      "name": "🔞新快猫",
+      "api": "csp_ZakaKm2Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaCucumber",
+      "name": "🔞黄瓜视频",
+      "api": "csp_ZakaCucumberAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHaijiao",
+      "name": "🔞海角社区",
+      "api": "csp_ZakaHaijiaoAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaMd",
+      "name": "🔞麻豆",
+      "api": "csp_ZakaMdAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaUtube",
+      "name": "🔞Utube",
+      "api": "csp_ZakaUtubeAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaXj",
+      "name": "🔞香蕉视频",
+      "api": "csp_ZakaXjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaAv91",
+      "name": "🔞av91",
+      "api": "csp_ZakaAv91Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaLxs",
+      "name": "🔞撸先生",
+      "api": "csp_ZakaLxsAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJavrate",
+      "name": "🛡️鉴黄师┃原生",
+      "api": "csp_ZakaJavrateAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakajavverse",
+      "name": "🆕🔞JAV Verse┃资料库+双线路",
+      "api": "csp_ZakaJavverseAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaxszav",
+      "name": "🆕🔞XSZAV┃无码·中文字幕",
+      "api": "csp_ZakaXszavAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakav01",
+      "name": "🆕🔞AV01┃无码破解·多码率",
+      "api": "csp_ZakaAv01Amns",
+      "ext": ""
+    },
+    {
+      "key": "zakaaiye",
+      "name": "🆕🔞爱液视频┃官方App接口",
+      "api": "csp_ZakaAiyeAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakahysxs",
+      "name": "🆕🔞H有声小说┃AES解密直取",
+      "api": "csp_ZakaHysxsAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakapuapua",
+      "name": "🔞PUA独家爆料┃多域直取",
+      "api": "csp_ZakaPuapuaAmns",
+      "ext": ""
+    },
+    {
+      "key": "zaketxfans",
+      "name": "🆕🔞糖心Fans┃设备登录+AES协议",
+      "api": "csp_ZakaTxfansAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakajuyin",
+      "name": "🆕🔞巨婴云播┃静态站整页包壳",
+      "api": "csp_ZakaJuyinAmns",
+      "ext": ""
+    },
+    {
+      "key": "zaka99jj",
+      "name": "🆕🔞久久热┃KVS直取384P",
+      "api": "csp_Zaka99jjAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakadayday",
+      "name": "🆕🔞天天A片┃CF盾绕行上游",
+      "api": "csp_ZakaDaydayAmns",
+      "ext": ""
+    },
+    {
+      "key": "dsav",
+      "name": "🆕🔞DSAV影视┃加密网关直取",
+      "api": "csp_ZakaDsavAmns",
+      "ext": ""
+    },
+    {
+      "key": "kuaihuo",
+      "name": "🆕🔞快活影院┃静态站直取",
+      "api": "csp_ZakaKuaihuoAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakans",
+      "name": "🆕🔞ns视频┃签到破VIP看正片",
+      "api": "csp_ZakaNsAmns",
+      "ext": ""
+    },
+    {
+      "key": "jack20",
+      "name": "🆕🔞後宮電影院┃xvideos聚合",
+      "api": "csp_ZakaJack20Amns",
+      "ext": ""
+    },
+    {
+      "key": "coolinet",
+      "name": "🆕🔞酷愛成人網┃WP全站直取",
+      "api": "csp_ZakaCoolAmns",
+      "ext": ""
+    },
+    {
+      "key": "gqck",
+      "name": "🆕🔞高清仓库┃免登直取",
+      "api": "csp_ZakaGqckAmns",
+      "ext": ""
+    },
+    {
+      "key": "zaka115",
+      "name": "☁️115网盘┃扫码离线",
+      "api": "csp_Zaka115Amns",
+      "ext": ""
+    },
+    {
+      "key": "zakajavpk",
+      "name": "🔞JAVPK┃磁力自动离线",
+      "api": "csp_ZakaJavpkAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaPektino",
+      "name": "🐦 推特涩涩┃PeKtino",
+      "api": "csp_ZakaPektinoAmns",
+      "ext": ""
+    },
+    {
+      "key": "wuyetv",
+      "name": "🕛 午夜TV┃百万精选",
+      "api": "csp_ZakaWyAmns",
+      "ext": ""
+    },
+    {
+      "key": "bhbox",
+      "name": "📦 笔盒┃海量精选",
+      "api": "csp_ZakaBhAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaqmdj",
+      "name": "🔞七猫短剧┃VIP破解",
+      "api": "csp_ZakaQmdjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHxc",
+      "name": "🔞含羞草┃VIP破解",
+      "api": "csp_ZakaHxcAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaUu",
+      "name": "🔞Uu视频┃多线路",
+      "api": "csp_ZakaUuAmns",
+      "ext": ""
+    },
+    {
+      "key": "zaka520av",
+      "name": "🔞520AV影城",
+      "api": "csp_Zaka520avAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHjw",
+      "name": "🔞海角网┃hj2",
+      "api": "csp_ZakaHjwAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHj1",
+      "name": "🔞海角社区┃hj1",
+      "api": "csp_ZakaHj1Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJav380",
+      "name": "🆕🔞JAV380┃無碼",
+      "api": "csp_ZakaJav380Amns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJavher",
+      "name": "🆕🔞JavHer┃JAV庫",
+      "api": "csp_ZakaJavherAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaaoxx69",
+      "name": "🔞AOXX69┃亞洲綜合",
+      "api": "csp_ZakaAoxx69Amns",
+      "ext": ""
+    },
+    {
+      "key": "zakajavmap",
+      "name": "🔞JAVMAP┃日本AV大全",
+      "api": "csp_ZakaJavmapAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakapigav",
+      "name": "🔞PIGAV┃朱古力",
+      "api": "csp_ZakaPigavAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakasihucdn",
+      "name": "🔞四虎┃免盾CDN",
+      "api": "csp_ZakaSihuCdnAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakasihu",
+      "name": "🔞四虎┃4hu",
+      "api": "csp_ZakaSihuAmns",
+      "ext": ""
+    },
+    {
+      "key": "av18avmcg",
+      "name": "🆕🔞18AV主站┃本地代理",
+      "api": "csp_Zaka18avMcgAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaxx9",
+      "name": "🆕🔞XX9┃金币站",
+      "api": "csp_ZakaXx9Amns",
+      "ext": ""
+    },
+    {
+      "key": "Zaka69vj",
+      "name": "🆕🔞69VJ┃xvideos片库",
+      "api": "csp_Zaka69vjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaAvbebe",
+      "name": "🆕🔞Avbebe┃H動畫里番",
+      "api": "csp_ZakaAvbebeAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaAvcnn",
+      "name": "🆕🔞AVCNN┃番号女优",
+      "api": "csp_ZakaAvcnnAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaAvple",
+      "name": "🆕🔞AVPle┃免盾直取",
+      "api": "csp_ZakaAvpleAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJavwine",
+      "name": "🆕🔞JAV.WINE┃日系高清",
+      "api": "csp_ZakaJavwineAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaNjav",
+      "name": "🆕🔞nJAV┃中字无码",
+      "api": "csp_ZakaNjavAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJavhd",
+      "name": "🆕🔞JavHD中文字幕┃日本管",
+      "api": "csp_ZakaJavhdAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaBaoyu",
+      "name": "🆕🔞鲍鱼盒子┃App直连",
+      "api": "csp_ZakaBaoyuAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaQysq",
+      "name": "🆕🔞妻友社区┃阅妹阁模块",
+      "api": "csp_ZakaQysqAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHgdj",
+      "name": "🔞黄果短剧┃AI成人短剧",
+      "api": "csp_ZakaHgdjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaHgdjApp",
+      "name": "🆕🔞黄果短剧App┃App网关",
+      "api": "csp_ZakaHgdjAppAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakahzai747",
+      "name": "🔞盒子AI视频┃747专线",
+      "api": "csp_ZakaHzaiAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaseku",
+      "name": "🔞阅妹阁┃App原版62站",
+      "api": "csp_ZakaSekuAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakakp14",
+      "name": "🔞看片站群┃App挖出14站",
+      "api": "csp_ZakaYueMGeAmns",
+      "ext": ""
+    },
+    {
+      "key": "zaka-yue2",
+      "name": "🔞阅妹阁模块2┃JavDB+51吃瓜",
+      "api": "csp_ZakaYueMGe2Amns",
+      "ext": ""
+    },
+    {
+      "key": "zakafq",
+      "name": "🔞番茄视频┃免登入直取",
+      "api": "csp_ZakaFqAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakawnzs",
+      "name": "🔞WNZS┃网络杀手",
+      "api": "csp_ZakaWnzsAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakahzai",
+      "name": "🔞盒子AI视频┃原生",
+      "api": "csp_ZakaHzaiAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaXme",
+      "name": "🔞樱桃破解┃站群直连",
+      "api": "csp_ZakaXmeAmns",
+      "ext": "{\"channelCode\":\"5051\"}"
+    },
+    {
+      "key": "zakatudou",
+      "name": "🔞土豆视频┃原生",
+      "api": "csp_ZakaTudouAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaxjh5",
+      "name": "🍌香蕉视频H5┃免登入",
+      "api": "csp_ZakaXjH5Amns",
+      "ext": ""
+    },
+    {
+      "key": "zakaykf",
+      "name": "🔞快播至臻版┃下载页直取",
+      "api": "csp_ZakaYkfAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakaxj",
+      "name": "🍌香蕉视频┃免登入直取",
+      "api": "csp_ZakaXjAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakakfz",
+      "name": "🔞K站┃密钥直取",
+      "api": "csp_ZakaKfzAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaMissav",
+      "name": "🔞MissAV官方┃过盾",
+      "api": "csp_ZakaMissavAmns",
+      "ext": "{\"base\":\"https://tv506.ystv.top\",\"miss\":\"https://missav.ws286.ystv.top\"}"
+    },
+    {
+      "key": "ZakaJavRank",
+      "name": "🏆JAV排行榜┃1769部战力榜",
+      "api": "csp_ZakaJavRankAmns",
+      "ext": "{\"site\":\"https://javrank849.ystv.top\",\"miss\":\"https://missav.ws286.ystv.top\"}"
+    },
+    {
+      "key": "ZakaHddj",
+      "name": "🔞黄豆短剧┃AI短剧+漫剧",
+      "api": "csp_ZakaHddjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaCrdj",
+      "name": "🔞91成人短剧┃全站",
+      "api": "csp_ZakaCrdjAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJm",
+      "name": "🔞JAV目錄┃免登录直取",
+      "api": "csp_ZakaJmAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaCn",
+      "name": "🔞中文秘密资源┃国产+有码",
+      "api": "csp_ZakaCnAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaBnzb",
+      "name": "🔞百年直播┃129平台",
+      "api": "csp_ZakaBnzbAmns",
+      "ext": "{\"host\":\"http://api.vipmisss.com:81/xcdsw\"}"
+    },
+    {
+      "key": "ZakaGetav",
+      "name": "👑帝皇影视┃4.5万部",
+      "api": "csp_ZakaGetavAmns",
+      "ext": "{\"host\":\"https://getav.me\",\"static\":\"https://static.worldstatic.com\",\"brand\":\"👑帝皇影视\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "Zaka69ck",
+      "name": "👑帝皇影视┃黄色仓库",
+      "api": "csp_Zaka69ckAmns",
+      "ext": "{\"brand\":\"👑帝皇影视\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "ZakaHsck",
+      "name": "👑帝皇影视┃黄色仓库②",
+      "api": "csp_ZakaHsckAmns",
+      "ext": "{\"brand\":\"👑帝皇影视\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "ZakaSe8",
+      "name": "🖼八色套图┃1.4万套",
+      "api": "csp_ZakaSe8Amns",
+      "ext": "{\"host\":\"https://8se.me\",\"cdn\":\"https://img.xchina.io\",\"brand\":\"🖼 八色套图\",\"relays\":\"https://tv506.ystv.top\"}"
+    },
+    {
+      "key": "ZakaMissavOff",
+      "name": "🔞MissAV官方┃原生",
+      "api": "csp_ZakaMissavOffAmns",
+      "ext": "{\"host\":\"https://missav.live\",\"relay\":\"https://tv506.ystv.top\",\"flare\":\"http://192.168.31.2:8191/v1\"}"
+    },
+    {
+      "key": "ZakaMirror",
+      "name": "🔞MissAV镜像┃免代理",
+      "api": "csp_ZakaMirrorAmns",
+      "ext": "{\"host\":\"https://www.thisav.my\"}"
+    },
+    {
+      "key": "ZakaAdult",
+      "name": "📁成人资源中心",
+      "api": "csp_ZakaAdultResAmns",
+      "ext": "{\"base\":\"https://tv506.ystv.top\",\"miss\":\"https://missav.ws286.ystv.top\"}"
+    },
+    {
+      "key": "Zaka123av",
+      "name": "🎬123AV┃原生",
+      "api": "csp_Zaka123avAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaDsd",
+      "name": "🎬懂色帝┃原生",
+      "api": "csp_ZakaDsdAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaWhos",
+      "name": "🔍whos识图┃原生",
+      "api": "csp_ZakaWhosAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaLissav",
+      "name": "🔞麻豆视频┃LissAV",
+      "api": "csp_ZakaLissavAmns",
+      "ext": "{\"section\":\"asian\"}"
+    },
+    {
+      "key": "ZakaLissavCn",
+      "name": "🔞麻豆视频┃国产区",
+      "api": "csp_ZakaLissavAmns",
+      "ext": "{\"section\":\"domestic\"}"
+    },
+    {
+      "key": "ZakaJable",
+      "name": "🔞Jable┃JAD免代理",
+      "api": "csp_ZakaJableAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaXhamster",
+      "name": "🔞xHamster┃XH免代理",
+      "api": "csp_ZakaXhamsterAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaRou",
+      "name": "🔞肉视频┃ROU免代理",
+      "api": "csp_ZakaRouAmns",
+      "ext": ""
+    },
+    {
+      "key": "Zaka321av",
+      "name": "🔞321AV┃中文字幕",
+      "api": "csp_Zaka321avAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaPb",
+      "name": "🔞好色TV┃PB免代理",
+      "api": "csp_ZakaPbAmns",
+      "ext": ""
+    },
+    {
+      "key": "rouav",
+      "name": "🔞rouAV┃PB免代理",
+      "api": "csp_ZakaRouavAmns",
+      "ext": ""
+    },
+    {
+      "key": "av18av",
+      "name": "🔞18AV┃本地代理",
+      "api": "csp_Zaka18avAmns",
+      "ext": ""
+    },
+    {
+      "key": "dage",
+      "name": "🔞大哥视频┃清单转写",
+      "api": "csp_ZakaDageAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaSupjav",
+      "name": "🔞SupJav┃中继免盾",
+      "api": "csp_ZakaSupjavAmns",
+      "ext": "{\"relay\":\"https://py.fzcrym.link:1314\"}"
+    },
+    {
+      "key": "ZakaPornhub",
+      "name": "🔞Pornhub┃免代理",
+      "api": "csp_ZakaPornhubAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaRohu",
+      "name": "🔞YouTube成人版┃wyll",
+      "api": "csp_ZakaRohuAmns",
+      "ext": ""
+    },
+    {
+      "key": "sporn",
+      "name": "🔞SuperPorn┃欧美免代理",
+      "api": "csp_ZakaKvsAmns",
+      "ext": "{\"site\":\"sporn\"}"
+    },
+    {
+      "key": "yporn",
+      "name": "🔞YESPORN┃欧美免代理",
+      "api": "csp_ZakaKvsAmns",
+      "ext": "{\"site\":\"yporn\"}"
+    },
+    {
+      "key": "okxxx",
+      "name": "🔞OKXXX┃欧美免代理",
+      "api": "csp_ZakaKvsAmns",
+      "ext": "{\"site\":\"okxxx\"}"
+    },
+    {
+      "key": "591av",
+      "name": "🔞591AV┃亚洲素人",
+      "api": "csp_ZakaKvsAmns",
+      "ext": "{\"site\":\"591av\"}"
+    },
+    {
+      "key": "avjoy",
+      "name": "🔞AVJOY┃欧美免代理",
+      "api": "csp_ZakaAvjoyAmns",
+      "ext": ""
+    },
+    {
+      "key": "hanime",
+      "name": "🔞Hanime1┃里番H动漫",
+      "api": "csp_ZakaHmAmns",
+      "ext": ""
+    },
+    {
+      "key": "xvideo",
+      "name": "🔞XVIDEOS┃欧美免代理",
+      "api": "csp_ZakaXvAmns",
+      "ext": ""
+    },
+    {
+      "key": "ptt01",
+      "name": "🔞PTT01┃三级稀缺",
+      "api": "csp_ZakaPttAmns",
+      "ext": ""
+    },
+    {
+      "key": "cporn",
+      "name": "🔞CartoonPorno┃欧美卡通",
+      "api": "csp_ZakaKvsAmns",
+      "ext": "{\"site\":\"cporn\"}"
+    },
+    {
+      "key": "xanimu",
+      "name": "🔞Xanimu┃里番动漫",
+      "api": "csp_ZakaXanimuAmns",
+      "ext": ""
+    },
+    {
+      "key": "xx01",
+      "name": "🔞XX01┃无码流出",
+      "api": "csp_ZakaXx01Amns",
+      "ext": ""
+    },
+    {
+      "key": "netflav",
+      "name": "🔞Netflav┃帝皇影视",
+      "api": "csp_ZakaNetflavAmns",
+      "ext": ""
+    },
+    {
+      "key": "goodav",
+      "name": "🔞正妹AV┃原生",
+      "api": "csp_ZakaGoodavAmns",
+      "ext": ""
+    },
+    {
+      "key": "av6k",
+      "name": "🔞AV6K┃原生",
+      "api": "csp_ZakaAv6kAmns",
+      "ext": ""
+    },
+    {
+      "key": "jav",
+      "name": "🔞J-AV┃原生",
+      "api": "csp_ZakaJavAmns",
+      "ext": ""
+    },
+    {
+      "key": "jav777",
+      "name": "🔞JAV777┃原生",
+      "api": "csp_ZakaJav777Amns",
+      "ext": ""
+    },
+    {
+      "key": "airav",
+      "name": "🔞AirAV┃原生",
+      "api": "csp_ZakaAiravAmns",
+      "ext": "{\"relay\":\"https://py.fzcrym.link:1314\"}"
+    },
+    {
+      "key": "zaka93",
+      "name": "👑93站合一",
+      "api": "csp_Zaka93Amns",
+      "ext": ""
+    },
+    {
+      "key": "go2av",
+      "name": "🔞GO2AV┃帝皇影视",
+      "api": "csp_ZakaGo2avAmns",
+      "ext": ""
+    },
+    {
+      "key": "mmtv7",
+      "name": "🔞7MMTV┃帝皇影视",
+      "api": "csp_Zaka7mmAmns",
+      "ext": ""
+    },
+    {
+      "key": "zggjav",
+      "name": "🔞GGJAV┃帝皇影视",
+      "api": "csp_ZakaGgjavAmns",
+      "ext": ""
+    },
+    {
+      "key": "avbigplat",
+      "name": "🔞AV大平台┃蝴蝶",
+      "api": "csp_Zaka9SexAmns",
+      "ext": ""
+    },
+    {
+      "key": "xhy11",
+      "name": "🔞小黄鸭┃xhy11",
+      "api": "csp_ZakaXhyAmns",
+      "ext": "{\"host\":\"https://www.xhy11.cc\",\"brand\":\"👑帝皇影视\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "pj5ti",
+      "name": "🔞蜜桃社┃pj5ti",
+      "api": "csp_ZakaPj5tiAmns",
+      "ext": ""
+    },
+    {
+      "key": "MyConfig",
+      "name": "⚙️配置┃中心",
+      "api": "csp_AAConfigAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaTg",
+      "name": "tg频道",
+      "api": "csp_ZakaTgAmns",
+      "ext": "{\"mirror\":\"https://tg.i-c-a.su\",\"size\":50,\"block\":100,\"channels\":[{\"name\":\"超清AV\",\"user\":\"cctv_av\"},{\"name\":\"那些极品姐姐\",\"user\":\"zfjp1024\"},{\"name\":\"麻豆 girl\",\"user\":\"madougirl\"},{\"name\":\"黄果漫剧\",\"user\":\"hgmanju\"},{\"name\":\"海角 AV\",\"user\":\"hjgc0\"},{\"name\":\"无码 91\",\"user\":\"wmav91\"},{\"name\":\"收藏 AV\",\"user\":\"shoucangav\"}],\"relay\":\"https://tv506.ystv.top/api/tg\"}"
+    },
+    {
+      "key": "push_agent",
+      "name": "🛴推送┃播放",
+      "api": "csp_PushAmns",
+      "ext": ""
+    },
+    {
+      "key": "MyAll",
+      "name": "📁资源┃中心",
+      "api": "csp_MyAllAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakajavdb",
+      "name": "🔞JAVDB┃磁力自动离线",
+      "api": "csp_ZakaJavdbAmns",
+      "ext": ""
+    },
+    {
+      "key": "zakajavbus",
+      "name": "🔞JAVBUS┃磁力自动离线",
+      "api": "csp_ZakaJavbusAmns",
+      "ext": ""
+    },
+    {
+      "key": "hongguo",
+      "name": "🍎红果短剧·听书┃官方直采+自建朗读",
+      "api": "csp_ZakaHongguoAmns",
+      "ext": "{\"host\":\"https://hongguoduanju.com\"}"
+    },
+    {
+      "key": "ZakaLiveTv",
+      "name": "📡电视直播┃110台",
+      "api": "csp_ZakaLiveTvAmns",
+      "ext": ""
+    },
+    {
+      "key": "thdh",
+      "name": "🔞探花短视频┃thdh",
+      "api": "csp_ZakaThdhApp",
+      "ext": "{\"host\":\"https://thdhhaj.xyz\",\"brand\":\"🔞 探花短视频\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "qishe",
+      "name": "🔞妻社┃qishe",
+      "api": "csp_ZakaQiSheAmns",
+      "ext": "{\"host\":\"https://qs.qsh52693.org.cn\",\"brand\":\"🔞 妻社\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "ZakaHjApp",
+      "name": "🔞海角社区┃App版",
+      "api": "csp_ZakaHjAppAmns",
+      "ext": "{\"brand\":\"🔞 海角社区App\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "Zaka17rip",
+      "name": "🔞17rip┃底部导航分类",
+      "api": "csp_Zaka17ripAmns",
+      "ext": "{\"brand\":\"🔞 17rip\",\"tg\":\"https://t.me/+3t5XRPPo9mlkZDRl\"}"
+    },
+    {
+      "key": "ZakaJavPlay",
+      "name": "🔞JavPlay┃免登录720",
+      "api": "csp_ZakaJa6playAmns",
+      "ext": ""
+    },
+    {
+      "key": "ZakaJavguru",
+      "name": "🔞JavGuru┃六线自动切",
+      "api": "csp_ZakaJavguruAmns",
+      "ext": ""
+    },
+    {
+      "key": "Zaka52av",
+      "name": "🔞52AV┃華語論壇",
+      "api": "csp_Zaka52avAmns",
+      "ext": ""
+    },
+    {
+      "key": "missavt",
+      "name": "🔞MissAVt┃原生",
+      "api": "csp_ZakaMissavtAmns",
+      "ext": ""
+    },
+    {
+      "key": "hgkpz",
+      "name": "🔞黄瓜┃黄瓜看片",
+      "api": "csp_ZakaHgkpzAmns",
+      "ext": ""
+    },
+    {
+      "key": "Wukong",
+      "name": "🔞悟空传媒",
+      "api": "csp_Wukong",
+      "ext": ""
+    },
+    {
+      "key": "Chengren91",
+      "name": "🔞91成人",
+      "api": "csp_Chengren91",
+      "ext": ""
+    },
+    {
+      "key": "go_tingshu",
+      "name": "听书",
+      "api": "csp_TingShu",
+      "ext": "{}"
+    }
+  ]
+}

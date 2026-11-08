@@ -1,0 +1,68 @@
+name: moyi
+description: 独立运行的多端短剧应用
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  archive: ^4.5.2
+  ffi: ^2.2.0
+  media_kit: 1.2.6
+  media_kit_video: 2.0.1
+  media_kit_libs_video: ^1.0.7
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  shared_preferences: ^2.5.5
+  sqflite: ^2.4.2
+  flutter_foreground_task: 11.0.3
+  ffmpeg_kit_flutter_new_min_gpl: 2.6.2
+  file_picker: 13.1.0
+  crypto: ^3.0.7
+  window_manager: ^0.5.1
+  nsd: 5.0.1
+  lucide_icons_flutter: 3.1.20
+  wakelock_plus: ^1.8.0
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.14.1
+  enough_convert: ^1.7.1
+  flutter_tts: ^4.2.5
+  html: ^0.15.0
+  http: ^1.6.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  shared_preferences_platform_interface: ^2.4.2
+
+dependency_overrides:
+  media_kit_libs_windows_video:
+    path: packages/media_kit_libs_windows_video
+  # 锁定 Android 端实现为传统 Pigeon（BasicMessageChannel）稳定版，避免 jnigen/JNI
+  # interop 版本漂移导致启动期 NoSuchMethodError（SharedPreferencesApiRegistrar.getAll）。
+  shared_preferences_android: 2.4.28
+
+flutter:
+  config:
+    enable-swift-package-manager: false
+  uses-material-design: true
+  assets:
+    - assets/video_enhancement/
+    - assets/live/
+    - assets/proxy_kernel/
+    - assets/audio_spiders/
+    - assets/novel_spiders/
+    - assets/py_spiders/
+    - assets/jars/zakatv.jar
+    - assets/jars/youtube.jar
+    - assets/youtube3.json
+    - assets/jar_site_configs.json
+    - assets/novel_covers/
+    - assets/ant_logo.png

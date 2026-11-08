@@ -1,0 +1,197 @@
+import argparse
+import hashlib
+import os
+import platform
+import plistlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+from app_build import BuildVariant, add_variant_argument
+
+root = Path(__file__).resolve().parents[1]
+
+
+def ios_artifact_name(variant, version, signed):
+    suffix = 'ios.ipa' if signed else 'ios-unsigned.ipa'
+    return f'{variant.slug}-{version}-{suffix}'
+
+
+def package_unsigned_ipa(application, destination):
+    if not application.is_dir():
+        raise ValueError('iOS 应用目录不存在')
+    try:
+        info = plistlib.loads((application / 'Info.plist').read_bytes())
+    except (OSError, plistlib.InvalidFileException, ValueError) as error:
+        raise ValueError('iOS 应用缺少有效 Info.plist') from error
+    executable = info.get('CFBundleExecutable', '')
+    if (not isinstance(executable, str) or not executable or Path(executable).name != executable
+            or not (application / executable).is_file()):
+        raise ValueError('iOS 应用缺少有效主程序')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + '.tmp')
+    temporary.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for source in sorted(application.rglob('*')):
+                name = 'Payload/' + application.name + '/' + source.relative_to(application).as_posix()
+                if source.is_symlink():
+                    entry = zipfile.ZipInfo(name)
+                    entry.create_system = 3
+                    entry.external_attr = source.lstat().st_mode << 16
+                    archive.writestr(entry, os.readlink(source))
+                else:
+                    archive.write(source, name)
+        with zipfile.ZipFile(temporary) as archive:
+            if archive.testzip() is not None:
+                raise ValueError('iOS IPA 完整性校验失败')
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def run(arguments, **kwargs):
+    subprocess.run(arguments, cwd=kwargs.pop('cwd', root), check=True, **kwargs)
+
+
+def build_core(simulator=False, variant=BuildVariant()):
+    if platform.system() != 'Darwin':
+        raise SystemExit('iOS 构建需要 macOS 和完整 Xcode。')
+    go = shutil.which('go')
+    if not go:
+        raise SystemExit('请安装 Go 1.24.1 或更新版本。')
+    environment = os.environ.copy()
+    environment.setdefault('GOPROXY', 'https://goproxy.cn,direct')
+    environment.setdefault('GOSUMDB', 'off')
+    environment['CGO_ENABLED'] = '1'
+    environment['GOTOOLCHAIN'] = os.environ.get('GOTOOLCHAIN', 'auto')
+    slices = [('iphoneos', 'arm64', 'arm64-apple-ios15.1')]
+    if simulator:
+        slices.extend([
+            ('iphonesimulator', 'arm64', 'arm64-apple-ios15.1-simulator'),
+            ('iphonesimulator', 'amd64', 'x86_64-apple-ios15.1-simulator'),
+        ])
+    libraries = []
+    for sdk, architecture, triple in slices:
+        sdk_path = subprocess.check_output(['xcrun', '--sdk', sdk, '--show-sdk-path'], text=True).strip()
+        compiler = subprocess.check_output(['xcrun', '--sdk', sdk, '--find', 'clang'], text=True).strip()
+        directory = root / 'native' / 'build' / 'ios' / f'{sdk}-{architecture}'
+        headers = directory / 'Headers'
+        headers.mkdir(parents=True, exist_ok=True)
+        output = directory / 'libMoyiCore.a'
+        flags = shlex.join(['-isysroot', sdk_path, '-target', triple])
+        build_env = environment | {
+            'GOOS': 'ios', 'GOARCH': architecture, 'CC': compiler,
+            'CGO_CFLAGS': flags, 'CGO_LDFLAGS': flags,
+        }
+        run([go, 'build', '-trimpath', '-buildmode=c-archive', '-ldflags=' + variant.linker_flags,
+             '-o', str(output), './bridge'], cwd=root / 'native', env=build_env)
+        shutil.copy2(output.with_suffix('.h'), headers / 'MoyiCore.h')
+        libraries.append((sdk, output, headers))
+    arguments = ['xcodebuild', '-create-xcframework']
+    device = libraries[0]
+    arguments.extend(['-library', str(device[1]), '-headers', str(device[2])])
+    if simulator:
+        universal = root / 'native' / 'build' / 'ios' / 'simulator-universal'
+        universal.mkdir(parents=True, exist_ok=True)
+        archive = universal / 'libMoyiCore.a'
+        run(['xcrun', 'lipo', '-create', str(libraries[1][1]), str(libraries[2][1]), '-output', str(archive)])
+        arguments.extend(['-library', str(archive), '-headers', str(libraries[1][2])])
+    framework = root / 'ios' / 'MoyiCore' / 'MoyiCore.xcframework'
+    if framework.exists():
+        shutil.rmtree(framework)
+    run(arguments + ['-output', str(framework)])
+
+
+def main():
+    parser = argparse.ArgumentParser(description='构建短剧视界 / 全剧视界 iOS 核心和应用')
+    parser.add_argument('--core-only', action='store_true')
+    parser.add_argument('--simulator', action='store_true', help='额外生成模拟器核心；不启动模拟器')
+    parser.add_argument('--export-options', type=Path, help='使用自己的 Xcode 签名配置导出 IPA')
+    add_variant_argument(parser)
+    options = parser.parse_args()
+    variant = BuildVariant(options.all_sources)
+    auth_key = os.environ.get('JIANHUANG_AUTH_KEY', '')
+    auth_defines = ['--dart-define=JIANHUANG_AUTH_KEY=' + auth_key] if auth_key else []
+    build_core(options.simulator, variant)
+    if options.core_only:
+        return
+    flutter = shutil.which('flutter')
+    if not flutter or not shutil.which('pod'):
+        raise SystemExit('请安装 Flutter 和 CocoaPods。')
+    run([flutter, 'pub', 'get', '--enforce-lockfile'])
+    generated = root / 'ios' / 'Flutter' / 'Generated.xcconfig'
+    stale = False
+    if generated.is_file():
+        for line in generated.read_text(errors='replace').splitlines():
+            if line.startswith('FLUTTER_ROOT='):
+                stale = not os.path.isdir(line.split('=', 1)[1].strip())
+                break
+        else:
+            stale = True
+    if stale:
+        generated.unlink(missing_ok=True)
+        export_env = root / 'ios' / 'Flutter' / 'flutter_export_environment.sh'
+        export_env.unlink(missing_ok=True)
+        ephemeral = root / 'ios' / 'Flutter' / 'ephemeral'
+        if ephemeral.exists():
+            shutil.rmtree(ephemeral)
+        run([flutter, 'pub', 'get', '--enforce-lockfile'])
+        if generated.is_file():
+            for line in generated.read_text(errors='replace').splitlines():
+                if line.startswith('FLUTTER_ROOT='):
+                    if not os.path.isdir(line.split('=', 1)[1].strip()):
+                        raise SystemExit('FLUTTER_ROOT in Generated.xcconfig does not exist after regeneration')
+                    break
+    run(['pod', 'install'], cwd=root / 'ios')
+    output = root / 'dist' / 'ios'
+    output.mkdir(parents=True, exist_ok=True)
+    version = re.search(r'^version:\s*(\S+)', (root / 'pubspec.yaml').read_text(), re.MULTILINE).group(1)
+    artifacts = []
+    if options.export_options:
+        config = options.export_options.expanduser().resolve()
+        if not config.is_file():
+            raise SystemExit('ExportOptions.plist 不存在。')
+        run([flutter, 'build', 'ipa', '--release', '--no-pub', '--obfuscate', '--split-debug-info=build/app/outputs/symbols', '--export-options-plist', str(config), *auth_defines, *variant.flutter_arguments])
+        for package in (root / 'build' / 'ios' / 'ipa').glob('*.ipa'):
+            destination = output / ios_artifact_name(variant, version, signed=True)
+            shutil.copy2(package, destination)
+            artifacts.append(destination)
+    else:
+        environment = os.environ.copy()
+        environment.update({
+            'CODE_SIGNING_ALLOWED': 'NO',
+            'CODE_SIGNING_REQUIRED': 'NO',
+            'CODE_SIGN_IDENTITY': '',
+        })
+        run(
+            [flutter, 'build', 'ios', '--release', '--no-codesign', '--no-pub', '--obfuscate', '--split-debug-info=build/app/outputs/symbols', *auth_defines, *variant.flutter_arguments],
+            env=environment,
+        )
+        application = root / 'build' / 'ios' / 'iphoneos' / 'Runner.app'
+        symbols = subprocess.check_output(['xcrun', 'nm', '-gU', str(application / 'Runner')], text=True)
+        for symbol in ['_MoyiRequest', '_MoyiFree']:
+            if symbol not in symbols:
+                raise SystemExit('iOS 包缺少 FFI 入口：' + symbol)
+        destination = output / ios_artifact_name(variant, version, signed=False)
+        package_unsigned_ipa(application, destination)
+        artifacts.append(destination)
+    if not artifacts:
+        raise SystemExit('未生成 iOS 安装包。')
+    checksums = []
+    for artifact in sorted(output.glob(f'*-{version}-ios*')):
+        digest = hashlib.sha256()
+        with artifact.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+        checksums.append(f'{digest.hexdigest()}  {artifact.name}')
+        print(artifact)
+    (output / 'SHA256SUMS.txt').write_text('\n'.join(checksums) + '\n', encoding='ascii')
+
+
+if __name__ == '__main__':
+    main()

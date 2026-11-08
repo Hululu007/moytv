@@ -1,0 +1,75 @@
+import 'package:moyi/models.dart';
+import 'package:moyi/playback_recovery.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  PlaybackPlan route(int index, {int count = 3}) => PlaybackPlan(
+    url: 'https://media.test/$index.mp4',
+    session: 'session-$index',
+    routeIndex: index,
+    routeCount: count,
+  );
+
+  test('retries the same route first, then alternates, then stops', () {
+    final recovery = PlaybackRecovery();
+    // 第一次失败：不急着换线，先原线路重新解析一次。
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.refresh);
+    // 仍失败：逐条切换备用线路。
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
+    expect(recovery.next(route(1)), PlaybackRecoveryAction.alternative);
+    // 线路 2 是最后一条，没有备选，停。
+    expect(recovery.next(route(2)), PlaybackRecoveryAction.stop);
+    recovery.reset();
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.refresh);
+  });
+
+  test('one-route sources refresh once without endless retrying', () {
+    final recovery = PlaybackRecovery();
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
+  });
+
+  test('many failing alternatives cannot exceed the automatic retry limit', () {
+    final recovery = PlaybackRecovery();
+    // 一次原线路重试 + 五条换线后触顶。
+    expect(recovery.next(route(0, count: 10)), PlaybackRecoveryAction.refresh);
+    for (var i = 1; i <= 5; i++) {
+      expect(
+        recovery.next(route(i, count: 10)),
+        PlaybackRecoveryAction.alternative,
+      );
+    }
+    expect(recovery.next(route(6, count: 10)), PlaybackRecoveryAction.stop);
+  });
+
+  test(
+    'a stalled foreground stream times out but paused and background playback do not',
+    () {
+      final health = PlaybackHealth();
+      final start = DateTime(2026, 9, 18);
+      bool stalled(
+        int seconds, {
+        bool playing = true,
+        bool foreground = true,
+        int position = 5,
+      }) => health.stalled(
+        position: Duration(seconds: position),
+        playing: playing,
+        foreground: foreground,
+        now: start.add(Duration(seconds: seconds)),
+      );
+      expect(stalled(0), isFalse);
+      expect(stalled(19), isFalse);
+      expect(stalled(20), isTrue);
+      expect(stalled(21, position: 6), isFalse);
+      expect(stalled(40, position: 6), isFalse);
+      expect(stalled(60, playing: false, position: 6), isFalse);
+      expect(stalled(80, playing: false, position: 6), isFalse);
+      expect(stalled(100, foreground: false, position: 6), isFalse);
+      expect(stalled(101, position: 6), isFalse);
+      health.reset();
+      expect(stalled(200, position: 6), isFalse);
+    },
+  );
+}
