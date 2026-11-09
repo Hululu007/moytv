@@ -51,10 +51,12 @@ void main() {
     expect(zones, [HomeZone.vod, HomeZone.midnight]);
     await tester.tap(find.text('直播'));
     expect(zones, [HomeZone.vod, HomeZone.midnight, HomeZone.live]);
-    await tester.tap(find.text('听书'));
-    expect(zones.last, HomeZone.audio);
     await tester.tap(find.text('一起看房间'));
     expect(room, 1);
+    await tester.tap(find.text('音乐'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('听书'));
+    expect(zones.last, HomeZone.audio);
   });
 
   testWidgets('drawer tool tiles map to their tools', (tester) async {
@@ -74,6 +76,8 @@ void main() {
       '蜘蛛规则编辑器': AppDrawerTool.ruleEditor,
     };
     for (final entry in expected.entries) {
+      await tester.ensureVisible(find.text(entry.key));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(entry.key));
       if (entry.key == '软件更新') {
         await tester.pump(const Duration(milliseconds: 400));
@@ -91,8 +95,7 @@ void main() {
       tools: [],
       onWatchRoom: () {},
     );
-    expect(find.text('影视区'), findsOneWidget);
-    expect(find.text('阅读'), findsOneWidget);
+    expect(find.text('影视模块'), findsOneWidget);
     expect(find.text('应用工具'), findsOneWidget);
     expect(find.text('通用配置与管理'), findsOneWidget);
     for (final label in [
@@ -101,12 +104,19 @@ void main() {
       '午夜区',
       '直播',
       '一起看房间',
-      '听书',
       '站源管理',
       '软件更新',
     ]) {
       expect(find.text(label), findsOneWidget);
     }
+    await tester.tap(find.text('音乐'));
+    await tester.pumpAndSettle();
+    expect(find.text('音乐与音频'), findsOneWidget);
+    expect(find.text('听书'), findsOneWidget);
+    await tester.tap(find.text('阅读'));
+    await tester.pumpAndSettle();
+    expect(find.text('阅读模块'), findsOneWidget);
+    expect(find.text('小说'), findsOneWidget);
   });
 
   testWidgets('site source box keeps its key and tap callback', (tester) async {
@@ -131,8 +141,45 @@ void main() {
   testWidgets('drawer header no longer shows the site box', (tester) async {
     await pumpDrawer(tester, zones: [], tools: [], onWatchRoom: () {});
     expect(find.text('魔蚁box'), findsOneWidget);
-    expect(find.text('当前版本 1.0.1'), findsOneWidget);
+    expect(find.text('v1.0.1 (5)'), findsWidgets);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
+  });
+
+  testWidgets('drawer header carries avatar, name, version and footer', (
+    tester,
+  ) async {
+    await pumpDrawer(tester, zones: [], tools: [], onWatchRoom: () {});
+    expect(find.byKey(const ValueKey('drawer-header')), findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-app-name')), findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-version')), findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-footer')), findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-shelf-tabs')), findsOneWidget);
+  });
+
+  testWidgets('drawer shelf tabs switch grouped content', (tester) async {
+    final tools = <AppDrawerTool>[];
+    await pumpDrawer(tester, zones: [], tools: tools, onWatchRoom: () {});
+    expect(find.text('影视模块'), findsOneWidget);
+    expect(find.text('听书'), findsNothing);
+
+    await tester.tap(find.text('音乐'));
+    await tester.pumpAndSettle();
+    expect(find.text('音乐与音频'), findsOneWidget);
+    expect(find.text('听书'), findsOneWidget);
+
+    await tester.tap(find.text('漫画'));
+    await tester.pumpAndSettle();
+    expect(find.text('漫画模块'), findsOneWidget);
+    expect(find.text('漫画区'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('小程序'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('小程序'));
+    await tester.pumpAndSettle();
+    expect(find.text('小程序模块'), findsOneWidget);
+    await tester.ensureVisible(find.text('小程序面板'));
+    await tester.tap(find.text('小程序面板'));
+    expect(tools.last, AppDrawerTool.miniApp);
   });
 
   testWidgets('midnight tile follows activation', (tester) async {
