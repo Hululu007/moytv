@@ -18,7 +18,7 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = '44c139f76ca17a4ffcfe89df5bb19910';
+const String zakatvJarMd5 = '6762dc8e6a076bb3f40189c5f3699d69';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';
@@ -28,7 +28,7 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
   ZakatvBuiltinSite('ZakaMjv011', '🔞mjv011', 'com.github.catvod.spider.ZakaMjv011Amns2', ''),
   ZakatvBuiltinSite('ZakaHuangguo', '🔞黄果', 'com.github.catvod.spider.ZakaHuangguoAmns', ''),
   ZakatvBuiltinSite('ZakaHl365', '🔞黑料不打烊', 'com.github.catvod.spider.ZakaHl365Amns', ''),
-  ZakatvBuiltinSite('ZakaLnkl', '🔞lnkl', 'com.github.catvod.spider.ZakaLnklAmns', ''),
+  ZakatvBuiltinSite('ZakaRoshy', '🔞Roshy┃日系无码', 'com.github.catvod.spider.ZakaRoshyAmns', ''),
   ZakatvBuiltinSite('ZakaHuangdou', '🔞黄豆短剧', 'com.github.catvod.spider.ZakaHuangdouAmns', '', section: SourceSite.sectionDrama),
   ZakatvBuiltinSite('ZakaSex8', '🔞sex8┃视频', 'com.github.catvod.spider.ZakaSex8Amns', ''),
   ZakatvBuiltinSite('ZakaHgdjV', '🔞黄果短剧┃视频', 'com.github.catvod.spider.ZakaHgdjVAmns', ''),
@@ -41,7 +41,7 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
   ZakatvBuiltinSite('ZakaAv91', '🔞av91', 'com.github.catvod.spider.ZakaAv91Amns', ''),
   ZakatvBuiltinSite('ZakaLxs', '🔞撸先生', 'com.github.catvod.spider.ZakaLxsAmns', ''),
   ZakatvBuiltinSite('ZakaJavrate', '🔞🛡️鉴黄师┃原生', 'com.github.catvod.spider.ZakaJavrateAmns', ''),
-  ZakatvBuiltinSite('zakajavverse', '🔞🆕JAV Verse┃资料库+双线路', 'com.github.catvod.spider.ZakaJavverseAmns', ''),
+  ZakatvBuiltinSite('javtiful', '🔞Javtiful┃JAV视频', 'com.github.catvod.spider.ZakaJavtifulAmns', ''),
   ZakatvBuiltinSite('zakaxszav', '🔞🆕XSZAV┃无码·中文字幕', 'com.github.catvod.spider.ZakaXszavAmns', ''),
   ZakatvBuiltinSite('zakav01', '🔞🆕AV01┃无码破解·多码率', 'com.github.catvod.spider.ZakaAv01Amns', ''),
   ZakatvBuiltinSite('zakaaiye', '🔞🆕爱液视频┃官方App接口', 'com.github.catvod.spider.ZakaAiyeAmns', ''),

@@ -10,8 +10,8 @@ import 'app_layout.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
 import 'app_drawer.dart';
-import 'midnight_zone.dart';
-import 'content_registry.dart';
+import 'neon/neon_ui.dart';
+import 'ui_style.dart';
 import 'content_zone_binding.dart';
 import 'content_zone_screen.dart';
 import 'content_models.dart';
@@ -48,7 +48,6 @@ import 'import_file_store.dart';
 
 import 'imported_site_record.dart';
 import 'py_bridge.dart';
-import 'ui_style.dart';
 import 'vod_detail_route.dart';
 import 'settings_screen.dart';
 import 'saved_library.dart';
@@ -125,7 +124,6 @@ class _HomeScreenState extends State<HomeScreen> {
   HomeZone _zone = HomeZone.drama;
   final _zoneHistory = BackHistory<HomeZone>();
   final _scaffoldKey = GlobalKey<ScaffoldState>();
-  bool _midnightActivated = false;
   String _currentVersion = '';
   String _catalogSection = SourceSite.sectionDrama;
   final _sectionSourceIds = <String, String>{};
@@ -170,16 +168,15 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _selectionMode = false;
   bool _showRecommendations = false;
   bool _catalogLoadScheduled = false;
+  // 首屏自动补拉：站源晚于页面就绪时，等它就绪后自动请求一次，用户不用手动下拉。
+  bool _autoLoadScheduled = false;
+  bool _autoLoadedOnce = false;
   bool _openingPlayback = false;
 
-  bool get _isCatalogZone =>
-      _zone == HomeZone.drama ||
-      _zone == HomeZone.vod ||
-      _zone == HomeZone.midnight;
+  bool get _isCatalogZone => _zone == HomeZone.drama || _zone == HomeZone.vod;
 
   String get _zoneTitle => switch (_zone) {
     HomeZone.vod => '点播',
-    HomeZone.midnight => '午夜区',
     HomeZone.live => '直播',
     HomeZone.audio => '听书',
     HomeZone.novel => '阅读',
@@ -192,8 +189,6 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final site in widget.store.visibleSources)
         if (_zone == HomeZone.vod
             ? isVodZoneSource(site)
-            : _zone == HomeZone.midnight
-            ? isMidnightZoneSource(site)
             : _catalogSection == SourceSite.sectionVideo
             ? site.isVideoSection || site.origin == SourceSite.originConfig
             : site.isDramaSection && site.origin != SourceSite.originConfig)
@@ -433,11 +428,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
   ];
 
-  String _sourcePickerSectionName() => _zone == HomeZone.midnight
-      ? '午夜'
-      : _catalogSection == SourceSite.sectionVideo
-      ? '点播'
-      : '短剧';
+  String _sourcePickerSectionName() =>
+      _catalogSection == SourceSite.sectionVideo ? '点播' : '短剧';
 
   Future<void> _pickSource({bool editMode = false}) async {
     final picked = await showSitePickerDialog(
@@ -739,6 +731,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (sameSection && _sectionZone == _zone) return;
     _sectionSourceIds[_catalogSection] = _source.id;
     _pauseCatalog();
+    _resetAutoLoad();
     if (!sameSection) {
       _saveSectionSnapshot();
       final snapshot = _sectionSnapshots[section];
@@ -790,7 +783,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
     if (_sectionSources.isNotEmpty) {
-      _load(useCache: true);
+      unawaited(_loadWithAutoRetry(useCache: true));
       _loadCategories();
     } else {
       setState(() => _loading = false);
@@ -841,7 +834,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _manageSources() async {
     _pauseCatalog();
-    await Navigator.push<void>(
+    // 统一站点区（站源管理页）点“进站浏览”会带回站源 id：先把该站设为
+    // 可见，再切到它所属的区并打开目录；不带回 id 时只做原有对账。
+    final picked = await Navigator.push<String?>(
       context,
       appPageRoute(
         builder: (_) => SourcesScreen(
@@ -852,6 +847,20 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (!mounted) return;
+    if (picked != null) {
+      final site = widget.store.sources
+          .where((candidate) => candidate.id == picked)
+          .firstOrNull;
+      if (site != null) {
+        await saveUserChange(
+          context,
+          () => widget.store.setSiteVisible(site.id, true),
+        );
+        if (!mounted) return;
+        _setZone(site.isDramaSection ? HomeZone.drama : HomeZone.vod);
+        _changeSource(site);
+      }
+    }
     // 站源显示列表可能变了：当前源被隐藏时落到第一个可见站源。
     final next = SourceSite.byId(widget.store.source);
     if (next.id != _source.id) {
@@ -948,16 +957,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _firstLaunch =
         widget.store.preferences.getBool('first_catalog_loaded') != true;
     if (_sectionSources.isNotEmpty) {
-      if (_firstLaunch) {
-        _load(force: true);
-      } else {
-        _load(useCache: true);
-      }
+      unawaited(_loadWithAutoRetry(useCache: !_firstLaunch));
       _loadCategories();
     } else {
       _loading = false;
     }
-    unawaited(_loadMidnightActivated());
     unawaited(_loadCurrentVersion());
     unawaited(ensureDramaUiStyleLoaded());
   }
@@ -1021,6 +1025,51 @@ class _HomeScreenState extends State<HomeScreen> {
       ];
     });
     unawaited(saveUserChange(context, () => widget.store.refreshDrama(drama)));
+  }
+
+  /// 页面重建时检查一次：目录区是空的、又不是在加载，就自动补一次请求。
+  ///
+  /// 装完第一次打开时站源经常比页面晚一步就绪（本地配置还在读、远程配置还在同步），
+  /// 那时首屏拿不到源，页面会停在空目录上；等源就绪后靠这里自动补拉，
+  /// 不用用户再手动下拉一次。
+  void _scheduleAutoLoad() {
+    if (_autoLoadScheduled || _autoLoadedOnce || !mounted) return;
+    if (!_isCatalogZone) return;
+    if (_items.isNotEmpty || _loading || _showRecommendations) return;
+    if (_sectionSources.isEmpty) return;
+    _autoLoadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoLoadScheduled = false;
+      if (!mounted || _loading || _loadingMore || _showRecommendations) return;
+      if (_items.isNotEmpty || _sectionSources.isEmpty) return;
+      _autoLoadedOnce = true;
+      unawaited(_loadWithAutoRetry(useCache: true));
+    });
+  }
+
+  void _resetAutoLoad() {
+    _autoLoadedOnce = false;
+  }
+
+  /// 首屏 / 切板块时的自动加载。
+  ///
+  /// 只读缓存的话，装完第一次打开、缓存为空、或者内核刚起来第一次请求落空时，
+  /// 列表会一直是空的，得用户手动下拉才出内容。这里补成：
+  /// 缓存读完还是空 → 立刻拉一次线上；还空 → 隔 1.5 秒再补一次。
+  Future<void> _loadWithAutoRetry({bool useCache = false}) async {
+    await (useCache ? _load(useCache: true) : _load(force: true));
+    if (!mounted) return;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (_loading || _loadingMore || _showRecommendations) return;
+      if (_items.isNotEmpty || _error != null) return;
+      if (_sectionSources.isEmpty) return;
+      if (attempt > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        if (!mounted) return;
+      }
+      await _load(force: true);
+      if (!mounted) return;
+    }
   }
 
   Future<void> _load({
@@ -1105,7 +1154,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 当前视频区上次选中的站（跨重启记忆）：先读本会话刚记下的，
   /// 再读落盘的；'__all__' 恢复全部站源模式，站源 id 恢复单站。
-  /// 记过但已不在本区可见源里（被删、被摘、被午夜门禁藏起）时返回 null，
+  /// 记过但已不在本区可见源里（被删、被摘、被隐藏）时返回 null，
   /// 由调用方回落默认站；门禁只做减法，记忆不把藏起的站翻出来。
   ({SourceSite site, bool allSources})? _rememberedForCurrentZone() {
     final value =
@@ -1291,11 +1340,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _openDrama(drama);
       return;
     }
-    final zone = isMidnightZoneSource(site)
-        ? HomeZone.midnight
-        : isVodZoneSource(site)
-        ? HomeZone.vod
-        : HomeZone.drama;
+    final zone = isVodZoneSource(site) ? HomeZone.vod : HomeZone.drama;
     if (zone != _zone) _setZone(zone);
     _changeSource(site);
     _openDrama(drama);
@@ -1308,6 +1353,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _applyZoneChange(HomeZone zone, {bool recordHistory = false}) {
     if (recordHistory && zone != _zone) _zoneHistory.push(_zone);
+    _resetAutoLoad();
     setState(() {
       _zone = zone;
       _selectionMode = false;
@@ -1315,7 +1361,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     if (zone == HomeZone.drama) {
       _changeSection(SourceSite.sectionDrama);
-    } else if (zone == HomeZone.vod || zone == HomeZone.midnight) {
+    } else if (zone == HomeZone.vod) {
       _changeSection(SourceSite.sectionVideo);
     }
   }
@@ -1366,26 +1412,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   AppDrawer _drawer() => AppDrawer(
     zone: _zone,
-    midnightActivated: _midnightActivated,
     currentVersion: _currentVersion,
     onZoneSelected: _onZoneSelected,
     onWatchRoom: _onWatchRoom,
     onTool: _onTool,
     onMinorProtectionChanged: _onMinorProtectionChanged,
-    onVersionDoubleTap: _onVersionDoubleTap,
   );
 
   void _openZoneSettings() {
     if (_zone == HomeZone.drama ||
         _zone == HomeZone.vod ||
-        _zone == HomeZone.midnight ||
         _zone == HomeZone.live) {
       _pushTool(
         ZoneSettingsScreen(
           repository: widget.repository,
           store: widget.store,
           zone: _zone,
-          onHideMidnight: () => unawaited(_onMinorProtectionChanged(true)),
+          onHideAdult: () => unawaited(_onMinorProtectionChanged(true)),
         ),
       );
     } else {
@@ -1429,7 +1472,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int? get _railIndex => switch (_zone) {
     HomeZone.drama => 0,
-    HomeZone.vod || HomeZone.midnight => 1,
+    HomeZone.vod => 1,
     HomeZone.live => 2,
     _ => null,
   };
@@ -1536,25 +1579,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// 未成年保护（与火蚁TV现行做法一致的一次性动作，无持久开关）：
+  /// 点按后离开统一视频区、回到短剧区；下次再进点播区仍可见成人站，
+  /// 与火蚁TV点按后离开午夜区、下次仍可再进午夜区的语义相同。
   Future<void> _onMinorProtectionChanged(bool enabled) async {
     if (!enabled) return;
-    await saveMidnightActivated(false);
-    ContentRegistry.midnightActivated = false;
-    if (!mounted) return;
-    setState(() => _midnightActivated = false);
-    if (_zone == HomeZone.midnight) {
+    if (_zone == HomeZone.vod) {
       _applyZoneChange(HomeZone.drama);
     }
-  }
-
-  Future<void> _onVersionDoubleTap() async {
-    await activateMidnightAndExit();
-  }
-
-  Future<void> _loadMidnightActivated() async {
-    final activated = await loadMidnightActivated();
-    ContentRegistry.midnightActivated = activated;
-    if (mounted) setState(() => _midnightActivated = activated);
   }
 
   Future<void> _loadCurrentVersion() async {
@@ -1939,311 +1971,340 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
-    builder: (context, _) => LayoutBuilder(
-      builder: (context, constraints) {
-        final television = AppLayout.isTelevision(context);
-        final glass = glassDesign(context);
-        final desktop =
-            Theme.of(context).platform != TargetPlatform.iOS &&
-            constraints.maxWidth >= 840;
-        if (!television &&
-            !desktop &&
-            !_selectionMode &&
-            _zone == HomeZone.drama) {
-          if (isHongguoDramaGroup(_group.id)) {
-            return Scaffold(
-              key: _scaffoldKey,
-              drawer: _drawer(),
-              extendBody: glass,
-              body: SafeArea(
-                bottom: !glass,
-                child: HongguoDramaHome(
-                  dramas: List.of(_visible),
-                  repository: widget.repository,
-                  store: widget.store,
-                  onOpenDrama: _openDrama,
-                  onOpenFeed: _openFullscreenFeed,
-                  onPickSource: () => unawaited(_pickSource()),
-                  sourceLabel: '${_group.name} (${_group.sources.length})',
-                  feedEnabled: _visible.isNotEmpty,
-                  categories: _displayCategories,
-                  selectedCategory: _displayCategory,
-                  onCategorySelected: _changeCategory,
-                  searchController: _search,
-                  searchHint: _searchHint,
-                  onSearchChanged: _searchChanged,
-                  onSearchSubmitted: _submitSearch,
-                  onMenuPressed: _openDrawer,
-                  onFilterPressed: () => unawaited(_chooseCatalogView()),
-                  onRankingsPressed: _openRankings,
-                  onNewPressed: _toggleNewSort,
-                  filtersActive:
-                      widget.store.catalogView.sort != CatalogSort.source ||
-                      widget.store.catalogView.release.isNotEmpty,
-                  newActive: widget.store.catalogView.sort == CatalogSort.date,
-                  onOpenSaved: _openSaved,
-                  onSettingsPressed: _openZoneSettings,
+    builder: (context, _) {
+      _scheduleAutoLoad();
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final television = AppLayout.isTelevision(context);
+          final glass = glassDesign(context);
+          final desktop =
+              Theme.of(context).platform != TargetPlatform.iOS &&
+              constraints.maxWidth >= 840;
+          if (!television &&
+              !desktop &&
+              !_selectionMode &&
+              _zone == HomeZone.drama) {
+            if (isHongguoDramaGroup(_group.id)) {
+              return Scaffold(
+                key: _scaffoldKey,
+                drawer: _drawer(),
+                extendBody: glass,
+                body: SafeArea(
+                  bottom: !glass,
+                  child: HongguoDramaHome(
+                    dramas: List.of(_visible),
+                    repository: widget.repository,
+                    store: widget.store,
+                    onOpenDrama: _openDrama,
+                    onOpenFeed: _openFullscreenFeed,
+                    onPickSource: () => unawaited(_pickSource()),
+                    sourceLabel: '${_group.name} (${_group.sources.length})',
+                    feedEnabled: _visible.isNotEmpty,
+                    categories: _displayCategories,
+                    selectedCategory: _displayCategory,
+                    onCategorySelected: _changeCategory,
+                    searchController: _search,
+                    searchHint: _searchHint,
+                    onSearchChanged: _searchChanged,
+                    onSearchSubmitted: _submitSearch,
+                    onMenuPressed: _openDrawer,
+                    onFilterPressed: () => unawaited(_chooseCatalogView()),
+                    onRankingsPressed: _openRankings,
+                    onNewPressed: _toggleNewSort,
+                    filtersActive:
+                        widget.store.catalogView.sort != CatalogSort.source ||
+                        widget.store.catalogView.release.isNotEmpty,
+                    newActive:
+                        widget.store.catalogView.sort == CatalogSort.date,
+                    onOpenSaved: _openSaved,
+                    onSettingsPressed: _openZoneSettings,
+                  ),
                 ),
+              );
+            }
+          }
+          final scaffold = Scaffold(
+            key: _scaffoldKey,
+            drawer: _drawer(),
+            extendBody: glass && !desktop,
+            appBar: glass
+                ? _glassAppBar()
+                : AppBar(
+                    toolbarHeight: television ? 64 : null,
+                    titleSpacing: 12,
+                    automaticallyImplyLeading: false,
+                    leadingWidth: _isCatalogZone && !_selectionMode
+                        ? 192
+                        : null,
+                    leading: _appBarLeading(),
+                    title: _selectionMode
+                        ? const Text(
+                            '选择短剧',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : _isCatalogZone
+                        ? InkWell(
+                            key: const ValueKey('source-switch'),
+                            onTap: _canSwitchSource
+                                ? () => unawaited(_pickSource())
+                                : null,
+                            child: SizedBox(
+                              height: 48,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      _group.name,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_canSwitchSource)
+                                    const Icon(Icons.expand_more_rounded),
+                                ],
+                              ),
+                            ),
+                          )
+                        : Text(_zoneTitle),
+                    actions: [
+                      if (_selectionMode) ...[
+                        TextButton(
+                          key: const ValueKey('clear-catalog-selection'),
+                          onPressed: _selectedDramas.isEmpty
+                              ? null
+                              : () => setState(_selectedDramas.clear),
+                          child: const Text('清空'),
+                        ),
+                        TextButton(
+                          key: const ValueKey('cancel-catalog-selection'),
+                          onPressed: _cancelSelection,
+                          child: const Text('取消'),
+                        ),
+                      ] else ...[
+                        if (_isCatalogZone) ...[
+                          if (!_showRecommendations)
+                            IconButton(
+                              tooltip:
+                                  '排序与筛选 · ${widget.store.catalogView.sort.label}',
+                              onPressed: _chooseCatalogView,
+                              color:
+                                  widget.store.catalogView.sort !=
+                                          CatalogSort.source ||
+                                      widget
+                                          .store
+                                          .catalogView
+                                          .release
+                                          .isNotEmpty
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                              icon: const Icon(Icons.sort_rounded),
+                            ),
+                          IconButton(
+                            key: const ValueKey('open-rankings'),
+                            tooltip: '榜单',
+                            onPressed: widget.store.visibleSources.isEmpty
+                                ? null
+                                : _openRankings,
+                            icon: const Icon(Icons.leaderboard_outlined),
+                          ),
+                          if (_zone == HomeZone.drama)
+                            IconButton(
+                              key: const ValueKey('open-fullscreen-feed'),
+                              tooltip: '全屏流',
+                              onPressed: _visible.isEmpty
+                                  ? null
+                                  : _openFullscreenFeed,
+                              icon: const Icon(Icons.play_arrow_rounded),
+                            ),
+                          if ((_isCatalogZone || _zone == HomeZone.live) &&
+                              !television)
+                            IconButton(
+                              key: const ValueKey('open-settings'),
+                              tooltip: '设置',
+                              icon: const Icon(Icons.settings_outlined),
+                              onPressed: _openZoneSettings,
+                            ),
+                          IconButton(
+                            key: const ValueKey('toggle-search'),
+                            tooltip: _searchVisible ? '收起搜索' : '搜索',
+                            icon: Icon(
+                              _searchVisible
+                                  ? Icons.search_off_rounded
+                                  : Icons.search_rounded,
+                            ),
+                            onPressed: _toggleSearch,
+                          ),
+                        ],
+                        if (_isCatalogZone &&
+                            !_showRecommendations &&
+                            constraints.maxWidth >= 400)
+                          RefreshAction(
+                            key: const ValueKey('catalog-refresh'),
+                            loading: _catalogBusy,
+                            tooltip: '更新剧库',
+                            onPressed: widget.store.visibleSources.isEmpty
+                                ? null
+                                : _refreshCatalog,
+                          ),
+                        if (_isCatalogZone &&
+                            !_showRecommendations &&
+                            constraints.maxWidth < 400)
+                          IconButton(
+                            tooltip: '更新剧库',
+                            onPressed: widget.store.visibleSources.isEmpty
+                                ? null
+                                : _refreshCatalog,
+                            icon: const Icon(Icons.refresh_rounded),
+                          ),
+                        if (_isCatalogZone)
+                          OutlinedButton.icon(
+                            key: const ValueKey('source-dropdown'),
+                            onPressed: _canSwitchSource
+                                ? () => unawaited(_pickSource())
+                                : null,
+                            icon: const Icon(
+                              Icons.expand_more_rounded,
+                              size: 18,
+                            ),
+                            label: Text(
+                              '${_group.name} (${_group.sources.length})',
+                            ),
+                          ),
+                      ],
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+            body: SafeArea(
+              top: false,
+              bottom: !glass || desktop,
+              child: Row(
+                children: [
+                  if (television) ...[
+                    SizedBox(
+                      width: 164,
+                      child: RemoteList(
+                        key: _navKey,
+                        itemKeys: const ['drama', 'video', 'live', 'settings'],
+                        itemExtent: 64,
+                        spacing: 14,
+                        padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
+                        autofocus: true,
+                        itemBuilder: (_, index, node, onFocus) {
+                          final entries = [
+                            (Icons.movie_rounded, '短剧'),
+                            (Icons.video_library_rounded, '影视'),
+                            (Icons.live_tv_rounded, '直播'),
+                            (Icons.settings_rounded, '设置'),
+                          ];
+                          final entry = entries[index];
+                          final selected = switch (index) {
+                            0 => _zone == HomeZone.drama,
+                            1 => _zone == HomeZone.vod,
+                            2 => _zone == HomeZone.live,
+                            _ => false,
+                          };
+                          return RemoteButton(
+                            key: ValueKey('tv-nav-$index'),
+                            label: entry.$2,
+                            icon: entry.$1,
+                            selected: selected,
+                            focusNode: node,
+                            onFocus: onFocus,
+                            onPressed: () {
+                              switch (index) {
+                                case 0:
+                                  _setZone(HomeZone.drama);
+                                case 1:
+                                  _setZone(HomeZone.vod);
+                                case 2:
+                                  _setZone(HomeZone.live);
+                                default:
+                                  _openDrawer();
+                              }
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    const VerticalDivider(width: 1),
+                  ] else if (desktop) ...[
+                    NavigationRail(
+                      selectedIndex: _railIndex,
+                      onDestinationSelected: _onRailSelected,
+                      labelType: NavigationRailLabelType.all,
+                      groupAlignment: -.8,
+                      destinations: const [
+                        NavigationRailDestination(
+                          icon: Icon(Icons.movie_outlined),
+                          selectedIcon: Icon(Icons.movie),
+                          label: Text('短剧'),
+                        ),
+                        NavigationRailDestination(
+                          icon: Icon(Icons.video_library_outlined),
+                          selectedIcon: Icon(Icons.video_library),
+                          label: Text('影视'),
+                        ),
+                        NavigationRailDestination(
+                          icon: Icon(Icons.live_tv_outlined),
+                          selectedIcon: Icon(Icons.live_tv),
+                          label: Text('直播'),
+                        ),
+                        NavigationRailDestination(
+                          icon: Icon(Icons.settings_outlined),
+                          selectedIcon: Icon(Icons.settings),
+                          label: Text('设置'),
+                        ),
+                      ],
+                    ),
+                    const VerticalDivider(width: 1, thickness: 1),
+                  ],
+                  Expanded(
+                    child: _tabBody(television: television, desktop: desktop),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (!television) {
+            return PopScope(
+              canPop:
+                  !_selectionMode &&
+                  !_searchVisible &&
+                  _search.text.isEmpty &&
+                  _zoneHistory.isEmpty,
+              onPopInvokedWithResult: (didPop, result) {
+                if (didPop) return;
+                if (_selectionMode) {
+                  _cancelSelection();
+                } else if (_searchVisible || _search.text.isNotEmpty) {
+                  setState(() => _searchVisible = false);
+                  _search.clear();
+                  _searchChanged('');
+                } else {
+                  _popZoneHistory();
+                }
+              },
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.escape): () =>
+                      Navigator.of(context).maybePop(),
+                  const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                      Navigator.of(context).maybePop(),
+                },
+                child: scaffold,
               ),
             );
           }
-        }
-        final scaffold = Scaffold(
-          key: _scaffoldKey,
-          drawer: _drawer(),
-          extendBody: glass && !desktop,
-          appBar: glass
-              ? _glassAppBar()
-              : AppBar(
-                  toolbarHeight: television ? 64 : null,
-                  titleSpacing: 12,
-                  automaticallyImplyLeading: false,
-                  leadingWidth: _isCatalogZone && !_selectionMode ? 192 : null,
-                  leading: _appBarLeading(),
-                  title: _selectionMode
-                      ? const Text(
-                          '选择短剧',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : _isCatalogZone
-                      ? InkWell(
-                          key: const ValueKey('source-switch'),
-                          onTap: _canSwitchSource
-                              ? () => unawaited(_pickSource())
-                              : null,
-                          child: SizedBox(
-                            height: 48,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    _group.name,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                                if (_canSwitchSource)
-                                  const Icon(Icons.expand_more_rounded),
-                              ],
-                            ),
-                          ),
-                        )
-                      : Text(_zoneTitle),
-                  actions: [
-                    if (_selectionMode) ...[
-                      TextButton(
-                        key: const ValueKey('clear-catalog-selection'),
-                        onPressed: _selectedDramas.isEmpty
-                            ? null
-                            : () => setState(_selectedDramas.clear),
-                        child: const Text('清空'),
-                      ),
-                      TextButton(
-                        key: const ValueKey('cancel-catalog-selection'),
-                        onPressed: _cancelSelection,
-                        child: const Text('取消'),
-                      ),
-                    ] else ...[
-                      if (_isCatalogZone) ...[
-                        if (!_showRecommendations)
-                          IconButton(
-                            tooltip:
-                                '排序与筛选 · ${widget.store.catalogView.sort.label}',
-                            onPressed: _chooseCatalogView,
-                            color:
-                                widget.store.catalogView.sort !=
-                                        CatalogSort.source ||
-                                    widget.store.catalogView.release.isNotEmpty
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                            icon: const Icon(Icons.sort_rounded),
-                          ),
-                        IconButton(
-                          key: const ValueKey('open-rankings'),
-                          tooltip: '榜单',
-                          onPressed: widget.store.visibleSources.isEmpty
-                              ? null
-                              : _openRankings,
-                          icon: const Icon(Icons.leaderboard_outlined),
-                        ),
-                        if (_zone == HomeZone.drama)
-                          IconButton(
-                            key: const ValueKey('open-fullscreen-feed'),
-                            tooltip: '全屏流',
-                            onPressed: _visible.isEmpty
-                                ? null
-                                : _openFullscreenFeed,
-                            icon: const Icon(Icons.play_arrow_rounded),
-                          ),
-                        if ((_isCatalogZone || _zone == HomeZone.live) &&
-                            !television)
-                          IconButton(
-                            key: const ValueKey('open-settings'),
-                            tooltip: '设置',
-                            icon: const Icon(Icons.settings_outlined),
-                            onPressed: _openZoneSettings,
-                          ),
-                        IconButton(
-                          key: const ValueKey('toggle-search'),
-                          tooltip: _searchVisible ? '收起搜索' : '搜索',
-                          icon: Icon(
-                            _searchVisible
-                                ? Icons.search_off_rounded
-                                : Icons.search_rounded,
-                          ),
-                          onPressed: _toggleSearch,
-                        ),
-                      ],
-                      if (_isCatalogZone &&
-                          !_showRecommendations &&
-                          constraints.maxWidth >= 400)
-                        RefreshAction(
-                          key: const ValueKey('catalog-refresh'),
-                          loading: _catalogBusy,
-                          tooltip: '更新剧库',
-                          onPressed: widget.store.visibleSources.isEmpty
-                              ? null
-                              : _refreshCatalog,
-                        ),
-                      if (_isCatalogZone &&
-                          !_showRecommendations &&
-                          constraints.maxWidth < 400)
-                        IconButton(
-                          tooltip: '更新剧库',
-                          onPressed: widget.store.visibleSources.isEmpty
-                              ? null
-                              : _refreshCatalog,
-                          icon: const Icon(Icons.refresh_rounded),
-                        ),
-                      if (_isCatalogZone)
-                        OutlinedButton.icon(
-                          key: const ValueKey('source-dropdown'),
-                          onPressed: _canSwitchSource
-                              ? () => unawaited(_pickSource())
-                              : null,
-                          icon: const Icon(Icons.expand_more_rounded, size: 18),
-                          label: Text(
-                            '${_group.name} (${_group.sources.length})',
-                          ),
-                        ),
-                    ],
-                    const SizedBox(width: 8),
-                  ],
-                ),
-          body: SafeArea(
-            top: false,
-            bottom: !glass || desktop,
-            child: Row(
-              children: [
-                if (television) ...[
-                  SizedBox(
-                    width: 164,
-                    child: RemoteList(
-                      key: _navKey,
-                      itemKeys: const ['drama', 'video', 'live', 'settings'],
-                      itemExtent: 64,
-                      spacing: 14,
-                      padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
-                      autofocus: true,
-                      itemBuilder: (_, index, node, onFocus) {
-                        final entries = [
-                          (Icons.movie_rounded, '短剧'),
-                          (Icons.video_library_rounded, '影视'),
-                          (Icons.live_tv_rounded, '直播'),
-                          (Icons.settings_rounded, '设置'),
-                        ];
-                        final entry = entries[index];
-                        final selected = switch (index) {
-                          0 => _zone == HomeZone.drama,
-                          1 =>
-                            _zone == HomeZone.vod || _zone == HomeZone.midnight,
-                          2 => _zone == HomeZone.live,
-                          _ => false,
-                        };
-                        return RemoteButton(
-                          key: ValueKey('tv-nav-$index'),
-                          label: entry.$2,
-                          icon: entry.$1,
-                          selected: selected,
-                          focusNode: node,
-                          onFocus: onFocus,
-                          onPressed: () {
-                            switch (index) {
-                              case 0:
-                                _setZone(HomeZone.drama);
-                              case 1:
-                                _setZone(HomeZone.vod);
-                              case 2:
-                                _setZone(HomeZone.live);
-                              default:
-                                _openDrawer();
-                            }
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
-                ] else if (desktop) ...[
-                  NavigationRail(
-                    selectedIndex: _railIndex,
-                    onDestinationSelected: _onRailSelected,
-                    labelType: NavigationRailLabelType.all,
-                    groupAlignment: -.8,
-                    destinations: const [
-                      NavigationRailDestination(
-                        icon: Icon(Icons.movie_outlined),
-                        selectedIcon: Icon(Icons.movie),
-                        label: Text('短剧'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.video_library_outlined),
-                        selectedIcon: Icon(Icons.video_library),
-                        label: Text('影视'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.live_tv_outlined),
-                        selectedIcon: Icon(Icons.live_tv),
-                        label: Text('直播'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.settings_outlined),
-                        selectedIcon: Icon(Icons.settings),
-                        label: Text('设置'),
-                      ),
-                    ],
-                  ),
-                  const VerticalDivider(width: 1, thickness: 1),
-                ],
-                Expanded(
-                  child: _tabBody(television: television, desktop: desktop),
-                ),
-              ],
-            ),
-          ),
-        );
-        if (!television) {
           return PopScope(
             canPop:
                 !_selectionMode &&
-                !_searchVisible &&
-                _search.text.isEmpty &&
-                _zoneHistory.isEmpty,
+                (!television || _isCatalogZone && _search.text.isEmpty),
             onPopInvokedWithResult: (didPop, result) {
-              if (didPop) return;
-              if (_selectionMode) {
-                _cancelSelection();
-              } else if (_searchVisible || _search.text.isNotEmpty) {
-                setState(() => _searchVisible = false);
-                _search.clear();
-                _searchChanged('');
-              } else {
-                _popZoneHistory();
-              }
+              if (!didPop) _televisionBack();
             },
             child: CallbackShortcuts(
               bindings: {
@@ -2255,26 +2316,9 @@ class _HomeScreenState extends State<HomeScreen> {
               child: scaffold,
             ),
           );
-        }
-        return PopScope(
-          canPop:
-              !_selectionMode &&
-              (!television || _isCatalogZone && _search.text.isEmpty),
-          onPopInvokedWithResult: (didPop, result) {
-            if (!didPop) _televisionBack();
-          },
-          child: CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.escape): () =>
-                  Navigator.of(context).maybePop(),
-              const SingleActivator(LogicalKeyboardKey.goBack): () =>
-                  Navigator.of(context).maybePop(),
-            },
-            child: scaffold,
-          ),
-        );
-      },
-    ),
+        },
+      );
+    },
   );
 
   Widget _tabBody({required bool television, required bool desktop}) {
@@ -2301,21 +2345,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (_sectionSources.isEmpty) {
       return StatusPanel(
-        title: _zone == HomeZone.midnight
-            ? '暂无显示中的午夜区站源'
-            : _zone == HomeZone.vod
-            ? '暂无显示中的点播站源（远程配置/py）'
+        title: _zone == HomeZone.vod
+            ? '暂无显示中的点播站源'
             : _catalogSection == SourceSite.sectionVideo
             ? '暂无显示中的点播站源'
             : '暂无显示中的站源',
         message: widget.store.sources.isEmpty
             ? '请联系管理员为当前用户开放站源。'
-            : _zone == HomeZone.vod
-            ? '点播站源请到内容源管理导入远程配置或 py 站。'
             : '所有站源已在「源显示列表」中关闭，请到站源管理中重新开启。',
       );
     }
-    return _catalog(selectionInBody: desktop || television);
+    final catalog = _catalog(selectionInBody: desktop || television);
+    if (!neonStyleActive || television) return catalog;
+    // 霓虹风格下，内容区（点播 / 短剧目录）铺同一套氛围光，
+    // 与抽屉共用 NeonBackdrop.app 这一份定义，不再只有首页和频道页
+    // 是霓虹、点播区还是原来的纯色底。
+    return NeonBackdrop.app(child: catalog);
   }
 
   Widget _breadcrumbBar() {

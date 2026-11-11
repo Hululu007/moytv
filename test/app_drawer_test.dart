@@ -7,7 +7,6 @@ void main() {
 
   Future<void> pumpDrawer(
     WidgetTester tester, {
-    bool midnightActivated = false,
     required List<HomeZone> zones,
     required List<AppDrawerTool> tools,
     required VoidCallback onWatchRoom,
@@ -21,13 +20,11 @@ void main() {
         home: Scaffold(
           body: AppDrawer(
             zone: HomeZone.drama,
-            midnightActivated: midnightActivated,
             currentVersion: '1.0.1',
             onZoneSelected: zones.add,
             onWatchRoom: onWatchRoom,
             onTool: tools.add,
             onMinorProtectionChanged: (_) {},
-            onVersionDoubleTap: () {},
           ),
         ),
       ),
@@ -40,17 +37,14 @@ void main() {
     var room = 0;
     await pumpDrawer(
       tester,
-      midnightActivated: true,
       zones: zones,
       tools: [],
       onWatchRoom: () => room++,
     );
     await tester.tap(find.text('点播'));
     expect(zones, [HomeZone.vod]);
-    await tester.tap(find.text('午夜区'));
-    expect(zones, [HomeZone.vod, HomeZone.midnight]);
     await tester.tap(find.text('直播'));
-    expect(zones, [HomeZone.vod, HomeZone.midnight, HomeZone.live]);
+    expect(zones, [HomeZone.vod, HomeZone.live]);
     await tester.tap(find.text('一起看房间'));
     expect(room, 1);
     await tester.tap(find.text('音乐'));
@@ -63,17 +57,12 @@ void main() {
     final tools = <AppDrawerTool>[];
     await pumpDrawer(tester, zones: [], tools: tools, onWatchRoom: () {});
     const expected = {
-      '站源管理': AppDrawerTool.sources,
+      '站点区': AppDrawerTool.sources,
       '内容源管理': AppDrawerTool.contentSources,
       '设置': AppDrawerTool.settings,
       '播放器选择': AppDrawerTool.player,
       '软件更新': AppDrawerTool.appUpdate,
       '导入中心': AppDrawerTool.importCenter,
-      '解析接口': AppDrawerTool.parse,
-      '站点验证': AppDrawerTool.clearance,
-      '代理内核': AppDrawerTool.proxyKernel,
-      '设备互联': AppDrawerTool.lanSync,
-      '蜘蛛规则编辑器': AppDrawerTool.ruleEditor,
     };
     for (final entry in expected.entries) {
       await tester.ensureVisible(find.text(entry.key));
@@ -88,25 +77,11 @@ void main() {
   });
 
   testWidgets('drawer sections are all expanded at once', (tester) async {
-    await pumpDrawer(
-      tester,
-      midnightActivated: true,
-      zones: [],
-      tools: [],
-      onWatchRoom: () {},
-    );
+    await pumpDrawer(tester, zones: [], tools: [], onWatchRoom: () {});
     expect(find.text('影视模块'), findsOneWidget);
     expect(find.text('应用工具'), findsOneWidget);
-    expect(find.text('通用配置与管理'), findsOneWidget);
-    for (final label in [
-      '短剧',
-      '点播',
-      '午夜区',
-      '直播',
-      '一起看房间',
-      '站源管理',
-      '软件更新',
-    ]) {
+    expect(find.text('常用入口 · 完整设置见「设置」'), findsOneWidget);
+    for (final label in ['短剧', '点播', '直播', '一起看房间', '站点区', '软件更新']) {
       expect(find.text(label), findsOneWidget);
     }
     await tester.tap(find.text('音乐'));
@@ -182,14 +157,10 @@ void main() {
     expect(tools.last, AppDrawerTool.miniApp);
   });
 
-  testWidgets('midnight tile follows activation', (tester) async {
-    await pumpDrawer(
-      tester,
-      midnightActivated: false,
-      zones: [],
-      tools: [],
-      onWatchRoom: () {},
-    );
+  testWidgets('drawer has no midnight tile after the merge', (tester) async {
+    await pumpDrawer(tester, zones: [], tools: [], onWatchRoom: () {});
     expect(find.text('午夜区'), findsNothing);
+    expect(find.text('站点区'), findsOneWidget);
+    expect(find.text('未成年保护'), findsOneWidget);
   });
 }

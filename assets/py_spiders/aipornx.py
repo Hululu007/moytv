@@ -168,7 +168,7 @@ class Spider(BaseSpider):
         html = http_get(self._host() + "/home/")
         return {"list": parse_cards(html)}
 
-    def categoryContent(self, tid, pg, filter, extend):
+    def categoryContent(self, tid, pg, filter=False, extend=None):
         pg = int(pg or 1)
         if tid == "home":
             html = http_get(self._host() + "/home/")
@@ -263,7 +263,7 @@ class Spider(BaseSpider):
             vod["vod_remarks"] = "更新至%d集" % len(items)
         return {"list": [vod]}
 
-    def playerContent(self, flag, id, vipFlags):
+    def playerContent(self, flag, id, vipFlags=None):
         if id.startswith("http"):
             play_path = urllib.parse.urlparse(id).path
         elif id.startswith("/"):
@@ -306,7 +306,7 @@ class Spider(BaseSpider):
         return {"parse": 1, "playUrl": "", "url": page_url,
                 "header": {"Referer": self._host() + "/", "User-Agent": UA}}
 
-    def searchContent(self, key, quick, pg="1"):
+    def searchContent(self, key, quick=False, pg=1):
         pg = int(pg or 1)
         kw = urllib.parse.quote(str(key))
         if pg > 1:

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -153,13 +152,18 @@ func (downloader *Downloader) registerHongguoDevice(ctx context.Context) (string
 	request.Header.Set("User-Agent", hongguoAppUserAgent)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	placeholder := downloader.hongguoDeviceID()
 	response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
-		query.Set("_rticket", strconv.FormatInt(time.Now().UnixMilli(), 10))
-		prepared.URL.RawQuery = query.Encode()
+		// 注册请求也带播放器签名头，用注册前本地占位设备号签；请求体形状不动。
+		hongguoPrepareSignedRequest(prepared, query, body, time.Now(), true, placeholder)
 	})
 	if err != nil {
 		return "", "", err
 	}
+	client := downloader.hongguoClient()
+	client.mu.Lock()
+	client.hongguoStoreCookies(request.URL.Host, response)
+	client.mu.Unlock()
 	content, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	response.Body.Close()
 	if err != nil {

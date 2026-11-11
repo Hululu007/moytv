@@ -54,3 +54,8 @@ native/server.exe~
 ios/Frameworks/
 ios/PythonBridge/Resources/PythonVendor.bundle/
 windows/flutter/ephemeral/
+
+# 本地渲染预览图（不入库）
+reading_bookshelf_previews/
+drawer_preview/
+android/app/.cxx/

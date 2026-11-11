@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'app_update.dart';
-import 'midnight_zone.dart';
 import 'update_config.dart';
 import 'update_download.dart';
 
@@ -23,9 +22,6 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
   bool _checked = false;
   DownloadProgress? _progress;
   final ResumableDownloader _downloader = ResumableDownloader();
-  Future<void> _onVersionDoubleTap() async {
-    await activateMidnightAndExit();
-  }
 
   @override
   void initState() {
@@ -125,13 +121,10 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          GestureDetector(
-            onDoubleTap: () => unawaited(_onVersionDoubleTap()),
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('当前版本'),
-              subtitle: Text(current?.toString() ?? '读取中…'),
-            ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('当前版本'),
+            subtitle: Text(current?.toString() ?? '读取中…'),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,

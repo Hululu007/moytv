@@ -311,7 +311,9 @@ class _SourcesScreenState extends State<SourcesScreen> {
           ? viewPaddingBottom
           : paddingBottom;
       return Scaffold(
-        appBar: AppBar(title: const Text('站源管理')),
+        // 统一站点区：午夜区已并入本站点区，全部站源只在此登记一次，
+        // 在此呈现（分组列表）与管理（更新/检测/显隐），不再另设午夜区列表。
+        appBar: AppBar(title: const Text('站点区')),
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 960),
@@ -366,7 +368,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   const Padding(
                     padding: EdgeInsets.only(bottom: 16),
                     child: Text(
-                      '各站源可分别更新和检测。更新会查找新剧、继续加载一页历史内容，并分批补齐资料；离开此页后任务继续。',
+                      '统一站点区：午夜区已并入此处，全部站源只登记一次。各站源可分别更新和检测。更新会查找新剧、继续加载一页历史内容，并分批补齐资料；离开此页后任务继续。',
                     ),
                   ),
                   if (sources.isEmpty)
@@ -473,6 +475,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
               runSpacing: 8,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                FilledButton.icon(
+                  key: ValueKey('browse-${source.id}'),
+                  onPressed: () => Navigator.of(context).pop(source.id),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('进站浏览'),
+                ),
                 FilledButton.icon(
                   key: ValueKey('update-${source.id}'),
                   onPressed: enabled ? () => _run(source, 'update') : null,

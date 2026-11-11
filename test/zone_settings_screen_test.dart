@@ -13,7 +13,7 @@ void main() {
   Future<void> pumpZone(
     WidgetTester tester,
     HomeZone zone, {
-    VoidCallback? onHideMidnight,
+    VoidCallback? onHideAdult,
   }) async {
     SharedPreferences.setMockInitialValues({});
     final store = LocalStore(await SharedPreferences.getInstance());
@@ -27,7 +27,7 @@ void main() {
           repository: FixtureRepository(),
           store: store,
           zone: zone,
-          onHideMidnight: onHideMidnight,
+          onHideAdult: onHideAdult,
         ),
       ),
     );
@@ -59,16 +59,16 @@ void main() {
     expect(find.text('未成年保护'), findsNothing);
   });
 
-  testWidgets('midnight zone settings carry protection switch', (tester) async {
+  testWidgets('vod zone settings carry protection switch', (tester) async {
     var hidden = 0;
-    await pumpZone(tester, HomeZone.midnight, onHideMidnight: () => hidden++);
-    expect(find.text('午夜设置'), findsOneWidget);
+    await pumpZone(tester, HomeZone.vod, onHideAdult: () => hidden++);
+    expect(find.text('点播设置'), findsOneWidget);
     expect(find.text('未成年保护'), findsOneWidget);
     expect(find.text('解析接口'), findsOneWidget);
     expect(find.text('通用设置'), findsOneWidget);
     expect(find.text('短剧区风格'), findsNothing);
     expect(find.text('点播区 UI 风格'), findsNothing);
-    expect(find.text('内容源管理'), findsNothing);
+    expect(find.text('内容源管理'), findsOneWidget);
     await tester.tap(find.text('未成年保护'));
     await tester.pumpAndSettle();
     expect(hidden, 1);

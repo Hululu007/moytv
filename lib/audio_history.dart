@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'midnight_zone.dart';
-
 const _audioResumeKey = 'audioResume';
 const _audioHistoryKey = 'audioHistory';
 const _audioFavoritesKey = 'audioFavorites';
@@ -252,24 +250,9 @@ Future<void> removeAudioFavorite(String sourceId, String bookId) async {
   await saveAudioFavorites(entries);
 }
 
-List<AudioListenRecord> visibleAudioRecords(
-  List<AudioListenRecord> entries,
-  bool midnightActivated,
-) {
-  if (midnightActivated) return entries;
-  return [
-    for (final entry in entries)
-      if (!isAdultSourceName(entry.sourceName)) entry,
-  ];
-}
+List<AudioListenRecord> visibleAudioRecords(List<AudioListenRecord> entries) =>
+    entries;
 
 List<AudioFavoriteEntry> visibleAudioFavorites(
   List<AudioFavoriteEntry> entries,
-  bool midnightActivated,
-) {
-  if (midnightActivated) return entries;
-  return [
-    for (final entry in entries)
-      if (!isAdultSourceName(entry.sourceName)) entry,
-  ];
-}
+) => entries;

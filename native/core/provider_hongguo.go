@@ -212,7 +212,25 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 			return media, nil
 		}
 	}
-	media, nativeErr := d.resolveHongguoAppMedia(ctx, videoID)
+	// 预取：从分集表（有缓存时不发请求）里取当前集之后的最多 2 集，批量一次取回进核内缓存。
+	var upcoming []string
+	if entry, detailErr := d.hongguoAppDetail(ctx, seriesID); detailErr == nil {
+		for index, chapter := range entry.Chapters {
+			if strings.TrimPrefix(chapter.VideoURL, "hongguo-cenc://") != videoID {
+				continue
+			}
+			for _, next := range entry.Chapters[index+1:] {
+				if len(upcoming) >= 2 {
+					break
+				}
+				if nextID := strings.TrimPrefix(next.VideoURL, "hongguo-cenc://"); hongguoNumericID.MatchString(nextID) {
+					upcoming = append(upcoming, nextID)
+				}
+			}
+			break
+		}
+	}
+	media, nativeErr := d.resolveHongguoAppMediaWithUpcoming(ctx, videoID, upcoming)
 	if nativeErr == nil {
 		return media, nil
 	}

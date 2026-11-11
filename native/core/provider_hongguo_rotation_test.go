@@ -54,7 +54,7 @@ func TestHongguoAppMediaRotatesOnEmptyBody(t *testing.T) {
 	if d.hongguoPlayerSuspended() {
 		t.Fatal("successful rotation must not suspend the player")
 	}
-	if got := *requests; len(got) != 4 || got[0] != "model@7" || got[1] != "model@7" || got[2] != "register" || got[3] != "model@1001" {
+	if got := *requests; len(got) != 5 || got[0] != "model@7" || got[1] != "model@7" || got[2] != "model@7" || got[3] != "register" || got[4] != "model@1001" {
 		t.Fatal("unexpected request sequence", got)
 	}
 }
@@ -69,7 +69,7 @@ func TestHongguoAppMediaRotatesOnEmptyModel(t *testing.T) {
 	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1001" {
 		t.Fatal("empty model did not rotate the device", state)
 	}
-	if got := *requests; len(got) != 4 || got[0] != "model@7" || got[1] != "model@7" || got[3] != "model@1001" {
+	if got := *requests; len(got) != 5 || got[0] != "model@7" || got[1] != "model@7" || got[2] != "model@7" || got[4] != "model@1001" {
 		t.Fatal("unexpected request sequence", got)
 	}
 }
@@ -93,7 +93,7 @@ func TestHongguoAppMediaSuspendsOnlyAfterRotationsExhausted(t *testing.T) {
 			registers++
 		}
 	}
-	if models != 2*(2+hongguoDeviceRotations) || registers != 2*hongguoDeviceRotations {
+	if models != 2*(3+hongguoDeviceRotations) || registers != 2*hongguoDeviceRotations {
 		t.Fatal("unexpected rotation counts", *requests)
 	}
 }

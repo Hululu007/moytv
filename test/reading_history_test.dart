@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 ReadingShelfEntry entry({
-  String sourceId = 'ssxxs',
-  String sourceName = '涩涩小说',
+  String sourceId = 'cheniyo',
+  String sourceName = '桃色书屋',
   String bookId = 'book1',
   String title = '测试小说',
   int lastChapterIndex = 3,
@@ -59,7 +59,7 @@ void main() {
   test('reading history entry can be removed', () async {
     await recordReadingHistory(entry(bookId: 'a'));
     await recordReadingHistory(entry(bookId: 'b'));
-    await removeReadingHistory('ssxxs', 'a');
+    await removeReadingHistory('cheniyo', 'a');
     final history = await loadReadingHistory();
     expect(history.length, 1);
     expect(history.first.bookId, 'b');

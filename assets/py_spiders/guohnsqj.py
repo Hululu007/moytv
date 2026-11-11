@@ -573,6 +573,8 @@ class Spider(BaseSpider):
                     stream = _fix_url(info.get('videoUrlTwo') or '')
                 else:
                     stream = _fix_url(info.get('videoUrlOne') or '')
+        if stream.startswith('https://video.twimg.com/') or '.twimg.com/' in stream:
+            header = {'User-Agent': UA, 'Referer': 'https://x.com/'}
         return {'parse': 0, 'playUrl': stream, 'url': stream, 'header': header}
 
     def localProxy(self, param):

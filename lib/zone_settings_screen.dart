@@ -17,22 +17,20 @@ class ZoneSettingsScreen extends StatelessWidget {
     required this.repository,
     required this.store,
     required this.zone,
-    this.onHideMidnight,
+    this.onHideAdult,
   });
 
   final AppRepository repository;
   final LocalStore store;
   final HomeZone zone;
-  final VoidCallback? onHideMidnight;
+  final VoidCallback? onHideAdult;
 
   String get title => switch (zone) {
     HomeZone.drama => '短剧设置',
     HomeZone.vod => '点播设置',
-    HomeZone.midnight => '午夜设置',
     HomeZone.live => '直播设置',
     HomeZone.audio => '听书设置',
     HomeZone.novel => '阅读设置',
-
   };
 
   Future<void> _push(BuildContext context, Widget page) =>
@@ -65,7 +63,6 @@ class ZoneSettingsScreen extends StatelessWidget {
     switch (zone) {
       case HomeZone.drama:
       case HomeZone.vod:
-      case HomeZone.midnight:
         break;
       case HomeZone.live:
         entries.add(
@@ -82,7 +79,6 @@ class ZoneSettingsScreen extends StatelessWidget {
     }
     if (zone == HomeZone.drama ||
         zone == HomeZone.vod ||
-        zone == HomeZone.midnight ||
         zone == HomeZone.live) {
       entries.add(
         _entry(
@@ -101,7 +97,7 @@ class ZoneSettingsScreen extends StatelessWidget {
         ),
       );
     }
-    if (zone == HomeZone.vod || zone == HomeZone.midnight) {
+    if (zone == HomeZone.vod) {
       entries.add(
         _entry(
           icon: Icons.link_rounded,
@@ -124,16 +120,18 @@ class ZoneSettingsScreen extends StatelessWidget {
         ),
       );
     }
-    if (zone == HomeZone.midnight && onHideMidnight != null) {
+    // 点播区是合并后的唯一视频区，未成年保护开关跟到点播区设置里，
+    // 语义与火蚁TV午夜区设置里的一致：一次性离开视频区、回到短剧区。
+    if (zone == HomeZone.vod && onHideAdult != null) {
       entries.add(
         SwitchListTile(
           secondary: const Icon(Icons.shield_rounded),
           title: const Text('未成年保护'),
-          subtitle: const Text('开启后隐藏午夜区并回到短剧区'),
+          subtitle: const Text('开启后隐藏成人站并回到短剧区'),
           value: false,
           onChanged: (value) {
             if (value) {
-              onHideMidnight!();
+              onHideAdult!();
               Navigator.pop(context);
             }
           },

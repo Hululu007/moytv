@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/bits"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -23,7 +24,68 @@ func newHongguoPlayerNonce() (hongguoPlayerNonce, error) {
 	return nonce, err
 }
 
+// hongguoSixGodBranch：对照仓 Signer.branch 的 Go 版——iv 取 (iv&15)%3，
+// 只发分支 0 的请求。query 是已编码的查询串（含 _rticket/ts），body 为空时取 16 字节零。
+func hongguoSixGodBranch(query string, body []byte, ts uint32) int {
+	querySm3 := hongguoSM3([]byte(query))
+	var bodyMD5 [16]byte
+	if body != nil {
+		bodyMD5 = md5.Sum(body)
+	}
+	iv := sixGodGetIv(0x20230928, querySm3[:])
+	iv = sixGodGetIv(iv, bodyMD5[:])
+	iv = sixGodGetIv(iv, sixGodU32LE(ts))
+	return int(iv&15) % 3
+}
+
+func cloneHongguoQuery(query url.Values) url.Values {
+	out := make(url.Values, len(query))
+	for key, values := range query {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
+// hongguoPickBranchZeroTicket：在 _rticket 上试偏移 0..127，直到分支为 0；
+// 128 次都凑不出时退回偏移 0 照常发，绝不因此让一次播放请求直接失败。
+// 通用形态同时把 ts 写进查询串；调用后 request.URL.RawQuery 即为待签名的查询串。
+func hongguoPickBranchZeroTicket(request *http.Request, query url.Values, body []byte, now time.Time, generic bool) int64 {
+	stamp := uint32(now.Unix())
+	base := now.UnixMilli()
+	for offset := int64(0); offset < 128; offset++ {
+		ticket := base + offset
+		picked := cloneHongguoQuery(query)
+		picked.Set("_rticket", strconv.FormatInt(ticket, 10))
+		if generic {
+			picked.Set("ts", strconv.FormatUint(uint64(stamp), 10))
+		}
+		request.URL.RawQuery = picked.Encode()
+		if hongguoSixGodBranch(request.URL.RawQuery, body, stamp) == 0 {
+			return ticket
+		}
+	}
+	picked := cloneHongguoQuery(query)
+	picked.Set("_rticket", strconv.FormatInt(base, 10))
+	if generic {
+		picked.Set("ts", strconv.FormatUint(uint64(stamp), 10))
+	}
+	request.URL.RawQuery = picked.Encode()
+	return base
+}
+
+// hongguoPrepareSignedRequest：调票至分支 0 后加播放器签名头。
+// playback 为真走播放器形态（地域头），为假走通用形态（ts 查询参数 + 请求标签头）。
+// deviceID 为空时取查询串里的 device_id；注册请求等场景可显式传本地占位设备号。
+func hongguoPrepareSignedRequest(request *http.Request, query url.Values, body []byte, now time.Time, playback bool, deviceID string) {
+	ticket := hongguoPickBranchZeroTicket(request, query, body, now, !playback)
+	signHongguoPlayerRequestFull(request, body, now, ticket, playback, deviceID)
+}
+
 func signHongguoPlayerRequest(request *http.Request, body []byte, now time.Time) {
+	signHongguoPlayerRequestFull(request, body, now, now.UnixMilli(), true, "")
+}
+
+func signHongguoPlayerRequestFull(request *http.Request, body []byte, now time.Time, ticketMs int64, playback bool, deviceID string) {
 	stamp := uint32(now.Unix())
 	queryHash := md5.Sum([]byte(request.URL.RawQuery))
 	var payload [20]byte
@@ -46,17 +108,30 @@ func signHongguoPlayerRequest(request *http.Request, body []byte, now time.Time)
 	signature := append([]byte{0x84, 0x04, 0x40, 0x1c, 0, 0}, payload[:]...)
 	request.Header.Set("X-Khronos", strconv.FormatUint(uint64(stamp), 10))
 	request.Header.Set("X-Gorgon", hex.EncodeToString(signature))
-	request.Header.Set("X-SS-Req-Ticket", strconv.FormatInt(now.UnixMilli(), 10))
+	request.Header.Set("X-SS-Req-Ticket", strconv.FormatInt(ticketMs, 10))
 
 	nonce, err := newHongguoPlayerNonce()
 	if err != nil {
 		return
 	}
-	request.Header.Set("X-Argus", hongguoPlayerArgus(request.URL.RawQuery, body, stamp, request.URL.Query().Get("device_id"), nonce))
+	if deviceID == "" {
+		deviceID = request.URL.Query().Get("device_id")
+	}
+	request.Header.Set("X-Argus", hongguoPlayerArgus(request.URL.RawQuery, body, stamp, deviceID, nonce))
 	request.Header.Set("X-Ladon", hongguoPlayerLadon(request.URL.Query().Get("aid"), stamp, nonce[2:6]))
 	request.Header.Set("X-Helios", sixGodHelios(stamp, 0))
-	if medusa, err := sixGodGenMedusa(request.URL.String(), body, stamp, sixGodMedusaOpts{}); err == nil {
+	if medusa, err := sixGodGenMedusa(request.URL.String(), body, stamp, sixGodMedusaOpts{DeviceID: deviceID}); err == nil {
 		request.Header.Set("X-Medusa", medusa)
+	}
+	if playback {
+		request.Header.Set("X-TT-Store-Region", "cn")
+		request.Header.Set("X-TT-Store-Region-Src", "did")
+	} else {
+		request.Header.Set("X-TT-Request-Tag", "t=0;n=0")
+		request.Header.Set("Passport-Sdk-Version", "50561")
+		if body != nil {
+			request.Header.Set("X-Vc-Bdturing-Sdk-Version", "3.7.2.cn")
+		}
 	}
 }
 

@@ -15,7 +15,7 @@ except Exception:
         class BaseSpider:
             pass
 
-BASE = 'https://5.hmav6546.cc:8888'
+BASE = 'https://5.hmav7248.cc:8888'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 CATEGORIES = [
@@ -60,24 +60,30 @@ def _http_get(url, referer=None, timeout=25):
     }
     if referer:
         hdr['Referer'] = referer
-    try:
-        req = urllib.request.Request(url, headers=hdr)
-        with urllib.request.urlopen(req, timeout=timeout, context=CTX) as resp:
-            data = resp.read()
-            enc = (resp.headers.get('Content-Encoding') or '').lower()
-        if enc == 'gzip' or data[:2] == b'\x1f\x8b':
-            try:
-                data = gzip.decompress(data)
-            except Exception:
-                pass
-        for cs in ('utf-8', 'gbk', 'gb18030'):
-            try:
-                return data.decode(cs)
-            except Exception:
-                continue
-        return data.decode('utf-8', 'replace')
-    except Exception:
-        return None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=hdr)
+            with urllib.request.urlopen(req, timeout=timeout, context=CTX) as resp:
+                data = resp.read()
+                enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or data[:2] == b'\x1f\x8b':
+                try:
+                    data = gzip.decompress(data)
+                except Exception:
+                    pass
+            for cs in ('utf-8', 'gbk', 'gb18030'):
+                try:
+                    return data.decode(cs)
+                except Exception:
+                    continue
+            return data.decode('utf-8', 'replace')
+        except Exception:
+            if attempt < 2:
+                try:
+                    time.sleep(1)
+                except Exception:
+                    pass
+    return None
 
 
 def _unwrap(raw):

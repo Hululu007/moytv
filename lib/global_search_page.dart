@@ -44,7 +44,6 @@ class GlobalVideoGroup {
 
 String globalSearchSectionOf(SourceSite? site) {
   if (site == null) return '其他';
-  if (isMidnightZoneSource(site)) return '午夜';
   if (isVodZoneSource(site)) return '点播';
   return '短剧';
 }
@@ -52,7 +51,6 @@ String globalSearchSectionOf(SourceSite? site) {
 int globalSearchSectionRank(String section) => switch (section) {
   '短剧' => 0,
   '点播' => 1,
-  '午夜' => 2,
   '听书' => 3,
   '阅读' => 4,
   _ => 5,
@@ -196,9 +194,8 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
       if (!sections.contains(group.section)) sections.add(group.section);
     }
     sections.sort(
-      (a, b) => globalSearchSectionRank(a).compareTo(
-        globalSearchSectionRank(b),
-      ),
+      (a, b) =>
+          globalSearchSectionRank(a).compareTo(globalSearchSectionRank(b)),
     );
     return Scaffold(
       appBar: AppBar(title: const Text('全局搜索')),
@@ -222,10 +219,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _search,
-                  child: const Text('搜索'),
-                ),
+                FilledButton(onPressed: _search, child: const Text('搜索')),
               ],
             ),
           ),
@@ -239,10 +233,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
                   children: [
                     Text(_error, style: TextStyle(color: colors.error)),
                     const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: _search,
-                      child: const Text('重试'),
-                    ),
+                    FilledButton(onPressed: _search, child: const Text('重试')),
                   ],
                 ),
               ),

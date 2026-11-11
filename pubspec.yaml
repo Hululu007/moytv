@@ -64,5 +64,6 @@ flutter:
     - assets/jars/youtube.jar
     - assets/youtube3.json
     - assets/jar_site_configs.json
+    - assets/haikuo_samples.json
     - assets/novel_covers/
     - assets/ant_logo.png

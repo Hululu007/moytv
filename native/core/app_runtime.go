@@ -156,6 +156,25 @@ type nativeInput struct {
 	Sha256           string                  `json:"sha256"`
 	Manifest         string                  `json:"manifest"`
 	Signature        string                  `json:"signature"`
+	// 红果账号/登录动作入参（hongguoAccount* / hongguoLogin*）。
+	Phone            string                  `json:"phone"`
+	Code             string                  `json:"code"`
+	Token            string                  `json:"token"`
+	AccountCookie    string                  `json:"accountCookie"`
+	AccountID        string                  `json:"accountId"`
+	UserName         string                  `json:"userName"`
+	ExpiresAtMS      int64                   `json:"expiresAtMs"`
+	CookieSource     string                  `json:"cookieSource"`
+	DeviceID         string                  `json:"deviceId"`
+	InstallID        string                  `json:"installId"`
+	Online           *bool                   `json:"online"`
+	Add              *bool                   `json:"add"`
+	ItemID           string                  `json:"itemId"`
+	EpisodeIndex     int                     `json:"episodeIndex"`
+	EpisodeCount     int                     `json:"episodeCount"`
+	ProgressMS       int64                   `json:"progressMs"`
+	TotalMS          int64                   `json:"totalMs"`
+	UpdatedAtMS      int64                   `json:"updatedAtMs"`
 }
 
 type nativeFilterOption struct {
@@ -610,6 +629,106 @@ func nativeDispatch(input nativeInput) (any, error) {
 		status := engine.downloader.hongguoDeviceStatus()
 		status["changed"] = changed
 		return status, nil
+	case "hongguoAccountStatus":
+		return engine.downloader.hongguoAccountStatus(), nil
+	case "hongguoAccountSetSession":
+		expires := time.Time{}
+		if input.ExpiresAtMS > 0 {
+			expires = time.UnixMilli(input.ExpiresAtMS)
+		}
+		engine.downloader.setHongguoAccountSession(hongguoAccountSession{
+			Cookie: input.AccountCookie, DeviceID: input.DeviceID, InstallID: input.InstallID,
+			AccountID: input.AccountID, UserName: input.UserName,
+			ExpiresAt: expires, Source: input.CookieSource,
+		})
+		return engine.downloader.hongguoAccountStatus(), nil
+	case "hongguoAccountExportSession":
+		return engine.downloader.hongguoAccountExportSession(), nil
+	case "hongguoAccountClearSession":
+		engine.downloader.setHongguoAccountSession(hongguoAccountSession{})
+		return engine.downloader.hongguoAccountStatus(), nil
+	case "hongguoLoginQr":
+		image, expires, err := engine.downloader.hongguoLoginQR(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"imageBase64": image, "expiresSeconds": expires}, nil
+	case "hongguoLoginQrPoll":
+		loggedIn, err := engine.downloader.hongguoLoginQRPoll(ctx)
+		if err != nil {
+			return nil, err
+		}
+		status := engine.downloader.hongguoAccountStatus()
+		status["loggedIn"] = loggedIn
+		return status, nil
+	case "hongguoAccountInfo":
+		return engine.downloader.hongguoLoginAccountInfo(ctx)
+	case "hongguoLoginSendCode":
+		masked, retry, err := engine.downloader.hongguoLoginWebSendCode(ctx, input.Phone)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"maskedMobile": masked, "retrySeconds": retry}, nil
+	case "hongguoLoginSms":
+		return engine.downloader.hongguoLoginWebVerify(ctx, input.Phone, input.Code)
+	case "hongguoLoginAppSendCode":
+		masked, retry, err := engine.downloader.hongguoLoginAppSendCode(ctx, input.Phone)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"maskedMobile": masked, "retrySeconds": retry}, nil
+	case "hongguoLoginAppSms":
+		return engine.downloader.hongguoLoginAppVerify(ctx, input.Phone, input.Code)
+	case "hongguoAccountFavorites":
+		items, err := engine.downloader.hongguoAccountFavorites(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "hongguoAccountSetFavorite":
+		add := input.Add != nil && *input.Add
+		items, err := engine.downloader.hongguoAccountSetFavorite(ctx, input.SeriesID, add)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "hongguoAccountHistory":
+		items, err := engine.downloader.hongguoAccountHistory(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "hongguoAccountUploadProgress":
+		progress := hongguoCloudProgress{
+			SeriesID: input.SeriesID, EpisodeID: input.ItemID,
+			EpisodeIndex: input.EpisodeIndex, EpisodeCount: input.EpisodeCount,
+			PositionMS: input.ProgressMS, DurationMS: input.TotalMS,
+			UpdatedAtMS: input.UpdatedAtMS,
+		}
+		if err := engine.downloader.hongguoAccountUploadProgress(ctx, progress); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "hongguoAccountReservations":
+		online := input.Online != nil && *input.Online
+		items, err := engine.downloader.hongguoAccountReservations(ctx, online)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "hongguoAccountReserve":
+		if err := engine.downloader.hongguoAccountReserve(ctx, input.SeriesID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	case "hongguoAccountRelated":
+		items, err := engine.downloader.hongguoAccountRelated(ctx, input.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "hongguoAccountFilter":
+		return engine.downloader.hongguoAccountFilter(ctx, input.Content, input.Cursor)
 	case "sourceJob":
 		return engine.startSourceTask(input.Source, input.Command, input.Drama)
 	case "cancelSourceJob":

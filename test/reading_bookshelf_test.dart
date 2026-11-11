@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:moyi/content_models.dart';
-import 'package:moyi/midnight_zone.dart';
 import 'package:moyi/nonvideo_content.dart';
 import 'package:moyi/novel_reader_page.dart';
 import 'package:moyi/reading_bookshelf.dart';
@@ -92,6 +91,15 @@ ReadingShelfEntry _entry({
 String _shelfJson(List<ReadingShelfEntry> entries) =>
     jsonEncode([for (final entry in entries) entry.toJson()]);
 
+// App 主题用 NoSplash（见 app_theme.dart），测试里也用它：
+// 默认 InkSparkle 点按时要加载 shaders/ink_sparkle.frag，测试包里没有该资源。
+Widget _testApp(Widget home) {
+  return MaterialApp(
+    theme: ThemeData(splashFactory: NoSplash.splashFactory),
+    home: home,
+  );
+}
+
 void main() {
   test('shelf add list remove round trip', () async {
     SharedPreferences.setMockInitialValues({});
@@ -152,15 +160,14 @@ void main() {
     expect(entry.started, isTrue);
   });
 
-  test('midnight gate hides adult entries only when inactive', () {
+  test('书架不过滤成人条目', () {
     final entries = [
       _entry(sourceName: '🔞成人源'),
       _entry(sourceId: 'plain', sourceName: '普通源', bookId: 'b9'),
     ];
-    expect(visibleShelfEntries(entries, true).length, 2);
-    final hidden = visibleShelfEntries(entries, false);
-    expect(hidden.length, 1);
-    expect(hidden.single.sourceId, 'plain');
+    final visible = visibleShelfEntries(entries);
+    expect(visible.length, 2);
+    expect(visible.map((e) => e.sourceId), containsAll(['fake', 'plain']));
   });
 
   testWidgets('bookshelf lists progress and source', (tester) async {
@@ -171,7 +178,7 @@ void main() {
       ]),
     });
     await tester.pumpWidget(
-      const MaterialApp(home: ReadingBookshelfScreen(sources: [])),
+      _testApp(const ReadingBookshelfScreen(sources: [])),
     );
     await tester.pumpAndSettle();
     expect(find.text('Book One'), findsOneWidget);
@@ -180,23 +187,22 @@ void main() {
     expect(find.text('Fake'), findsNWidgets(2));
   });
 
-  testWidgets('bookshelf hides adult entries when midnight inactive', (
+  testWidgets('bookshelf lists adult entries', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
-      midnightActivatedKey: false,
       'readingBookshelf': _shelfJson([
         _entry(sourceName: '🔞成人源', title: 'Adult Book'),
         _entry(bookId: 'b2', title: 'Book Two'),
       ]),
     });
     await tester.pumpWidget(
-      const MaterialApp(home: ReadingBookshelfScreen(sources: [])),
+      _testApp(const ReadingBookshelfScreen(sources: [])),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Adult Book'), findsNothing);
+    expect(find.text('Adult Book'), findsOneWidget);
     expect(find.text('Book Two'), findsOneWidget);
-    expect(find.text('有 1 本书因午夜门禁隐藏'), findsOneWidget);
+    expect(find.text('有 1 本书因午夜门禁隐藏'), findsNothing);
   });
 
   testWidgets('bookshelf delete removes entry', (tester) async {
@@ -204,7 +210,7 @@ void main() {
       'readingBookshelf': _shelfJson([_entry()]),
     });
     await tester.pumpWidget(
-      const MaterialApp(home: ReadingBookshelfScreen(sources: [])),
+      _testApp(const ReadingBookshelfScreen(sources: [])),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('shelf-remove-fake-b1')));
@@ -231,7 +237,7 @@ void main() {
     });
     final source = _FakeSource(fakeId: 'fake', fakeName: 'Fake');
     await tester.pumpWidget(
-      MaterialApp(home: ReadingBookshelfScreen(sources: [source])),
+      _testApp(ReadingBookshelfScreen(sources: [source])),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Book One'));
@@ -254,8 +260,8 @@ void main() {
     });
     final source = _FakeSource(fakeId: 'fake', fakeName: 'Fake');
     await tester.pumpWidget(
-      MaterialApp(
-        home: NovelReaderPage(
+      _testApp(
+        NovelReaderPage(
           source: source,
           book: const ContentBook(id: 'b1', title: 'Book One'),
         ),
@@ -280,8 +286,8 @@ void main() {
       texts: {'c1': longText},
     );
     await tester.pumpWidget(
-      MaterialApp(
-        home: NovelReaderPage(
+      _testApp(
+        NovelReaderPage(
           source: source,
           book: const ContentBook(id: 'b1', title: 'Book One'),
         ),

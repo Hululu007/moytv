@@ -1,3 +1,4 @@
+import gzip
 import json
 import urllib.request
 import urllib.parse
@@ -47,22 +48,48 @@ class Spider(BaseSpider):
             "Referer": self.host + "/",
             "Accept": accept,
             "Accept-Language": self.lang,
+            "Accept-Encoding": "gzip, deflate",
         }
         last = None
+        last_partial = None
         for _ in range(2):
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=60) as r:
-                    return r.read().decode("utf-8", "ignore")
+                    raw = r.read()
+                    enc = (r.headers.get("Content-Encoding") or "").lower()
+                    if enc == "gzip" or raw[:2] == b"\x1f\x8b":
+                        try:
+                            raw = gzip.decompress(raw)
+                        except Exception:
+                            pass
+                    return raw.decode("utf-8", "ignore")
             except Exception as e:
                 last = e
+                partial = getattr(e, 'partial', None)
+                if partial:
+                    last_partial = partial
+        if last_partial:
+            try:
+                return last_partial.decode("utf-8", "ignore")
+            except Exception:
+                pass
         if last:
             raise last
         return ""
 
     def _api(self, path):
-        text = self._fetch(self.host + path)
-        data = json.loads(text)
+        last = None
+        for _ in range(3):
+            try:
+                text = self._fetch(self.host + path)
+                data = json.loads(text)
+                break
+            except Exception as e:
+                last = e
+                data = None
+        else:
+            raise last
         if isinstance(data, dict) and data.get("code") == 0:
             return data.get("data")
         if isinstance(data, list):

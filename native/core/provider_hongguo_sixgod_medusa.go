@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 func sixGodVarint(v uint64) []byte {
@@ -391,6 +392,25 @@ type sixGodMedusaOpts struct {
 	HashRand   uint32
 	XMRand     uint32
 	TimeSec    int64
+	// DeviceID：显式指定 Medusa 明文里的设备号；为空时取查询串里的 device_id/did。
+	// App 短信登录等“查询串不带设备号、签名仍需设备身份”的场景用它。
+	DeviceID string
+}
+
+// sixGodProcessFixed：Medusa 明文里的进程级固定值——进程冷启动生成一次，
+// 后续请求复用同一份，不再每次请求随机生成。
+var (
+	sixGodProcessLaunchTime int64
+	sixGodProcessID         int64
+	sixGodProcessOnce       sync.Once
+)
+
+func sixGodProcessFixed() (int64, int64) {
+	sixGodProcessOnce.Do(func() {
+		sixGodProcessLaunchTime = 100 + int64(sixGodRandUint32()%21)
+		sixGodProcessID = 10001 + int64(sixGodRandUint32()%2000)
+	})
+	return sixGodProcessLaunchTime, sixGodProcessID
 }
 
 func sixGodRandUint32() uint32 {
@@ -434,9 +454,12 @@ func sixGodGenMedusaProto(rawURL string, body []byte, khronos uint32, opts sixGo
 	bodyHash := hongguoSM3(bodyHashInput)
 	queryBodyHash := append([]byte(nil), bodyHash[:]...)
 
-	deviceID := first("device_id")
+	deviceID := opts.DeviceID
 	if deviceID == "" {
-		deviceID = first("did")
+		deviceID = first("device_id")
+		if deviceID == "" {
+			deviceID = first("did")
+		}
 	}
 	versionName := first("version_name")
 	if versionName == "" {
@@ -454,12 +477,15 @@ func sixGodGenMedusaProto(rawURL string, body []byte, khronos uint32, opts sixGo
 		protoRand = sixGodRandUint32()
 	}
 	launchTime := opts.LaunchTime
-	if launchTime == 0 {
-		launchTime = 100 + int64(sixGodRandUint32()%21)
-	}
 	processID := opts.ProcessID
-	if processID == 0 {
-		processID = 10001 + int64(sixGodRandUint32()%2000)
+	if launchTime == 0 || processID == 0 {
+		fixedLaunch, fixedPID := sixGodProcessFixed()
+		if launchTime == 0 {
+			launchTime = fixedLaunch
+		}
+		if processID == 0 {
+			processID = fixedPID
+		}
 	}
 	const reportTs = int64(1728388016635)
 	reportTime := opts.TimeSec

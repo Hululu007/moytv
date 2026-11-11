@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,12 @@ var hongguoSpadeDerivationConstants = func() []byte {
 }()
 
 func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoID string) (providerMedia, error) {
+	return downloader.resolveHongguoAppMediaWithUpcoming(ctx, videoID, nil)
+}
+
+// resolveHongguoAppMediaWithUpcoming：upcoming 为当前集之后的最多 2 个分集 ID，
+// 批量接口一次取回后进预取缓存；单集调用传 nil 即可。
+func (downloader *Downloader) resolveHongguoAppMediaWithUpcoming(ctx context.Context, videoID string, upcoming []string) (providerMedia, error) {
 	if !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
@@ -36,15 +43,31 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 	if downloader.hongguoDeviceLimited() {
 		downloader.ensureHongguoDevice(ctx, downloader.hongguoDeviceID())
 	}
-	media, err := downloader.resolveHongguoAppMediaLine(ctx, videoID)
+	media, err := downloader.resolveHongguoAppMediaLineWithUpcoming(ctx, videoID, upcoming)
 	if err == nil {
 		return media, nil
+	}
+	if errors.Is(err, errHongguoDeviceRejected) {
+		// 设备被拒：换身份重试一次（有界）；仍被拒则直接报被拒，不再走海外线撞同一面墙；
+		// 重试后变为空 body 时继续走下面的海外线。
+		if reregisterErr := downloader.reregisterHongguoDevice(ctx); reregisterErr == nil {
+			if media, retryErr := downloader.resolveHongguoAppMediaLineWithUpcoming(ctx, videoID, upcoming); retryErr == nil {
+				return media, nil
+			} else if !errors.Is(retryErr, errHongguoAppEmptyBody) {
+				return providerMedia{}, retryErr
+			} else {
+				err = retryErr
+			}
+		}
+		if !errors.Is(err, errHongguoAppEmptyBody) {
+			return providerMedia{}, err
+		}
 	}
 	if !errors.Is(err, errHongguoAppEmptyBody) {
 		return providerMedia{}, err
 	}
 	overseaCtx := context.WithValue(ctx, hongguoBaseURLOverrideKey{}, hongguoOverseaAppBaseURL)
-	media, overseaErr := downloader.resolveHongguoAppMediaLine(overseaCtx, videoID)
+	media, overseaErr := downloader.resolveHongguoAppMediaLineWithUpcoming(overseaCtx, videoID, upcoming)
 	if overseaErr == nil {
 		return media, nil
 	}
@@ -56,9 +79,32 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 }
 
 func (downloader *Downloader) resolveHongguoAppMediaLine(ctx context.Context, videoID string) (providerMedia, error) {
-	if media, err := downloader.resolveHongguoMultiModel(ctx, videoID); err == nil {
+	return downloader.resolveHongguoAppMediaLineWithUpcoming(ctx, videoID, nil)
+}
+
+func (downloader *Downloader) resolveHongguoAppMediaLineWithUpcoming(ctx context.Context, videoID string, upcoming []string) (providerMedia, error) {
+	// 预取缓存命中：领取即删，直接用。
+	if cached, ok := downloader.hongguoTakeUpcomingModel(videoID); ok {
+		downloader.hongguoMergeFallbackAPI(ctx, cached)
+		if media, err := selectHongguoAppMedia(cached); err == nil {
+			downloader.clearHongguoDeviceLimited()
+			return media, nil
+		}
+	}
+	// GET 批量首选 leg：冷却中则跳过，不硬撞。
+	if media, err := downloader.resolveHongguoVideoTabModel(ctx, videoID); err == nil {
 		downloader.clearHongguoDeviceLimited()
 		return media, nil
+	} else if errors.Is(err, errHongguoDeviceRejected) {
+		return providerMedia{}, err
+	} else if ctx.Err() != nil {
+		return providerMedia{}, ctx.Err()
+	}
+	if media, err := downloader.resolveHongguoMultiModelWithUpcoming(ctx, videoID, upcoming); err == nil {
+		downloader.clearHongguoDeviceLimited()
+		return media, nil
+	} else if errors.Is(err, errHongguoDeviceRejected) {
+		return providerMedia{}, err
 	} else if ctx.Err() != nil {
 		return providerMedia{}, ctx.Err()
 	}
@@ -76,6 +122,12 @@ func (downloader *Downloader) resolveHongguoAppMediaLine(ctx context.Context, vi
 		result, err := downloader.hongguoAppRequestInternal(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload, true)
 		if err != nil {
 			if errors.Is(err, errHongguoAppEmptyBody) {
+				downloader.markHongguoDeviceLimited()
+				lastErr = err
+				continue
+			}
+			if errors.Is(err, errHongguoDeviceRejected) {
+				// 设备被拒：标记受限，下一次循环换身份再试；轮换预算内有界。
 				downloader.markHongguoDeviceLimited()
 				lastErr = err
 				continue
@@ -112,9 +164,77 @@ func (downloader *Downloader) resolveHongguoAppMediaLine(ctx context.Context, vi
 	return providerMedia{}, errHongguoAppEmptyBody
 }
 
+// resolveHongguoVideoTabModel：GET 批量首选 leg（对照仓 tabVideoModel 结构）。
+// 任一失败（非 0 业务码、空正文、结构不符、网络异常）一律返回哨兵错，由调用方回退 POST，
+// 只有设备被拒码才原样返回专用错。
+func (downloader *Downloader) resolveHongguoVideoTabModel(ctx context.Context, videoID string) (providerMedia, error) {
+	extra := url.Values{
+		"video_id": {videoID}, "video_id_type": {"0"}, "device_level": {"1"},
+		"need_all_video_definition": {"1"}, "need_mp4_align": {"0"}, "use_os_player": {"0"},
+		"video_platform": {"1024"}, "source": {"0"}, "from_video_id": {""},
+	}
+	base := hongguoAppBaseURL
+	if override, ok := ctx.Value(hongguoBaseURLOverrideKey{}).(string); ok && override != "" {
+		base = override
+	}
+	if downloader.hongguoRouteCooling(hongguoRouteKey(http.MethodGet, base, "/reading/bookapi/video_tab/multi_video_model/v1/")) {
+		return providerMedia{}, errHongguoAppEmptyBody
+	}
+	result, err := downloader.hongguoAppRequestInternal(ctx, http.MethodGet, "/reading/bookapi/video_tab/multi_video_model/v1/", extra, nil, true)
+	if err != nil {
+		return providerMedia{}, err
+	}
+	data := nestedMap(result, "data")
+	rows := nestedMap(data, "video_model_data")
+	if len(rows) == 0 {
+		rows = data
+	}
+	entry := hongguoMultiEntry(rows, videoID)
+	if entry == nil {
+		return providerMedia{}, errHongguoAppEmptyBody
+	}
+	model, err := hongguoVideoModelValue(entry["video_model"])
+	if err != nil {
+		return providerMedia{}, errors.New("红果 App 播放信息格式异常")
+	}
+	if model == nil {
+		model = map[string]any{}
+	}
+	if len(model) == 0 {
+		if rows := anyList(entry["video_list"]); len(rows) > 0 {
+			model["video_list"] = entry["video_list"]
+			model["video_duration"] = entry["video_duration"]
+			model["duration"] = entry["duration"]
+		}
+	}
+	if len(model) == 0 {
+		return providerMedia{}, errHongguoAppEmptyBody
+	}
+	hongguoAttachKeySeed(model, entry, data)
+	downloader.hongguoMergeFallbackAPI(ctx, model)
+	return selectHongguoAppMedia(model)
+}
+
 func (downloader *Downloader) resolveHongguoMultiModel(ctx context.Context, videoID string) (providerMedia, error) {
+	return downloader.resolveHongguoMultiModelWithUpcoming(ctx, videoID, nil)
+}
+
+func (downloader *Downloader) resolveHongguoMultiModelWithUpcoming(ctx context.Context, videoID string, upcoming []string) (providerMedia, error) {
+	ids := []string{videoID}
+	for _, id := range upcoming {
+		if len(ids) > 2 {
+			break
+		}
+		if hongguoNumericID.MatchString(id) && id != videoID {
+			ids = append(ids, id)
+		}
+	}
+	videoIDs := make([]any, 0, len(ids))
+	for _, id := range ids {
+		videoIDs = append(videoIDs, id)
+	}
 	payload := map[string]any{
-		"mixed_video_id_map": map[string]any{"1004": []any{videoID}},
+		"mixed_video_id_map": map[string]any{"1004": videoIDs},
 		"biz_param":          map[string]any{"need_all_video_definition": true, "video_platform": 3},
 	}
 	result, err := downloader.hongguoAppRequestInternal(ctx, http.MethodPost, "/novel/player/multi_video_model/v1/", nil, payload, true)
@@ -142,6 +262,15 @@ func (downloader *Downloader) resolveHongguoMultiModel(ctx context.Context, vide
 	}
 	if len(model) == 0 {
 		return providerMedia{}, errHongguoAppEmptyBody
+	}
+	// 后续集模型进预取缓存（60 秒有效、领取即删），当前集不进缓存。
+	for _, id := range ids[1:] {
+		if next := hongguoMultiEntry(data, id); next != nil {
+			if nextModel, err := hongguoVideoModelValue(next["video_model"]); err == nil && len(nextModel) > 0 {
+				hongguoAttachKeySeed(nextModel, next, data)
+				downloader.hongguoOfferUpcomingModel(id, nextModel)
+			}
+		}
 	}
 	hongguoAttachKeySeed(model, entry, data)
 	downloader.hongguoMergeFallbackAPI(ctx, model)
@@ -277,24 +406,89 @@ func decryptHongguoSpadeURL(value string, seed []byte) (string, error) {
 }
 
 func (downloader *Downloader) hongguoMergeFallbackAPI(ctx context.Context, model map[string]any) {
-	if fallbackURL := hongguoFallbackAPIURL(model); fallbackURL == "" {
+	fallbackURL := hongguoFallbackAPIURL(model)
+	if fallbackURL == "" {
 		return
-	} else if body, fetchErr := downloader.fetchProviderText(ctx, fallbackURL, "https://novel.snssdk.com/"); fetchErr == nil {
-		if rows, parseErr := hongguoFallbackVideoRows(body); parseErr == nil && len(rows) > 0 {
-			merged := anyList(model["video_list"])
-			if rowsMap, ok := model["video_list"].(map[string]any); ok && len(merged) == 0 {
-				keys := make([]string, 0, len(rowsMap))
-				for key := range rowsMap {
-					keys = append(keys, key)
-				}
-				sort.Strings(keys)
-				for _, key := range keys {
-					merged = append(merged, rowsMap[key])
-				}
-			}
-			model["video_list"] = append(merged, rows...)
+	}
+	if rows, fetchErr := downloader.hongguoFetchFallbackRows(ctx, fallbackURL, false); fetchErr == nil {
+		hongguoAppendFallbackRows(model, rows)
+	}
+	// 全档不兼容（只剩 bytevc2 或无可用行）时，带兼容参数重读一次再按实际模型选档。
+	if hongguoModelCompatibleCount(model) == 0 {
+		if rows, fetchErr := downloader.hongguoFetchFallbackRows(ctx, fallbackURL, true); fetchErr == nil {
+			hongguoAppendFallbackRows(model, rows)
 		}
 	}
+}
+
+// hongguoFetchFallbackRows：拉备用接口的清晰度行；compat 为真时追加
+// codec_type=0 + force_codec=h264（参数名不保证回 h264，仍按实际模型选档）。
+func (downloader *Downloader) hongguoFetchFallbackRows(ctx context.Context, rawURL string, compat bool) ([]any, error) {
+	target := rawURL
+	if compat {
+		if parsed, err := url.Parse(rawURL); err == nil {
+			query := parsed.Query()
+			query.Set("codec_type", "0")
+			query.Set("force_codec", "h264")
+			parsed.RawQuery = query.Encode()
+			target = parsed.String()
+		}
+	}
+	body, fetchErr := downloader.fetchProviderText(ctx, target, "https://novel.snssdk.com/")
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+	return hongguoFallbackVideoRows(body)
+}
+
+func hongguoAppendFallbackRows(model map[string]any, rows []any) {
+	if len(rows) == 0 {
+		return
+	}
+	merged := anyList(model["video_list"])
+	if rowsMap, ok := model["video_list"].(map[string]any); ok && len(merged) == 0 {
+		keys := make([]string, 0, len(rowsMap))
+		for key := range rowsMap {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			merged = append(merged, rowsMap[key])
+		}
+	}
+	model["video_list"] = append(merged, rows...)
+}
+
+// hongguoModelCompatibleCount：模型里非 bytevc2 编码的行数（兼容参数重读的触发条件）。
+func hongguoModelCompatibleCount(model map[string]any) int {
+	count := 0
+	for _, row := range anyList(model["video_list"]) {
+		variant, _ := row.(map[string]any)
+		if variant == nil {
+			continue
+		}
+		meta := nestedMap(variant, "video_meta")
+		codec := strings.ToLower(mapString(meta, "codec_type"))
+		if codec == "bytevc2" || strings.Contains(strings.ToLower(mapString(variant, "gear_des_key")), "bytevc2") {
+			continue
+		}
+		count++
+	}
+	if rows, ok := model["video_list"].(map[string]any); ok {
+		for _, row := range rows {
+			variant, _ := row.(map[string]any)
+			if variant == nil {
+				continue
+			}
+			meta := nestedMap(variant, "video_meta")
+			codec := strings.ToLower(mapString(meta, "codec_type"))
+			if codec == "bytevc2" || strings.Contains(strings.ToLower(mapString(variant, "gear_des_key")), "bytevc2") {
+				continue
+			}
+			count++
+		}
+	}
+	return count
 }
 
 func hongguoFallbackAPIURL(model map[string]any) string {

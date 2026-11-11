@@ -8,24 +8,36 @@ void main() {
     test('听书：听书网、喜马拉雅、红果听书、懒人听书', () {
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.id),
-        ['tingshuwang', 'ximalaya', 'hongguo_audio', 'lrts', 'tingyou', 'jar_tingshu'],
+        [
+          'tingshuwang',
+          'ximalaya',
+          'hongguo_audio',
+          'lrts',
+          'hsvoice31',
+          'tingyou',
+          'hysxs',
+          'jar_tingshu',
+        ],
       );
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.name),
-        ['听书网', '喜马拉雅', '红果听书', '懒人听书', '听友听书', '飞卢听书'],
+        ['听书网', '喜马拉雅', '红果听书', '懒人听书', '🔞黄色有声小说', '听友听书', '🔞H有声小说', '飞卢听书'],
       );
     });
 
-    test('午夜未激活时成人源隐藏，激活后出现', () {
-      addTearDown(() => ContentRegistry.midnightActivated = false);
+    test('听书：成人源也在列，不再有午夜门禁', () {
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.id),
-        ['tingshuwang', 'ximalaya', 'hongguo_audio', 'lrts', 'tingyou', 'jar_tingshu'],
-      );
-      ContentRegistry.midnightActivated = true;
-      expect(
-        ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.id),
-        ['tingshuwang', 'ximalaya', 'hongguo_audio', 'lrts', 'hsvoice31', 'tingyou', 'hysxs', 'jar_tingshu'],
+        [
+          'tingshuwang',
+          'ximalaya',
+          'hongguo_audio',
+          'lrts',
+          'hsvoice31',
+          'tingyou',
+          'hysxs',
+          'jar_tingshu',
+        ],
       );
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).last.name,
@@ -36,9 +48,7 @@ void main() {
     test('小说：内置源默认在列，导入后只进小说区', () {
       addTearDown(() {
         ContentRegistry.setNovelImports([]);
-        ContentRegistry.midnightActivated = false;
       });
-      ContentRegistry.midnightActivated = true;
       expect(
         ContentRegistry.sourcesFor(ContentSection.novel).map((s) => s.id),
         containsAll([
@@ -46,11 +56,8 @@ void main() {
           'ylxs',
           'cheniyo',
           'hwg4',
-          'lbwen',
-          'cjg',
           'buliang',
           'yinse',
-          'ssxxs',
           'mhbl',
           'ho5ho',
         ]),
@@ -68,24 +75,30 @@ void main() {
       ).map((s) => s.id);
       expect(novelIds, contains('novel_demo'));
       expect(novelIds.last, 'novel_demo');
-      ContentRegistry.midnightActivated = false;
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.id),
-        ['tingshuwang', 'ximalaya', 'hongguo_audio', 'lrts', 'tingyou', 'jar_tingshu'],
+        [
+          'tingshuwang',
+          'ximalaya',
+          'hongguo_audio',
+          'lrts',
+          'hsvoice31',
+          'tingyou',
+          'hysxs',
+          'jar_tingshu',
+        ],
       );
     });
 
-    test('小说内置源默认隐藏，午夜激活后出现且排在导入源前面', () {
+    test('小说内置源默认在列，导入源排在后面', () {
       addTearDown(() {
         ContentRegistry.setNovelImports([]);
-        ContentRegistry.midnightActivated = false;
       });
       final offIds = ContentRegistry.sourcesFor(
         ContentSection.novel,
       ).map((s) => s.id);
-      expect(offIds, isEmpty);
-      expect(offIds, isNot(contains('aabook')));
-      ContentRegistry.midnightActivated = true;
+      expect(offIds, isNot(isEmpty));
+      expect(offIds, contains('aabook'));
       final onIds = ContentRegistry.sourcesFor(
         ContentSection.novel,
       ).map((s) => s.id).toList();
@@ -94,12 +107,12 @@ void main() {
         'ylxs',
         'cheniyo',
         'hwg4',
-        'lbwen',
-        'cjg',
         'buliang',
         'yinse',
-        'ssxxs',
         'mhbl',
+        'ho5ho',
+        'modu18',
+        'h528',
       ]);
       expect(
         ContentRegistry.sourcesFor(ContentSection.novel).first.name,
@@ -122,26 +135,13 @@ void main() {
         'ylxs',
         'cheniyo',
         'hwg4',
-        'lbwen',
-        'cjg',
         'buliang',
         'yinse',
-        'ssxxs',
         'mhbl',
+        'ho5ho',
+        'modu18',
+        'h528',
       ]);
-    });
-
-    test('午夜未激活时小说区有成人源被隐藏，激活后不再隐藏', () {
-      addTearDown(() => ContentRegistry.midnightActivated = false);
-      expect(
-        ContentRegistry.hasHiddenAdultSources(ContentSection.novel),
-        isTrue,
-      );
-      ContentRegistry.midnightActivated = true;
-      expect(
-        ContentRegistry.hasHiddenAdultSources(ContentSection.novel),
-        isFalse,
-      );
     });
 
     test('id 全局唯一且分区归属自洽', () {

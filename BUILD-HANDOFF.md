@@ -148,3 +148,43 @@ flutter test test/app_drawer_test.dart test/midnight_zone_test.dart
 - 服务器地址、部署机凭据：不在这里，也不需要
 - 签名文件本体：不进仓库，只放 Secrets
 - 任何第三方服务的 key：工程里的 key 都在 `assets/jar_site_configs.json` 和 Python 蜘蛛里，属于运行配置，不是构建依赖
+
+---
+
+## 7. 海阔小程序模块（2026-11-11）
+
+目录 `lib/miniapp/haikuo/`：
+
+| 文件 | 作用 |
+| --- | --- |
+| `haikuo_program.dart` | 数据模型（`HaikuoKind.script/rule/link`）+ 稳定 id（sha1 名称+主体） |
+| `haikuo_codec.dart` | JSON 结构归一（单条/数组/`{data:[...]}` 包裹）、zip/gzip/base64、口令解码 |
+| `haikuo_store.dart` | 落盘 `Documents/haikuo/programs.json`，增删改、去重、导出 |
+| `haikuo_runtime_html.dart` | 运行时页面：hiker 兼容层（fetch/pdfa/pdfh/setResult/`$`/`hiker://page` 虚拟页） |
+| `haikuo_runner_page.dart` | 本地 HTTP 服务 + WebView 跑脚本，`/__fetch` 同源代理解决跨域，点播走 media_kit |
+| `haikuo_home_page.dart` | 面板：文件导入 / 口令导入 / 链接导入 / 示例导入 / 详情 / 删除 |
+
+口令格式对照海阔官方源码（`qiusunshine/hikerView` 的 `AutoImportHelper` / `ShareRuleUtil`）：
+
+1. `海阔视界规则分享，当前分享的是：小程序￥home_rule￥<载荷>￥`
+2. `rule://<整段口令的 base64>`
+3. 载荷是 `base64://@<标题>@<规则 JSON 的 base64>`
+
+规则字段：`title / author / version / type / url / col_type / find_rule / searchFind / detail_find_rule / pages / icon`。`url` 常见 `hiker://empty##<真实地址>`，子页在 `pages`（JSON 字符串）里，运行时按 `hiker://page/<path>` 解析。
+
+入口：小程序首页「已安装」顶部固定一块「海阔小程序」，以及右上角「+」菜单里的「海阔小程序」。
+
+## 8. 主题覆盖（2026-11-11）
+
+- `applyThemePreferences` 的 `neon` 分支现在换整套 ColorScheme（`Neon.bg` 底、`Neon.purple` 主色、`Neon.cyan` 次色），顶栏透明、卡片霓虹描边 —— 点播区/设置页等所有页面跟着变。
+- `lib/ui_style.dart` 新增 `themeStyleNotifier` / `neonStyleActive`，`main.dart` 每次重建时同步当前风格。
+- 抽屉在霓虹风格下用 `NeonBackdrop` 铺氛围光、底色透明、激活胶囊走 `Neon.hotGradient`（`ValueKey('drawer-neon')`）。
+- 内容区（点播/午夜/短剧目录）在霓虹风格下包一层 `NeonBackdrop`。
+
+## 9. 首屏不自动出列表的修复（2026-11-11）
+
+`lib/home_screen.dart` 新增 `_loadWithAutoRetry()` 与 `_scheduleAutoLoad()`：
+
+- 首屏 / 切板块：`_load(useCache: true)` 之后如果列表还是空、且没有报错，立刻补一次线上请求；仍为空则 1.5 秒后再补一次（覆盖内核刚启动第一次请求落空）。
+- 站源晚于页面就绪的情况：页面重建时检查一次，站源就绪后自动补拉，不需要用户手动下拉。
+- 切换板块 / 换站源时重置 `_autoLoadedOnce`。

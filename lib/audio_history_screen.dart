@@ -4,7 +4,6 @@ import 'app_page_route.dart';
 import 'audio_history.dart';
 import 'content_detail_screen.dart';
 import 'content_models.dart';
-import 'midnight_zone.dart';
 
 String _formatMs(int ms) {
   final total = ms < 0 ? 0 : ms ~/ 1000;
@@ -40,7 +39,6 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen>
   );
   List<AudioListenRecord> _history = const [];
   List<AudioFavoriteEntry> _favorites = const [];
-  bool _midnightActivated = false;
   bool _loading = true;
 
   @override
@@ -58,21 +56,16 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen>
   Future<void> _reload() async {
     List<AudioListenRecord> history = const [];
     List<AudioFavoriteEntry> favorites = const [];
-    bool activated = false;
     try {
       history = await loadAudioHistory();
     } catch (_) {}
     try {
       favorites = await loadAudioFavorites();
     } catch (_) {}
-    try {
-      activated = await loadMidnightActivated();
-    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _history = history;
       _favorites = favorites;
-      _midnightActivated = activated;
       _loading = false;
     });
   }
@@ -244,7 +237,7 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen>
 
   Widget _historyList() {
     final colors = Theme.of(context).colorScheme;
-    final visible = visibleAudioRecords(_history, _midnightActivated);
+    final visible = visibleAudioRecords(_history);
     if (visible.isEmpty) {
       return const Center(child: Text('还没有收听记录，听过的书会出现在这里'));
     }
@@ -278,7 +271,7 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen>
 
   Widget _favoriteList() {
     final colors = Theme.of(context).colorScheme;
-    final visible = visibleAudioFavorites(_favorites, _midnightActivated);
+    final visible = visibleAudioFavorites(_favorites);
     if (visible.isEmpty) {
       return const Center(child: Text('还没有收藏，听书详情页点星标即可收藏'));
     }

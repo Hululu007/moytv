@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'midnight_zone.dart';
-
 const _shelfKey = 'readingBookshelf';
 const _bookmarkKey = 'readingBookmarks';
 const _historyKey = 'readingHistory';
@@ -257,11 +255,4 @@ Future<void> saveBookmark({
 
 List<ReadingShelfEntry> visibleShelfEntries(
   List<ReadingShelfEntry> entries,
-  bool midnightActivated,
-) {
-  if (midnightActivated) return entries;
-  return [
-    for (final entry in entries)
-      if (!isAdultSourceName(entry.sourceName)) entry,
-  ];
-}
+) => entries;

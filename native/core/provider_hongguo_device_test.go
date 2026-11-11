@@ -15,8 +15,9 @@ func hongguoDeviceFixture(t *testing.T, rejected map[string]bool, registerFails 
 		if request.URL.String() == hongguoDeviceRegisterURL+"?"+request.URL.RawQuery {
 			registered++
 			requests = append(requests, "register")
-			if request.URL.Query().Get("device_id") != "" || request.Header.Get("X-Argus") != "" {
-				t.Error("device registration leaked an old device or a signature")
+			// 注册请求不带旧设备号查询参数，但必须带播放器签名头（用注册前本地占位设备号签）。
+			if request.URL.Query().Get("device_id") != "" || request.Header.Get("X-Argus") == "" || request.Header.Get("X-Gorgon") == "" || request.Header.Get("X-Medusa") == "" {
+				t.Error("device registration must not leak an old device id, but must carry a player signature")
 			}
 			if registerFails {
 				return sourceFixtureResponse(request, http.StatusOK, `{"device_id":0,"install_id":0}`), nil

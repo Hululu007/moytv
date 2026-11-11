@@ -151,8 +151,9 @@ Future<void> capturePreview(
 void main() {
   setUpAll(() async {
     try {
-      final bytes = File('/home/hatch/workspace/huoyi_new/cjk_subset.ttf')
-          .readAsBytesSync();
+      final bytes = File(
+        '/home/hatch/workspace/huoyi_new/cjk_subset.ttf',
+      ).readAsBytesSync();
       final loader = FontLoader('PreviewCJK')
         ..addFont(Future.value(ByteData.view(bytes.buffer)));
       await loader.load();
@@ -211,9 +212,9 @@ void main() {
     print('preview landed: preview_drama_vod');
   });
 
-  testWidgets('preview drama midnight', (tester) async {
+  testWidgets('preview drama vod unified', (tester) async {
     dramaUiStyleNotifier.value = DramaUiStyle.ant;
-    final store = await previewStore({'midnightActivated': true});
+    final store = await previewStore({});
     final key = await pumpPreview(
       tester,
       HomeScreen(repository: FixtureRepository(), store: store),
@@ -221,7 +222,7 @@ void main() {
     try {
       await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
       await settlePreview(tester);
-      await tester.tap(find.text('午夜区'));
+      await tester.tap(find.text('点播'));
       await settlePreview(tester);
     } catch (_) {}
     final boundary =
@@ -233,8 +234,8 @@ void main() {
       data.lengthInBytes,
     );
     Directory(previewDir).createSync(recursive: true);
-    File('$previewDir/preview_drama_midnight.png').writeAsBytesSync(bytes);
-    print('preview landed: preview_drama_midnight');
+    File('$previewDir/preview_drama_vod_unified.png').writeAsBytesSync(bytes);
+    print('preview landed: preview_drama_vod_unified');
   });
 
   testWidgets('preview feed fullscreen', (tester) async {
@@ -386,8 +387,6 @@ void main() {
     print('preview landed: preview_settings_style');
   });
 
-
-
   testWidgets('preview downloads', (tester) async {
     final store = await previewStore({});
     await capturePreview(
@@ -435,13 +434,11 @@ void main() {
         key: scaffoldKey,
         drawer: AppDrawer(
           zone: HomeZone.drama,
-          midnightActivated: true,
           currentVersion: '1.0.0',
           onZoneSelected: (_) {},
           onWatchRoom: () {},
           onTool: (_) {},
           onMinorProtectionChanged: (_) {},
-          onVersionDoubleTap: () {},
         ),
         body: const SizedBox.shrink(),
       ),
@@ -480,13 +477,11 @@ void main() {
               key: scaffoldKey,
               drawer: AppDrawer(
                 zone: HomeZone.drama,
-                midnightActivated: true,
                 currentVersion: '1.0.0',
                 onZoneSelected: (_) {},
-                      onWatchRoom: () {},
+                onWatchRoom: () {},
                 onTool: (_) {},
                 onMinorProtectionChanged: (_) {},
-                onVersionDoubleTap: () {},
               ),
               body: const SizedBox.shrink(),
             ),

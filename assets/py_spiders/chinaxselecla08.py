@@ -210,6 +210,12 @@ def _resolve_variant(master_url):
     if not master_url or '.m3u8' not in master_url:
         return master_url
     txt = _http_get(master_url, referer=BASE + '/')
+    if (not txt or '#EXTM3U' not in txt) and 'lsbbf5.com' not in master_url:
+        alt = re.sub(r'https?://[^/]+', 'https://lsbbf5.com', master_url, count=1)
+        alt_txt = _http_get(alt, referer=BASE + '/')
+        if alt_txt and '#EXTM3U' in alt_txt:
+            master_url = alt
+            txt = alt_txt
     if not txt or '#EXT-X-STREAM-INF' not in txt:
         return master_url
     best = None

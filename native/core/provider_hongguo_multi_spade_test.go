@@ -108,6 +108,10 @@ func hongguoMultiFixture(t *testing.T, multiBody string, singleBody string) (*Do
 			content, _ := io.ReadAll(request.Body)
 			bodies = append(bodies, string(content))
 		}
+		if strings.Contains(request.URL.Path, "video_tab") {
+			// GET 首选 leg 在本夹具里回空，走 POST 批量。
+			return sourceFixtureResponse(request, http.StatusOK, ``), nil
+		}
 		if strings.Contains(request.URL.Path, "multi_video_model") {
 			return sourceFixtureResponse(request, http.StatusOK, multiBody), nil
 		}
@@ -129,10 +133,10 @@ func TestHongguoMultiModelSuccessSkipsSingle(t *testing.T) {
 	if media.URL != "https://media.example.test/multi1080.mp4" {
 		t.Fatal("multi model did not win", media.URL)
 	}
-	if len(*paths) != 1 || !strings.Contains((*paths)[0], "multi_video_model") {
-		t.Fatal("single must not run after multi success", *paths)
+	if len(*paths) != 2 || !strings.Contains((*paths)[0], "video_tab") || !strings.Contains((*paths)[1], "multi_video_model") {
+		t.Fatal("GET leg must run first, then multi; single must not run after multi success", *paths)
 	}
-	if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "1004") || !strings.Contains((*bodies)[0], "12345") || !strings.Contains((*bodies)[0], "need_all_video_definition") {
+	if len(*bodies) != 2 || !strings.Contains((*bodies)[1], "1004") || !strings.Contains((*bodies)[1], "12345") || !strings.Contains((*bodies)[1], "need_all_video_definition") {
 		t.Fatal("multi payload must carry mixed_video_id_map and need_all_video_definition", *bodies)
 	}
 }
@@ -146,8 +150,8 @@ func TestHongguoMultiModelFallsBackToSingle(t *testing.T) {
 	if media.URL != "https://media.example.test/high.mp4" {
 		t.Fatal("multi failure must fall back to single", media.URL)
 	}
-	if len(*paths) != 2 || !strings.Contains((*paths)[0], "multi_video_model") || !strings.Contains((*paths)[1], "video_model/v1") {
-		t.Fatal("multi must run first, single second", *paths)
+	if len(*paths) != 3 || !strings.Contains((*paths)[0], "video_tab") || !strings.Contains((*paths)[1], "multi_video_model") || !strings.Contains((*paths)[2], "video_model/v1") {
+		t.Fatal("GET leg first, multi second, single third", *paths)
 	}
 }
 

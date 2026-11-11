@@ -4,7 +4,6 @@ import 'content_jar_audio.dart';
 import 'content_lrts.dart';
 import 'content_models.dart';
 import 'content_py.dart';
-import 'midnight_zone.dart';
 
 class ContentRegistry {
   ContentRegistry._();
@@ -45,8 +44,6 @@ class ContentRegistry {
     JarAudioContentSource(),
   ];
 
-  static bool midnightActivated = false;
-
   static final List<ContentSource> _novelBuiltins = [
     PyContentSource(
       id: 'aabook',
@@ -73,18 +70,6 @@ class ContentRegistry {
       section: ContentSection.novel,
     ),
     PyContentSource(
-      id: 'lbwen',
-      name: '🔞刘备文',
-      assetPath: 'assets/novel_spiders/lbwen.py',
-      section: ContentSection.novel,
-    ),
-    PyContentSource(
-      id: 'cjg',
-      name: '🔞藏精阁',
-      assetPath: 'assets/novel_spiders/cjg.py',
-      section: ContentSection.novel,
-    ),
-    PyContentSource(
       id: 'buliang',
       name: '🔞不良小说网',
       assetPath: 'assets/novel_spiders/buliang.py',
@@ -94,12 +79,6 @@ class ContentRegistry {
       id: 'yinse',
       name: '🔞淫色小说网',
       assetPath: 'assets/novel_spiders/yinse.py',
-      section: ContentSection.novel,
-    ),
-    PyContentSource(
-      id: 'ssxxs',
-      name: '🔞涩涩小说',
-      assetPath: 'assets/novel_spiders/ssxxs.py',
       section: ContentSection.novel,
     ),
     PyContentSource(
@@ -184,7 +163,6 @@ class ContentRegistry {
 
   static final List<ContentSource> _novelImports = [];
 
-
   static void setNovelImports(List<ContentSource> sources) {
     _novelImports
       ..clear()
@@ -193,10 +171,7 @@ class ContentRegistry {
 
   static List<ContentSource> _baseFor(ContentSection section) {
     return section == ContentSection.novel
-        ? [
-            ..._novelBuiltins,
-            ..._novelImports,
-          ]
+        ? [..._novelBuiltins, ..._novelImports]
         : [
             for (final source in _sources)
               if (source.section == section) source,
@@ -204,19 +179,7 @@ class ContentRegistry {
   }
 
   static List<ContentSource> sourcesFor(ContentSection section) {
-    final base = _baseFor(section);
-    if (midnightActivated) return List.unmodifiable(base);
-    return List.unmodifiable([
-      for (final source in base)
-        if (!isAdultSourceName(source.name)) source,
-    ]);
-  }
-
-  static bool hasHiddenAdultSources(ContentSection section) {
-    if (midnightActivated) return false;
-    return _baseFor(
-      section,
-    ).any((source) => isAdultSourceName(source.name));
+    return List.unmodifiable(_baseFor(section));
   }
 
   static List<ContentSource> get allSources => List.unmodifiable(_sources);

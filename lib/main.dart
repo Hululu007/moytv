@@ -14,12 +14,14 @@ import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'theme_settings.dart';
+import 'ui_style.dart';
 import 'external_py_import.dart';
 import 'playback_foreground.dart';
 import 'tv_theme.dart';
 import 'zoo_builtin_seed.dart';
 import 'home_screen.dart';
 import 'hongguo_account.dart';
+import 'hongguo_account_store.dart';
 import 'jar_bridge.dart';
 import 'builtin_py_sites.dart';
 import 'jar_import.dart';
@@ -97,6 +99,18 @@ class _AppBootstrapState extends State<AppBootstrap>
     if (mounted) setState(() => _signatureOk = ok);
   }
 
+  /// 冷启动恢复红果账号会话（见 _initialize 注释）：建一个
+  /// HongguoAccountStore 走 load()，失败自己吞掉，不影响启动。
+  Future<void> _restoreHongguoAccount(SharedPreferences preferences) async {
+    try {
+      final accountStore = HongguoAccountStore(
+        repository: repository,
+        preferences: preferences,
+      );
+      await accountStore.load();
+    } catch (_) {}
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -135,6 +149,10 @@ class _AppBootstrapState extends State<AppBootstrap>
       unawaited(ensureHongguoAccountLoaded());
       await _refreshDevice();
       await repository.initialize();
+      // 冷启动恢复红果账号会话：把持久化的会话交回 Go 核再确认
+      // 状态（HongguoAccountStore.load 内做，空 Cookie 不交回）。
+      // 恢复失败不阻塞启动；打开账号页时 load() 会再试一次。
+      unawaited(_restoreHongguoAccount(preferences));
       unawaited(AppUpdateChecker.maybeCheckSilently());
       unawaited(ProxyKernelService.maybeAutostart());
       await JarImport.registerBuiltinZakatv();
@@ -248,7 +266,10 @@ class MoyiApp extends StatelessWidget {
     builder: (_, _) => _application(),
   );
 
-  Widget _application() => MaterialApp(
+  Widget _application() {
+    // 把当前主题风格同步给全局通知器：抽屉、内容区等深层组件据此决定是否走霓虹视觉。
+    themeStyleNotifier.value = store?.themeStyle ?? '';
+    return MaterialApp(
     navigatorKey: navigatorKey,
     title: appName,
     debugShowCheckedModeBanner: false,
@@ -357,5 +378,6 @@ class MoyiApp extends StatelessWidget {
               ),
             ),
           ),
-  );
+    );
+  }
 }

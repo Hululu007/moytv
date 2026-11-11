@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'content_models.dart';
-import 'midnight_zone.dart';
 import 'novel_cover.dart';
 import 'novel_reader_page.dart';
 import 'reading_bookshelf.dart';
@@ -21,7 +20,6 @@ class _ReadingBookshelfScreenState extends State<ReadingBookshelfScreen>
   late final TabController _tabs = TabController(length: 2, vsync: this);
   List<ReadingShelfEntry> _entries = const [];
   List<ReadingShelfEntry> _history = const [];
-  bool _midnightActivated = false;
   bool _loading = true;
 
   @override
@@ -39,21 +37,16 @@ class _ReadingBookshelfScreenState extends State<ReadingBookshelfScreen>
   Future<void> _reload() async {
     List<ReadingShelfEntry> entries = const [];
     List<ReadingShelfEntry> history = const [];
-    bool activated = false;
     try {
       entries = await loadShelf();
     } catch (_) {}
     try {
       history = await loadReadingHistory();
     } catch (_) {}
-    try {
-      activated = await loadMidnightActivated();
-    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _entries = entries;
       _history = history;
-      _midnightActivated = activated;
       _loading = false;
     });
   }
@@ -186,49 +179,29 @@ class _ReadingBookshelfScreenState extends State<ReadingBookshelfScreen>
 
   Widget _shelfList() {
     final colors = Theme.of(context).colorScheme;
-    final visible = visibleShelfEntries(_entries, _midnightActivated);
-    final hiddenCount = _entries.length - visible.length;
+    final visible = visibleShelfEntries(_entries);
     if (visible.isEmpty) {
-      return Center(
-        child: Text(
-          hiddenCount > 0 ? '书架里的成人书因午夜门禁隐藏' : '书架是空的，在阅读页点书签加入',
-        ),
-      );
+      return const Center(child: Text('书架是空的，在阅读页点书签加入'));
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (hiddenCount > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Text(
-              '有 $hiddenCount 本书因午夜门禁隐藏',
-              style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
-            ),
-          ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: visible.length,
-            itemBuilder: (context, index) {
-              final entry = visible[index];
-              return _entryRow(
-                entry,
-                colors,
-                () => _remove(entry),
-                '移出书架',
-                'shelf-remove-${entry.sourceId}-${entry.bookId}',
-              );
-            },
-          ),
-        ),
-      ],
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: visible.length,
+      itemBuilder: (context, index) {
+        final entry = visible[index];
+        return _entryRow(
+          entry,
+          colors,
+          () => _remove(entry),
+          '移出书架',
+          'shelf-remove-${entry.sourceId}-${entry.bookId}',
+        );
+      },
     );
   }
 
   Widget _historyList() {
     final colors = Theme.of(context).colorScheme;
-    final visible = visibleShelfEntries(_history, _midnightActivated);
+    final visible = visibleShelfEntries(_history);
     if (visible.isEmpty) {
       return const Center(child: Text('还没有阅读记录，读过的书会出现在这里'));
     }

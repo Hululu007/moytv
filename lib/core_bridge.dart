@@ -108,6 +108,63 @@ abstract class AppRepository {
       throw AppFailure('当前环境不支持设备注册档案');
   Future<Map<String, dynamic>> hongguoDeviceRefresh() async =>
       throw AppFailure('当前环境不支持设备注册档案');
+
+  /// 红果服务端多维筛选（POST landpage/v）：content 为筛选请求体 JSON，
+  /// cursor 为游标 JSON（{"offset":N,"session":"..."}），空表示首页。
+  /// 返回 {items, groups, hasMore, nextCursor}；groups 只在首页返回。
+  Future<Map<String, dynamic>> hongguoAccountFilter({
+    required String content,
+    String cursor = '',
+  }) async =>
+      throw AppFailure('当前环境不支持红果筛选');
+  Future<Map<String, dynamic>> hongguoAccountStatus() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  /// 导出 Go 核当前账号会话给 Dart 持久化（跨重启恢复用）。
+  /// 返回 {loggedIn, accountCookie, deviceId, installId, accountId,
+  /// userName, expiresAtMs, cookieSource}；expiresAtMs 为 0 表示
+  /// 服务端没给过期时间；Cookie 只导出，不记日志。
+  Future<Map<String, dynamic>> hongguoAccountExportSession() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountSetSession(
+    Map<String, dynamic> session,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountClearSession() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginQr() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginQrPoll() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountInfo() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginSendCode(String phone) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginSms(
+    String phone,
+    String code,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginAppSendCode(String phone) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoLoginAppSms(
+    String phone,
+    String code,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountFavorites() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountSetFavorite(
+    String seriesId,
+    bool add,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountHistory() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountUploadProgress(
+    Map<String, dynamic> progress,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountReservations(bool online) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountReserve(String seriesId) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountRelated(String seriesId) async =>
+      throw AppFailure('当前环境不支持红果账号');
   Future<dynamic> legadoRun(
     String sourceJson,
     String action,
@@ -307,10 +364,297 @@ abstract class AppRepository {
   Future<void> release(String session);
 }
 
+/// 红果小说/听书分类（对照 Go hongguoIsBookCategory）：novel/audio，
+/// 或 bcat 开头的书分类；视频分类（short_play/comic_series/ai_series
+/// 等）不在此列。bcat 后缀无法在 Dart 侧核对书名，保守按书分类处理。
+bool _isHongguoBookCategory(String category) =>
+    category == 'novel' ||
+    category == 'audio' ||
+    category.startsWith('bcat');
+
+/// 红果服务端多维筛选（landpage/v）纯逻辑：筛选项拼请求体、游标续页。
+/// 只借对照仓 DiscoveryFilters.kt 的字段名，不抄常量与设备值。
+/// 会话只放内存（NativeRepository 的字段），不落盘。
+
+/// 服务端多维筛选 8 组键（对照仓 DiscoveryFilters.labels）。
+/// 魔蚁现有 4 组 → 服务端键：cat→genre、topic→category_dim_theme、
+/// background→category_dim_epoch、setting→category_dim_role；
+/// 其余 4 组（sort/gender/online_time/creation_status）直接用服务端键。
+const hongguoDiscoveryLabels = <String, String>{
+  'genre': '类型',
+  'category_dim_theme': '主题',
+  'category_dim_role': '设定',
+  'category_dim_epoch': '背景',
+  'sort': '排序',
+  'gender': '受众',
+  'online_time': '时间',
+  'creation_status': '状态',
+};
+
+/// 魔蚁旧筛选键 → 服务端键。
+const hongguoDiscoveryLegacyKeyToServer = <String, String>{
+  'cat': 'genre',
+  'topic': 'category_dim_theme',
+  'background': 'category_dim_epoch',
+  'setting': 'category_dim_role',
+};
+
+/// 服务端键 → 魔蚁旧筛选键（仅 4 组有旧键；其余 4 组无旧键）。
+const hongguoDiscoveryServerKeyToLegacy = <String, String>{
+  'genre': 'cat',
+  'category_dim_theme': 'topic',
+  'category_dim_epoch': 'background',
+  'category_dim_role': 'setting',
+};
+
+/// 服务端多维筛选条件：服务端键 → 选项 id（单选，每组最多一个）。
+class HongguoDiscoverySelection {
+  HongguoDiscoverySelection([Map<String, String>? values])
+    : _values = Map<String, String>.unmodifiable(values ?? const {});
+
+  final Map<String, String> _values;
+
+  Map<String, String> get values => Map<String, String>.of(_values);
+
+  bool get isEmpty => _values.values.every((value) => value.isEmpty);
+
+  /// 选一项：空 id 即清除该组；切类型（genre）时丢弃旧类型的条件
+  ///（对照 DiscoverySelection.choose：类型不同，维度体系不同）。
+  HongguoDiscoverySelection choose(String type, String id) {
+    if (!hongguoDiscoveryLabels.containsKey(type)) return this;
+    final next = type == 'genre'
+        ? <String, String>{}
+        : Map<String, String>.of(_values);
+    if (id.isEmpty) {
+      next.remove(type);
+    } else {
+      next[type] = id;
+    }
+    return HongguoDiscoverySelection(next);
+  }
+
+  /// 拼 landpage 请求体（对照 DiscoverySelection.request）。
+  /// select_items 8 组键齐全，未选的组发空数组；游标为空即首页。
+  Map<String, dynamic> requestBody({HongguoDiscoveryCursor? cursor}) {
+    final selected = <String, dynamic>{};
+    for (final key in hongguoDiscoveryLabels.keys) {
+      final value = _values[key];
+      selected[key] = value == null || value.isEmpty
+          ? <String>[]
+          : <String>[value];
+    }
+    return <String, dynamic>{
+      'offset': cursor?.offset ?? 0,
+      'limit': 24,
+      'need_selector_panel': cursor == null,
+      'select_items': selected,
+      'session_id': cursor?.session ?? '',
+      'req_type': cursor == null ? 'default' : 'only_content',
+      'client_req_type': 3,
+      'filter_ids': '',
+      'req_scene': reqScene,
+    };
+  }
+
+  /// genre 为漫剧/AI 剧类型时走对应场景，否则默认场景。
+  String get reqScene {
+    final genre = _values['genre'];
+    return genre == 'comic_series' || genre == 'ai_series'
+        ? genre!
+        : 'default';
+  }
+
+  /// 会话指纹：筛选条件排好序拼起来，换筛选项即换会话。
+  String get fingerprint {
+    final parts = _values.entries
+        .where((entry) => entry.value.isNotEmpty)
+        .map((entry) => '${entry.key}=${entry.value}')
+        .toList()
+      ..sort();
+    return parts.join(',');
+  }
+}
+
+/// 服务端筛选游标（Go 桥接的 nextCursor 原样透传）。
+class HongguoDiscoveryCursor {
+  const HongguoDiscoveryCursor({required this.offset, required this.session});
+
+  final int offset;
+  final String session;
+
+  Map<String, dynamic> toJson() => {'offset': offset, 'session': session};
+
+  factory HongguoDiscoveryCursor.fromJson(Map<String, dynamic> json) =>
+      HongguoDiscoveryCursor(
+        offset: intValue(json['offset']),
+        session: json['session'] as String? ?? '',
+      );
+}
+
+/// Go 桥接 hongguoAccountFilter 一页返回的解析结果：
+/// {items, groups, hasMore, nextCursor}。
+class HongguoDiscoveryFilterPage {
+  const HongguoDiscoveryFilterPage({
+    required this.items,
+    required this.groups,
+    required this.hasMore,
+    required this.nextCursor,
+    required this.nameToId,
+  });
+
+  final List<Drama> items;
+
+  /// 界面可直接用的筛选组：旧 4 组沿用旧键（cat/topic/background/
+  /// setting），选项 id 用展示名（调用方已选的中文值才能继续命中）；
+  /// 新 4 组用服务端键与服务端 id。
+  final List<CatalogFilterGroup> groups;
+  final bool hasMore;
+  final HongguoDiscoveryCursor? nextCursor;
+
+  /// 展示名 → 服务端选项 id（按服务端键分），供旧 4 组中文值翻译。
+  final Map<String, Map<String, String>> nameToId;
+
+  factory HongguoDiscoveryFilterPage.fromBridgeJson(
+    Map<String, dynamic> json,
+  ) {
+    final items = <Drama>[];
+    for (final row in json['items'] as List? ?? const []) {
+      if (row is! Map) continue;
+      final item = Map<String, dynamic>.from(row);
+      final seriesId = item['seriesId']?.toString() ?? '';
+      if (seriesId.isEmpty) continue;
+      final badge = item['badge']?.toString() ?? '';
+      final episodeCount =
+          int.tryParse(
+            RegExp(r'(\d+)').firstMatch(badge)?.group(1) ?? '',
+          ) ??
+          0;
+      final tags = (item['tags']?.toString() ?? '')
+          .split(' · ')
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty)
+          .toList();
+      items.add(
+        Drama(
+          id: 'hongguo:$seriesId',
+          source: 'hongguo',
+          title: item['title']?.toString() ?? '短剧',
+          description: item['desc']?.toString() ?? '',
+          cover: item['cover']?.toString() ?? '',
+          episodes: episodeCount,
+          tags: tags,
+        ),
+      );
+    }
+    final groups = <CatalogFilterGroup>[];
+    final nameToId = <String, Map<String, String>>{};
+    for (final row in json['groups'] as List? ?? const []) {
+      if (row is! Map) continue;
+      final group = Map<String, dynamic>.from(row);
+      final type = group['type']?.toString() ?? '';
+      if (!hongguoDiscoveryLabels.containsKey(type)) continue;
+      final label =
+          group['label']?.toString() ?? hongguoDiscoveryLabels[type]!;
+      final legacyKey = hongguoDiscoveryServerKeyToLegacy[type];
+      final options = <CatalogFilterOption>[];
+      final index = <String, String>{};
+      for (final optionRow in group['options'] as List? ?? const []) {
+        if (optionRow is! Map) continue;
+        final option = Map<String, dynamic>.from(optionRow);
+        final id = option['id']?.toString() ?? '';
+        final name = option['name']?.toString() ?? '';
+        if (id.isEmpty || name.isEmpty) continue;
+        index[name] = id;
+        options.add(CatalogFilterOption(legacyKey == null ? id : name, name));
+      }
+      if (options.isEmpty) continue;
+      nameToId[type] = index;
+      groups.add(CatalogFilterGroup(legacyKey ?? type, label, options));
+    }
+    final hasMore = json['hasMore'] == true;
+    HongguoDiscoveryCursor? nextCursor;
+    if (hasMore && json['nextCursor'] is Map) {
+      final cursor = HongguoDiscoveryCursor.fromJson(
+        Map<String, dynamic>.from(json['nextCursor'] as Map),
+      );
+      if (cursor.offset > 0 && cursor.session.isNotEmpty) {
+        nextCursor = cursor;
+      }
+    }
+    return HongguoDiscoveryFilterPage(
+      items: items,
+      groups: groups,
+      // 服务端说有更多却没给可用游标时按无更多处理，否则续页无从发。
+      hasMore: hasMore && nextCursor != null,
+      nextCursor: nextCursor,
+      nameToId: nameToId,
+    );
+  }
+}
+
+/// 把调用方 filters（旧键中文值 / 服务端键 id）归一成服务端 selection。
+/// 旧键按展示名查 [nameToId] 翻译成服务端 id；查不到的丢弃该组，
+/// 绝不把中文值当 id 发给服务端（服务端只要 selector_item_id）。
+/// 漫剧/AI 剧分类无显式类型选择时，用分类定 genre，避免筛出真人剧。
+HongguoDiscoverySelection hongguoNormalizeFilters(
+  Map<String, String> filters,
+  Map<String, Map<String, String>> nameToId, {
+  String category = '',
+}) {
+  final values = <String, String>{};
+  for (final entry in filters.entries) {
+    final value = entry.value;
+    if (value.isEmpty) continue;
+    final serverKey = hongguoDiscoveryLegacyKeyToServer[entry.key];
+    if (serverKey != null) {
+      final id = nameToId[serverKey]?[value];
+      if (id != null && id.isNotEmpty) values[serverKey] = id;
+      continue;
+    }
+    if (hongguoDiscoveryLabels.containsKey(entry.key)) {
+      values[entry.key] = value;
+    }
+  }
+  if (!values.containsKey('genre')) {
+    if (category == 'comic_series') {
+      values['genre'] = 'comic_series';
+    } else if (category == 'ai_series') {
+      values['genre'] = 'ai_series';
+    }
+  }
+  return HongguoDiscoverySelection(values);
+}
+
+/// 服务端筛选会话：只放内存，不落盘。
+/// 指纹 = 分类 + 归一前的筛选条件；换筛选项/换分类即新会话，游标作废。
+class HongguoDiscoverySession {
+  HongguoDiscoverySession({
+    required this.fingerprint,
+    required this.selection,
+  });
+
+  final String fingerprint;
+  final HongguoDiscoverySelection selection;
+  List<CatalogFilterGroup> groups = const [];
+  HongguoDiscoveryCursor? nextCursor;
+  bool hasMore = false;
+
+  void applyPage(HongguoDiscoveryFilterPage page, {bool first = false}) {
+    if (first && page.groups.isNotEmpty) groups = page.groups;
+    nextCursor = page.nextCursor;
+    hasMore = page.hasMore;
+  }
+}
+
 class NativeRepository extends AppRepository {
   static final _coverDecoder = CoverDecoder();
   NativeRepository({this.background = false});
   final bool background;
+
+  /// 红果服务端筛选会话（只放内存，不落盘）：展示名→服务端选项 id 的
+  /// 索引跨会话复用，游标只跟当前筛选会话走。
+  final Map<String, Map<String, String>> _hongguoFilterNameIndex = {};
+  HongguoDiscoverySession? _hongguoFilterSession;
 
   static bool isPySource(String source) =>
       SourceSite.importedSites[source]?.importType == 'py';
@@ -733,6 +1077,192 @@ class NativeRepository extends AppRepository {
   @override
   Future<Map<String, dynamic>> hongguoDeviceRefresh() =>
       _call({'action': 'hongguoDeviceRefresh'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountFilter({
+    required String content,
+    String cursor = '',
+  }) async {
+    _authorize('hongguo');
+    return _call({
+      'action': 'hongguoAccountFilter',
+      'content': content,
+      'cursor': cursor,
+    });
+  }
+
+  /// 红果服务端筛选：按筛选会话的游标续页；首页或换筛选项时重拉首页。
+  /// 展示名→服务端选项 id 的索引（[_hongguoFilterNameIndex]）跨会话复用。
+  Future<CatalogPage> _hongguoServerFilterCatalog({
+    required String category,
+    required int page,
+    required Map<String, String> filters,
+  }) async {
+    final fingerprint = [
+      category,
+      ...filters.entries
+          .where((entry) => entry.value.isNotEmpty)
+          .map((entry) => '${entry.key}=${entry.value}')
+          .toList()
+        ..sort(),
+    ].join('|');
+    final session = _hongguoFilterSession;
+    if (page > 1 && session != null && session.fingerprint == fingerprint) {
+      // 同一筛选会话续页：有游标就接着拉；服务端已无更多时回空页，
+      // 不重拉首页（否则已拼好的列表会被首页冲掉）。
+      if (session.hasMore && session.nextCursor != null) {
+        final body = session.selection.requestBody(
+          cursor: session.nextCursor,
+        );
+        final result = await hongguoAccountFilter(
+          content: jsonEncode(body),
+          cursor: jsonEncode(session.nextCursor!.toJson()),
+        );
+        final parsed = HongguoDiscoveryFilterPage.fromBridgeJson(result);
+        session.applyPage(parsed);
+        return CatalogPage(
+          parsed.items,
+          hasMore: parsed.hasMore,
+          page: page,
+          filters: session.groups,
+        );
+      }
+      return CatalogPage(
+        const [],
+        hasMore: false,
+        page: page,
+        filters: session.groups,
+      );
+    }
+    // 首页或换筛选项：旧 4 组是中文值，服务端只要 selector_item_id，
+    // 索引为空时先拉一次空条件首页取筛选面板（只取其 groups，条目丢弃）。
+    final needsPanel =
+        _hongguoFilterNameIndex.isEmpty &&
+        filters.entries.any(
+          (entry) =>
+              entry.value.isNotEmpty &&
+              hongguoDiscoveryLegacyKeyToServer.containsKey(entry.key),
+        );
+    if (needsPanel) {
+      final panel = await hongguoAccountFilter(
+        content: jsonEncode(HongguoDiscoverySelection().requestBody()),
+      );
+      _learnHongguoFilterIndex(
+        HongguoDiscoveryFilterPage.fromBridgeJson(panel).nameToId,
+      );
+    }
+    final selection = hongguoNormalizeFilters(
+      filters,
+      _hongguoFilterNameIndex,
+      category: category,
+    );
+    final result = await hongguoAccountFilter(
+      content: jsonEncode(selection.requestBody()),
+    );
+    final parsed = HongguoDiscoveryFilterPage.fromBridgeJson(result);
+    _learnHongguoFilterIndex(parsed.nameToId);
+    final next = HongguoDiscoverySession(
+      fingerprint: fingerprint,
+      selection: selection,
+    )..applyPage(parsed, first: true);
+    _hongguoFilterSession = next;
+    return CatalogPage(
+      parsed.items,
+      hasMore: parsed.hasMore,
+      page: page,
+      filters: next.groups,
+    );
+  }
+
+  void _learnHongguoFilterIndex(
+    Map<String, Map<String, String>> learned,
+  ) {
+    for (final entry in learned.entries) {
+      _hongguoFilterNameIndex
+          .putIfAbsent(entry.key, () => {})
+          .addAll(entry.value);
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountStatus() =>
+      _call({'action': 'hongguoAccountStatus'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountExportSession() =>
+      _call({'action': 'hongguoAccountExportSession'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountSetSession(
+    Map<String, dynamic> session,
+  ) => _call({'action': 'hongguoAccountSetSession', ...session});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountClearSession() =>
+      _call({'action': 'hongguoAccountClearSession'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginQr() =>
+      _call({'action': 'hongguoLoginQr'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginQrPoll() =>
+      _call({'action': 'hongguoLoginQrPoll'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountInfo() =>
+      _call({'action': 'hongguoAccountInfo'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginSendCode(String phone) =>
+      _call({'action': 'hongguoLoginSendCode', 'phone': phone});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginSms(String phone, String code) =>
+      _call({'action': 'hongguoLoginSms', 'phone': phone, 'code': code});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginAppSendCode(String phone) =>
+      _call({'action': 'hongguoLoginAppSendCode', 'phone': phone});
+
+  @override
+  Future<Map<String, dynamic>> hongguoLoginAppSms(String phone, String code) =>
+      _call({'action': 'hongguoLoginAppSms', 'phone': phone, 'code': code});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountFavorites() =>
+      _call({'action': 'hongguoAccountFavorites'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountSetFavorite(
+    String seriesId,
+    bool add,
+  ) => _call({
+    'action': 'hongguoAccountSetFavorite',
+    'seriesId': seriesId,
+    'add': add,
+  });
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountHistory() =>
+      _call({'action': 'hongguoAccountHistory'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountUploadProgress(
+    Map<String, dynamic> progress,
+  ) => _call({'action': 'hongguoAccountUploadProgress', ...progress});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountReservations(bool online) =>
+      _call({'action': 'hongguoAccountReservations', 'online': online});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountReserve(String seriesId) =>
+      _call({'action': 'hongguoAccountReserve', 'seriesId': seriesId});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountRelated(String seriesId) =>
+      _call({'action': 'hongguoAccountRelated', 'seriesId': seriesId});
 
   @override
   Future<Map<String, dynamic>> crackConfigSummary() =>
@@ -1548,6 +2078,19 @@ class NativeRepository extends AppRepository {
         fresh: pageResult.fresh,
         tags: pageResult.tags,
         filters: groups,
+      );
+    }
+    // 红果视频目录带筛选时走服务端多维筛选（landpage/v），不再把
+    // 已拉回的列表在本机按标签过滤；站内分类（真人/漫剧/AI 剧）
+    // 与题材仍走原有 category 参数，不动。小说/听书分类不走这条。
+    if (source == 'hongguo' &&
+        query.isEmpty &&
+        filters.values.any((value) => value.isNotEmpty) &&
+        !_isHongguoBookCategory(category)) {
+      return _hongguoServerFilterCatalog(
+        category: category,
+        page: page,
+        filters: filters,
       );
     }
     return CatalogPage.fromJson(

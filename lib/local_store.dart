@@ -733,7 +733,7 @@ class LocalStore extends ChangeNotifier {
     }
   }
 
-  /// 读某视频区（drama/vod/midnight）上次选中的站，'' 表示没记过。
+  /// 读某视频区（drama/vod）上次选中的站，'' 表示没记过。
   /// 只读不回落；回落由调用方按当前区可见源做（站不存在或被门禁藏起时落默认站）。
   String zoneSource(String zone) {
     if (locked) return '';
@@ -889,8 +889,7 @@ class LocalStore extends ChangeNotifier {
     return {'guo', 'xigua'}.contains(value) ? value : 'guo';
   }
 
-  Future<void> setPlayer(String value) =>
-      {'guo', 'xigua'}.contains(value)
+  Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
   Future<void> setThemeMode(String value) =>
@@ -963,32 +962,33 @@ class LocalStore extends ChangeNotifier {
 
   Future<void> setThemeAccent(String value) =>
       {
-        'default',
-        'green',
-        'blue',
-        'purple',
-        'red',
-        'orange',
-        'jiucai',
-        'matcha',
-        'luhui',
-        'qingci',
-        'boheqing',
-        'chunrilv',
-        'qingkonglan',
-        'shenhailan',
-        'shilan',
-        'qunqing',
-        'yuanwei',
-        'xunyicao',
-        'meizizi',
-        'putaozi',
-        'xiangyuzi',
-        'shanhuhong',
-        'meiguifen',
-        'zhuanhong',
-        '',
-      }.contains(value) || _isCustomThemeAccentId(value)
+            'default',
+            'green',
+            'blue',
+            'purple',
+            'red',
+            'orange',
+            'jiucai',
+            'matcha',
+            'luhui',
+            'qingci',
+            'boheqing',
+            'chunrilv',
+            'qingkonglan',
+            'shenhailan',
+            'shilan',
+            'qunqing',
+            'yuanwei',
+            'xunyicao',
+            'meizizi',
+            'putaozi',
+            'xiangyuzi',
+            'shanhuhong',
+            'meiguifen',
+            'zhuanhong',
+            '',
+          }.contains(value) ||
+          _isCustomThemeAccentId(value)
       ? _setting('themeAccent', value)
       : Future.value();
 
@@ -1027,6 +1027,71 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlaybackPreferences(PlaybackPreferences value) {
     PlaybackPreferences.fromJson(value.toJson());
     return _setting(_key('playback'), jsonEncode(value.toJson()));
+  }
+
+  // 红果播放页设置：直接走 SharedPreferences，不进 LocalSnapshot 受管字段。
+  // 原因是 LocalSnapshot 只接受 String（布尔只有 hideVip 等三例）且键要进
+  // local_snapshot.dart 的白名单，那个文件不在本次改动范围；红果账号
+  // （hongguo_account.dart）也是同样的直存做法。键是设备级，不分用户。
+  String get hongguoFrameMode {
+    final value = preferences.getString('hongguoFrameMode');
+    return {'fit', 'zoom', 'fill'}.contains(value) ? value! : 'fit';
+  }
+
+  Future<void> setHongguoFrameMode(String value) async {
+    final normalized = {'fit', 'zoom', 'fill'}.contains(value) ? value : 'fit';
+    await preferences.setString('hongguoFrameMode', normalized);
+    _notify();
+  }
+
+  int get hongguoVideoRotation {
+    final value = preferences.getInt('hongguoVideoRotation') ?? 0;
+    return {0, 90, 180, 270}.contains(value) ? value : 0;
+  }
+
+  Future<void> setHongguoVideoRotation(int value) async {
+    final normalized = {0, 90, 180, 270}.contains(value) ? value : 0;
+    await preferences.setInt('hongguoVideoRotation', normalized);
+    _notify();
+  }
+
+  bool get hongguoAlwaysShowProgress =>
+      preferences.getBool('hongguoAlwaysShowProgress') ?? false;
+
+  Future<void> setHongguoAlwaysShowProgress(bool value) async {
+    await preferences.setBool('hongguoAlwaysShowProgress', value);
+    _notify();
+  }
+
+  bool get hongguoSeasonAutoplay =>
+      preferences.getBool('hongguoSeasonAutoplay') ?? false;
+
+  Future<void> setHongguoSeasonAutoplay(bool value) async {
+    await preferences.setBool('hongguoSeasonAutoplay', value);
+    _notify();
+  }
+
+  // 0 表示自动（最高档）；显式档位只认 480/720/1080，其它值归零。
+  int get hongguoQuality {
+    final value = preferences.getInt('hongguoQuality') ?? 0;
+    return {0, 480, 720, 1080}.contains(value) ? value : 0;
+  }
+
+  Future<void> setHongguoQuality(int value) async {
+    final normalized = {0, 480, 720, 1080}.contains(value) ? value : 0;
+    await preferences.setInt('hongguoQuality', normalized);
+    _notify();
+  }
+
+  // 解码失败教训：JSON 对象，键是“编码|宽|高”，值是失败次数。
+  // Dart 侧取流结果只带高度，编码/宽未知时记空串与 0，见
+  // hongguo_playback_page.dart 的 HongguoDecoderLessons。
+  String get hongguoDecoderLessonsRaw =>
+      preferences.getString('hongguoDecoderLessons') ?? '';
+
+  Future<void> setHongguoDecoderLessons(String raw) async {
+    await preferences.setString('hongguoDecoderLessons', raw);
+    _notify();
   }
 
   Future<void> setDownloadPreferences(DownloadPreferences value) {

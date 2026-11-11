@@ -6,7 +6,6 @@ import 'app_page_route.dart';
 import 'audio_history_screen.dart';
 import 'content_detail_screen.dart';
 import 'content_models.dart';
-import 'content_registry.dart';
 import 'content_zone_binding.dart';
 import 'core_bridge.dart';
 import 'novel_cover.dart';
@@ -363,12 +362,6 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text('小说暂无可用源'),
-              if (ContentRegistry.hasHiddenAdultSources(
-                ContentSection.novel,
-              )) ...[
-                const SizedBox(height: 8),
-                const Text('有成人源被午夜门禁隐藏，开午夜后可见'),
-              ],
               const SizedBox(height: 12),
               FilledButton.icon(
                 key: const ValueKey('novel-import-py'),

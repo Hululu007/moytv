@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'local_store.dart';
+import 'neon/neon_ui.dart';
 
 class ThemeOption {
   const ThemeOption(this.id, this.name);
@@ -222,28 +223,93 @@ ThemeData applyThemePreferences(
       ),
       surfaceContainerLow: scheme.surfaceContainerLow.withValues(alpha: 0.85),
       surfaceContainer: scheme.surfaceContainer.withValues(alpha: 0.85),
-      surfaceContainerHigh: scheme.surfaceContainerHigh.withValues(
-        alpha: 0.85,
-      ),
+      surfaceContainerHigh: scheme.surfaceContainerHigh.withValues(alpha: 0.85),
       surfaceContainerHighest: scheme.surfaceContainerHighest.withValues(
         alpha: 0.85,
       ),
       outline: dark ? Colors.white38 : Colors.black26,
     );
   }
+  // 霓虹暗夜：整套配色统一到 Neon 调色板，让内容区（点播）、抽屉、
+  // 卡片、输入框都跟首页同一套紫粉青，而不是只有首页一页走霓虹。
+  var appBarBackground = scaffold;
   if (style == 'neon') {
-    scheme = scheme.copyWith(
-      outline: scheme.primary,
-      outlineVariant: scheme.primary.withValues(alpha: 0.35),
-    );
+    if (dark) {
+      scaffold = Neon.bg;
+      canvas = Neon.bgDeep;
+      scheme = scheme.copyWith(
+        brightness: Brightness.dark,
+        primary: Neon.purple,
+        onPrimary: Colors.white,
+        primaryContainer: const Color(0xFF2A1247),
+        onPrimaryContainer: const Color(0xFFE8D6FF),
+        secondary: Neon.pink,
+        onSecondary: Colors.white,
+        secondaryContainer: const Color(0xFF3A1240),
+        onSecondaryContainer: const Color(0xFFF7DDFF),
+        tertiary: Neon.cyan,
+        onTertiary: const Color(0xFF001821),
+        tertiaryContainer: const Color(0xFF0B2A38),
+        onTertiaryContainer: Neon.cyan,
+        surface: Neon.surface,
+        onSurface: Neon.text,
+        onSurfaceVariant: Neon.textDim,
+        outline: Neon.purple,
+        outlineVariant: const Color(0xFF2E1D45),
+        surfaceContainerLowest: Neon.bgDeep,
+        surfaceContainerLow: const Color(0xFF150C26),
+        surfaceContainer: Neon.surface,
+        surfaceContainerHigh: Neon.surfaceHigh,
+        surfaceContainerHighest: const Color(0xFF2A1745),
+        surfaceTint: Colors.transparent,
+      );
+    } else {
+      scaffold = const Color(0xFFF6F1FD);
+      canvas = const Color(0xFFF6F1FD);
+      scheme = scheme.copyWith(
+        brightness: Brightness.light,
+        primary: const Color(0xFF7B2FD1),
+        primaryContainer: const Color(0xFFEADCFF),
+        onPrimaryContainer: const Color(0xFF3A0E63),
+        secondary: const Color(0xFFC2307A),
+        tertiary: const Color(0xFF00677A),
+        surface: Colors.white,
+        onSurface: const Color(0xFF1B1128),
+        onSurfaceVariant: const Color(0xFF6B5C86),
+        outline: const Color(0xFF9B6BE0),
+        outlineVariant: const Color(0xFFE5DCF2),
+        surfaceContainerLowest: Colors.white,
+        surfaceContainerLow: const Color(0xFFF6F1FD),
+        surfaceContainer: const Color(0xFFEFE8FA),
+        surfaceContainerHigh: const Color(0xFFE8DDF6),
+        surfaceContainerHighest: const Color(0xFFDFD2F0),
+        surfaceTint: Colors.transparent,
+      );
+    }
+    // 顶栏透明，让页面底部的霓虹氛围光透上来；卡片统一霓虹描边。
+    appBarBackground = Colors.transparent;
     cardTheme = cardTheme.copyWith(
+      color: scheme.surfaceContainer,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius ?? 10),
         side: BorderSide(
-          color: scheme.primary.withValues(alpha: 0.55),
+          color: scheme.primary.withValues(alpha: dark ? .55 : .35),
           width: 1,
         ),
       ),
+    );
+    dialogTheme = dialogTheme.copyWith(
+      backgroundColor: scheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(radius ?? 14),
+        side: BorderSide(
+          color: scheme.primary.withValues(alpha: dark ? .45 : .28),
+        ),
+      ),
+    );
+    bottomSheetTheme = bottomSheetTheme.copyWith(
+      backgroundColor: scheme.surface,
+      modalBackgroundColor: scheme.surface,
     );
   }
   if (style == 'aurora') {
@@ -283,7 +349,10 @@ ThemeData applyThemePreferences(
     colorScheme: scheme,
     scaffoldBackgroundColor: scaffold,
     canvasColor: canvas,
-    appBarTheme: base.appBarTheme.copyWith(backgroundColor: scaffold),
+    appBarTheme: base.appBarTheme.copyWith(
+      backgroundColor: appBarBackground,
+      foregroundColor: scheme.onSurface,
+    ),
     drawerTheme: DrawerThemeData(backgroundColor: scheme.surface),
     cardTheme: cardTheme,
     dialogTheme: dialogTheme,

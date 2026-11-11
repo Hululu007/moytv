@@ -728,7 +728,12 @@ class SourceSite {
   static const knownValues = [
     hongguo,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
-    SourceSite('hgtvmirror', '红果镜像', '镜站 · 真人剧 · 漫剧 · AI 剧', section: sectionDrama),
+    SourceSite(
+      'hgtvmirror',
+      '红果镜像',
+      '镜站 · 真人剧 · 漫剧 · AI 剧',
+      section: sectionDrama,
+    ),
     ikanbot,
     a123,
     hanxiaoquan,
@@ -752,7 +757,12 @@ class SourceSite {
   static const allValues = [
     hongguo,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
-    SourceSite('hgtvmirror', '红果镜像', '镜站 · 真人剧 · 漫剧 · AI 剧', section: sectionDrama),
+    SourceSite(
+      'hgtvmirror',
+      '红果镜像',
+      '镜站 · 真人剧 · 漫剧 · AI 剧',
+      section: sectionDrama,
+    ),
     ikanbot,
     a123,
     hanxiaoquan,
@@ -842,16 +852,10 @@ class SourceSite {
   };
 }
 
-bool isVodZoneSource(SourceSite site) =>
-    site.isVideoSection &&
-    (site.origin == SourceSite.originConfig ||
-        (site.origin == SourceSite.originImport &&
-            (site.importType == 'py' || site.importType == 'jar')) ||
-        (site.origin == SourceSite.originBuiltin &&
-            !site.name.startsWith('🔞')));
-
-bool isMidnightZoneSource(SourceSite site) =>
-    site.isVideoSection && site.origin == SourceSite.originBuiltin;
+/// 统一视频区谓词（第二阶段站合并后）：全部视频分区站源都在点播区浏览，
+/// 不再按来源（内置/导入）或 🔞 名拆成点播/午夜两个区。午夜区已并入
+/// 统一站点区（站源管理页呈现与管理），本谓词是首页唯一的视频区分流。
+bool isVodZoneSource(SourceSite site) => site.isVideoSection;
 
 class SourceGroup {
   const SourceGroup(

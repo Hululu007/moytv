@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'app_build.dart';
+import 'neon/neon_ui.dart';
+import 'ui_style.dart';
 
-enum HomeZone { drama, vod, midnight, live, audio, novel }
+enum HomeZone { drama, vod, live, audio, novel }
 
 enum AppDrawerTool {
   sources,
@@ -83,7 +85,6 @@ class _DrawerRow extends StatelessWidget {
     required this.selected,
     this.description,
     this.onTap,
-    this.onDoubleTap,
   });
 
   final IconData icon;
@@ -91,7 +92,6 @@ class _DrawerRow extends StatelessWidget {
   final String? description;
   final bool selected;
   final VoidCallback? onTap;
-  final VoidCallback? onDoubleTap;
 
   @override
   Widget build(BuildContext context) {
@@ -134,10 +134,9 @@ class _DrawerRow extends StatelessWidget {
         color: colors.onSurfaceVariant.withValues(alpha: 0.7),
       ),
       selected: selected,
-      onTap: onDoubleTap == null ? onTap : null,
+      onTap: onTap,
     );
-    if (onDoubleTap == null) return tile;
-    return InkWell(onTap: onTap, onDoubleTap: onDoubleTap, child: tile);
+    return tile;
   }
 }
 
@@ -207,12 +206,16 @@ class _DrawerSection extends StatelessWidget {
             ),
           ),
           Material(
-            color: colors.surfaceContainerHighest.withValues(alpha: 0.4),
+            color: neonStyleActive
+                ? Neon.surfaceGlass.withValues(alpha: 0.72)
+                : colors.surfaceContainerHighest.withValues(alpha: 0.4),
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
               side: BorderSide(
-                color: colors.outlineVariant.withValues(alpha: 0.5),
+                color: neonStyleActive
+                    ? Neon.purple.withValues(alpha: 0.26)
+                    : colors.outlineVariant.withValues(alpha: 0.5),
               ),
             ),
             child: Column(mainAxisSize: MainAxisSize.min, children: rows),
@@ -227,23 +230,19 @@ class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
     required this.zone,
-    required this.midnightActivated,
     required this.currentVersion,
     required this.onZoneSelected,
     required this.onWatchRoom,
     required this.onTool,
     required this.onMinorProtectionChanged,
-    required this.onVersionDoubleTap,
   });
 
   final HomeZone zone;
-  final bool midnightActivated;
   final String currentVersion;
   final ValueChanged<HomeZone> onZoneSelected;
   final VoidCallback onWatchRoom;
   final ValueChanged<AppDrawerTool> onTool;
   final ValueChanged<bool> onMinorProtectionChanged;
-  final VoidCallback onVersionDoubleTap;
 
   @override
   State<AppDrawer> createState() => _AppDrawerState();
@@ -259,7 +258,6 @@ class _AppDrawerState extends State<AppDrawer> {
   bool get _videoZone =>
       widget.zone == HomeZone.drama ||
       widget.zone == HomeZone.vod ||
-      widget.zone == HomeZone.midnight ||
       widget.zone == HomeZone.live;
 
   void _selectShelf(DrawerShelf shelf) {
@@ -273,7 +271,6 @@ class _AppDrawerState extends State<AppDrawer> {
     String? description,
     bool selected = false,
     VoidCallback? onTap,
-    VoidCallback? onDoubleTap,
   }) {
     return _DrawerRow(
       icon: icon,
@@ -281,7 +278,6 @@ class _AppDrawerState extends State<AppDrawer> {
       description: description,
       selected: selected,
       onTap: onTap,
-      onDoubleTap: onDoubleTap,
     );
   }
 
@@ -343,22 +339,34 @@ class _AppDrawerState extends State<AppDrawer> {
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: active
-              ? colors.primary
-              : colors.surface.withValues(alpha: 0.55),
+          color: neonStyleActive
+              ? (active ? null : Colors.white.withValues(alpha: 0.06))
+              : (active
+                    ? colors.primary
+                    : colors.surface.withValues(alpha: 0.55)),
+          gradient: neonStyleActive && active ? Neon.hotGradient : null,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: active
-                ? colors.primary
-                : colors.outlineVariant.withValues(alpha: 0.6),
+            color: neonStyleActive
+                ? (active
+                      ? Neon.pink.withValues(alpha: .9)
+                      : Colors.white.withValues(alpha: .14))
+                : (active
+                      ? colors.primary
+                      : colors.outlineVariant.withValues(alpha: 0.6)),
           ),
+          boxShadow: neonStyleActive && active
+              ? [Neon.bloom(Neon.pink, blur: 18)]
+              : null,
         ),
         child: Text(
           shelf.label,
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active ? colors.onPrimary : colors.onSurfaceVariant,
+            color: neonStyleActive
+                ? (active ? Colors.white : Neon.textDim)
+                : (active ? colors.onPrimary : colors.onSurfaceVariant),
           ),
         ),
       ),
@@ -372,11 +380,22 @@ class _AppDrawerState extends State<AppDrawer> {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 0, 6, 12),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primaryContainer, colors.surface],
-        ),
+        gradient: neonStyleActive
+            ? const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0x4DB14BFF),
+                  Color(0x1AFF4FA3),
+                  Color(0x00120B20),
+                ],
+                stops: [0, .55, 1],
+              )
+            : LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [colors.primaryContainer, colors.surface],
+              ),
       ),
       child: SafeArea(
         bottom: false,
@@ -469,13 +488,6 @@ class _AppDrawerState extends State<AppDrawer> {
                 description: '电影 / 剧集 / 动漫站源',
                 target: HomeZone.vod,
               ),
-              if (widget.midnightActivated)
-                _zoneRow(
-                  icon: Icons.nightlight_rounded,
-                  label: '午夜区',
-                  description: '已解锁 · 开启未成年保护可隐藏',
-                  target: HomeZone.midnight,
-                ),
               _zoneRow(
                 icon: Icons.live_tv_rounded,
                 label: '直播',
@@ -586,15 +598,16 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   Widget _appToolSection() {
+    // 设置项统一收进「设置」页（分类口径对齐参考实现），抽屉只留常用快捷入口。
     return _DrawerSection(
       title: '应用工具',
-      hint: '通用配置与管理',
+      hint: '常用入口 · 完整设置见「设置」',
       children: [
         _toolRow(
           AppDrawerTool.sources,
           Icons.list_rounded,
-          '站源管理',
-          '显示与排序当前站源',
+          '站点区',
+          '统一站点区 · 全部站源呈现与管理',
         ),
         _toolRow(
           AppDrawerTool.contentSources,
@@ -602,71 +615,28 @@ class _AppDrawerState extends State<AppDrawer> {
           '内容源管理',
           '导入远程配置 / py 站 / 蜘蛛源',
         ),
-        _row(
-          icon: Icons.system_update_rounded,
-          label: '软件更新',
-          description: _versionText,
-          onTap: () => widget.onTool(AppDrawerTool.appUpdate),
-          onDoubleTap: widget.onVersionDoubleTap,
-        ),
-        _row(
-          icon: Icons.download_rounded,
-          label: '导入中心',
-          description: '本地文件 / 书源 / 配置包',
-          onTap: () => widget.onTool(AppDrawerTool.importCenter),
-        ),
-        _toolRow(
-          AppDrawerTool.parse,
-          Icons.link_rounded,
-          '解析接口',
-          '网页解析与直链解析',
-        ),
-        _toolRow(
-          AppDrawerTool.clearance,
-          Icons.verified_user_rounded,
-          '站点验证',
-          'Cloudflare / 人机验证通道',
-        ),
-        _toolRow(
-          AppDrawerTool.proxyKernel,
-          Icons.vpn_key_rounded,
-          '代理内核',
-          '内置代理与线路',
-        ),
-        _toolRow(
-          AppDrawerTool.lanSync,
-          Icons.devices_rounded,
-          '设备互联',
-          '局域网同步与推屏',
-        ),
         _toolRow(
           AppDrawerTool.player,
           Icons.play_circle_rounded,
           '播放器选择',
           '切换解码内核',
         ),
-        _toolRow(
-          AppDrawerTool.ruleEditor,
-          Icons.code_rounded,
-          '蜘蛛规则编辑器',
-          '写 / 调 / 测蜘蛛规则',
+        _row(
+          icon: Icons.library_add_outlined,
+          label: '导入中心',
+          description: '本地文件 / 书源 / 配置包',
+          onTap: () => widget.onTool(AppDrawerTool.importCenter),
         ),
-        _toolRow(
-          AppDrawerTool.viewingExperience,
-          Icons.visibility_outlined,
-          '观看体验',
-          '弹幕 / 倍速 / 画面比例',
-        ),
-        _toolRow(
-          AppDrawerTool.torrent,
-          Icons.download_outlined,
-          '种子',
-          'BT / 磁力下载',
+        _row(
+          icon: Icons.system_update_rounded,
+          label: '软件更新',
+          description: _versionText,
+          onTap: () => widget.onTool(AppDrawerTool.appUpdate),
         ),
         _row(
           icon: Icons.settings_outlined,
           label: '设置',
-          description: '账号 / 主题 / 关于',
+          description: '播放 / 外观 / 网络 / 存储 / 关于',
           onTap: () => widget.onTool(AppDrawerTool.settings),
         ),
       ],
@@ -677,7 +647,7 @@ class _AppDrawerState extends State<AppDrawer> {
     final colors = Theme.of(context).colorScheme;
     return _DrawerSection(
       title: '青少年保护',
-      hint: '开启后隐藏午夜区',
+      hint: '开启后隐藏成人站并回到短剧区',
       children: [
         SwitchListTile.adaptive(
           contentPadding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
@@ -699,7 +669,7 @@ class _AppDrawerState extends State<AppDrawer> {
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: Text(
-            '开启后隐藏午夜区',
+            '开启后隐藏成人站并回到短剧区',
             style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
           ),
           value: false,
@@ -721,7 +691,11 @@ class _AppDrawerState extends State<AppDrawer> {
           Text(
             '$appName · $_versionText',
             key: const ValueKey('drawer-footer'),
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: muted),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: muted,
+            ),
           ),
           const SizedBox(height: 5),
           Text(
@@ -743,17 +717,34 @@ class _AppDrawerState extends State<AppDrawer> {
 
   @override
   Widget build(BuildContext context) {
+    final content = ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        _header(context),
+        ..._shelfSections(),
+        _appToolSection(),
+        _guardianSection(),
+        _footer(),
+      ],
+    );
+    if (!neonStyleActive) {
+      // 非霓虹风格：抽屉底与点播区（Scaffold 背景）用同一个主题背景色。
+      return Drawer(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        child: content,
+      );
+    }
+    // 霓虹风格：抽屉跟点播区 / 内容区同一套氛围光（NeonBackdrop.app），
+    // 不再是一块单独的纯色板，也不再是自己一份参数。
     return Drawer(
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          _header(context),
-          ..._shelfSections(),
-          _appToolSection(),
-          if (widget.midnightActivated) _guardianSection(),
-          _footer(),
-        ],
+      key: const ValueKey('drawer-neon'),
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(24)),
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.horizontal(right: Radius.circular(24)),
+        child: NeonBackdrop.app(child: content),
       ),
     );
   }

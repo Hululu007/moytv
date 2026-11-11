@@ -12,12 +12,43 @@ import 'hongguo_playback_page.dart';
 import 'hongguo_preload.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'neon/neon_channel_view.dart';
+import 'neon/neon_home_view.dart';
+import 'neon/neon_ui.dart';
 import 'playback_foreground.dart';
 import 'tvbox_player_bridge.dart';
 import 'watchroom/player.dart';
 import 'widgets.dart';
 
 bool isHongguoDramaGroup(String groupId) => groupId == 'hongguo';
+
+/// 试播失败重试两档延迟（对齐对照仓 HomeFeedScreen.trialRecoveryDelays）。
+const hongguoTrialRetryDelays = <Duration>[
+  Duration(seconds: 2),
+  Duration(seconds: 5),
+];
+
+/// 试播单轮最多往后探的集数（含首集）：第 0/1/2 集。
+/// 对齐对照仓 FeedPlayback.openTrialEpisode“最多探到第三集”。
+const hongguoTrialMaxProbeEpisodes = 3;
+
+/// 试播探集：从 [startIndex] 起按集号顺序调用 [tryEpisode]，返回首个
+/// 能播的集下标；全部探完都播不了返回 null（调用方负责重试或停住，
+/// 不静默跳下一部）。[tryEpisode] 返回 true 表示该集已播起来。
+Future<int?> hongguoFirstPlayableEpisode({
+  required int episodeCount,
+  int startIndex = 0,
+  required Future<bool> Function(int episodeIndex) tryEpisode,
+  int maxProbe = hongguoTrialMaxProbeEpisodes,
+}) async {
+  final end = episodeCount < startIndex + maxProbe
+      ? episodeCount
+      : startIndex + maxProbe;
+  for (var index = startIndex; index < end; index++) {
+    if (await tryEpisode(index)) return index;
+  }
+  return null;
+}
 
 class HongguoDramaHome extends StatefulWidget {
   const HongguoDramaHome({
@@ -82,7 +113,7 @@ typedef _FeedResume = ({String key, int episode, double position});
 class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   static _FeedResume? _resume;
 
-  int _tab = 0;
+  int _tab = 3;
   String _channel = 'recommend';
   bool _didRandomStart = false;
   bool _synopsisExpanded = false;
@@ -419,6 +450,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   }
 
   void _onPageChanged(int index) {
+    // 翻页即作废上一部的试播（含重试等待），新一部的试播另起 token。
+    _playToken++;
     setState(() {
       _index = index;
       _episode = 0;
@@ -466,31 +499,55 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         setState(() => _detailError = '暂无可播剧集');
         return;
       }
-      final episodeIndex = _episode.clamp(0, detail.episodes.length - 1);
-      if (episodeIndex != _episode) {
-        setState(() => _episode = episodeIndex);
+      final startIndex = _episode.clamp(0, detail.episodes.length - 1);
+      if (startIndex != _episode) {
+        setState(() => _episode = startIndex);
       }
       if (!mounted || token != _playToken) return;
       final start = _startPosition;
       _startPosition = 0;
+      // 上一轮试播失败的提示清掉，成功播起来后不再显示。
+      if (_detailError != null) {
+        setState(() => _detailError = null);
+      }
       final preloaded = _preloadWindow.take(
         drama,
-        detail.episodes[episodeIndex],
+        detail.episodes[startIndex],
       );
-      await _player.open(
+      // 试播：先探首集（或续播集），播不起来就往后探；整轮都失败时
+      // 按 2 秒、5 秒两档重试；耗尽后停在当前推荐，不跳下一部。
+      var playedIndex = await _tryTrialEpisodes(
         detail: detail,
-        episodeIndex: episodeIndex,
+        drama: drama,
+        startIndex: startIndex,
         startPosition: start,
-        repository: widget.repository,
-        store: widget.store,
         preloadedPlan: preloaded,
+        token: token,
       );
-      if (!mounted) return;
+      for (final delay in hongguoTrialRetryDelays) {
+        if (playedIndex != null) break;
+        if (!mounted || token != _playToken) return;
+        if (!await _sleepOrAbort(delay, token)) return;
+        if (!mounted || token != _playToken) return;
+        playedIndex = await _tryTrialEpisodes(
+          detail: detail,
+          drama: drama,
+          startIndex: startIndex,
+          startPosition: 0,
+          token: token,
+        );
+      }
+      if (playedIndex == null) {
+        if (!mounted || token != _playToken) return;
+        setState(() => _detailError = '试播暂时失败，可点重试或上下滑动换一部');
+        return;
+      }
+      if (!mounted || token != _playToken) return;
       if (_tab != 0) {
         unawaited(_player.pause());
         return;
       }
-      if (token != _playToken) return;
+      final episodeIndex = playedIndex;
       final plan = _player.plan;
       if (plan != null) {
         if (!_playbackServiceHeld) {
@@ -517,6 +574,59 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         if (mounted) unawaited(_playCurrent());
       }
     }
+  }
+
+  /// 试播探集：从 [startIndex] 起按顺序试播，最多探
+  /// [hongguoTrialMaxProbeEpisodes] 集，返回首个能播的集下标，
+  /// 全部失败返回 null。首集可用预加载的 plan，其余集现取现验
+  /// （取流失败即该集不可播）；续播起始位置只用于首集，
+  /// 回退的集从头播。播起来的集写回 [_episode]，信息区集号与之一致。
+  Future<int?> _tryTrialEpisodes({
+    required DramaDetail detail,
+    required Drama drama,
+    required int startIndex,
+    required double startPosition,
+    required int token,
+    PlaybackPlan? preloadedPlan,
+  }) async {
+    final played = await hongguoFirstPlayableEpisode(
+      episodeCount: detail.episodes.length,
+      startIndex: startIndex,
+      tryEpisode: (index) async {
+        if (!mounted || token != _playToken) return false;
+        await _player.open(
+          detail: detail,
+          episodeIndex: index,
+          startPosition: index == startIndex ? startPosition : 0,
+          repository: widget.repository,
+          store: widget.store,
+          preloadedPlan: index == startIndex ? preloadedPlan : null,
+        );
+        if (!mounted || token != _playToken) return false;
+        // _player.open 内部已把取流/打开失败记进 error：
+        // error 为空且有视频才算该集播起来。
+        return _player.error == null && _player.hasVideo;
+      },
+    );
+    if (played != null && mounted && _episode != played) {
+      setState(() => _episode = played);
+    }
+    return played;
+  }
+
+  /// 可中断的等待：每 100 毫秒检查一次，翻页/切 tab/退出即返回 false，
+  /// 否则等满 [delay] 返回 true。
+  Future<bool> _sleepOrAbort(Duration delay, int token) async {
+    var waited = Duration.zero;
+    const step = Duration(milliseconds: 100);
+    while (waited < delay) {
+      if (!mounted || token != _playToken) return false;
+      final rest = delay - waited;
+      final slice = rest < step ? rest : step;
+      await Future<void>.delayed(slice);
+      waited += slice;
+    }
+    return mounted && token == _playToken;
   }
 
   Future<void> _prefetch(int index) async {
@@ -630,78 +740,92 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     }
   }
 
+  // 霓虹页签（追加到原有的 0=全屏流 / 1=剧场 / 2=我的 之后，
+  // 这样原有播放与剧场逻辑完全不受影响）。
+  static const _neonHomeTab = 3;
+  static const _neonChannelTab = 4;
+
+  int get _barIndex => switch (_tab) {
+        3 => 0,
+        4 => 1,
+        1 => 2,
+        2 => 3,
+        _ => -1,
+      };
+
+  void _onBarSelect(int index) {
+    _selectTab(switch (index) {
+      0 => _neonHomeTab,
+      1 => _neonChannelTab,
+      2 => 1,
+      _ => 2,
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final neonTab = _tab >= 3;
     return Scaffold(
-      backgroundColor: _tab == 0 ? Colors.black : null,
-      body: switch (_tab) {
-        1 => _theater(context),
-        2 => _mine(context),
-        _ => _feed(context),
-      },
-      bottomNavigationBar: Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: _tab == 0
-              ? const ColorScheme.dark(
-                  primary: Colors.white,
-                  onPrimary: Colors.black,
-                  surface: Colors.black,
-                  onSurface: Colors.white,
-                  onSurfaceVariant: Colors.white70,
-                  secondary: Colors.white,
-                )
-              : const ColorScheme.light(
-                  primary: Colors.black,
-                  onPrimary: Colors.white,
-                  surface: Colors.transparent,
-                  onSurface: Colors.black,
-                  onSurfaceVariant: Colors.black54,
-                  secondary: Colors.black,
-                ),
-        ),
-        child: NavigationBar(
-          backgroundColor: _tab == 0 ? Colors.black : Colors.transparent,
-          elevation: _tab == 0 ? 3 : 0,
-          indicatorColor: Colors.transparent,
-          selectedIndex: _tab,
-          onDestinationSelected: _selectTab,
-          destinations: [
-            NavigationDestination(
-              icon: Icon(
-                Icons.home_outlined,
-                color: _tab == 0 ? Colors.white70 : Colors.black54,
+      backgroundColor: _tab == 0 ? Colors.black : (neonTab ? Neon.bg : null),
+      extendBody: neonTab,
+      body: neonTab
+          ? NeonBackdrop(
+              // 频道页参考图是「顶部紫色主光 + 左中光更弱」的布局。
+              intensity: _tab == _neonHomeTab ? 1 : .58,
+              magentaY: _tab == _neonHomeTab ? .40 : .26,
+              tealY: _tab == _neonHomeTab ? .40 : .30,
+              topGlow: _tab == _neonHomeTab ? .26 : .58,
+              rightGlowColor: _tab == _neonHomeTab ? Neon.teal : Neon.blue,
+              rightGlowAlpha: _tab == _neonHomeTab ? 1 : .62,
+              child: SafeArea(
+                bottom: false,
+                child: _tab == _neonHomeTab
+                    ? _neonHome(context)
+                    : _neonChannel(context),
               ),
-              selectedIcon: Icon(
-                Icons.home,
-                color: _tab == 0 ? Colors.white : Colors.black,
-              ),
-              label: '首页',
-            ),
-            NavigationDestination(
-              icon: Icon(
-                Icons.theater_comedy_outlined,
-                color: _tab == 0 ? Colors.white70 : Colors.black54,
-              ),
-              selectedIcon: Icon(
-                Icons.theater_comedy,
-                color: _tab == 0 ? Colors.white : Colors.black,
-              ),
-              label: '剧场',
-            ),
-            NavigationDestination(
-              icon: Icon(
-                Icons.person_outline,
-                color: _tab == 0 ? Colors.white70 : Colors.black54,
-              ),
-              selectedIcon: Icon(
-                Icons.person,
-                color: _tab == 0 ? Colors.white : Colors.black,
-              ),
-              label: '我的',
-            ),
-          ],
-        ),
+            )
+          : switch (_tab) {
+              1 => _theater(context),
+              2 => _mine(context),
+              _ => _feed(context),
+            },
+      bottomNavigationBar: NeonBottomBar(
+        index: _barIndex,
+        onSelect: _onBarSelect,
+        onCenter: () => _selectTab(0),
       ),
+    );
+  }
+
+  Widget _neonHome(BuildContext context) {
+    return NeonHomeView(
+      items: widget.dramas,
+      repository: widget.repository,
+      brand: '魔蚁box',
+      sourceLabel: widget.sourceLabel,
+      onOpen: widget.onOpenDrama,
+      onSearch: () => widget.onSearchSubmitted(widget.searchController.text),
+      onSourceTap: widget.onPickSource,
+      onLongPress: widget.onOpenDrama,
+      onMenu: widget.onMenuPressed,
+      onRankings: widget.onRankingsPressed,
+      onFeaturedPlay: widget.onOpenDrama,
+    );
+  }
+
+  Widget _neonChannel(BuildContext context) {
+    return NeonChannelView(
+      items: widget.dramas,
+      repository: widget.repository,
+      categories: widget.categories,
+      selectedCategory: widget.selectedCategory,
+      onCategory: widget.onCategorySelected,
+      onOpen: widget.onOpenDrama,
+      onBack: () => _selectTab(_neonHomeTab),
+      onSearch: () => widget.onSearchSubmitted(widget.searchController.text),
+      onFilter: widget.onFilterPressed,
+      onRankings: widget.onRankingsPressed,
+      filtersActive: widget.filtersActive,
     );
   }
 

@@ -18,16 +18,16 @@ import 'clearance_bridge.dart';
 import 'crack_config_section.dart';
 import 'custom_headers_screen.dart';
 import 'jar_bridge.dart';
+import 'py_bridge.dart';
 import 'import_center_screen.dart';
 import 'parse_settings_screen.dart';
-import 'app_theme.dart';
 import 'liquid_glass.dart';
 import 'local_store.dart';
-import 'py_bridge.dart';
 import 'profiles_screen.dart';
 import 'remote_widgets.dart';
 import 'site_check_screen.dart';
 import 'sources_screen.dart';
+import 'content_source_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'lan_screen.dart';
@@ -38,6 +38,7 @@ import 'proxy_kernel_screen.dart';
 import 'rule_editor_screen.dart';
 import 'theme_settings_screen.dart';
 import 'hongguo_device_screen.dart';
+import 'hongguo_login_page.dart';
 import 'app_layout.dart';
 import 'models.dart';
 import 'playback_launch_screen.dart';
@@ -186,284 +187,394 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final body = glassDesign(context) ? _glassBody() : _materialBody();
       if (widget.embedded) return body;
       return Scaffold(
-        appBar: AppBar(title: const Text('设置与备份')),
+        appBar: AppBar(title: const Text('设置')),
         body: body,
       );
     },
   );
 
-  Widget _materialBody() => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 720),
-      child: ListView(
-        key: const ValueKey('settings-list'),
-        padding: const EdgeInsets.all(16),
-        children: [
-          ListTile(
-            key: const ValueKey('lan-settings'),
-            leading: const Icon(Icons.devices_rounded),
-            title: const Text('设备互联'),
-            subtitle: const Text('局域网自动同步追剧与推送播放'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => openLanSync(context),
-          ),
-          ListTile(
-            key: const ValueKey('theme-settings-entry'),
-            leading: const Icon(Icons.palette_outlined),
-            title: const Text('主题设置'),
-            subtitle: const Text('模式、风格、主题色与背景'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => ThemeSettingsScreen(store: widget.store),
+  /// 设置分组：分类口径对齐参考实现的设置页体系
+  /// （播放 / 外观界面 / 网络 / 缓存存储 / 源与规则 / 小程序 / 媒体库 / 设备 / 关于）。
+  List<_SettingsGroup> _settingGroups() {
+    final store = widget.store;
+    final admin = store.profile.admin;
+    return [
+      _SettingsGroup('播放与画面', [
+        _SettingsItem(
+          keyName: 'player-entry',
+          icon: Icons.play_circle_outline_rounded,
+          lucide: LucideIcons.circlePlay,
+          color: const Color(0xFF5E5CE6),
+          title: '播放器选择',
+          detail: '解码内核与播放优先级',
+          onTap: () => _push(PlayerPickerScreen(store: store)),
+        ),
+        _SettingsItem(
+          keyName: 'viewing-experience-entry',
+          icon: Icons.visibility_outlined,
+          lucide: LucideIcons.sparkles,
+          color: const Color(0xFFFF9F0A),
+          title: '观看体验',
+          detail: '沉浸式详情 · TMDB 海报 · 弹幕与手势',
+          onTap: () => _push(ViewingExperienceScreen(store: store)),
+        ),
+        _SettingsItem(
+          keyName: 'parse-settings-entry',
+          icon: Icons.alt_route_rounded,
+          lucide: LucideIcons.route,
+          color: const Color(0xFF30B0C7),
+          title: '解析接口',
+          detail: '播放解析接口列表与默认选中',
+          onTap: () => _push(const ParseSettingsScreen()),
+        ),
+      ]),
+      _SettingsGroup('外观与界面', [
+        _SettingsItem(
+          keyName: 'theme-settings-entry',
+          icon: Icons.palette_outlined,
+          lucide: LucideIcons.palette,
+          color: const Color(0xFFAF52DE),
+          title: '外观主题',
+          detail: '模式、风格、主题色与背景',
+          onTap: () => _push(ThemeSettingsScreen(store: store)),
+        ),
+        _SettingsItem(
+          keyName: 'display-mode-entry',
+          icon: Icons.display_settings_outlined,
+          lucide: LucideIcons.monitor,
+          color: const Color(0xFF5E5CE6),
+          title: '界面模式',
+          detail: _displayModeLabel(store.displayMode),
+          onTap: _chooseDisplayMode,
+        ),
+      ]),
+      _SettingsGroup('网络与连接', [
+        if (admin)
+          _SettingsItem(
+            keyName: 'network-resource-entry',
+            icon: Icons.settings_ethernet_rounded,
+            lucide: LucideIcons.network,
+            color: const Color(0xFF5E5CE6),
+            title: '网络与资源',
+            detail: '代理、请求间隔与站源目录',
+            onTap: () => _push(
+              ResourceSettingsScreen(
+                repository: widget.repository,
+                store: store,
               ),
             ),
           ),
-          ListTile(
-            key: const ValueKey('hongguo-device-entry'),
-            leading: const Icon(Icons.badge_outlined),
-            title: const Text('设备注册档案'),
-            subtitle: const Text('红果设备身份与注册状态'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) =>
-                    HongguoDeviceScreen(repository: widget.repository),
-              ),
+        _SettingsItem(
+          keyName: 'proxy-kernel-entry',
+          icon: Icons.shield_outlined,
+          lucide: LucideIcons.shield,
+          color: const Color(0xFF5E5CE6),
+          title: '代理内核',
+          detail: 'mihomo 本地代理 · 订阅与选节点',
+          onTap: () => _push(ProxyKernelScreen(repository: widget.repository)),
+        ),
+        _SettingsItem(
+          keyName: 'clearance-entry',
+          icon: Icons.verified_user_outlined,
+          lucide: LucideIcons.shieldCheck,
+          color: const Color(0xFF34C759),
+          title: '站点验证',
+          detail: '为被拦截的站点完成浏览器验证',
+          onTap: () => openClearanceFlow(context, widget.repository),
+        ),
+      ]),
+      _SettingsGroup('源与规则', [
+        if (widget.repository.supportsSourceManagement)
+          _SettingsItem(
+            keyName: 'sources-entry',
+            icon: Icons.dns_outlined,
+            lucide: LucideIcons.server,
+            color: const Color(0xFF0A84FF),
+            title: '站点区',
+            detail: '统一站点区 · 独立更新、连接与播放检测',
+            onTap: () => _push(
+              SourcesScreen(repository: widget.repository, store: store),
             ),
           ),
-          if (widget.repository.supportsSourceManagement)
-            ListTile(
-              leading: const Icon(Icons.dns_outlined),
-              title: const Text('站源管理'),
-              subtitle: const Text('独立更新、连接与播放检测'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Navigator.push(
-                context,
-                appPageRoute<void>(
-                  builder: (_) => SourcesScreen(
-                    repository: widget.repository,
-                    store: widget.store,
+        _SettingsItem(
+          keyName: 'content-sources-entry',
+          icon: Icons.layers_outlined,
+          lucide: LucideIcons.libraryBig,
+          color: const Color(0xFF30D158),
+          title: '内容源管理',
+          detail: '远程配置 / py 站 / 蜘蛛源 / 书源',
+          onTap: () => _push(
+            ContentSourceScreen(repository: widget.repository, store: store),
+          ),
+        ),
+        _SettingsItem(
+          keyName: 'site-check-entry',
+          icon: Icons.fact_check_outlined,
+          lucide: LucideIcons.listChecks,
+          color: const Color(0xFF34C759),
+          title: '站点检查',
+          detail: '逐站测活，失效站自动隐藏',
+          onTap: () => _push(
+            SiteCheckScreen(repository: widget.repository, store: store),
+          ),
+        ),
+        _SettingsItem(
+          keyName: 'rule-editor-entry',
+          icon: Icons.code_rounded,
+          lucide: LucideIcons.code,
+          color: const Color(0xFF8E8E93),
+          title: '蜘蛛规则编辑器',
+          detail: '编辑、校验与本地试跑 XBPQ 规则',
+          onTap: () => _push(RuleEditorScreen(repository: widget.repository)),
+        ),
+        _SettingsItem(
+          keyName: 'crack-config-entry',
+          icon: Icons.security_rounded,
+          lucide: LucideIcons.fingerprint,
+          color: const Color(0xFFFF765F),
+          title: '过盾、指纹与请求头',
+          detail: '指纹过盾开关 · 自定义请求头 · VIP 配置',
+          onTap: () => _push(
+            _AntiBotScreen(repository: widget.repository, store: store),
+          ),
+        ),
+      ]),
+      _SettingsGroup('存储与缓存', [
+        _SettingsItem(
+          keyName: 'storage-entry',
+          icon: Icons.sd_storage_outlined,
+          lucide: LucideIcons.arrowDownToLine,
+          color: const Color(0xFF30B0C7),
+          title: '存储空间',
+          detail: '下载目录、占用与迁移',
+          onTap: () =>
+              _push(StorageScreen(repository: widget.repository, store: store)),
+        ),
+        _SettingsItem(
+          keyName: 'import-center-entry',
+          icon: Icons.library_add_outlined,
+          lucide: LucideIcons.download,
+          color: const Color(0xFF30D158),
+          title: '导入中心',
+          detail: 'TVBox 远程配置与 jar 直导入',
+          onTap: () => _push(
+            ImportCenterScreen(repository: widget.repository, store: store),
+          ),
+        ),
+        _SettingsItem(
+          keyName: 'torrent-entry',
+          icon: Icons.download_outlined,
+          lucide: LucideIcons.download,
+          color: const Color(0xFF30D158),
+          title: '种子',
+          detail: '磁力链接解析与保存',
+          onTap: () => _push(const TorrentHomePage()),
+        ),
+      ]),
+      _SettingsGroup('小程序', [
+        _SettingsItem(
+          keyName: 'miniapp-entry',
+          icon: Icons.widgets_outlined,
+          lucide: LucideIcons.layoutGrid,
+          color: const Color(0xFF30B0C7),
+          title: '小程序',
+          detail: '已安装、市场与小程序设置',
+          onTap: () => _push(const MiniAppHomePage()),
+        ),
+      ]),
+      _SettingsGroup('媒体库', [
+        _SettingsItem(
+          keyName: 'saved-drama-entry',
+          icon: Icons.bookmark_outline_rounded,
+          lucide: LucideIcons.bookmark,
+          color: const Color(0xFFFF9F0A),
+          title: '追剧',
+          detail: '收藏的剧集与更新',
+          onTap: () => _openSavedLibrary(history: false),
+        ),
+        _SettingsItem(
+          keyName: 'saved-history-entry',
+          icon: Icons.history_rounded,
+          lucide: LucideIcons.history,
+          color: const Color(0xFF30B0C7),
+          title: '最近观看',
+          detail: '本机观看记录与续播',
+          onTap: () => _openSavedLibrary(history: true),
+        ),
+      ]),
+      _SettingsGroup('设备', [
+        _SettingsItem(
+          keyName: 'lan-settings',
+          icon: Icons.devices_rounded,
+          lucide: LucideIcons.monitorSmartphone,
+          color: const Color(0xFF0A84FF),
+          title: '设备互联',
+          detail: '局域网同步追剧与推送播放',
+          onTap: () => openLanSync(context),
+        ),
+        _SettingsItem(
+          keyName: 'hongguo-device-entry',
+          icon: Icons.badge_outlined,
+          lucide: LucideIcons.badge,
+          color: const Color(0xFFFF765F),
+          title: '设备注册档案',
+          detail: '设备身份与注册状态',
+          onTap: () =>
+              _push(HongguoDeviceScreen(repository: widget.repository)),
+        ),
+        _SettingsItem(
+          keyName: 'hongguo-account-entry',
+          icon: Icons.account_circle_outlined,
+          lucide: LucideIcons.user,
+          color: const Color(0xFFFF2D55),
+          title: '红果账号',
+          detail: '手机号 / 扫码登录、账号收藏与云端记录',
+          onTap: () => _push(
+            HongguoAccountPage(repository: widget.repository, store: store),
+          ),
+        ),
+      ]),
+      _SettingsGroup('关于与更新', [
+        _SettingsItem(
+          keyName: 'profiles-entry',
+          icon: Icons.people_outline_rounded,
+          lucide: LucideIcons.users,
+          color: const Color(0xFF34C759),
+          title: '用户管理',
+          detail: '当前：${store.profile.name}',
+          onTap: () => _push(ProfilesScreen(store: store)),
+        ),
+        _SettingsItem(
+          keyName: 'app-update-entry',
+          icon: Icons.system_update_outlined,
+          lucide: LucideIcons.arrowDownToLine,
+          color: const Color(0xFF30B0C7),
+          title: '软件更新',
+          detail: _appUpdateSummary,
+          onTap: () => _push(const AppUpdateScreen()),
+        ),
+        _SettingsItem(
+          keyName: 'about-entry',
+          icon: Icons.info_outlined,
+          lucide: LucideIcons.info,
+          color: const Color(0xFF8E8E93),
+          title: '关于$appName',
+          detail: '版本与许可',
+          onTap: _showAbout,
+        ),
+      ]),
+    ];
+  }
+
+  Widget _materialBody() {
+    final colors = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: ListView(
+          key: const ValueKey('settings-list'),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
+          children: [
+            for (final group in _settingGroups())
+              if (group.items.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                  child: Text(
+                    group.title,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6,
+                      color: colors.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ListTile(
-            key: const ValueKey('site-check-entry'),
-            leading: const Icon(Icons.fact_check_outlined),
-            title: const Text('站点检查'),
-            subtitle: const Text('逐站测活，失效站自动隐藏'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => SiteCheckScreen(
-                  repository: widget.repository,
-                  store: widget.store,
-                ),
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.code_rounded),
-            title: const Text('蜘蛛规则编辑器'),
-            subtitle: const Text('编辑、校验与本地试跑 XBPQ 规则'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => RuleEditorScreen(repository: widget.repository),
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.video_settings_outlined),
-            title: const Text('播放器选择'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => PlayerPickerScreen(store: widget.store),
-              ),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('app-update-entry'),
-            leading: const Icon(Icons.system_update_outlined),
-            title: const Text('软件更新'),
-            subtitle: Text(_appUpdateSummary),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(builder: (_) => const AppUpdateScreen()),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('proxy-kernel-entry'),
-            leading: const Icon(Icons.shield_outlined),
-            title: const Text('代理内核'),
-            subtitle: const Text('mihomo 本地代理：内置核、更新内核、订阅、选节点、测速、自启'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) =>
-                    ProxyKernelScreen(repository: widget.repository),
-              ),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('miniapp-entry'),
-            leading: const Icon(Icons.apps_outlined),
-            title: const Text('小程序'),
-            subtitle: const Text('已安装小程序、市场与小程序设置'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(builder: (_) => const MiniAppHomePage()),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('viewing-experience-entry'),
-            leading: const Icon(Icons.visibility_outlined),
-            title: const Text('观看体验'),
-            subtitle: const Text('沉浸式详情 · TMDB 海报'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => ViewingExperienceScreen(store: widget.store),
-              ),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('torrent-entry'),
-            leading: const Icon(Icons.download_outlined),
-            title: const Text('种子'),
-            subtitle: const Text('磁力链接解析与保存 · 引擎未接入'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(builder: (_) => const TorrentHomePage()),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('import-center-entry'),
-            leading: const Icon(Icons.library_add_outlined),
-            title: const Text('导入中心'),
-            subtitle: const Text('TVBox 远程配置与 jar 直导入，分组共存'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => ImportCenterScreen(
-                  repository: widget.repository,
-                  store: widget.store,
-                ),
-              ),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('parse-settings-entry'),
-            leading: const Icon(Icons.alt_route_rounded),
-            title: const Text('解析接口'),
-            subtitle: const Text('播放解析接口列表与默认选中'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(builder: (_) => const ParseSettingsScreen()),
-            ),
-          ),
-          ListTile(
-            key: const ValueKey('clearance-entry'),
-            leading: const Icon(Icons.verified_user_outlined),
-            title: const Text('站点验证'),
-            subtitle: const Text('为被拦截的站点完成浏览器验证'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => openClearanceFlow(context, widget.repository),
-          ),
-          ListTile(
-            key: const ValueKey('crack-config-entry'),
-            leading: const Icon(Icons.shield_outlined),
-            title: const Text('过盾与 VIP 配置'),
-            subtitle: const Text('导入导出各站过盾与 VIP 配置'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('过盾与 VIP 配置')),
-                  body: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: CrackConfigSection(repository: widget.repository),
+                Material(
+                  color: colors.surfaceContainerHighest.withValues(alpha: 0.35),
+                  clipBehavior: Clip.antiAlias,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: colors.outlineVariant.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < group.items.length; i++) ...[
+                        if (i > 0)
+                          Divider(
+                            height: 1,
+                            thickness: 1,
+                            indent: 56,
+                            endIndent: 12,
+                            color: colors.outlineVariant.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                        ListTile(
+                          key: ValueKey(group.items[i].keyName),
+                          contentPadding: const EdgeInsets.fromLTRB(
+                            14,
+                            0,
+                            10,
+                            0,
+                          ),
+                          leading: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: group.items[i].color.withValues(
+                                alpha: 0.14,
+                              ),
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Icon(
+                              group.items[i].icon,
+                              size: 18,
+                              color: group.items[i].color,
+                            ),
+                          ),
+                          title: Text(
+                            group.items[i].title,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: group.items[i].detail.isEmpty
+                              ? null
+                              : Text(
+                                  group.items[i].detail,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: colors.onSurfaceVariant,
+                                  ),
+                                ),
+                          trailing: Icon(
+                            Icons.chevron_right_rounded,
+                            size: 18,
+                            color: colors.onSurfaceVariant.withValues(
+                              alpha: 0.7,
+                            ),
+                          ),
+                          onTap: group.items[i].onTap,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.display_settings_outlined),
-            title: const Text('界面模式'),
-            subtitle: Text(_displayModeLabel(widget.store.displayMode)),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: _chooseDisplayMode,
-          ),
-          ListTile(
-            leading: const Icon(Icons.people_outline),
-            title: const Text('用户管理'),
-            subtitle: Text('当前：${widget.store.profile.name}'),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => ProfilesScreen(store: widget.store),
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.info_outlined),
-            title: Text('关于$appName'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: _showAbout,
-          ),
-          ListTile(
-            leading: const Icon(Icons.bookmark_outline),
-            title: const Text('追剧'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _openSavedLibrary(history: false),
-          ),
-          ListTile(
-            leading: const Icon(Icons.history_outlined),
-            title: const Text('最近观看'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _openSavedLibrary(history: true),
-          ),
-          if (widget.store.profile.admin) ...[
-            ListTile(
-              leading: const Icon(Icons.settings_ethernet_rounded),
-              title: const Text('网络与资源'),
-              subtitle: const Text('代理、目录请求间隔与站源目录'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Navigator.push(
-                context,
-                appPageRoute<void>(
-                  builder: (_) => ResourceSettingsScreen(
-                    repository: widget.repository,
-                    store: widget.store,
-                  ),
-                ),
-              ),
-            ),
+                const SizedBox(height: 12),
+              ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Future<void> _push(Widget page) =>
       Navigator.push(context, appPageRoute<void>(builder: (_) => page));
-
   Widget _glassIcon(IconData icon, Color color) => DecoratedBox(
     decoration: BoxDecoration(
       color: color,
@@ -617,7 +728,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _glassBody() {
-    final store = widget.store;
     return ListView(
       key: const ValueKey('settings-list'),
       padding: EdgeInsets.fromLTRB(
@@ -627,256 +737,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         32 + MediaQuery.paddingOf(context).bottom,
       ),
       children: [
-        _glassSection('通用', [
-          _glassRow(
-            key: const ValueKey('lan-settings'),
-            icon: LucideIcons.monitorSmartphone,
-            color: const Color(0xFF0A84FF),
-            title: '设备互联',
-            detail: '同步与推送',
-            onTap: () => openLanSync(context),
-          ),
-          if (widget.repository.supportsSourceManagement)
-            _glassRow(
-              icon: LucideIcons.server,
-              color: const Color(0xFF30B0C7),
-              title: '站源管理',
-              onTap: () => _push(
-                SourcesScreen(repository: widget.repository, store: store),
-              ),
-            ),
-          _glassRow(
-            key: const ValueKey('site-check-entry'),
-            icon: LucideIcons.listChecks,
-            color: const Color(0xFF30B0C7),
-            title: '站点检查',
-            detail: '逐站测活 · 失效自动隐藏',
-            onTap: () => _push(
-              SiteCheckScreen(repository: widget.repository, store: store),
-            ),
-          ),
-          _glassRow(
-            icon: LucideIcons.code,
-            color: const Color(0xFFBF5AF2),
-            title: '蜘蛛规则编辑器',
-            onTap: () => _push(RuleEditorScreen(repository: widget.repository)),
-          ),
-          _glassRow(
-            icon: LucideIcons.clapperboard,
-            color: const Color(0xFF64D2FF),
-            title: '播放器选择',
-            onTap: () => _push(PlayerPickerScreen(store: store)),
-          ),
-          _glassRow(
-            key: const ValueKey('app-update-entry'),
-            icon: LucideIcons.arrowDownToLine,
-            color: const Color(0xFF0A84FF),
-            title: '软件更新',
-            detail: _appUpdateSummary,
-            onTap: () => _push(const AppUpdateScreen()),
-          ),
-          _glassRow(
-            key: const ValueKey('import-center-entry'),
-            icon: LucideIcons.libraryBig,
-            color: const Color(0xFF64D2FF),
-            title: '导入中心',
-            detail: 'TVBox 配置 / jar',
-            onTap: () => _push(
-              ImportCenterScreen(repository: widget.repository, store: store),
-            ),
-          ),
-          _glassRow(
-            key: const ValueKey('parse-settings-entry'),
-            icon: LucideIcons.route,
-            color: const Color(0xFFFF6482),
-            title: '解析接口',
-            detail: '默认选中',
-            onTap: () => _push(const ParseSettingsScreen()),
-          ),
-          _glassRow(
-            key: const ValueKey('clearance-entry'),
-            icon: LucideIcons.shieldCheck,
-            color: const Color(0xFF64D2FF),
-            title: '站点验证',
-            detail: '浏览器过盾回填',
-            onTap: () => openClearanceFlow(context, widget.repository),
-          ),
-          _glassRow(
-            key: const ValueKey('python-cf-disguise-entry'),
-            icon: LucideIcons.fingerprint,
-            color: const Color(0xFF30D158),
-            title: 'Python 指纹过盾',
-            detail: store.pythonCfDisguise
-                ? '已开启 · 按蜘蛛 UA 匹配浏览器'
-                : '已关闭 · 只用普通请求',
-            trailing: Switch.adaptive(
-              value: store.pythonCfDisguise,
-              onChanged: (value) async {
-                try {
-                  await store.setPythonCfDisguise(value);
-                  await PyBridge.setCfDisguise(value);
-                } catch (error) {
-                  if (mounted) {
-                    ScaffoldMessenger.maybeOf(
-                      context,
-                    )?.showSnackBar(SnackBar(content: Text('切换失败：$error')));
-                  }
-                }
-                if (mounted) setState(() {});
-              },
-            ),
-          ),
-          _glassRow(
-            key: const ValueKey('jar-fingerprint-entry'),
-            icon: LucideIcons.fingerprint,
-            color: const Color(0xFF30D158),
-            title: 'Jar 指纹过盾',
-            detail: store.jarFingerprintEnabled
-                ? '已开启 · 按蜘蛛 UA 匹配浏览器'
-                : '已关闭 · 只用普通请求',
-            trailing: Switch.adaptive(
-              value: store.jarFingerprintEnabled,
-              onChanged: (value) async {
-                try {
-                  await store.setJarFingerprintEnabled(value);
-                  await JarBridge.setJarFingerprint(value);
-                } catch (error) {
-                  if (mounted) {
-                    ScaffoldMessenger.maybeOf(
-                      context,
-                    )?.showSnackBar(SnackBar(content: Text('切换失败：$error')));
-                  }
-                }
-                if (mounted) setState(() {});
-              },
-            ),
-          ),
-          _glassRow(
-            key: const ValueKey('custom-headers-entry'),
-            icon: LucideIcons.slidersHorizontal,
-            color: const Color(0xFF0A84FF),
-            title: '自定义请求头',
-            detail: store.customHeadersEnabled
-                ? '已开启 · ${store.customHeaderRules.length} 条规则'
-                : '已关闭',
-            onTap: () => _push(CustomHeadersScreen(store: store)),
-            trailing: Switch.adaptive(
-              value: store.customHeadersEnabled,
-              onChanged: (value) async {
-                try {
-                  await store.setCustomHeadersEnabled(value);
-                } catch (error) {
-                  if (mounted) {
-                    ScaffoldMessenger.maybeOf(
-                      context,
-                    )?.showSnackBar(SnackBar(content: Text('切换失败：$error')));
-                  }
-                }
-                if (mounted) setState(() {});
-              },
-            ),
-          ),
-          _glassRow(
-            key: const ValueKey('proxy-kernel-entry'),
-            icon: LucideIcons.shield,
-            color: const Color(0xFF5E5CE6),
-            title: '代理内核',
-            detail: 'mihomo 本地代理',
-            onTap: () =>
-                _push(ProxyKernelScreen(repository: widget.repository)),
-          ),
-          _glassRow(
-            key: const ValueKey('miniapp-entry'),
-            icon: LucideIcons.layoutGrid,
-            color: const Color(0xFF30B0C7),
-            title: '小程序',
-            detail: '已安装与市场',
-            onTap: () => _push(const MiniAppHomePage()),
-          ),
-          _glassRow(
-            key: const ValueKey('viewing-experience-entry'),
-            icon: LucideIcons.sparkles,
-            color: const Color(0xFFFF9F0A),
-            title: '观看体验',
-            detail: '沉浸式 · TMDB 海报',
-            onTap: () => _push(ViewingExperienceScreen(store: widget.store)),
-          ),
-          _glassRow(
-            key: const ValueKey('torrent-entry'),
-            icon: LucideIcons.download,
-            color: const Color(0xFF30D158),
-            title: '种子',
-            detail: '磁力链接 · 引擎未接入',
-            onTap: () => _push(const TorrentHomePage()),
-          ),
-          _glassRow(
-            key: const ValueKey('theme-setting'),
-            icon: LucideIcons.palette,
-            color: const Color(0xFFAF52DE),
-            title: '外观主题',
-            detail: AppTheme.label(store.themeMode),
-            onTap: () => _push(ThemeSettingsScreen(store: widget.store)),
-          ),
-          _glassRow(
-            key: const ValueKey('hongguo-device-entry'),
-            icon: LucideIcons.badge,
-            color: const Color(0xFFFF765F),
-            title: '设备注册档案',
-            detail: '红果设备身份与注册状态',
-            onTap: () =>
-                _push(HongguoDeviceScreen(repository: widget.repository)),
-          ),
-          _glassRow(
-            icon: LucideIcons.monitor,
-            color: const Color(0xFF5E5CE6),
-            title: '界面模式',
-            detail: _displayModeLabel(store.displayMode),
-            onTap: _chooseDisplayMode,
-          ),
-          _glassRow(
-            icon: LucideIcons.users,
-            color: const Color(0xFF34C759),
-            title: '用户管理',
-            detail: store.profile.name,
-            onTap: () => _push(ProfilesScreen(store: store)),
-          ),
-          _glassRow(
-            icon: LucideIcons.info,
-            color: const Color(0xFF8E8E93),
-            title: '关于$appName',
-            onTap: _showAbout,
-          ),
-        ]),
-        _glassSection('内容', [
-          _glassRow(
-            icon: LucideIcons.bookmark,
-            color: const Color(0xFFFF9F0A),
-            title: '追剧',
-            onTap: () => _openSavedLibrary(history: false),
-          ),
-          _glassRow(
-            icon: LucideIcons.history,
-            color: const Color(0xFF30B0C7),
-            title: '最近观看',
-            onTap: () => _openSavedLibrary(history: true),
-          ),
-        ]),
-        if (store.profile.admin) ...[
-          _glassSection('管理', [
-            _glassRow(
-              icon: LucideIcons.network,
-              color: const Color(0xFF5E5CE6),
-              title: '网络与资源',
-              detail: '代理与并发',
-              onTap: () => _push(
-                ResourceSettingsScreen(
-                  repository: widget.repository,
-                  store: store,
+        for (final group in _settingGroups())
+          if (group.items.isNotEmpty)
+            _glassSection(group.title, [
+              for (final item in group.items)
+                _glassRow(
+                  key: ValueKey(item.keyName),
+                  icon: item.lucide,
+                  color: item.color,
+                  title: item.title,
+                  detail: item.detail.isEmpty ? null : item.detail,
+                  onTap: item.onTap,
                 ),
-              ),
-            ),
-          ]),
-        ],
+            ]),
       ],
     );
   }
@@ -1047,4 +920,125 @@ class _StorageScreenState extends State<StorageScreen> {
       ),
     ),
   );
+}
+
+/// 设置页分组与条目：只做展示层描述，实际页面在 [_SettingsScreenState] 里绑定。
+class _SettingsGroup {
+  const _SettingsGroup(this.title, this.items);
+
+  final String title;
+  final List<_SettingsItem> items;
+}
+
+class _SettingsItem {
+  const _SettingsItem({
+    required this.keyName,
+    required this.icon,
+    required this.lucide,
+    required this.color,
+    required this.title,
+    required this.onTap,
+    this.detail = '',
+  });
+
+  final String keyName;
+  final IconData icon;
+  final IconData lucide;
+  final Color color;
+  final String title;
+  final String detail;
+  final VoidCallback onTap;
+}
+
+/// 过盾、指纹与请求头：把原先散在设置平铺列表里的三项收进一个页面。
+///
+/// 参考实现的同类项集中在「网络 / 反爬」一处，这里同样只做归拢，
+/// 底层开关与存储字段一个不动（pythonCfDisguise / jarFingerprintEnabled /
+/// customHeaderRules），所以升级后原配置继续生效。
+class _AntiBotScreen extends StatefulWidget {
+  const _AntiBotScreen({required this.repository, required this.store});
+
+  final AppRepository repository;
+  final LocalStore store;
+
+  @override
+  State<_AntiBotScreen> createState() => _AntiBotScreenState();
+}
+
+class _AntiBotScreenState extends State<_AntiBotScreen> {
+  Future<void> _toggle(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('切换失败：$error')));
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = widget.store;
+    return Scaffold(
+      appBar: AppBar(title: const Text('过盾、指纹与请求头')),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        children: [
+          SwitchListTile.adaptive(
+            key: const ValueKey('python-cf-disguise-entry'),
+            secondary: const Icon(LucideIcons.fingerprint),
+            title: const Text('Python 指纹过盾'),
+            subtitle: Text(
+              store.pythonCfDisguise ? '已开启 · 按蜘蛛 UA 匹配浏览器' : '已关闭 · 只用普通请求',
+            ),
+            value: store.pythonCfDisguise,
+            onChanged: (value) => _toggle(() async {
+              await store.setPythonCfDisguise(value);
+              await PyBridge.setCfDisguise(value);
+            }),
+          ),
+          SwitchListTile.adaptive(
+            key: const ValueKey('jar-fingerprint-entry'),
+            secondary: const Icon(LucideIcons.fingerprint),
+            title: const Text('Jar 指纹过盾'),
+            subtitle: Text(
+              store.jarFingerprintEnabled
+                  ? '已开启 · 按蜘蛛 UA 匹配浏览器'
+                  : '已关闭 · 只用普通请求',
+            ),
+            value: store.jarFingerprintEnabled,
+            onChanged: (value) => _toggle(() async {
+              await store.setJarFingerprintEnabled(value);
+              await JarBridge.setJarFingerprint(value);
+            }),
+          ),
+          ListTile(
+            key: const ValueKey('custom-headers-entry'),
+            leading: const Icon(LucideIcons.slidersHorizontal),
+            title: const Text('自定义请求头'),
+            subtitle: Text(
+              store.customHeadersEnabled
+                  ? '已开启 · ${store.customHeaderRules.length} 条规则'
+                  : '已关闭',
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.push(
+              context,
+              appPageRoute<void>(
+                builder: (_) => CustomHeadersScreen(store: store),
+              ),
+            ),
+          ),
+          const Divider(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: CrackConfigSection(repository: widget.repository),
+          ),
+        ],
+      ),
+    );
+  }
 }
