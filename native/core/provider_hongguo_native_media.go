@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -78,6 +79,19 @@ func (downloader *Downloader) resolveHongguoAppMediaWithUpcoming(ctx context.Con
 	return providerMedia{}, overseaErr
 }
 
+// hongguoPlayerBizParam：JS 实捕体原样 17 字段（video_platform 1024 等）；
+// video_id_type 由调用方定：video_model / multi_video_model 取 0，video_detail 取 1。
+func hongguoPlayerBizParam(videoIDType int) map[string]any {
+	return map[string]any{
+		"video_platform": 1024, "need_all_video_definition": true, "use_os_player": false,
+		"video_id_type": videoIDType, "from_video_id": "", "device_level": 3, "source": 4,
+		"need_mp4_align": false, "image_shrink_datas_str": "", "screen_width_px": "1080",
+		"item_map": map[string]any{}, "caller_scene": "0", "detail_page_version": 0,
+		"use_server_dns": false, "use_server_dns_scene": "0", "expire_strategy": "0",
+		"disable_digg_stat": false,
+	}
+}
+
 func (downloader *Downloader) resolveHongguoAppMediaLine(ctx context.Context, videoID string) (providerMedia, error) {
 	return downloader.resolveHongguoAppMediaLineWithUpcoming(ctx, videoID, nil)
 }
@@ -88,7 +102,7 @@ func (downloader *Downloader) resolveHongguoAppMediaLineWithUpcoming(ctx context
 		downloader.hongguoMergeFallbackAPI(ctx, cached)
 		if media, err := selectHongguoAppMedia(cached); err == nil {
 			downloader.clearHongguoDeviceLimited()
-			return media, nil
+			return downloader.hongguoApplyPlayAuth(ctx, media, cached), nil
 		}
 	}
 	// GET 批量首选 leg：冷却中则跳过，不硬撞。
@@ -110,8 +124,9 @@ func (downloader *Downloader) resolveHongguoAppMediaLineWithUpcoming(ctx context
 	}
 	payload := map[string]any{
 		"video_id": videoID, "content_type": 1,
-		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
+		"biz_param": hongguoPlayerBizParam(0),
 	}
+	playerCtx := context.WithValue(ctx, hongguoSignOptionsKey{}, hongguoSignOptions{PlayerOnly: true})
 	var lastErr error
 	for attempt := 0; attempt <= hongguoDeviceRotations; attempt++ {
 		if attempt > 0 {
@@ -119,7 +134,7 @@ func (downloader *Downloader) resolveHongguoAppMediaLineWithUpcoming(ctx context
 				return providerMedia{}, err
 			}
 		}
-		result, err := downloader.hongguoAppRequestInternal(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload, true)
+		result, err := downloader.hongguoAppRequestInternal(playerCtx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload, true)
 		if err != nil {
 			if errors.Is(err, errHongguoAppEmptyBody) {
 				downloader.markHongguoDeviceLimited()
@@ -156,7 +171,11 @@ func (downloader *Downloader) resolveHongguoAppMediaLineWithUpcoming(ctx context
 			continue
 		}
 		downloader.clearHongguoDeviceLimited()
-		return selectHongguoAppMedia(model)
+		media, err := selectHongguoAppMedia(model)
+		if err != nil {
+			return providerMedia{}, err
+		}
+		return downloader.hongguoApplyPlayAuth(ctx, media, data), nil
 	}
 	if lastErr != nil {
 		return providerMedia{}, lastErr
@@ -212,7 +231,11 @@ func (downloader *Downloader) resolveHongguoVideoTabModel(ctx context.Context, v
 	}
 	hongguoAttachKeySeed(model, entry, data)
 	downloader.hongguoMergeFallbackAPI(ctx, model)
-	return selectHongguoAppMedia(model)
+	media, err := selectHongguoAppMedia(model)
+	if err != nil {
+		return providerMedia{}, err
+	}
+	return downloader.hongguoApplyPlayAuth(ctx, media, entry, rows, data), nil
 }
 
 func (downloader *Downloader) resolveHongguoMultiModel(ctx context.Context, videoID string) (providerMedia, error) {
@@ -235,7 +258,8 @@ func (downloader *Downloader) resolveHongguoMultiModelWithUpcoming(ctx context.C
 	}
 	payload := map[string]any{
 		"mixed_video_id_map": map[string]any{"1004": videoIDs},
-		"biz_param":          map[string]any{"need_all_video_definition": true, "video_platform": 3},
+		// multi 的 biz_param 实捕未覆盖，照同系播放接口取 video_id_type 0（推断）。
+		"biz_param": hongguoPlayerBizParam(0),
 	}
 	result, err := downloader.hongguoAppRequestInternal(ctx, http.MethodPost, "/novel/player/multi_video_model/v1/", nil, payload, true)
 	if err != nil {
@@ -274,7 +298,11 @@ func (downloader *Downloader) resolveHongguoMultiModelWithUpcoming(ctx context.C
 	}
 	hongguoAttachKeySeed(model, entry, data)
 	downloader.hongguoMergeFallbackAPI(ctx, model)
-	return selectHongguoAppMedia(model)
+	media, err := selectHongguoAppMedia(model)
+	if err != nil {
+		return providerMedia{}, err
+	}
+	return downloader.hongguoApplyPlayAuth(ctx, media, entry, data), nil
 }
 
 func hongguoMultiEntry(data map[string]any, videoID string) map[string]any {
@@ -674,4 +702,122 @@ func hongguoMediaAddressesWithSeed(info map[string]any, seed []byte) []string {
 		add(info[key])
 	}
 	return addresses
+}
+
+var hongguoPlayAuthAPIBase = "https://open.bytedanceapi.com/"
+
+func hongguoPlayAuthFromData(data map[string]any) (string, int64) {
+	if data == nil {
+		return "", 0
+	}
+	token := strings.TrimSpace(mapString(data, "play_auth_token"))
+	if token == "" {
+		return "", 0
+	}
+	return token, int64(mapInt(data, "expire_time"))
+}
+
+func hongguoDecodePlayAuthToken(token string) (string, error) {
+	normalized := strings.TrimSpace(token)
+	if normalized == "" {
+		return "", errors.New("红果播放鉴权为空")
+	}
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+		if decoded, err := encoding.DecodeString(normalized); err == nil && len(decoded) > 0 {
+			return string(decoded), nil
+		}
+	}
+	return "", errors.New("红果播放鉴权不是有效 Base64")
+}
+
+func hongguoCollectPlayAuthURLs(value any, found *[]string) {
+	switch item := value.(type) {
+	case string:
+		if address := strings.TrimSpace(item); isProviderHTTPMediaURL(address) {
+			*found = append(*found, address)
+		}
+	case []any:
+		for _, child := range item {
+			hongguoCollectPlayAuthURLs(child, found)
+		}
+	case map[string]any:
+		for _, child := range item {
+			hongguoCollectPlayAuthURLs(child, found)
+		}
+	}
+}
+
+func (downloader *Downloader) hongguoResolvePlayAuthSecondStage(ctx context.Context, token string, expires int64) (string, error) {
+	if strings.TrimSpace(token) == "" {
+		return "", errors.New("红果播放鉴权为空")
+	}
+	if expires > 0 && time.Now().Unix() >= expires-30 {
+		return "", errors.New("红果播放鉴权已过期")
+	}
+	decoded, err := hongguoDecodePlayAuthToken(token)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(decoded) == "" {
+		return "", errors.New("红果播放鉴权解码为空")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(callCtx, http.MethodGet, hongguoPlayAuthAPIBase+"?"+decoded, nil)
+	if err != nil {
+		return "", err
+	}
+	client := downloader.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("红果第二段鉴权返回 HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 256<<10))
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(string(body))
+	if isProviderHTTPMediaURL(text) {
+		return text, nil
+	}
+	var parsed any
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	if err := decoder.Decode(&parsed); err != nil {
+		return "", errors.New("红果第二段鉴权未返回可用地址")
+	}
+	var found []string
+	hongguoCollectPlayAuthURLs(parsed, &found)
+	for _, address := range found {
+		if strings.HasSuffix(strings.ToLower(address), ".m3u8") {
+			return address, nil
+		}
+	}
+	if len(found) > 0 {
+		return found[0], nil
+	}
+	return "", errors.New("红果第二段鉴权未返回可用地址")
+}
+
+func (downloader *Downloader) hongguoApplyPlayAuth(ctx context.Context, media providerMedia, sources ...map[string]any) providerMedia {
+	for _, source := range sources {
+		token, expires := hongguoPlayAuthFromData(source)
+		if token == "" {
+			continue
+		}
+		media.PlayAuthToken = token
+		media.PlayAuthExpires = expires
+		if address, err := downloader.hongguoResolvePlayAuthSecondStage(ctx, token, expires); err == nil && address != "" && address != media.URL {
+			media.URL = address
+		}
+		return media
+	}
+	return media
 }

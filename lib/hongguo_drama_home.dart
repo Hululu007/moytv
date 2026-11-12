@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'app_page_route.dart';
 import 'compact_chip.dart';
 import 'core_bridge.dart';
+import 'hongguo_account.dart';
+import 'hongguo_account_entry.dart';
 import 'hongguo_comment.dart';
 import 'hongguo_danmaku.dart';
 import 'hongguo_playback_page.dart';
@@ -119,6 +121,11 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   bool _synopsisExpanded = false;
   late final PageController _pages;
   final RoomPlayerHandle _player = RoomPlayerHandle();
+  late final HongguoAccountController _accountController =
+      HongguoAccountController.withTransport(
+        GoHongguoAccountTransport(widget.repository),
+        repository: widget.repository,
+      );
   late final HongguoPreloadWindow _preloadWindow = HongguoPreloadWindow(
     widget.repository,
     detailOf: (drama) async {
@@ -178,6 +185,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         unawaited(_prefetch(_index + 1));
       });
     }
+    unawaited(_accountController.load());
   }
 
   String get _siteName {
@@ -303,6 +311,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     _pages.dispose();
     _player.dispose();
     _preloadWindow.dispose();
+    _accountController.dispose();
     if (_playbackServiceHeld) {
       _playbackServiceHeld = false;
       unawaited(PlaybackForeground.release());
@@ -1603,6 +1612,16 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             leading: const CircleAvatar(child: Icon(Icons.person)),
             title: const Text('我的'),
             subtitle: Text(widget.sourceLabel),
+          ),
+          const Divider(),
+          HongguoAccountEntry(
+            controller: _accountController,
+            repository: widget.repository,
+          ),
+          const Divider(),
+          HongguoAccountCloudSection(
+            controller: _accountController,
+            onOpenDrama: widget.onOpenDrama,
           ),
           const Divider(),
           ListTile(

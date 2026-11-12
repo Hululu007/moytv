@@ -371,7 +371,7 @@ func sixGodXmxor(data, key []byte) []byte {
 	data0 := int(value[0])
 	value[0] = byte(((^lastFlag) + int(value[0])) & 255)
 	value[1] = byte(((int(value[0]) ^ int(value[last]) ^ 254) + int(value[1])) & 255)
-	value[2] = byte((int(value[2]) + ((lastFlag-data0) ^ int(sixGodRL8(value[1], 3)) ^ 2)) & 255)
+	value[2] = byte((int(value[2]) + ((lastFlag - data0) ^ int(sixGodRL8(value[1], 3)) ^ 2)) & 255)
 	for index := 0; index < len(value)-4; index++ {
 		temp := int(sixGodRL8(value[index+2], 3)) ^ int(value[index+1]) ^ (index + 3)
 		value[index+3] = byte(((^temp) + int(value[index+3])) & 255)
@@ -627,7 +627,7 @@ func sixGodGenMedusa(rawURL string, body []byte, khronos uint32, opts sixGodMedu
 	version := sixGodHexBytes("03000000f7e85ffad7d7dc3bd62ac87057cf6118")
 	var versionOr []byte
 	for i := 0; i < 20; i += 4 {
-		v := binary.LittleEndian.Uint32(version[i : i+4]) ^ khronos
+		v := binary.LittleEndian.Uint32(version[i:i+4]) ^ khronos
 		versionOr = append(versionOr, sixGodU32LE(v)...)
 	}
 	final := append(versionOr, hashBytes[0:2]...)

@@ -403,6 +403,16 @@ func (d *Downloader) resolveHGTVMedia(ctx context.Context, task Task) (providerM
 	} else if err := ctx.Err(); err != nil {
 		return providerMedia{}, err
 	}
+	// 备用播放接口（修仙版 playSource 同款修法）：站方改版后播放页
+	// video_player_info 恒为空，上面一步拿不到地址；此时先调 POST
+	// /api/video/protected/fallback-play-info 取 main_url 作主地址，
+	// 360p 只留最后兜底。镜像站 resolveHGTVMirrorMedia 已有同样一
+	// 步，直接复用同一函数（接口与配方完全相同）。
+	if fallbackURL, err := d.fetchHGTVMirrorFallbackURL(ctx, videoID); err == nil {
+		lines = append(lines, providerMedia{URL: fallbackURL, Referer: hongguoBaseURL + "/"})
+	} else if err := ctx.Err(); err != nil {
+		return providerMedia{}, err
+	}
 	lines = append(lines, providerMedia{
 		URL:     hongguoBaseURL + "/video/public/" + videoID + "/360p.mp4",
 		Referer: hongguoBaseURL + "/",

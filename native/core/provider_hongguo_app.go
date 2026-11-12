@@ -30,7 +30,7 @@ type hongguoBaseURLOverrideKey struct{}
 // 用账号设备号签名、用账号 Cookie 发请求；未携带时走设备身份。
 type hongguoAccountOverrideKey struct{}
 
-const hongguoAppUserAgent = "com.phoenix.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+const hongguoAppUserAgent = "com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
 
 type hongguoCatalogCursor struct {
 	Offset        int       `json:"offset"`
@@ -46,6 +46,7 @@ type hongguoCatalogState struct {
 	Version    int                             `json:"version"`
 	DeviceID   string                          `json:"deviceId"`
 	InstallID  string                          `json:"installId"`
+	CDID       string                          `json:"cdid,omitempty"`
 	Registered bool                            `json:"registered,omitempty"`
 	Feeds      map[string]hongguoCatalogCursor `json:"feeds"`
 }
@@ -135,24 +136,27 @@ type hongguoAppClient struct {
 	account hongguoAccountSession
 	// qrToken：扫码登录当前二维码的轮询 token；appTicket/appMobile：App 短信登录的会话；
 	// webSent/webMobile：站内短信登录的发码状态。
-	qrToken   string
-	appTicket string
-	appMobile string
-	webSent   bool
-	webMobile string
+	// accountPhone：账号动作（hongguoAccountSendSms/VerifySms）的待验码登录会话，
+	// 对照仓 phoneAccount 的魔蚁版；验码成功后落进 account 会话槽。
+	accountPhone *hongguoAccountPhoneSession
+	qrToken      string
+	appTicket    string
+	appMobile    string
+	webSent      bool
+	webMobile    string
 }
 
 func (downloader *Downloader) hongguoClient() *hongguoAppClient {
 	downloader.hongguoOnce.Do(func() {
 		downloader.hongguo = &hongguoAppClient{
 			baseURL: hongguoAppBaseURL,
-			state:   hongguoCatalogState{Version: 1, DeviceID: newHongguoDeviceID(), InstallID: newHongguoDeviceID(), Feeds: map[string]hongguoCatalogCursor{}},
+			state:   hongguoCatalogState{Version: 1, DeviceID: newHongguoDeviceID(), InstallID: newHongguoDeviceID(), CDID: uuidLike(), Feeds: map[string]hongguoCatalogCursor{}},
 			details: map[string]hongguoDetailEntry{}, pending: map[string]*hongguoDetailCall{},
 			searches: map[string]hongguoSearchEntry{}, searchPending: map[string]*hongguoSearchCall{},
 			suggestions: map[string]hongguoSuggestionEntry{}, suggestPending: map[string]*hongguoSuggestionCall{},
 			routes: map[string]*hongguoRouteHealth{}, cookies: map[string]map[string]string{},
 			cookieExpires: map[string]map[string]time.Time{},
-			upcoming: map[string]hongguoUpcomingModel{},
+			upcoming:      map[string]hongguoUpcomingModel{},
 		}
 	})
 	return downloader.hongguo
@@ -175,6 +179,9 @@ func (downloader *Downloader) restoreHongguoCatalog(state *hongguoCatalogState) 
 		return
 	}
 	cloned := cloneHongguoCatalogState(state)
+	if cloned.CDID == "" {
+		cloned.CDID = uuidLike()
+	}
 	for name, cursor := range cloned.Feeds {
 		known := false
 		for _, genre := range hongguoAppGenres {
@@ -223,12 +230,27 @@ func hongguoCatalogHasMore(state *hongguoCatalogState) bool {
 
 func hongguoAppQuery(deviceID, installID string) url.Values {
 	return url.Values{
-		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {"73532"}, "version_name": {"7.3.5.32"},
-		"manifest_version_code": {"73532"}, "update_version_code": {"73532"}, "channel": {"update_64"},
+		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {"74332"}, "version_name": {"7.4.3.32"},
+		"manifest_version_code": {"74332"}, "update_version_code": {"74332"}, "channel": {"update_64"},
 		"device_platform": {"android"}, "os": {"android"}, "ssmix": {"a"}, "device_type": {"25053RT47C"},
 		"device_brand": {"Redmi"}, "language": {"zh"}, "os_api": {"36"}, "os_version": {"16"},
 		"resolution": {"1280*2772"}, "dpi": {"520"}, "ac": {"wifi"}, "device_id": {deviceID}, "iid": {installID},
+		"host_abi": {"arm64-v8a"}, "dragon_device_type": {"phone"}, "pv_player": {"74332"},
+		"compliance_status": {"0"}, "need_personal_recommend": {"1"}, "player_so_load": {"1"},
+		"is_android_pad_screen": {"0"},
 	}
+}
+
+// hongguoCDID：稳定的设备 cdid（新建 state 时生成、旧持久化 state 恢复时缺了
+// 就补），App 请求链路与设备注册共用同一个值，不再每次现生成。
+func (downloader *Downloader) hongguoCDID() string {
+	client := downloader.hongguoClient()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.state.CDID == "" {
+		client.state.CDID = uuidLike()
+	}
+	return client.state.CDID
 }
 
 // clearHongguoPlayerSuspended 重置玩家 App 接口的负缓存窗口（App 恢复可用时调用）。
@@ -593,6 +615,15 @@ func (downloader *Downloader) hongguoAppRequestInternalOpts(ctx context.Context,
 	}
 	routeKey := hongguoRouteKey(method, base, path)
 	query := hongguoAppQuery(deviceID, installID)
+	// cdid 全量带（修仙版 _accountParams 同款）：全量设备表里 cdid
+	// 取本次登录会话的设备身份，刷新沿用同一份；缺 cdid 时平台可能
+	// 报 100103 参数无效。未登录沿用稳定的 hongguoCDID；已登录用
+	// 上面已换成的账号设备号 deviceID，与 device_id 同一份身份。
+	if account.loggedIn() {
+		query.Set("cdid", deviceID)
+	} else {
+		query.Set("cdid", downloader.hongguoCDID())
+	}
 	for key, values := range extra {
 		query[key] = append([]string(nil), values...)
 	}
@@ -674,7 +705,12 @@ func (downloader *Downloader) hongguoAppRequestInternalOpts(ctx context.Context,
 				prepared.URL.RawQuery = query.Encode()
 				signHongguoCommentRequest(prepared, commentNonce, now)
 			} else if form != hongguoSignNone {
-				hongguoPrepareSignedRequest(prepared, query, body, now, form == hongguoSignPlayback, "")
+				if opts, ok := ctx.Value(hongguoSignOptionsKey{}).(hongguoSignOptions); ok && opts.PlayerOnly {
+					prepared.URL.RawQuery = query.Encode()
+					hongguoSignRequest(prepared, body, now, hongguoSignOptions{PlayerOnly: true, Identity: hongguoSignerIdentity{DeviceID: deviceID, InstallID: installID}})
+				} else {
+					hongguoPrepareSignedRequest(prepared, query, body, now, form == hongguoSignPlayback, "")
+				}
 			} else {
 				query.Set("_rticket", strconv.FormatInt(now.UnixMilli(), 10))
 				prepared.URL.RawQuery = query.Encode()
@@ -741,6 +777,12 @@ func (downloader *Downloader) hongguoAppRequestInternalOpts(ctx context.Context,
 			client.hongguoNoteRouteFailure(routeKey, false)
 			if hongguoIsDeviceRejectedCode(code) {
 				return nil, fmt.Errorf("%w（业务码 %s）", errHongguoDeviceRejected, code)
+			}
+			// 带服务端原话（修仙版 _accountJson 同款）：平台原话在
+			// message/msg/description 任一字段里，有原话显示原话
+			// （如 100103 的具体原因），没有才回退旧文案。
+			if detail := firstNonEmpty(mapString(result, "message", "msg", "description"), mapString(nestedMap(result, "data"), "message", "msg", "description")); detail != "" {
+				return nil, fmt.Errorf("红果 App 接口暂不可用（%s：%s）", truncate(code, 20), truncate(detail, 100))
 			}
 			return nil, fmt.Errorf("红果 App 接口暂不可用（%s）", truncate(code, 20))
 		}

@@ -15,7 +15,7 @@ import (
 func TestHongguoAccountSessionExportRestore(t *testing.T) {
 	expiry := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
 	original := hongguoAccountSession{
-		Cookie: "sessionid=fixture-cookie-1; sessionid_ss=fixture-cookie-2",
+		Cookie:   "sessionid=fixture-cookie-1; sessionid_ss=fixture-cookie-2",
 		DeviceID: "12345678901", InstallID: "12345678902",
 		AccountID: "99001", UserName: "测试用户",
 		ExpiresAt: expiry, Source: hongguoAccountCookieWebSource,
@@ -47,7 +47,7 @@ func TestHongguoAccountSessionExportRestore(t *testing.T) {
 	restored.setHongguoAccountSession(hongguoAccountSession{
 		Cookie: exported["accountCookie"].(string), DeviceID: exported["deviceId"].(string),
 		InstallID: exported["installId"].(string), AccountID: exported["accountId"].(string),
-		UserName: exported["userName"].(string),
+		UserName:  exported["userName"].(string),
 		ExpiresAt: time.UnixMilli(exported["expiresAtMs"].(int64)),
 		Source:    exported["cookieSource"].(string),
 	})

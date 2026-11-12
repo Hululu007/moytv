@@ -12,18 +12,20 @@ import (
 )
 
 type providerMedia struct {
-	credentials *providerMediaCredentials
-	URL         string
-	Referer     string
-	Duration    time.Duration
-	Playlist    string
-	HLSKey      []byte
-	CENCKey     []byte
-	Audio       bool
-	Quality     int
-	NeedsParse  bool
-	Variants    []providerMedia
-	Hook        seku.StreamHook
+	credentials     *providerMediaCredentials
+	URL             string
+	Referer         string
+	Duration        time.Duration
+	Playlist        string
+	HLSKey          []byte
+	CENCKey         []byte
+	Audio           bool
+	Quality         int
+	NeedsParse      bool
+	Variants        []providerMedia
+	Hook            seku.StreamHook
+	PlayAuthToken   string
+	PlayAuthExpires int64
 }
 
 func (d *Downloader) providerBaseURL(source string) string {

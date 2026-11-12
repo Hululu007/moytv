@@ -386,21 +386,94 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function base64Encode(text) { try { return btoa(unescape(encodeURIComponent(text))); } catch (e) { return ''; } }
   function base64Decode(text) { try { return decodeURIComponent(escape(atob(text))); } catch (e) { return ''; } }
 
+  // ---------- 海阔模块加载（$.require / $.exports，官方写法） ----------
+  // 官方约定（docs.189.tyrantg.com）：子页脚本用 $.exports 导出模块
+  // （$.exports = X，或往 $.exports 上挂属性；$.importParam 区分用法），
+  // 引用处 $.require(path, importParam) 拿到导出对象再调 .home()/.detail()/.search()。
+  // 之前这里对 js: 子页只返回一个裸函数，规则一调 .home 就报
+  // "TypeError: $.require(...).home is not a function"。
+  // 模块默认全局缓存；第二个参数传了真值时不走缓存（同时当 importParam 传进子页）。
+  var moduleCache = {};
+  var moduleState = { exports: {}, importParam: undefined };
+  function hasOwnProps(obj) {
+    if (!obj || (typeof obj !== 'object' && typeof obj !== 'function')) return false;
+    for (var key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) return true;
+    }
+    return false;
+  }
+  function loadModule(path, param) {
+    var key = String(path || '').replace(/^hiker:\/\/page\//, '');
+    var page = findPage(key);
+    if (!page) return {};
+    var force = !!param;
+    if (!force && Object.prototype.hasOwnProperty.call(moduleCache, key)) {
+      return moduleCache[key];
+    }
+    var rule = String(page.rule || '');
+    if (rule.indexOf('js:') !== 0) {
+      var value = runPageRule(rule);
+      if (!force) moduleCache[key] = value;
+      return value;
+    }
+    var code = rule.slice(3);
+    var freshExports = {};
+    var savedExports = moduleState.exports;
+    var savedImportParam = moduleState.importParam;
+    moduleState.exports = freshExports;
+    moduleState.importParam = param;
+    var moduleObj = { exports: {} };
+    var initialModuleExports = moduleObj.exports;
+    var collected = null;
+    try {
+      var factory = new Function(
+        'require', 'module', 'exports', 'console', 'input',
+        code + '\n;return {' +
+        'home: typeof home === "function" ? home : null,' +
+        'detail: typeof detail === "function" ? detail : null,' +
+        'search: typeof search === "function" ? search : null,' +
+        'category: typeof category === "function" ? category : null,' +
+        'play: typeof play === "function" ? play : null,' +
+        'lazy: typeof lazy === "function" ? lazy : null,' +
+        'init: typeof init === "function" ? init : null,' +
+        'main: typeof main === "function" ? main : null' +
+        '};'
+      );
+      collected = factory(
+        function (p, prm) { return loadModule(p, prm); },
+        moduleObj, moduleObj.exports, { log: log }, input
+      );
+    } catch (error) {
+      say('模块加载失败：' + key + '\n' + (error && error.message ? error.message : error));
+      moduleState.exports = savedExports;
+      moduleState.importParam = savedImportParam;
+      return {};
+    }
+    var exported = moduleState.exports;
+    moduleState.exports = savedExports;
+    moduleState.importParam = savedImportParam;
+    var result = null;
+    if (exported !== freshExports || hasOwnProps(exported)) {
+      result = exported;
+    } else if (moduleObj.exports !== initialModuleExports || hasOwnProps(moduleObj.exports)) {
+      result = moduleObj.exports;
+    } else if (collected) {
+      result = {};
+      var anyFn = false;
+      var names = ['home', 'detail', 'search', 'category', 'play', 'lazy', 'init', 'main'];
+      for (var i = 0; i < names.length; i++) {
+        if (collected[names[i]]) { result[names[i]] = collected[names[i]]; anyFn = true; }
+      }
+      if (!anyFn) result = {};
+    }
+    if (result === null || result === undefined) result = {};
+    if (!force) moduleCache[key] = result;
+    return result;
+  }
+
   // ---------- 海阔的 $ 工具箱（只实现常用的一层） ----------
   var $api = {
-    require: function (path) {
-      var page = findPage(String(path || '').replace('hiker://page/', ''));
-      if (!page) return '';
-      var rule = String(page.rule || '');
-      if (rule.indexOf('js:') === 0) {
-        // 页面脚本可能返回一个函数，也可能直接返回值
-        try {
-          var fn = new Function('input', rule.slice(3));
-          return function (input) { return runPageRule('js:' + fn(input)); };
-        } catch (e) { return ''; }
-      }
-      return runPageRule(rule);
-    },
+    require: function (path, param) { return loadModule(path, param); },
     toString: function (value) { return String(value); },
     post: function (url, body, headers) { return post(url, body, { headers: headers || {} }); },
     get: function (url, headers) { return fetch(url, { headers: headers || {} }); },
@@ -423,6 +496,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 包一层可调用函数：$() 返回 $api，$.lazyRule 也照常用。
   function $(selector) { return $api; }
   Object.keys($api).forEach(function (key) { $[key] = $api[key]; });
+  // $.exports / $.importParam 与模块加载共用同一份状态（子页脚本读写的是 $ 上的
+  // 这两个属性；直接把值拷到 $ 上会在子页重赋值后失同步，所以用访问器代理）。
+  Object.defineProperty($, 'exports', {
+    get: function () { return moduleState.exports; },
+    set: function (value) { moduleState.exports = value; },
+    configurable: true, enumerable: true
+  });
+  Object.defineProperty($, 'importParam', {
+    get: function () { return moduleState.importParam; },
+    set: function (value) { moduleState.importParam = value; },
+    configurable: true, enumerable: true
+  });
 
   // ---------- 全局环境 ----------
   function homeUrl() {

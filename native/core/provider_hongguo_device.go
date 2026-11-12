@@ -128,12 +128,12 @@ func (downloader *Downloader) hongguoDeviceID() string {
 
 func (downloader *Downloader) registerHongguoDevice(ctx context.Context) (string, string, error) {
 	header := map[string]any{
-		"display_name": "红果免费短剧", "aid": 8662, "app_version": "7.3.5.32", "version_code": 73532,
-		"manifest_version_code": 73532, "update_version_code": 73532, "channel": "update_64", "package": "com.phoenix.read",
+		"display_name": "红果免费短剧", "aid": 8662, "app_version": "7.4.3.32", "version_code": 74332,
+		"manifest_version_code": 74332, "update_version_code": 74332, "channel": "update_64", "package": "com.phoenix.read",
 		"app_language": "zh", "os": "Android", "os_version": "16", "os_api": 36, "device_model": "25053RT47C",
 		"device_brand": "Redmi", "device_manufacturer": "Xiaomi", "cpu_abi": "arm64-v8a", "density_dpi": 520,
 		"display_density": "xxhdpi", "resolution": "2772x1280", "language": "zh", "timezone": 8, "access": "wifi",
-		"openudid": randomHex(8), "clientudid": uuidLike(), "cdid": uuidLike(),
+		"openudid": randomHex(8), "clientudid": uuidLike(), "cdid": downloader.hongguoCDID(),
 		"region": "CN", "tz_name": "Asia/Shanghai", "tz_offset": 28800, "sim_region": "cn", "device_platform": "android",
 		"not_request_sender": 0, "is_system_app": 0, "sdk_flavor": "china", "rom": "OS2.0", "rom_version": "BP2A.250605.031.A3",
 	}
@@ -142,6 +142,7 @@ func (downloader *Downloader) registerHongguoDevice(ctx context.Context) (string
 		return "", "", err
 	}
 	query := hongguoAppQuery("", "")
+	query.Set("cdid", downloader.hongguoCDID())
 	query.Del("device_id")
 	query.Del("iid")
 	query.Set("req_id", uuidLike())

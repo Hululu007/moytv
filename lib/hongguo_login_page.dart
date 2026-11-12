@@ -18,10 +18,15 @@ class HongguoLoginPage extends StatefulWidget {
     super.key,
     required this.repository,
     required this.accountStore,
+    this.accountController,
   });
 
   final AppRepository repository;
   final HongguoAccountStore accountStore;
+
+  /// 新路控制器（可空）：有则发码/验码优先走控制器 transport，
+  /// 失败回退旧 store 路；没有则全程走旧路。
+  final HongguoAccountController? accountController;
 
   @override
   State<HongguoLoginPage> createState() => _HongguoLoginPageState();
@@ -62,6 +67,24 @@ class _HongguoLoginPageState extends State<HongguoLoginPage>
 
   // ------------------------------------------------------------ 手机号
 
+  void _startCountdown(int seconds) {
+    _retryTimer?.cancel();
+    setState(() => _retryIn = seconds < 0 ? 0 : seconds);
+    if (_retryIn <= 0) return;
+    _retryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_retryIn <= 1) {
+        timer.cancel();
+        setState(() => _retryIn = 0);
+      } else {
+        setState(() => _retryIn--);
+      }
+    });
+  }
+
   Future<void> _sendCode() async {
     final phone = HongguoPhoneNumber.normalize(_phoneController.text);
     if (!HongguoPhoneNumber.isValid(_areaCode, phone)) {
@@ -72,6 +95,43 @@ class _HongguoLoginPageState extends State<HongguoLoginPage>
       _sending = true;
       _error = null;
     });
+    // 新路优先：控制器 transport 发码。错误码 7 是平台限流，只显示
+    // 限流文案并进 60 秒冷却（按钮变“60 秒后重发”禁用，冷却内再点
+    // 不发请求），不回退旧路（回退会再撞限流）；其他失败回退旧路。
+    final controller = widget.accountController;
+    if (controller != null) {
+      try {
+        final sent = await controller.transportSendSmsCode(
+          HongguoPhoneNumber.forBridge(_areaCode, phone),
+        );
+        if (!mounted) return;
+        setState(() {
+          _sending = false;
+          _sentRoute = sent.route == 'app' ? 'App 形态' : '站内';
+        });
+        _startCountdown(sent.retrySeconds);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('验证码已发送到 ${sent.maskedMobile}（${sent.route}）'),
+          ),
+        );
+        return;
+      } on HongguoLoginFailure catch (error) {
+        if (!mounted) return;
+        if (error.errorCode == 7) {
+          setState(() {
+            _sending = false;
+            _error = error.message;
+          });
+          _startCountdown(60);
+          return;
+        }
+        // 非限流失败：往下走旧路。
+      } catch (_) {
+        // transport 未接通（如 Go 新动作未落地）：往下走旧路。
+      }
+      if (!mounted) return;
+    }
     try {
       final sent = await widget.accountStore.sendCode(
         areaCode: _areaCode,
@@ -81,21 +141,8 @@ class _HongguoLoginPageState extends State<HongguoLoginPage>
       setState(() {
         _sending = false;
         _sentRoute = sent.route == 'app' ? 'App 形态' : '站内';
-        _retryIn = sent.retrySeconds;
       });
-      _retryTimer?.cancel();
-      _retryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        if (_retryIn <= 1) {
-          timer.cancel();
-          setState(() => _retryIn = 0);
-        } else {
-          setState(() => _retryIn--);
-        }
-      });
+      _startCountdown(sent.retrySeconds);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('验证码已发送到 ${sent.maskedMobile}（${sent.route}）'),
@@ -124,6 +171,46 @@ class _HongguoLoginPageState extends State<HongguoLoginPage>
       _verifying = true;
       _error = null;
     });
+    // 新路优先：控制器验码（verify→资料→存凭证+账号→刷新云端）；
+    // 失败回退旧 store 路。但新路验码成功后资料拉取失败时（100103
+    // 那类），验证码已被消费：先重试已验会话的核对，不回退旧路重验。
+    final controller = widget.accountController;
+    if (controller != null) {
+      try {
+        final account = await controller.loginWithSms(
+          mobile: HongguoPhoneNumber.forBridge(_areaCode, phone),
+          code: _codeController.text,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已登录：${account.displayName}')),
+        );
+        Navigator.of(context).pop(account);
+        return;
+      } catch (_) {
+        if (!mounted) return;
+        // 验码已换到会话、失败在后面的资料核对时（100103 那类），
+        // 验证码已被消费：直接重试核对，不回退旧路重验（重验必败）。
+        if (controller.hasPendingVerifiedLogin) {
+          try {
+            final account = await controller.retryPendingVerifiedLogin();
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('已登录：${account.displayName}')),
+            );
+            Navigator.of(context).pop(account);
+            return;
+          } catch (error) {
+            if (!mounted) return;
+            setState(() {
+              _verifying = false;
+              _error = error.toString();
+            });
+            return;
+          }
+        }
+      }
+    }
     try {
       final account = await widget.accountStore.verifyCode(
         areaCode: _areaCode,
@@ -373,6 +460,7 @@ class HongguoAccountPage extends StatefulWidget {
 
 class _HongguoAccountPageState extends State<HongguoAccountPage> {
   HongguoAccountStore? _accountStore;
+  HongguoAccountController? _accountController;
   bool _loading = true;
   bool _signingOut = false;
   String? _error;
@@ -389,14 +477,22 @@ class _HongguoAccountPageState extends State<HongguoAccountPage> {
       repository: widget.repository,
       preferences: preferences,
     );
+    final accountController = HongguoAccountController.withTransport(
+      GoHongguoAccountTransport(widget.repository),
+      repository: widget.repository,
+    );
     try {
       await accountStore.load();
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     }
+    try {
+      await accountController.load();
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _accountStore = accountStore;
+      _accountController = accountController;
       _loading = false;
     });
   }
@@ -409,10 +505,17 @@ class _HongguoAccountPageState extends State<HongguoAccountPage> {
         builder: (_) => HongguoLoginPage(
           repository: widget.repository,
           accountStore: accountStore,
+          accountController: _accountController,
         ),
       ),
     );
-    if (result != null && mounted) setState(() {});
+    if (result != null && mounted) {
+      // 控制器登录后 store 侧还是旧态：重载一次，让账号页读到新账号。
+      try {
+        await accountStore.load();
+      } catch (_) {}
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> _signOut() async {
@@ -420,6 +523,7 @@ class _HongguoAccountPageState extends State<HongguoAccountPage> {
     if (accountStore == null) return;
     setState(() => _signingOut = true);
     await accountStore.signOut();
+    await _accountController?.logout();
     if (!mounted) return;
     setState(() => _signingOut = false);
     ScaffoldMessenger.of(

@@ -218,5 +218,5 @@ func TestNativeOpenPlaybackEmitsOriginalURL(t *testing.T) {
 	if next.OriginalURL != second.URL {
 		t.Fatalf("route switch must update originalUrl: %+v", next)
 	}
-var _ seku.StreamHook = testStreamHook{}
+	var _ seku.StreamHook = testStreamHook{}
 }

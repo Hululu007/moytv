@@ -55,18 +55,24 @@ def _headers():
     return h
 
 
-def _get_req(url):
+def _get_req(url, extra=None):
     import requests
-    r = requests.get(url, headers=_headers(), timeout=TIMEOUT)
+    h = _headers()
+    if extra:
+        h.update(extra)
+    r = requests.get(url, headers=h, timeout=TIMEOUT)
     if r.status_code >= 400:
         raise IOError("http %s" % r.status_code)
     return r.text
 
 
-def _get_urllib(url):
+def _get_urllib(url, extra=None):
     req = urllib.request.Request(url)
     for k, v in _headers().items():
         req.add_header(k, v)
+    if extra:
+        for k, v in extra.items():
+            req.add_header(k, v)
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         raw = r.read()
     if raw[:2] == b"\x1f\x8b":
@@ -74,19 +80,19 @@ def _get_urllib(url):
     return _dec(raw)
 
 
-def http_get(url):
+def http_get(url, extra=None):
     if not url.startswith("http"):
         url = SITE["domains"][0].rstrip("/") + url
     for attempt in range(RETRY):
         try:
-            return _get_req(url)
+            return _get_req(url, extra)
         except ImportError:
             break
         except Exception:
             time.sleep(0.4 * (attempt + 1))
     for attempt in range(RETRY):
         try:
-            return _get_urllib(url)
+            return _get_urllib(url, extra)
         except Exception:
             time.sleep(0.5 * (attempt + 1))
     return ""
@@ -284,10 +290,12 @@ class Spider(BaseSpider):
                     api = "%s/huangguo.php?ac=play&id=%s&ep=%s&_=%d" % (
                         self._host(), urllib.parse.quote(parts[0]),
                         urllib.parse.quote(parts[1]), int(time.time() * 1000))
-                    js = http_get(api)
+                    js = http_get(api, {"X-Requested-With": "XMLHttpRequest"})
                     d = json.loads(js) if js else {}
                     u = str(d.get("url") or "")
-                    if d.get("code") == 1 and u.startswith("/hgmedia.php?e="):
+                    if d.get("code") == 1 and u.startswith("/huangguo.php?ac=media"):
+                        proxy = self._host() + u
+                    elif d.get("code") == 1 and u.startswith("/hgmedia.php?e="):
                         proxy = self._host() + u
                         token = u.split("e=", 1)[1]
                         pad = "=" * (-len(token) % 4)

@@ -19,13 +19,13 @@ type siteImpl struct {
 	DefaultCat string // category id used when the request names none
 	HomeURL    string
 
-	Categories func(slot string) []interface{}
-	Catalog    func(slot, category string, page int) ([]interface{}, int, bool, error)
+	Categories      func(slot string) []interface{}
+	Catalog         func(slot, category string, page int) ([]interface{}, int, bool, error)
 	CatalogFiltered func(slot, category string, page int, filters map[string]string) ([]interface{}, int, bool, error)
-	Detail     func(slot, rawID string) (map[string]interface{}, error)
-	Resolve    func(slot, rawID string) (map[string]interface{}, error)
-	Search     func(slot, kw string) ([]interface{}, error)
-	Headers    func() map[string]string
+	Detail          func(slot, rawID string) (map[string]interface{}, error)
+	Resolve         func(slot, rawID string) (map[string]interface{}, error)
+	Search          func(slot, kw string) ([]interface{}, error)
+	Headers         func() map[string]string
 	// CoverFetch optionally fetches+transforms a cover (sites whose
 	// cover bytes are XOR/AES transformed at rest). Nil -> plain GET.
 	CoverFetch func(url string) ([]byte, error)
@@ -46,7 +46,7 @@ var slotOrder = []string{
 	"wangguo", "faguo", "wuguo", "youtube",
 	"javmenu", "xszav", "av123",
 	"av520", "pigav", "aoxx69", "javdb",
-"z2_17rip", "z2_321av", "z2_av6k", "z2_7mm", "z2_xanimu",
+	"z2_17rip", "z2_321av", "z2_av6k", "z2_7mm", "z2_xanimu",
 	"z2_cn",
 	"xhy11", "jack20", "javguru", "sihu", "tg",
 	"kuaihuo", "avbigplat", "hxc", "hjw", "goodav", "ikun",

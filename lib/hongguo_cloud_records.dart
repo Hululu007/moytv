@@ -31,6 +31,13 @@ class HongguoCloudFavorite {
         badge: json['badge'] as String? ?? '',
       );
 
+  Map<String, dynamic> toJson() => {
+    'seriesId': seriesId,
+    'title': title,
+    'cover': cover,
+    'badge': badge,
+  };
+
   final String seriesId;
   final String title;
   final String cover;
@@ -63,6 +70,18 @@ class HongguoCloudHistoryItem {
         episodeCount: intValue(json['episodeCount']),
       );
 
+  Map<String, dynamic> toJson() => {
+    'seriesId': seriesId,
+    'title': title,
+    'cover': cover,
+    'episodeId': episodeId,
+    'episodeIndex': episodeIndex,
+    'positionMs': positionMs,
+    'durationMs': durationMs,
+    'updatedAtMs': updatedAtMs,
+    'episodeCount': episodeCount,
+  };
+
   final String seriesId;
   final String title;
   final String cover;
@@ -93,6 +112,14 @@ class HongguoCloudReservation {
         online: json['online'] == true,
         badge: json['badge'] as String? ?? '',
       );
+
+  Map<String, dynamic> toJson() => {
+    'seriesId': seriesId,
+    'title': title,
+    'cover': cover,
+    'online': online,
+    'badge': badge,
+  };
 
   final String seriesId;
   final String title;

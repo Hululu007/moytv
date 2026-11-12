@@ -42,6 +42,11 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
   }
 
   Future<void> _load() async {
+    // 生产上页面用默认仓库：先播种 App 自带的海阔规则，再列出本地库。
+    // 测试注入的仓库不自动播种（保持空库断言可测，播种由单测直接调方法验）。
+    if (widget.store == null) {
+      await _store.ensureBuiltinRules();
+    }
     final programs = await _store.list();
     if (!mounted) return;
     setState(() {
@@ -175,6 +180,21 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
       final programs = HaikuoCodecBridge.parseSample(raw);
       return _store.addAll(programs, origin: '内置示例');
     });
+  }
+
+  /// 手动恢复内置规则：忽略版本标记，重新播种（补回被删的内置规则、
+  /// 同名旧版替换为新版）。用户导入的规则不受影响。
+  Future<void> _restoreBuiltins() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final count = await _store.ensureBuiltinRules(force: true);
+      await _load();
+      if (!mounted) return;
+      _snack(count > 0 ? '已恢复 $count 条内置规则' : '内置规则已是最新，无需恢复');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _run(Future<HaikuoImportResult> Function() action) async {
@@ -321,11 +341,14 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
                   _importLink();
                 case 'samples':
                   _importSamples();
+                case 'restore':
+                  _restoreBuiltins();
               }
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'link', child: Text('从链接导入')),
               PopupMenuItem(value: 'samples', child: Text('导入内置示例')),
+              PopupMenuItem(value: 'restore', child: Text('恢复内置规则')),
             ],
           ),
         ],

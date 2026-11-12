@@ -21,46 +21,6 @@ import 'hongguo_cloud_records.dart';
 /// 登出只清账号侧（hongguoAccount / hongguoAccountSession /
 /// hongguoCloudUploadQueue 三个键），不动本机收藏/历史/搜索记录。
 
-class HongguoQrCode {
-  const HongguoQrCode({
-    required this.imageBase64,
-    required this.expiresSeconds,
-  });
-
-  factory HongguoQrCode.fromJson(Map<String, dynamic> json) =>
-      HongguoQrCode(
-        imageBase64: json['imageBase64'] as String? ?? '',
-        expiresSeconds:
-            (json['expiresSeconds'] as num?)?.toInt() ?? 60,
-      );
-
-  /// base64 不带 data: 前缀，界面用 base64Decode 后 Image.memory 显示。
-  final String imageBase64;
-  final int expiresSeconds;
-}
-
-class HongguoSmsSent {
-  const HongguoSmsSent({
-    required this.maskedMobile,
-    required this.retrySeconds,
-    required this.route,
-  });
-
-  factory HongguoSmsSent.fromJson(Map<String, dynamic> json, String route) =>
-      HongguoSmsSent(
-        maskedMobile: json['maskedMobile'] as String? ?? '',
-        retrySeconds: (json['retrySeconds'] as num?)?.toInt() ?? 60,
-        route: route,
-      );
-
-  final String maskedMobile;
-  final int retrySeconds;
-
-  /// 发码走的路：site 站内 / app 官方 App 形态。
-  final String route;
-}
-
-/// 手机号归一化与校验（纯函数，可单测）。
 class HongguoPhoneNumber {
   static const List<String> areaCodes = ['+86', '+852', '+853', '+886'];
 
@@ -77,10 +37,15 @@ class HongguoPhoneNumber {
     return phone.length >= 5 && phone.length <= 15;
   }
 
-  /// 发码入参的手机号形状：站内路要含区号前缀，见 Go 侧笔记。
+  /// 发码入参的手机号形状：+86 只传 11 位裸号（修仙版
+  /// HongguoPhoneNumber.format 同款：大陆号 return digits，不拼区
+  /// 号）。旧版这里拼了 "+86 " 前缀，Go 侧 hongguoFormatMobile 收
+  /// 到 13 位数字直接报“大陆手机号是 1 开头的 11 位数字”，合法号码
+  /// 也被误报；新路 passport 的 mobile 字段同样只认裸号。境外号
+  /// 保持 "+区号 号码"。
   static String forBridge(String areaCode, String raw) {
     final phone = normalize(raw);
-    if (areaCode == '+86') return '+86 $phone';
+    if (areaCode == '+86') return phone;
     return '$areaCode $phone';
   }
 }
@@ -273,6 +238,8 @@ class HongguoAccountStore {
 
   /// 登出只清账号侧三个键 + 通知 Go 核清会话；本机收藏 / 历史 /
   /// 搜索记录一个键都不动，登出再登入后本机记录还在。
+  /// 另清控制器存的凭证键（hongguoAccountCredentials），免得
+  /// 控制器登出后还留着旧 Cookie。
   Future<void> signOut() async {
     _generation++;
     try {
@@ -280,6 +247,7 @@ class HongguoAccountStore {
     } catch (_) {}
     await clearHongguoAccount();
     await clearHongguoAccountSession();
+    await clearHongguoAccountCredentials();
     await _queue.discardAll();
     _account = null;
     _sessionLive = false;

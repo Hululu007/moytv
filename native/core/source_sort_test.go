@@ -7,25 +7,25 @@ import (
 
 func TestSortSourceNamesOrder(t *testing.T) {
 	input := []string{
-		"黄果",     // huangguo（中文桶）
+		"黄果",         // huangguo（中文桶）
 		"cloudfront", // 字母桶
-		"红果",     // hongguo
-		"A123",     // 字母桶
-		"虎果",     // huguo
-		"猫果",     // maoguo
-		"HuangJu",  // 字母桶
-		"阿果",     // aguo
-		"北京果",   // beijingguo
-		"！",       // 其他桶
+		"红果",         // hongguo
+		"A123",       // 字母桶
+		"虎果",         // huguo
+		"猫果",         // maoguo
+		"HuangJu",    // 字母桶
+		"阿果",         // aguo
+		"北京果",        // beijingguo
+		"！",          // 其他桶
 	}
 	want := []string{
 		// 中文桶（按完整拼音序）：
-		"阿果",   // aguo
+		"阿果",  // aguo
 		"北京果", // beijingguo
-		"红果",   // hongguo
-		"黄果",   // huangguo（huang < hug）
-		"虎果",   // huguo
-		"猫果",   // maoguo
+		"红果",  // hongguo
+		"黄果",  // huangguo（huang < hug）
+		"虎果",  // huguo
+		"猫果",  // maoguo
 		// 字母桶（按小写字母序）：
 		"A123", "cloudfront", "HuangJu",
 		// 其他桶最后：

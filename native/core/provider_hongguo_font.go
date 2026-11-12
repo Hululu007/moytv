@@ -1,4 +1,5 @@
 package core
+
 var hongguoFontMap = map[rune]rune{
 	58344: 'D',
 	58345: '在',

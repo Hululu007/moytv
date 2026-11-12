@@ -14,7 +14,7 @@ import (
 
 // 红果登录客户端（Go 核一半，供 Dart 登录组接线；Dart 侧只改 lib/*.dart）。
 // 两条路都要做：扫码登录（站内 passport）与手机号登录（站内网页 + App 形态）。
-// 只借结构，设备参数（aid 8662 / 版本 73532 / 7.3.5.32）用魔蚁自己的；
+// 只借结构，设备参数（aid 8662 / 版本 74332 / 7.4.3.32）用魔蚁自己的；
 // 站内网页登录的 aid（513755）与桌面 UA 是该端点自身的形态，随请求结构走。
 // 严禁 live 调用发码接口：发码与校验只做到请求构造 + 响应解析可单测，
 // live 实测只做到扫码取码那一步；发码 live 验要等用户手机号，由 Dart 侧在用户手机上走。
@@ -48,6 +48,12 @@ func hongguoFormatMobile(countryCode, number string) (string, error) {
 	cc := digitsOnly(countryCode)
 	digits := strings.TrimPrefix(digitsOnly(number), "0")
 	if cc == "86" {
+		// 容错：Dart 侧 forBridge 曾把区号拼进来（"+86 138…"），数字
+		// 串会变成 13 位的 "86"+11 位；先剥掉这层区号再校验，别把
+		// 合法号码误报成“大陆手机号是 1 开头的 11 位数字”。
+		if len(digits) == 13 && strings.HasPrefix(digits, "86") {
+			digits = digits[2:]
+		}
 		if len(digits) != 11 || !strings.HasPrefix(digits, "1") {
 			return "", errors.New("大陆手机号是 1 开头的 11 位数字")
 		}

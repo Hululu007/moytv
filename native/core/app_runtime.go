@@ -157,24 +157,24 @@ type nativeInput struct {
 	Manifest         string                  `json:"manifest"`
 	Signature        string                  `json:"signature"`
 	// 红果账号/登录动作入参（hongguoAccount* / hongguoLogin*）。
-	Phone            string                  `json:"phone"`
-	Code             string                  `json:"code"`
-	Token            string                  `json:"token"`
-	AccountCookie    string                  `json:"accountCookie"`
-	AccountID        string                  `json:"accountId"`
-	UserName         string                  `json:"userName"`
-	ExpiresAtMS      int64                   `json:"expiresAtMs"`
-	CookieSource     string                  `json:"cookieSource"`
-	DeviceID         string                  `json:"deviceId"`
-	InstallID        string                  `json:"installId"`
-	Online           *bool                   `json:"online"`
-	Add              *bool                   `json:"add"`
-	ItemID           string                  `json:"itemId"`
-	EpisodeIndex     int                     `json:"episodeIndex"`
-	EpisodeCount     int                     `json:"episodeCount"`
-	ProgressMS       int64                   `json:"progressMs"`
-	TotalMS          int64                   `json:"totalMs"`
-	UpdatedAtMS      int64                   `json:"updatedAtMs"`
+	Phone         string `json:"phone"`
+	Code          string `json:"code"`
+	Token         string `json:"token"`
+	AccountCookie string `json:"accountCookie"`
+	AccountID     string `json:"accountId"`
+	UserName      string `json:"userName"`
+	ExpiresAtMS   int64  `json:"expiresAtMs"`
+	CookieSource  string `json:"cookieSource"`
+	DeviceID      string `json:"deviceId"`
+	InstallID     string `json:"installId"`
+	Online        *bool  `json:"online"`
+	Add           *bool  `json:"add"`
+	ItemID        string `json:"itemId"`
+	EpisodeIndex  int    `json:"episodeIndex"`
+	EpisodeCount  int    `json:"episodeCount"`
+	ProgressMS    int64  `json:"progressMs"`
+	TotalMS       int64  `json:"totalMs"`
+	UpdatedAtMS   int64  `json:"updatedAtMs"`
 }
 
 type nativeFilterOption struct {
@@ -679,6 +679,29 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return map[string]any{"maskedMobile": masked, "retrySeconds": retry}, nil
 	case "hongguoLoginAppSms":
 		return engine.downloader.hongguoLoginAppVerify(ctx, input.Phone, input.Code)
+	case "hongguoAccountSendSms":
+		params, err := hongguoAccountContentParams(input.Content)
+		if err != nil {
+			return nil, err
+		}
+		return engine.downloader.hongguoAccountSendSms(ctx, mapString(params, "mobile"))
+	case "hongguoAccountVerifySms":
+		params, err := hongguoAccountContentParams(input.Content)
+		if err != nil {
+			return nil, err
+		}
+		return engine.downloader.hongguoAccountVerifySms(ctx, mapString(params, "mobile"), mapString(params, "code"))
+	case "hongguoAccountQrCode":
+		return engine.downloader.hongguoAccountQrCode(ctx)
+	case "hongguoAccountQrPoll":
+		return engine.downloader.hongguoAccountQrPoll(ctx)
+	case "hongguoAccountQrConfirm":
+		return engine.downloader.hongguoAccountQrConfirm(ctx)
+	case "hongguoAccountProfile":
+		if _, err := hongguoAccountContentParams(input.Content); err != nil {
+			return nil, err
+		}
+		return engine.downloader.hongguoAccountProfile(ctx)
 	case "hongguoAccountFavorites":
 		items, err := engine.downloader.hongguoAccountFavorites(ctx)
 		if err != nil {
@@ -721,6 +744,10 @@ func nativeDispatch(input nativeInput) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"ok": true}, nil
+	case "hongguoAccountLoginRewardInfo":
+		return engine.downloader.hongguoAccountLoginRewardInfo(ctx)
+	case "hongguoAccountClaimDailyCoins":
+		return engine.downloader.hongguoAccountClaimDailyCoins(ctx)
 	case "hongguoAccountRelated":
 		items, err := engine.downloader.hongguoAccountRelated(ctx, input.SeriesID)
 		if err != nil {

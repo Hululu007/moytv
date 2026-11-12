@@ -109,6 +109,29 @@ abstract class AppRepository {
   Future<Map<String, dynamic>> hongguoDeviceRefresh() async =>
       throw AppFailure('当前环境不支持设备注册档案');
 
+  /// 红果账号新路（对照 tree_104 的 12 个账号动作）：
+  /// 这里只新增魔蚁确实缺失的 6 个——发码/验码/扫码取码/轮询/
+  /// 确认/资料。另 6 个（收藏/写收藏/历史/进度上传/预约列表/
+  /// 写预约）魔蚁已有同名会话制方法（Go 核进程内持有会话，不用
+  /// 传 Cookie），transport 直接复用，不另建同名方法（Dart 无重载）。
+  /// 入参走魔蚁平铺字段约定（phone/code/cookie），不套 tree_104
+  /// 的 content 装 JSON 字符串；Go 侧读 nativeInput 的
+  /// Phone/Code/Cookie 字段。
+  Future<Map<String, dynamic>> hongguoAccountSendSms(String mobile) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountVerifySms(
+    String mobile,
+    String code,
+  ) async => throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountQrCode() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountQrPoll() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountQrConfirm() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountProfile(String cookie) async =>
+      throw AppFailure('当前环境不支持红果账号');
+
   /// 红果服务端多维筛选（POST landpage/v）：content 为筛选请求体 JSON，
   /// cursor 为游标 JSON（{"offset":N,"session":"..."}），空表示首页。
   /// 返回 {items, groups, hasMore, nextCursor}；groups 只在首页返回。
@@ -162,6 +185,10 @@ abstract class AppRepository {
   Future<Map<String, dynamic>> hongguoAccountReservations(bool online) async =>
       throw AppFailure('当前环境不支持红果账号');
   Future<Map<String, dynamic>> hongguoAccountReserve(String seriesId) async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountLoginRewardInfo() async =>
+      throw AppFailure('当前环境不支持红果账号');
+  Future<Map<String, dynamic>> hongguoAccountClaimDailyCoins() async =>
       throw AppFailure('当前环境不支持红果账号');
   Future<Map<String, dynamic>> hongguoAccountRelated(String seriesId) async =>
       throw AppFailure('当前环境不支持红果账号');
@@ -1079,6 +1106,36 @@ class NativeRepository extends AppRepository {
       _call({'action': 'hongguoDeviceRefresh'});
 
   @override
+  Future<Map<String, dynamic>> hongguoAccountSendSms(String mobile) =>
+      _call({'action': 'hongguoAccountSendSms', 'phone': mobile});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountVerifySms(
+    String mobile,
+    String code,
+  ) => _call({
+    'action': 'hongguoAccountVerifySms',
+    'phone': mobile,
+    'code': code,
+  });
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountQrCode() =>
+      _call({'action': 'hongguoAccountQrCode'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountQrPoll() =>
+      _call({'action': 'hongguoAccountQrPoll'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountQrConfirm() =>
+      _call({'action': 'hongguoAccountQrConfirm'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountProfile(String cookie) =>
+      _call({'action': 'hongguoAccountProfile', 'cookie': cookie});
+
+  @override
   Future<Map<String, dynamic>> hongguoAccountFilter({
     required String content,
     String cursor = '',
@@ -1259,6 +1316,14 @@ class NativeRepository extends AppRepository {
   @override
   Future<Map<String, dynamic>> hongguoAccountReserve(String seriesId) =>
       _call({'action': 'hongguoAccountReserve', 'seriesId': seriesId});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountLoginRewardInfo() =>
+      _call({'action': 'hongguoAccountLoginRewardInfo'});
+
+  @override
+  Future<Map<String, dynamic>> hongguoAccountClaimDailyCoins() =>
+      _call({'action': 'hongguoAccountClaimDailyCoins'});
 
   @override
   Future<Map<String, dynamic>> hongguoAccountRelated(String seriesId) =>

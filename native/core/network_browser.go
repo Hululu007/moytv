@@ -34,8 +34,8 @@ type huangguoBrowserTransport struct {
 	// 浏览器指纹并非总是更优：实测部分站点（如 hanjuds 一类普通 CMS）对 utls
 	// 指纹直接返回 403 Cloudflare 验证页，而标准 Go 传输可以正常拿到 200。
 	// 因此它们先走标准传输，只有真被验证页拦住（challenged）才升级到浏览器指纹。
-	custom   map[string]bool
-	upgraded map[string]bool
+	custom      map[string]bool
+	upgraded    map[string]bool
 	onChallenge func(rawurl string)
 	shieldApply func(*http.Request) (*http.Request, bool)
 }

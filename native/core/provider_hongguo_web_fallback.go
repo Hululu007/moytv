@@ -17,8 +17,11 @@ const hongguoWebMediaCacheTTL = 50 * time.Minute
 const hongguoWebMediaCacheMax = 300
 const hongguoWebPublicMinBytes = 65536
 
-var hongguoWebFallbackDefinitions = []string{"720p", "480p", "360p", "720p"}
 var hongguoWebPublicDefinitions = []string{"720p", "480p", "360p"}
+
+// 备用接口重试次数：每次失败换一个游客会话（ttwid）再试，与
+// 修仙版 playSource 同款（播放页取不到地址后走 fallback-play-info）。
+const hongguoWebFallbackAttempts = 4
 
 var errHongguoWebSessionUnavailable = errors.New("红果网页游客会话不可用")
 var errHongguoWebFallbackUnavailable = errors.New("红果网页兜底未对该集开放")
@@ -57,7 +60,7 @@ func (downloader *Downloader) resolveHongguoWebFallback(ctx context.Context, ser
 	}
 	var lastErr error
 	sawUnavailable := false
-	for attempt, definition := range hongguoWebFallbackDefinitions {
+	for attempt := 0; attempt < hongguoWebFallbackAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return providerMedia{}, err
 		}
@@ -66,7 +69,7 @@ func (downloader *Downloader) resolveHongguoWebFallback(ctx context.Context, ser
 			lastErr = err
 			break
 		}
-		mediaURL, err := downloader.hongguoWebFallbackPost(ctx, seriesID, videoID, definition, session)
+		mediaURL, err := downloader.hongguoWebFallbackPost(ctx, videoID, session)
 		if err == nil && mediaURL != "" {
 			downloader.hongguoWebCacheMedia(key, mediaURL)
 			return providerMedia{URL: mediaURL, Referer: hongguoBaseURL + "/"}, nil
@@ -144,21 +147,26 @@ func (downloader *Downloader) hongguoWebSession(ctx context.Context, forceRefres
 	return cookie, nil
 }
 
-func (downloader *Downloader) hongguoWebFallbackPost(ctx context.Context, seriesID, videoID, definition, session string) (string, error) {
-	payload, err := json.Marshal(map[string]string{"series_id": seriesID, "item_id": videoID, "definition": definition})
+// hongguoWebFallbackPost：备用播放接口（修仙版 playSource 同款修法）。
+// 播放页 video_player_info 为空时调 POST
+// /api/video/protected/fallback-play-info?aid=8662 取 main_url 作主
+// 地址；体只带 item_id、Referer 指播放页、桌面 Chrome UA——与树内
+// 镜像站 fetchHGTVMirrorFallbackURL 同一配方。备用接口失败才退 360p。
+func (downloader *Downloader) hongguoWebFallbackPost(ctx context.Context, videoID, session string) (string, error) {
+	payload, err := json.Marshal(map[string]string{"item_id": videoID})
 	if err != nil {
 		return "", err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, hongguoBaseURL+"/api/video/protected/fallback-play-info", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, hongguoBaseURL+"/api/video/protected/fallback-play-info?aid=8662", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", hongguoWebUserAgent)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	request.Header.Set("Referer", hongguoBaseURL+"/")
+	request.Header.Set("Referer", hongguoBaseURL+"/player")
 	request.Header.Set("Origin", hongguoBaseURL)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 	if session != "" {
 		request.Header.Set("Cookie", session)
 	}

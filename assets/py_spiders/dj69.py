@@ -281,8 +281,6 @@ class Spider(BaseSpider):
             path, k, name = m.group(1), m.group(2), _unescape(m.group(3))
             if k in seen:
                 continue
-            if '立即播放' in name:
-                continue
             seen.add(k)
             eps.append('%s$dj69:%s%s' % (name or ('第%s集' % k), base, path))
         if not eps:

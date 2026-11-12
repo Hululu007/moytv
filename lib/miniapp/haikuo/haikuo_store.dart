@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -282,5 +283,68 @@ class HaikuoStore {
       'data': programs.map((program) => program.toJson()).toList(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
+  }
+
+  /// 内置规则包版本：assets/haikuo_builtin_rules.json 每次更新内容时 +1。
+  /// 只有版本变化时才重新播种；用户删掉的内置规则在版本不变时不再自动补回。
+  static const builtinBundleVersion = 1;
+  static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
+  static const _builtinMarkerFile = 'builtin_seeded.json';
+
+  /// 把 App 自带的海阔规则播种进本地库（首次打开海阔页时调用一次）。
+  ///
+  /// 与用户导入的规则并列存放、互不覆盖：同名内置规则出新版时按标题替换
+  /// 旧版（规则全文一变 id 就变，只按 id 去重会留重复项，所以按标题去重）；
+  /// 若用户已导入同名规则，播种时以内置版为准（同名只留一份）；
+  /// 用户删掉的内置规则只有版本升级或手动“恢复内置规则”时才补回。
+  /// 返回新增/更新的条数；任何异常都吞掉返回 0，绝不拖垮页面加载。
+  /// [bundleText] 仅供测试注入；[force] 为 true 时忽略版本标记重新播种。
+  Future<int> ensureBuiltinRules({String? bundleText, bool force = false}) async {
+    try {
+      final dir = await root;
+      final marker = File(p.join(dir.path, _builtinMarkerFile));
+      if (!force && await marker.exists()) {
+        try {
+          final saved = jsonDecode(await marker.readAsString());
+          if (saved is Map && saved['version'] == builtinBundleVersion) {
+            return 0;
+          }
+        } catch (_) {
+          // 标记损坏就当没播种过，继续往下走。
+        }
+      }
+      final text = bundleText ?? await rootBundle.loadString(builtinAssetPath);
+      final programs = HaikuoCodec.parseText(text, origin: '内置规则');
+      if (programs.isEmpty) return 0;
+      final existing = await list();
+      final byId = {for (final program in existing) program.id: program};
+      final incoming = <HaikuoProgram>[];
+      for (final program in programs) {
+        if (byId.containsKey(program.id)) continue;
+        incoming.add(program);
+      }
+      // 同名旧版（全文变了、id 不同）先摘掉，再写入新版，避免重复项。
+      final merged = existing
+          .where((old) => !incoming.any((next) => next.name == old.name))
+          .toList();
+      merged.addAll(incoming);
+      merged.sort((a, b) {
+        final left = a.importedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final right = b.importedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return right.compareTo(left);
+      });
+      await _writeAll(merged);
+      await marker.writeAsString(
+        jsonEncode({
+          'version': builtinBundleVersion,
+          'seededAt': DateTime.now().toIso8601String(),
+          'names': programs.map((program) => program.name).toList(),
+        }),
+        flush: true,
+      );
+      return incoming.length;
+    } catch (_) {
+      return 0;
+    }
   }
 }
