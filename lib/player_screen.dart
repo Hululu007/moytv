@@ -26,6 +26,7 @@ import 'jar_bridge.dart';
 import 'jar_youtube_takeover.dart';
 import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
+import 'episode_preview_card.dart';
 import 'follow_state.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -51,6 +52,9 @@ import 'tvbox_player_bridge.dart';
 import 'player_interactions.dart';
 import 'player_menu.dart';
 import 'television_controls.dart';
+import 'tmdb/tmdb_config.dart';
+import 'tmdb/tmdb_metadata.dart';
+import 'tmdb/tmdb_service.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
 import 'lan_controller.dart';
@@ -165,6 +169,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _episodesReversed = false;
   bool _synopsisExpanded = false;
   final ScrollController _episodeStripController = ScrollController();
+  TmdbConfig _tmdbConfig = const TmdbConfig();
+  TmdbMetadata? _tmdb;
   bool _autoAdvance = true;
   bool _adBlock = true;
   bool? _systemFullscreen;
@@ -397,6 +403,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
     unawaited(_loadParseSelection());
+    unawaited(_loadTmdb(widget.detail.drama));
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
@@ -1932,15 +1939,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  /// 退出全屏后把选集横排滚回当前集（每枚 chip 约 84px 估宽，
-  /// 精确位置由 ListView 的可视钳制兜底）。
+  /// 退出全屏后把选集横排滚回当前集（每张预览卡 148px 宽 + 8px
+  /// 间距估宽，精确位置由 ListView 的可视钳制兜底）。
   void _scrollEpisodeStripToCurrent() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _closed || !_episodeStripController.hasClients) return;
       final displayIndex = _episodesReversed
           ? widget.detail.episodes.length - 1 - _index
           : _index;
-      final target = (displayIndex * 84.0).clamp(
+      final target = (displayIndex * (episodePreviewCardWidth + 8)).clamp(
         0.0,
         _episodeStripController.position.maxScrollExtent,
       );
@@ -2000,6 +2007,27 @@ class _PlayerScreenState extends State<PlayerScreen>
       final settings = await ViewingExperienceSettings.load();
       if (mounted) setState(() => _deepSniffer = settings.deepSniffer);
     } catch (_) {}
+  }
+
+  /// 选集预览图用的 TMDB 元数据：与详情页同一条路（标题 + 年份 +
+  /// 类型提示），进页取一次存 state；拉不到只影响预览图。
+  Future<void> _loadTmdb(Drama drama) async {
+    final config = await TmdbConfig.load();
+    if (!mounted || _closed) return;
+    if (!config.configured) return;
+    setState(() => _tmdbConfig = config);
+    try {
+      final meta = await TmdbService.instance.fetchMetadata(
+        title: drama.title,
+        year: yearFromText(drama.onlineDate),
+        typeHint: tmdbMediaTypeHint(drama.category, drama.title),
+        config: config,
+      );
+      if (!mounted || _closed) return;
+      setState(() => _tmdb = meta);
+    } catch (_) {
+      // TMDB 拉不到只影响选集预览图，播放页照常显示站源内容。
+    }
   }
 
   Future<PlaybackPlan?> _tryYoutubeDirect(PlaybackPlan current) async {
@@ -3760,6 +3788,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   Widget _playerEpisodeSection({required bool darkScrim}) {
     final episodes = widget.detail.episodes;
     final colors = Theme.of(context).colorScheme;
+    // 全集列表上匹配一次、按真实集号下标取，倒序显示不重算、不错位。
+    final previews = episodePreviewData(
+      titles: [for (final episode in episodes) episode.title],
+      tmdbEpisodes: _tmdb?.episodes ?? const [],
+      config: _tmdbConfig,
+      tmdbPosterUrl: _tmdb?.posterUrl(_tmdbConfig) ?? '',
+      dramaCover: widget.detail.drama.cover,
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 18),
       child: Column(
@@ -3802,7 +3838,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
           const SizedBox(height: 6),
           SizedBox(
-            height: 42,
+            height: episodePreviewCardExtent(
+              context,
+              episodePreviewCardWidth,
+            ),
             child: ListView.separated(
               controller: _episodeStripController,
               scrollDirection: Axis.horizontal,
@@ -3813,19 +3852,27 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ? episodes.length - 1 - i
                     : i;
                 final episode = episodes[realIndex];
+                final preview = previews[realIndex];
                 final selected = realIndex == _index;
-                return ChoiceChip(
-                  key: ValueKey('episode-chip-$realIndex'),
-                  label: Text(episode.title),
-                  selected: selected,
-                  onSelected: (_) {
-                    if (selected) {
-                      // 再点当前集 = 进全屏（FongMi 语义）
-                      unawaited(_rotate());
-                    } else {
-                      _play(realIndex, showControlsOnReady: false);
-                    }
-                  },
+                return SizedBox(
+                  width: episodePreviewCardWidth,
+                  child: EpisodePreviewCard(
+                    // key 沿用 chip 时代的名字，widget 测试与外部定位不改。
+                    key: ValueKey('episode-chip-$realIndex'),
+                    episode: episode,
+                    tmdb: preview.tmdb,
+                    stillUrl: preview.stillUrl,
+                    posterUrl: preview.posterUrl,
+                    current: selected,
+                    onPressed: () {
+                      if (selected) {
+                        // 再点当前集 = 进全屏（FongMi 语义）
+                        unawaited(_rotate());
+                      } else {
+                        _play(realIndex, showControlsOnReady: false);
+                      }
+                    },
+                  ),
                 );
               },
             ),

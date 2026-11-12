@@ -2,8 +2,6 @@ import 'dart:async';
 
 import 'app_page_route.dart';
 
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +22,7 @@ import 'player_screen.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
 import 'episode_browser.dart';
+import 'episode_preview_card.dart';
 import 'nonvideo_content.dart';
 import 'follow_state.dart';
 import 'watchroom/controller.dart';
@@ -739,11 +738,13 @@ class _DetailScreenState extends State<DetailScreen> {
                         .skip(start)
                         .take(episodePageSize)
                         .toList();
-                    final tmdbMatched = matchTmdbEpisodes(
-                      [for (final episode in episodes) episode.title],
-                      _tmdb?.episodes ?? const [],
+                    final previews = episodePreviewData(
+                      titles: [for (final episode in episodes) episode.title],
+                      tmdbEpisodes: _tmdb?.episodes ?? const [],
+                      config: _tmdbConfig,
+                      tmdbPosterUrl: _tmdb?.posterUrl(_tmdbConfig) ?? '',
+                      dramaCover: drama.cover,
                     );
-                    final posterFallback = _tmdbPosterDrama(drama).cover;
                     final showEpisodes = _episodesExpanded;
                     return CustomScrollView(
                       controller: _detailScroll,
@@ -811,18 +812,13 @@ class _DetailScreenState extends State<DetailScreen> {
                                   index,
                                 ) {
                                   final episode = visible[index];
-                                  final tmdb = tmdbMatched[start + index];
-                                  return _EpisodePreviewCard(
+                                  final preview = previews[start + index];
+                                  return EpisodePreviewCard(
                                     key: ValueKey('episode-${episode.number}'),
                                     episode: episode,
-                                    tmdb: tmdb,
-                                    stillUrl: tmdb == null
-                                        ? ''
-                                        : _tmdbConfig.imageUrl(
-                                            tmdb.stillPath,
-                                            size: 'w500',
-                                          ),
-                                    posterUrl: posterFallback,
+                                    tmdb: preview.tmdb,
+                                    stillUrl: preview.stillUrl,
+                                    posterUrl: preview.posterUrl,
                                     current: episode.number == watched?.episode,
                                     onPressed: () => _play(start + index),
                                   );
@@ -1467,9 +1463,7 @@ class _DetailScreenState extends State<DetailScreen> {
   double _episodeCardExtent(BuildContext context, double width) {
     final columns = _episodeColumns(width);
     final tileWidth = (width - 40 - (columns - 1) * 10) / columns;
-    final factor = MediaQuery.textScalerOf(context).scale(14) / 14;
-    final textScale = math.min(1.4, math.max(1.0, factor));
-    return tileWidth * 9 / 16 + 56 * textScale;
+    return episodePreviewCardExtent(context, tileWidth);
   }
 
   List<DetailTag> _effectiveTags(Drama drama) {
@@ -1674,171 +1668,3 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 }
 
-/// 详情页选集区的预览图卡片：16:9 剧照（TMDB still 优先、本剧海报
-/// 兜底、都没有时显示带集号的占位块）+ 左上角集号角标 + 可播标题
-/// + TMDB 集名/播出日期副标题。点按播放该集；图片加载失败时只显示
-/// 占位块，不闪退、不留空白。无时长字段，卡片上不显示时长。
-class _EpisodePreviewCard extends StatelessWidget {
-  const _EpisodePreviewCard({
-    super.key,
-    required this.episode,
-    required this.tmdb,
-    required this.stillUrl,
-    required this.posterUrl,
-    required this.current,
-    required this.onPressed,
-  });
-
-  final Episode episode;
-  final TmdbEpisode? tmdb;
-  final String stillUrl;
-  final String posterUrl;
-  final bool current;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final imageUrl = stillUrl.isNotEmpty ? stillUrl : posterUrl;
-    final subtitleParts = <String>[
-      if (tmdb != null &&
-          tmdb!.name.isNotEmpty &&
-          tmdb!.name != episode.title)
-        tmdb!.name,
-      if (tmdb != null && tmdb!.airDate.isNotEmpty) tmdb!.airDate,
-    ];
-    final subtitle = subtitleParts.join(' · ');
-    return Semantics(
-      button: true,
-      label: '第 ${episode.number} 集${episode.vip ? '，VIP 试看' : ''}',
-      child: Material(
-        color: colors.surfaceContainer,
-        borderRadius: BorderRadius.circular(12),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onPressed,
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: current ? colors.primary : colors.outlineVariant,
-                width: current ? 2 : 1,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              colors.surfaceContainerHighest,
-                              colors.surfaceContainer,
-                            ],
-                          ),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '${episode.number}',
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: colors.onSurfaceVariant.withValues(
-                                alpha: .55,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (imageUrl.isNotEmpty && !DramaCover.imagesDisabled)
-                        Image.network(
-                          imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) =>
-                              const SizedBox.shrink(),
-                        ),
-                      Positioned(
-                        left: 6,
-                        top: 6,
-                        child: _badge('${episode.number}'),
-                      ),
-                      if (episode.vip)
-                        Positioned(
-                          right: 6,
-                          top: 6,
-                          child: _badgeIcon(Icons.workspace_premium_rounded),
-                        ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        episode.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium?.copyWith(
-                          fontWeight: current
-                              ? FontWeight.w700
-                              : FontWeight.w600,
-                          color: current ? colors.primary : null,
-                        ),
-                      ),
-                      if (subtitle.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _badge(String text) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-    decoration: BoxDecoration(
-      color: Colors.black54,
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Text(
-      text,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-      ),
-    ),
-  );
-
-  Widget _badgeIcon(IconData icon) => Container(
-    padding: const EdgeInsets.all(3),
-    decoration: BoxDecoration(
-      color: Colors.black54,
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Icon(icon, size: 14, color: Colors.white),
-  );
-}

@@ -121,6 +121,12 @@ void main() {
 
   testWidgets('点其他集切播、再点当前集进全屏且信息区消失', (tester) async {
     final player = await mount(tester);
+    // 选集区在信息滚动区下方、卡片又比旧药丸宽，先滚出来再点，
+    // 否则 tap 落点在视口外、点不到。
+    await tester.ensureVisible(find.byKey(const ValueKey('episode-chip-2')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
     await tester.tap(find.byKey(const ValueKey('episode-chip-2')));
     for (var i = 0; i < 12; i++) {
       await tester.pump(const Duration(milliseconds: 10));
@@ -133,6 +139,12 @@ void main() {
     }
     expect(find.byKey(const ValueKey('player-info-scroll')), findsNothing);
     expect(find.byKey(const ValueKey('player-synopsis')), findsNothing);
+    // 控制层 4 秒自动隐藏定时器在点播后起表，收尾前把假时钟推过
+    // 它，否则拆树时框架会报 Timer 未清（与选集卡片无关，旧药丸
+    // 版同样如此）。
+    for (var i = 0; i < 50; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     await unmount(tester);
   });
 }
