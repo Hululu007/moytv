@@ -9,11 +9,11 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import '../app_orientation.dart';
-import '../app_theme.dart';
-import '../network_speed.dart';
-import '../player_controls.dart';
-import '../player_interactions.dart';
+import '../../app_orientation.dart';
+import '../../app_theme.dart';
+import '../../network_speed.dart';
+import '../../player_controls.dart';
+import '../../player_interactions.dart';
 import 'haikuo_codec.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runtime_html.dart';
