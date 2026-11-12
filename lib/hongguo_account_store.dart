@@ -142,6 +142,14 @@ class HongguoAccountStore {
     } catch (_) {
       _sessionLive = false;
     }
+    if (_sessionLive && _account != null && _account!.userId.isEmpty) {
+      // 待补身份的登入（App 路校验成功、资料接口当时没拿到身份）：
+      // 每次启动恢复时再取一次资料，补上就落盘；取不到也不影响
+      // 本次恢复，会话本身照样有效。
+      try {
+        await refreshProfile();
+      } catch (_) {}
+    }
     _rebuildQueue();
     if (_sessionLive) unawaited(_queue.drain());
   }
@@ -183,18 +191,35 @@ class HongguoAccountStore {
     final userId =
         info['userId']?.toString() ?? info['biz_user_id']?.toString() ?? '';
     final userName = info['userName'] as String? ?? '';
-    if (userId.isEmpty) {
+    // App 形态校验成功、但资料接口一时拿不到身份时，Go 核返回
+    // loggedIn=true + 空 userId：会话已成立，登入照样走完，身份等
+    // 后续刷新再补；没带 loggedIn 标记的空身份仍按旧口径报错。
+    final identityPending = userId.isEmpty && info['loggedIn'] == true;
+    if (userId.isEmpty && !identityPending) {
       throw AppFailure('登录成功但未拿到账号信息，请重试');
     }
     final account = HongguoAccount(
       userId: userId,
-      displayName: userName.isEmpty ? userId : userName,
+      displayName: userName.isNotEmpty
+          ? userName
+          : userId.isNotEmpty
+              ? userId
+              : maskedPhone.isNotEmpty
+                  ? maskedPhone
+                  : '红果用户',
       maskedPhone: maskedPhone,
       method: method,
     );
     final saved = await _persistAccount(account);
+    if (identityPending) {
+      // 立刻再取一次资料：资料接口只是偶发失败时，这里就能把身
+      // 份补上；补不上也不影响本次登入，load() 里还会再补。
+      try {
+        await refreshProfile();
+      } catch (_) {}
+    }
     await exportAndSaveSession();
-    return saved;
+    return _account ?? saved;
   }
 
   /// 手头已有完整会话时用：有 Cookie 才调 hongguoAccountSetSession
@@ -292,7 +317,8 @@ class HongguoAccountStore {
 
   /// 验证码校验：站内路主用，失败回退 App 形态路；成功后拉账号
   /// 信息落盘。发码与校验走同一路不强制：站内发码成功后若站内
-  /// 校验失败，仍会试 App 校验（Go 侧两路独立）。
+  /// 校验失败，仍会试 App 校验（Go 侧两路独立）。两路都失败时，
+  /// 报错里两路的原因都带上，不只留站内路的旧错。
   Future<HongguoAccount> verifyCode({
     required String areaCode,
     required String phone,
@@ -312,14 +338,26 @@ class HongguoAccountStore {
           result['biz_user_id']?.toString() ??
           '';
       if (userId.isEmpty) throw AppFailure('验证码校验未返回账号');
-    } on AppFailure catch (error) {
-      final result = await repository.hongguoLoginAppSms(
-        bridgePhone,
-        trimmedCode,
-      );
-      if (result['loggedIn'] != true &&
-          (result['accountId']?.toString() ?? '').isEmpty) {
-        throw AppFailure(error.message);
+    } on AppFailure catch (siteError) {
+      // App 路也失败时，两路的错误都带上（站内路的旧错不能单独
+      // 盖掉 App 路的结果），方便定位到底是哪一路拦住了登入。
+      var appOk = false;
+      var appError = 'App 校验未返回登录态';
+      try {
+        final result = await repository.hongguoLoginAppSms(
+          bridgePhone,
+          trimmedCode,
+        );
+        appOk =
+            result['loggedIn'] == true ||
+            (result['accountId']?.toString() ?? '').isNotEmpty;
+      } on AppFailure catch (error) {
+        appError = error.message;
+      }
+      if (!appOk) {
+        throw AppFailure(
+          '站内校验失败：${siteError.message}；App 校验失败：$appError',
+        );
       }
     }
     return signInFromBridge(method: 'sms', maskedPhone: maskedPhone);

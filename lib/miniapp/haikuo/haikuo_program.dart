@@ -115,10 +115,16 @@ class HaikuoProgram {
     return digest.toString().substring(0, 16);
   }
 
-  HaikuoProgram copyWith({String? origin, HaikuoKind? kind, int? entries}) {
+  HaikuoProgram copyWith({
+    String? id,
+    String? name,
+    String? origin,
+    HaikuoKind? kind,
+    int? entries,
+  }) {
     return HaikuoProgram(
-      id: id,
-      name: name,
+      id: id ?? this.id,
+      name: name ?? this.name,
       author: author,
       version: version,
       icon: icon,
@@ -140,15 +146,20 @@ class HaikuoImportResult {
     required this.added,
     required this.updated,
     this.notes = const [],
+    this.cancelled = false,
   });
 
   final List<HaikuoProgram> added;
   final List<HaikuoProgram> updated;
   final List<String> notes;
 
+  /// 用户在重复提示里选了取消：整批导入未写入。
+  final bool cancelled;
+
   int get total => added.length + updated.length;
 
   String get summary {
+    if (cancelled) return '已取消导入';
     if (total == 0) return '没有新增条目';
     final parts = <String>[
       if (added.isNotEmpty) '新增 ${added.length} 个',
@@ -157,6 +168,19 @@ class HaikuoImportResult {
     return parts.join('，');
   }
 }
+
+/// 导入时发现的同名重复：新条目与库里已有的同名条目内容不同
+/// （所以 id 不同），旧逻辑会无提示地堆成两个同名条目。
+class HaikuoDuplicate {
+  const HaikuoDuplicate({required this.incoming, required this.existing});
+
+  final HaikuoProgram incoming;
+  final HaikuoProgram existing;
+}
+
+/// 用户对一批重复项的决定：替换旧的 / 保留两者（新条目改名 _2）/
+/// 取消整批导入。
+enum HaikuoDuplicateDecision { replace, keepBoth, cancel }
 
 class HaikuoFormatException implements Exception {
   const HaikuoFormatException(this.message);

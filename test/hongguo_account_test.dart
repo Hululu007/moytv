@@ -20,6 +20,10 @@ class _FakeAccountRepository implements AppRepository {
   };
   bool failSiteSend = false;
   bool failSiteVerify = false;
+  bool failAppVerify = false;
+  String appVerifyError = 'App 校验失败';
+  Map<String, dynamic>? appVerifyResult;
+  final List<Map<String, dynamic>> infoQueue = [];
   int sendRetrySeconds = 60;
   bool qrPollLoggedIn = false;
   final List<Map<String, dynamic>> uploadCalls = [];
@@ -129,7 +133,10 @@ class _FakeAccountRepository implements AppRepository {
   };
 
   @override
-  Future<Map<String, dynamic>> hongguoAccountInfo() async => info;
+  Future<Map<String, dynamic>> hongguoAccountInfo() async {
+    if (infoQueue.isNotEmpty) return infoQueue.removeAt(0);
+    return info;
+  }
 
   @override
   Future<Map<String, dynamic>> hongguoLoginSendCode(String phone) async {
@@ -154,7 +161,10 @@ class _FakeAccountRepository implements AppRepository {
   Future<Map<String, dynamic>> hongguoLoginAppSms(
     String phone,
     String code,
-  ) async => {'loggedIn': true, 'accountId': 'u1'};
+  ) async {
+    if (failAppVerify) throw AppFailure(appVerifyError);
+    return appVerifyResult ?? {'loggedIn': true, 'accountId': 'u1'};
+  }
 
   @override
   Future<Map<String, dynamic>> hongguoAccountFavorites() async => {
@@ -521,6 +531,120 @@ void main() {
       );
       expect(account.userId, 'u1');
       expect(store.loggedIn, isTrue);
+    });
+  });
+
+  group('App 会话登入与回退报错', () {
+    test('两路校验都抛错时，报错里两路原因都带上', () async {
+      final repo = _FakeAccountRepository()
+        ..failSiteVerify = true
+        ..failAppVerify = true
+        ..appVerifyError = '验证码错误（错误码 1102）';
+      final store = await _openStore(repo);
+      await expectLater(
+        store.verifyCode(
+          areaCode: '+86',
+          phone: '13812345678',
+          code: '123456',
+        ),
+        throwsA(
+          isA<AppFailure>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('站内校验失败'), contains('错误码 1102')),
+          ),
+        ),
+      );
+    });
+
+    test('App 校验回未登录态时，报错带两路原因', () async {
+      final repo = _FakeAccountRepository()
+        ..failSiteVerify = true
+        ..appVerifyResult = {'loggedIn': false, 'accountId': ''};
+      final store = await _openStore(repo);
+      await expectLater(
+        store.verifyCode(
+          areaCode: '+86',
+          phone: '13812345678',
+          code: '123456',
+        ),
+        throwsA(
+          isA<AppFailure>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('站内校验失败'), contains('App 校验未返回登录态')),
+          ),
+        ),
+      );
+    });
+
+    test('App 会话已成立、身份待补时登入照样走完', () async {
+      final repo = _FakeAccountRepository()
+        ..info = {
+          'userId': '',
+          'userName': '',
+          'avatar': '',
+          'loggedIn': true,
+          'identityPending': true,
+        };
+      final store = await _openStore(repo);
+      final account = await store.signInFromBridge(
+        method: 'sms',
+        maskedPhone: '138****8000',
+      );
+      expect(account.userId, '');
+      expect(account.displayName, '138****8000');
+      expect(store.loggedIn, isTrue);
+    });
+
+    test('没带登录态标记的空身份仍报错', () async {
+      final repo = _FakeAccountRepository()
+        ..info = {'userId': '', 'userName': ''};
+      final store = await _openStore(repo);
+      await expectLater(
+        store.signInFromBridge(method: 'sms'),
+        throwsA(isA<AppFailure>()),
+      );
+      expect(store.loggedIn, isFalse);
+    });
+
+    test('待补登入时立刻再取一次资料，取到就补上身份', () async {
+      final repo = _FakeAccountRepository()
+        ..infoQueue.addAll([
+          {
+            'userId': '',
+            'userName': '',
+            'loggedIn': true,
+            'identityPending': true,
+          },
+          {'userId': 'u1', 'userName': '道友1', 'avatar': ''},
+        ]);
+      final store = await _openStore(repo);
+      final account = await store.signInFromBridge(method: 'sms');
+      expect(account.userId, 'u1');
+      expect(account.displayName, '道友1');
+    });
+
+    test('冷启动恢复时待补身份再取一次资料', () async {
+      final repo = _FakeAccountRepository()
+        ..statusLoggedIn = true
+        ..info = {
+          'userId': '',
+          'userName': '',
+          'loggedIn': true,
+          'identityPending': true,
+        };
+      final store = await _openStore(repo);
+      await store.signInFromBridge(method: 'sms');
+      expect(store.account?.userId, '');
+
+      final repo2 = _FakeAccountRepository()
+        ..statusLoggedIn = true
+        ..info = {'userId': 'u1', 'userName': '道友1', 'avatar': ''};
+      final store2 = await _openStore(repo2);
+      await store2.load();
+      expect(store2.account?.userId, 'u1');
+      expect(store2.loggedIn, isTrue);
     });
   });
 

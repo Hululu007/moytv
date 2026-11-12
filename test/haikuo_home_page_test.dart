@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/miniapp/haikuo/haikuo_home_page.dart';
+import 'package:moyi/miniapp/haikuo/haikuo_program.dart';
 import 'package:moyi/miniapp/haikuo/haikuo_store.dart';
 
 void main() {
@@ -84,5 +85,86 @@ void main() {
     expect(find.text('类型：规则'), findsOneWidget);
     expect(find.text('来源：口令'), findsOneWidget);
     expect(find.textContaining('脚本长度'), findsOneWidget);
+  });
+
+  testWidgets('已导入的规则以网格平铺，角标菜单含四项操作', (tester) async {
+    await tester.runAsync(
+      () => store.importText(
+        jsonEncode([
+          {
+            'title': '测试海阔源',
+            'type': 'video',
+            'url': 'hiker://empty##https://example.com',
+            'col_type': 'movie_3',
+            'find_rule': 'js:\nsetResult([{title:"x"}]);',
+          },
+        ]),
+        origin: '测试',
+      ),
+    );
+    await pumpPage(tester);
+    expect(find.byType(GridView), findsOneWidget);
+    expect(find.text('测试海阔源'), findsOneWidget);
+    expect(find.textContaining('规则'), findsWidgets);
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('打开'), findsOneWidget);
+    expect(find.text('详情'), findsOneWidget);
+    expect(find.text('复制 JSON'), findsOneWidget);
+    expect(find.text('删除'), findsOneWidget);
+  });
+
+  Future<HaikuoDuplicateDecision?> pumpDuplicateDialog(
+    WidgetTester tester,
+    String choice,
+  ) async {
+    HaikuoDuplicateDecision? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showHaikuoDuplicateDialog(context, [
+                  HaikuoDuplicate(
+                    incoming: const HaikuoProgram(id: 'new', name: '同名站'),
+                    existing: const HaikuoProgram(id: 'old', name: '同名站'),
+                  ),
+                ]);
+              },
+              child: const Text('问'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('问'));
+    await tester.pumpAndSettle();
+    expect(find.text('发现同名站点'), findsOneWidget);
+    expect(find.textContaining('同名站'), findsWidgets);
+    expect(find.textContaining('同名站_2'), findsOneWidget);
+    if (choice == 'dismiss') {
+      await tester.tapAt(const Offset(10, 10));
+    } else {
+      await tester.tap(find.text(choice));
+    }
+    await tester.pumpAndSettle();
+    return result;
+  }
+
+  testWidgets('重复提示：选替换返回 replace', (tester) async {
+    expect(await pumpDuplicateDialog(tester, '替换'), HaikuoDuplicateDecision.replace);
+  });
+
+  testWidgets('重复提示：选保留两者返回 keepBoth', (tester) async {
+    expect(await pumpDuplicateDialog(tester, '保留两者'), HaikuoDuplicateDecision.keepBoth);
+  });
+
+  testWidgets('重复提示：选取消返回 cancel', (tester) async {
+    expect(await pumpDuplicateDialog(tester, '取消'), HaikuoDuplicateDecision.cancel);
+  });
+
+  testWidgets('重复提示：点遮罩关掉也算取消', (tester) async {
+    expect(await pumpDuplicateDialog(tester, 'dismiss'), HaikuoDuplicateDecision.cancel);
   });
 }

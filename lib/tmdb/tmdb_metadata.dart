@@ -351,3 +351,86 @@ class TmdbMetadata {
     ].where((path) => path.isNotEmpty).toList(),
   );
 }
+
+/// 从选集标题里提取集号，只认以下写法，其余返回 null：
+///
+/// - 中文“第 N 集”（含空格与前导零，如“第 03 集”）；
+/// - 季集写法 SxxExx（如 S01E05 取 5）；
+/// - EP/E + 数字（如 EP12、E03），前面不能紧贴字母数字；
+/// - 纯数字标题（如“12”）；
+/// - 开头数字 + 分隔符（如“12. 标题”“12、标题”“12 标题”）。
+///
+/// 年份日期不会被误认：分隔符不含 '-'，纯数字分支要求整条标题
+/// 只有数字；即使误解析出超大数字，配对时也找不到对应的 TMDB 集。
+int? episodeNumberFromTitle(String title) {
+  final text = title.trim();
+  if (text.isEmpty) return null;
+  final chinese = RegExp(r'第\s*(\d+)\s*集').firstMatch(text);
+  if (chinese != null) return int.tryParse(chinese.group(1)!);
+  final seasonEpisode = RegExp(
+    r'[sS]\s*\d+\s*[eE]\s*0*(\d+)',
+  ).firstMatch(text);
+  if (seasonEpisode != null) return int.tryParse(seasonEpisode.group(1)!);
+  final ep = RegExp(r'[eE][pP]?\s*0*(\d+)').firstMatch(text);
+  if (ep != null) {
+    final before = ep.start == 0 ? '' : text[ep.start - 1];
+    if (before.isEmpty || !_isAsciiAlphanumeric(before)) {
+      return int.tryParse(ep.group(1)!);
+    }
+  }
+  final pure = RegExp(r'^0*(\d+)$').firstMatch(text);
+  if (pure != null) return int.tryParse(pure.group(1)!);
+  final leading = RegExp(
+    r'^0*(\d+)\s*(?:[.、:：]\s*|\s+)(?=\S)',
+  ).firstMatch(text);
+  if (leading != null) return int.tryParse(leading.group(1)!);
+  return null;
+}
+
+bool _isAsciiAlphanumeric(String char) {
+  final code = char.codeUnitAt(0);
+  return (code >= 0x30 && code <= 0x39) ||
+      (code >= 0x41 && code <= 0x5A) ||
+      (code >= 0x61 && code <= 0x7A);
+}
+
+/// 把可播选集标题与 TMDB 集信息配对，返回与 [playableTitles] 等长、
+///
+/// 顺序一致的列表，配不上的位置为 null（调用方用兜底图显示）。
+/// 先按标题里的集号对号；再把剩余的无集号标题按顺序配对；有集号
+/// 但对不上的标题留空（不拿别集的剧照张冠李戴）。每条 TMDB 记录
+/// 最多用一次；绝不丢集、不改顺序。季号不参与匹配：TMDB 集列表
+/// 只取一季（见 TmdbService.fetchMetadata），同号重复时取先出现的。
+List<TmdbEpisode?> matchTmdbEpisodes(
+  List<String> playableTitles,
+  List<TmdbEpisode> tmdbEpisodes,
+) {
+  final matched = List<TmdbEpisode?>.filled(playableTitles.length, null);
+  if (playableTitles.isEmpty || tmdbEpisodes.isEmpty) return matched;
+  final byNumber = <int, int>{};
+  for (var i = 0; i < tmdbEpisodes.length; i++) {
+    byNumber.putIfAbsent(tmdbEpisodes[i].episodeNumber, () => i);
+  }
+  final used = <int>{};
+  for (var i = 0; i < playableTitles.length; i++) {
+    final number = episodeNumberFromTitle(playableTitles[i]);
+    if (number == null) continue;
+    final index = byNumber[number];
+    if (index == null || !used.add(index)) continue;
+    matched[i] = tmdbEpisodes[index];
+  }
+  final leftovers = [
+    for (var i = 0; i < tmdbEpisodes.length; i++)
+      if (!used.contains(i)) i,
+  ];
+  var cursor = 0;
+  for (var i = 0; i < matched.length; i++) {
+    if (matched[i] != null ||
+        episodeNumberFromTitle(playableTitles[i]) != null ||
+        cursor >= leftovers.length) {
+      continue;
+    }
+    matched[i] = tmdbEpisodes[leftovers[cursor++]];
+  }
+  return matched;
+}

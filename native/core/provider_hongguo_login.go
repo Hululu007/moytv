@@ -88,6 +88,14 @@ func hongguoClientHasWebSession(client *hongguoAppClient) bool {
 	return jar["sessionid"] != "" || jar["sessionid_ss"] != ""
 }
 
+// hongguoClientHasAppSession：App 形态登录域名的罐里是否有会话 Cookie。
+func hongguoClientHasAppSession(client *hongguoAppClient) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	jar := client.cookies["security.snssdk.com"]
+	return jar["sessionid"] != "" || jar["sessionid_ss"] != ""
+}
+
 func hongguoClientWebCookie(client *hongguoAppClient) string {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -316,12 +324,30 @@ func (downloader *Downloader) hongguoLoginFinishRedirect(ctx context.Context, re
 	return errors.New("登录确认跳转次数过多")
 }
 
-// hongguoLoginAccountInfo：取账号信息，并把站内 Cookie 落成账号会话。
+// hongguoLoginAccountInfo：取账号信息。站内罐有会话走站内接口；站内罐为空、
+// 但已有账号会话（App 形态校验落的会话在另一个域名罐里）时，走会话制资
+// 料接口取身份；两者都没有才报错（短信路文案，不带扫码措辞）。扫码确认
+// 的站内罐检查在 hongguoAccountQrConfirm 里另做，这里不替它把关。
 func (downloader *Downloader) hongguoLoginAccountInfo(ctx context.Context) (map[string]any, error) {
 	client := downloader.hongguoClient()
-	if !hongguoClientHasWebSession(client) {
-		return nil, errors.New("官网尚未下发登录态，请先在手机确认登录")
+	if hongguoClientHasWebSession(client) {
+		return downloader.hongguoLoginAccountInfoFromWeb(ctx, client)
 	}
+	if downloader.hongguoAccountSessionSnapshot().loggedIn() {
+		return downloader.hongguoLoginAccountInfoFromSession(ctx)
+	}
+	if hongguoClientHasAppSession(client) {
+		if _, err := downloader.hongguoAppSessionFromJar(ctx, "", ""); err != nil {
+			return nil, errors.New("登录态尚未建立，请重新登录")
+		}
+		return downloader.hongguoLoginAccountInfoFromSession(ctx)
+	}
+	return nil, errors.New("登录态尚未建立，请重新登录")
+}
+
+// hongguoLoginAccountInfoFromWeb：站内罐有会话时走站内账号信息接口，
+// 并把站内 Cookie 落成账号会话。
+func (downloader *Downloader) hongguoLoginAccountInfoFromWeb(ctx context.Context, client *hongguoAppClient) (map[string]any, error) {
 	reply, err := downloader.hongguoWebCall(ctx, "/passport/account/info/v2/", nil, nil)
 	if err != nil {
 		return nil, err
@@ -348,6 +374,45 @@ func (downloader *Downloader) hongguoLoginAccountInfo(ctx context.Context) (map[
 		"userId":   accountID,
 		"userName": userName,
 		"avatar":   firstNonEmpty(mapString(data, "avatar_url"), mapString(data, "avatar")),
+	}, nil
+}
+
+// hongguoLoginAccountInfoFromSession：已有账号会话、但站内罐为空时（App
+// 形态校验成功的典型情形），走会话制资料接口取身份并落盘。资料实在拿
+// 不到时也不报错：返回 loggedIn/identityPending，让本次登入以已有会话
+// 成立，身份等后续刷新再补（与 hongguoAppReplyIdentity 的口径一致），
+// 而不是把已成功的校验作废。
+func (downloader *Downloader) hongguoLoginAccountInfoFromSession(ctx context.Context) (map[string]any, error) {
+	session := downloader.hongguoAccountSessionSnapshot()
+	if profile, err := downloader.hongguoAccountProfile(ctx); err == nil {
+		data := nestedMap(profile, "profile")
+		accountID := firstNonEmpty(
+			mapString(data, "biz_user_id"), mapString(data, "user_id"), mapString(data, "id"), mapString(data, "unique_id"),
+			mapString(nestedMap(data, "user_info"), "user_id"), mapString(nestedMap(data, "user_info"), "id"),
+		)
+		userName := firstNonEmpty(
+			mapString(data, "user_name"), mapString(data, "nickname"), mapString(data, "name"),
+			mapString(nestedMap(data, "user_info"), "user_name"), mapString(nestedMap(data, "user_info"), "nickname"),
+		)
+		if accountID != "" {
+			session.AccountID = accountID
+			if userName != "" {
+				session.UserName = userName
+			}
+			downloader.setHongguoAccountSession(session)
+			return map[string]any{
+				"userId":   accountID,
+				"userName": firstNonEmpty(userName, session.UserName, "红果用户"),
+				"avatar":   firstNonEmpty(mapString(data, "avatar_url"), mapString(data, "avatar")),
+			}, nil
+		}
+	}
+	return map[string]any{
+		"userId":          session.AccountID,
+		"userName":        session.UserName,
+		"avatar":          "",
+		"loggedIn":        true,
+		"identityPending": true,
 	}, nil
 }
 

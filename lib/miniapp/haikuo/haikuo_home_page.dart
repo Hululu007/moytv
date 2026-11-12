@@ -11,6 +11,45 @@ import 'haikuo_program.dart';
 import 'haikuo_runner_page.dart';
 import 'haikuo_store.dart';
 
+/// 导入时发现同名站点，问用户怎么处理：替换旧的 / 保留两者
+/// （新导入的改名 _2）/ 取消整批导入。点遮罩或返回键关掉也算取消。
+Future<HaikuoDuplicateDecision> showHaikuoDuplicateDialog(
+  BuildContext context,
+  List<HaikuoDuplicate> duplicates,
+) async {
+  if (duplicates.isEmpty) return HaikuoDuplicateDecision.cancel;
+  final names = duplicates.map((d) => d.incoming.name).toSet().toList();
+  final choice = await showDialog<HaikuoDuplicateDecision>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('发现同名站点'),
+      content: Text(
+        '以下站点已经存在：\n${names.join('、')}\n\n'
+        '替换会用新导入的覆盖旧的；保留两者会把新导入的改名'
+        '（如“${names.first}_2”）后留下；取消则这次什么都不导入。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () =>
+              Navigator.pop(context, HaikuoDuplicateDecision.cancel),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () =>
+              Navigator.pop(context, HaikuoDuplicateDecision.keepBoth),
+          child: const Text('保留两者'),
+        ),
+        FilledButton(
+          onPressed: () =>
+              Navigator.pop(context, HaikuoDuplicateDecision.replace),
+          child: const Text('替换'),
+        ),
+      ],
+    ),
+  );
+  return choice ?? HaikuoDuplicateDecision.cancel;
+}
+
 /// 海阔小程序面板：导入、管理、打开。
 ///
 /// 入口在小程序模块里：小程序页「海阔」标签，右上角「+」菜单里也有
@@ -55,6 +94,12 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
     });
   }
 
+  Future<HaikuoDuplicateDecision> _askDuplicates(
+    List<HaikuoDuplicate> duplicates,
+  ) {
+    return showHaikuoDuplicateDialog(context, duplicates);
+  }
+
   Future<void> _importFile() async {
     if (_busy) return;
     final files = await FilePicker.pickFiles(
@@ -71,7 +116,9 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
     // readAsBytes() 按 Uri 读字节兜底，只有两者都拿不到才报错。
     final path = picked.path;
     if (path != null) {
-      await _run(() => _store.importFile(File(path)));
+      await _run(
+        () => _store.importFile(File(path), onDuplicates: _askDuplicates),
+      );
       return;
     }
     try {
@@ -81,7 +128,11 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
         return;
       }
       await _run(
-        () => _store.importBytes(bytes, origin: '文件：${picked.name}'),
+        () => _store.importBytes(
+          bytes,
+          origin: '文件：${picked.name}',
+          onDuplicates: _askDuplicates,
+        ),
       );
     } catch (error) {
       _snack('没拿到文件路径，也读不出文件内容：$error');
@@ -137,7 +188,9 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
       ),
     );
     if (text == null || text.isEmpty) return;
-    await _run(() => _store.importText(text, origin: '口令'));
+    await _run(
+      () => _store.importText(text, origin: '口令', onDuplicates: _askDuplicates),
+    );
   }
 
   Future<void> _importLink() async {
@@ -169,7 +222,7 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
       ),
     );
     if (url == null || url.isEmpty) return;
-    await _run(() => _store.importUrl(url));
+    await _run(() => _store.importUrl(url, onDuplicates: _askDuplicates));
   }
 
   /// 内置示例：格式参考自公开的海阔规则仓库（hikerViewRules 等）。
@@ -178,7 +231,11 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
     await _run(() async {
       final raw = await rootBundle.loadString('assets/haikuo_samples.json');
       final programs = HaikuoCodecBridge.parseSample(raw);
-      return _store.addAll(programs, origin: '内置示例');
+      return _store.addAll(
+        programs,
+        origin: '内置示例',
+        onDuplicates: _askDuplicates,
+      );
     });
   }
 
@@ -308,7 +365,7 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator.adaptive(
             onRefresh: _load,
-            child: _programs.isEmpty ? _empty() : _list(),
+            child: _programs.isEmpty ? _empty() : _grid(),
           );
     // 嵌进小程序页「海阔」标签时不带自己的 AppBar / Scaffold。
     if (widget.embedded) {
@@ -402,99 +459,229 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
     );
   }
 
-  Widget _list() {
-    final colors = Theme.of(context).colorScheme;
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+  /// 平铺网格：与小程序页「已安装」tab 同一样式（图标块 + 站名在下），
+  /// 四列。角标 ⋮ 打开操作表（打开/详情/复制 JSON/删除），长按仍直接弹详情。
+  Widget _grid() {
+    return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 28),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4,
+        mainAxisSpacing: 18,
+        crossAxisSpacing: 8,
+        childAspectRatio: 0.74,
+      ),
       itemCount: _programs.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final program = _programs[index];
-        return Material(
-          color: colors.surfaceContainerHigh.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(14),
-          clipBehavior: Clip.antiAlias,
-          child: ListTile(
-            leading: _ProgramIcon(program: program),
-            title: Text(
-              program.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(
-              program.subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11.5),
-            ),
-            trailing: PopupMenuButton<String>(
-              onSelected: (value) {
-                switch (value) {
-                  case 'open':
-                    _open(program);
-                  case 'info':
-                    _showInfo(program);
-                  case 'export':
-                    _export(program);
-                  case 'delete':
-                    _delete(program);
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(value: 'open', child: Text('打开')),
-                const PopupMenuItem(value: 'info', child: Text('详情')),
-                const PopupMenuItem(value: 'export', child: Text('复制 JSON')),
-                const PopupMenuItem(value: 'delete', child: Text('删除')),
-              ],
-            ),
-            onTap: () => _open(program),
-            onLongPress: () => _showInfo(program),
-          ),
+        return _ProgramTile(
+          program: program,
+          onTap: () => _open(program),
+          onLongPress: () => _showInfo(program),
+          onMenu: () => _showActions(program),
         );
       },
     );
   }
+
+  Future<void> _showActions(HaikuoProgram program) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.play_arrow_rounded),
+              title: const Text('打开'),
+              onTap: () => Navigator.pop(context, 'open'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline_rounded),
+              title: const Text('详情'),
+              onTap: () => Navigator.pop(context, 'info'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy_rounded),
+              title: const Text('复制 JSON'),
+              onTap: () => Navigator.pop(context, 'export'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded),
+              title: const Text('删除'),
+              onTap: () => Navigator.pop(context, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    switch (action) {
+      case 'open':
+        _open(program);
+      case 'info':
+        _showInfo(program);
+      case 'export':
+        _export(program);
+      case 'delete':
+        _delete(program);
+    }
+  }
 }
 
-class _ProgramIcon extends StatelessWidget {
-  const _ProgramIcon({required this.program});
+/// 平铺图标块：与「已安装」tab 的 _MiniAppTile 同一样式（58 圆角块 +
+/// 站名在下），另加一行小字副标题（作者 · 版本 · 类型）与角标 ⋮ 菜单。
+class _ProgramTile extends StatelessWidget {
+  const _ProgramTile({
+    required this.program,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onMenu,
+  });
 
   final HaikuoProgram program;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onMenu;
 
   @override
   Widget build(BuildContext context) {
-    const palette = [
-      Color(0xFFB14BFF),
-      Color(0xFFFF4FA3),
-      Color(0xFF33E1FF),
-      Color(0xFF5B8CFF),
-      Color(0xFF8A5BFF),
-    ];
-    final color = palette[program.id.hashCode.abs() % palette.length];
-    final letter = program.name.isEmpty ? '海' : program.name.substring(0, 1);
-    return Container(
-      width: 42,
-      height: 42,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [color.withValues(alpha: 0.95), color.withValues(alpha: 0.55)],
-        ),
+    final colors = Theme.of(context).colorScheme;
+    final color = _haikuoIconColor(program.id);
+    return InkWell(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      borderRadius: BorderRadius.circular(14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color, Color.lerp(color, Colors.black, 0.28)!],
+                  ),
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.28),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  _haikuoIconGlyph(program.name),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Positioned(
+                right: -6,
+                top: -6,
+                child: _TileMenuButton(onPressed: onMenu),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text(
+            program.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 10.5,
+              height: 1.25,
+              fontWeight: FontWeight.w500,
+              color: colors.onSurface,
+            ),
+          ),
+          Text(
+            program.subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 9.5, color: colors.onSurfaceVariant),
+          ),
+        ],
       ),
-      child: Text(
-        letter,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 18,
-          fontWeight: FontWeight.w800,
+    );
+  }
+}
+
+class _TileMenuButton extends StatelessWidget {
+  const _TileMenuButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.45),
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        customBorder: const CircleBorder(),
+        child: const SizedBox(
+          width: 22,
+          height: 22,
+          child: Icon(
+            Icons.more_vert_rounded,
+            size: 14,
+            color: Colors.white,
+          ),
         ),
       ),
     );
   }
+}
+
+// 与 mini_app_home_page.dart 的色板/取色保持一致（那文件反向依赖本页，
+// 直接 import 会循环，故在此镜像一份）。
+const List<Color> _kHaikuoIconPalette = [
+  Color(0xFFFF8A3D),
+  Color(0xFF3B82F6),
+  Color(0xFFA855F7),
+  Color(0xFF22C55E),
+  Color(0xFFEF4444),
+  Color(0xFF14B8A6),
+  Color(0xFFF59E0B),
+  Color(0xFF6366F1),
+];
+
+Color _haikuoIconColor(String seed) {
+  if (seed.isEmpty) return _kHaikuoIconPalette.first;
+  var hash = 0;
+  for (final unit in seed.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
+  }
+  return _kHaikuoIconPalette[hash % _kHaikuoIconPalette.length];
+}
+
+final _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+/// 站名首字：跳过开头的表情/符号（如 🔞），取第一个字母或数字；
+/// 全是符号时退回第一个字符，空名时用“海”。
+/// 注意不能用 substring(0, 1)：🔞 是代理对，截一半会显示成“?”。
+String _haikuoIconGlyph(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return '海';
+  for (final rune in trimmed.runes) {
+    final ch = String.fromCharCode(rune);
+    if (_letterOrDigit.hasMatch(ch)) return ch;
+  }
+  return String.fromCharCode(trimmed.runes.first);
 }
 
 /// 供示例资源解析使用的小桥接，避免页面层直接依赖编解码细节。

@@ -469,22 +469,36 @@ void main() {
       expect(result['data'], 'pong');
     });
 
-    test('source and player report NOT_IMPLEMENTED, not fake data', () async {
+    test('source.list returns builtin sites, player still NOT_IMPLEMENTED',
+        () async {
       const manifest = MiniAppManifest(
         appId: 'com.example.a',
         name: 'A',
         permissions: ['source', 'player'],
       );
       final bridge = makeBridge(manifest);
-      await expectLater(
-        bridge.invoke('source.list', {}),
-        throwsA(
-          isA<MiniAppApiException>().having(
-            (e) => e.code,
-            'code',
-            'NOT_IMPLEMENTED',
-          ),
-        ),
+      final result = await bridge.invoke('source.list', {});
+      expect(result, isA<List>());
+      final sites = result as List;
+      expect(sites, isNotEmpty);
+      for (final entry in sites) {
+        expect(entry, isA<Map<String, dynamic>>());
+        final site = entry as Map<String, dynamic>;
+        expect(site['key'], isA<String>());
+        expect((site['key'] as String), isNotEmpty);
+        expect(site['name'], isA<String>());
+        expect(site['type'], isA<String>());
+        expect(site['searchable'], isA<bool>());
+        expect(site['available'], isA<bool>());
+      }
+      // 本用例的隔离区里没有注册任何站：只有 jar 静态表条目，且都不可用。
+      expect(
+        sites.every((e) => (e as Map)['type'] == 'jar'),
+        isTrue,
+      );
+      expect(
+        sites.every((e) => (e as Map)['available'] == false),
+        isTrue,
       );
       await expectLater(
         bridge.invoke('player.open', {'url': 'https://example.com/v.mp4'}),

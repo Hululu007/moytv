@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'mini_app_manifest.dart';
+import 'mini_app_sources.dart';
 
 class MiniAppApiException implements Exception {
   MiniAppApiException(this.code, this.message);
@@ -60,7 +61,8 @@ class MiniAppBridge {
     required this.callbacks,
     this.launchOptions = const <String, dynamic>{},
     http.Client? httpClient,
-  }) {
+    MiniAppSourceProvider? sourceProvider,
+  }) : sourceProvider = sourceProvider ?? HostMiniAppSourceProvider() {
     _httpClient = httpClient;
   }
 
@@ -69,6 +71,7 @@ class MiniAppBridge {
   final SharedPreferences prefs;
   final MiniAppBridgeCallbacks callbacks;
   final Map<String, dynamic> launchOptions;
+  final MiniAppSourceProvider sourceProvider;
   http.Client? _httpClient;
 
   String _storageKey(String key) => 'moyi_miniapp_${manifest.appId}_$key';
@@ -250,6 +253,46 @@ class MiniAppBridge {
         return null;
       case 'miniApp.getLaunchOptions':
         return launchOptions;
+      case 'source.list':
+        return _source(() => sourceProvider.listSites());
+      case 'source.home':
+        return _source(
+          () => sourceProvider.home(
+            _sourceArg(params, const ['siteKey']),
+          ),
+        );
+      case 'source.category':
+        return _source(
+          () => sourceProvider.category(
+            siteKey: _sourceArg(params, const ['siteKey']),
+            tid: _sourceArg(params, const ['tid', 'typeId', 'category']),
+            page: _sourcePage(params),
+            ext: _sourceExt(params),
+          ),
+        );
+      case 'source.detail':
+        return _source(
+          () => sourceProvider.detail(
+            siteKey: _sourceArg(params, const ['siteKey']),
+            id: _sourceArg(params, const ['id', 'vodId']),
+          ),
+        );
+      case 'source.play':
+        return _source(
+          () => sourceProvider.play(
+            siteKey: _sourceArg(params, const ['siteKey']),
+            flag: _sourceArg(params, const ['flag', 'from']),
+            id: _sourceArg(params, const ['id', 'playId', 'vodId']),
+          ),
+        );
+      case 'source.search':
+        return _source(
+          () => sourceProvider.search(
+            siteKey: _sourceArg(params, const ['siteKey']),
+            wd: _sourceArg(params, const ['wd', 'query', 'keyword']),
+            page: _sourcePage(params),
+          ),
+        );
       case 'player.open':
       case 'player.getState':
         throw MiniAppApiException(
@@ -262,12 +305,6 @@ class MiniAppBridge {
           'Python 服务未接：小程序暂不能调用宿主 Python',
         );
       default:
-        if (api.startsWith('source.')) {
-          throw MiniAppApiException(
-            'NOT_IMPLEMENTED',
-            '采集源桥未接：宿主站源暂未开放给小程序',
-          );
-        }
         if (api.startsWith('requestStream') ||
             api.startsWith('requestSSE') ||
             api == 'requestBytes' ||
@@ -279,6 +316,48 @@ class MiniAppBridge {
         }
         throw MiniAppApiException('UNKNOWN_API', '未知接口：$api');
     }
+  }
+
+  /// source.* 统一出口：宿主失败码原样交给 JS 侧，意外异常收成
+  /// SOURCE_FAILED，不把宿主内部细节直接抛给小程序。
+  Future<dynamic> _source(Future<dynamic> Function() run) async {
+    try {
+      return await run();
+    } on MiniAppSourceFailure catch (failure) {
+      throw MiniAppApiException(failure.code, failure.message);
+    } catch (error) {
+      throw MiniAppApiException('SOURCE_FAILED', '采集源调用失败：$error');
+    }
+  }
+
+  /// 按契约字段名取参，顺带认几个常见别名；取不到给空串，
+  /// 由宿主实现报 INVALID_PARAMS。
+  String _sourceArg(Map<String, dynamic> params, List<String> keys) {
+    for (final key in keys) {
+      final value = params[key];
+      if (value != null && value.toString().isNotEmpty) {
+        return value.toString();
+      }
+    }
+    return '';
+  }
+
+  int _sourcePage(Map<String, dynamic> params) {
+    final raw = params['page'];
+    if (raw is num) return raw.toInt();
+    return int.tryParse('${raw ?? ''}') ?? 1;
+  }
+
+  Map<String, dynamic> _sourceExt(Map<String, dynamic> params) {
+    final raw = params['ext'];
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.trim().startsWith('{')) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    return const {};
   }
 
   Future<Map<String, dynamic>> _request(Map<String, dynamic> params) async {

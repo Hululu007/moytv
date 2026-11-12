@@ -46,16 +46,52 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .card .desc { margin-top: 3px; font-size: 11px; color: #B4A5CE;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rows { display: flex; flex-direction: column; gap: 8px; }
-  .row {
-    display: flex; align-items: center; gap: 10px; padding: 11px 12px;
-    background: rgba(25,16,41,.92); border: 1px solid rgba(177,75,255,.24); border-radius: 12px;
-  }
-  .row .idx { width: 22px; text-align: center; color: #7E6E9C; font-size: 12px; }
-  .row .txt { flex: 1; min-width: 0; }
-  .row .txt .t { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row .txt .d { font-size: 11px; color: #B4A5CE; margin-top: 2px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px 8px; padding: 4px 2px; }
+  .tile { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .tile:active { transform: scale(.97); }
+  .tile .glyph { width: 58px; height: 58px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 700; color: #fff;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+  .tile .t { margin-top: 7px; font-size: 12.5px; font-weight: 600; line-height: 1.35;
+    text-align: center; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .tile .d { margin-top: 2px; font-size: 11px; color: #B4A5CE; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .d-head { position: relative; overflow: hidden; border-radius: 14px;
+    border: 1px solid rgba(177,75,255,.28); background: rgba(25,16,41,.92); margin-bottom: 14px; }
+  .d-head .bg { position: absolute; inset: -18px; background-size: cover;
+    background-position: center; filter: blur(18px) brightness(.45); }
+  .d-head .fg { position: relative; display: flex; gap: 12px; padding: 14px; }
+  .d-head .poster { width: 96px; aspect-ratio: 2/3; object-fit: cover;
+    border-radius: 10px; flex-shrink: 0; background: linear-gradient(160deg, #22143A, #150C26); }
+  .d-head .info { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+  .d-head .t { font-size: 17px; font-weight: 800; line-height: 1.4; }
+  .d-head .d { margin-top: 6px; font-size: 12px; color: #D9CDEF; line-height: 1.5; }
+  .d-sec { display: flex; align-items: center; gap: 8px; margin: 16px 2px 8px;
+    font-size: 13px; font-weight: 700; color: #E7DCF7; }
+  .d-sec::before { content: ''; width: 3px; height: 14px; border-radius: 2px;
+    background: #B14BFF; box-shadow: 0 0 8px #B14BFF; }
+  .d-sec.center { justify-content: center; }
+  .d-sec.center::before { display: none; }
+  .d-desc { margin: 0 2px; font-size: 13.5px; line-height: 1.75; color: #D9CDEF;
+    white-space: pre-wrap; word-break: break-word; }
+  .d-line { display: flex; align-items: center; gap: 8px; margin: 14px 2px 8px;
+    padding: 10px 12px; background: rgba(25,16,41,.92);
+    border: 1px solid rgba(177,75,255,.24); border-radius: 12px;
+    font-size: 13px; font-weight: 700; }
+  .d-line .tag { font-size: 11px; color: #B14BFF;
+    border: 1px solid rgba(177,75,255,.5); border-radius: 999px; padding: 1px 8px; }
+  .d-eps { display: grid; grid-template-columns: repeat(auto-fill, minmax(102px, 1fr)); gap: 12px; }
+  .ep { border-radius: 12px; overflow: hidden; background: rgba(25,16,41,.92);
+    border: 1px solid rgba(177,75,255,.28); display: flex; flex-direction: column; }
+  .ep:active { transform: scale(.98); }
+  .ep .pic { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
+    background: linear-gradient(160deg, #22143A, #150C26); }
+  .ep .lbl { padding: 7px 8px 9px; font-size: 12.5px; font-weight: 700; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ep.chip .lbl { padding: 10px 8px; }
+  .d-text { padding: 8px 2px; font-size: 13px; color: #D9CDEF; line-height: 1.6; }
   .empty, .error { padding: 26px 10px; text-align: center; color: #B4A5CE; font-size: 13px; }
   .error { color: #FF9BC8; text-align: left; white-space: pre-wrap;
     font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11.5px; }
@@ -86,6 +122,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   var resCode = 0;
   var pageTitle = PROGRAM.name || '海阔小程序';
   var lazyMap = {};
+  // 详情模式：openDetail() 进入、goBack()/boot() 退出。详情结果按
+  // 头项→简介→线路→选集渲染；列表页（首页/分类/搜索）保持原有卡片/行渲染。
+  var isDetail = false;
+  // 当前详情页的选集条目（按顺序）：点选集发 play 消息时带上，
+  // 原生播放器据此显示选集面板；切集时原生调 __haikuoPlayEpisode(i)。
+  var currentEpisodes = [];
+  var detailTitle = '';
+  // 详情头项条目：点它等同于播第 1 集，play 消息同样带选集上下文。
+  var headItem = null;
 
   function native(payload) {
     try { window.HaikuoNative.postMessage(JSON.stringify(payload)); } catch (e) {}
@@ -239,6 +284,71 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function isMedia(url) {
     return /\.(m3u8|mp4|flv|mkv|m4a|mp3|ts)(\?|#|$)/i.test(String(url || ''));
   }
+  // HTML 转义还原（规则/站方文本里常带 &nbsp; &amp; 等）：纯正则实现，
+  // 不依赖 DOM，Node 夹具里也能跑。只还原实体，不解释标签。
+  var namedEntities = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", copy: '©', reg: '®', hellip: '…', mdash: '—', ndash: '–', laquo: '«', raquo: '»', middot: '·' };
+  function decodeEntities(value) {
+    var text = String(value == null ? '' : value);
+    if (text.indexOf('&') < 0) return text;
+    return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, function (m, body) {
+      if (body.charAt(0) === '#') {
+        var code = (body.charAt(1) === 'x' || body.charAt(1) === 'X')
+          ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+        if (!isNaN(code) && code > 0 && code < 0x110000) {
+          try { return String.fromCodePoint(code); } catch (e) { return m; }
+        }
+        return m;
+      }
+      return Object.prototype.hasOwnProperty.call(namedEntities, body) ? namedEntities[body] : m;
+    });
+  }
+  // 标题里的 HTML 标签只留文字、不做完整渲染：先去标签再解实体，
+  // 这样 &lt;b&gt; 这类被转义过的尖括号仍能原样显示为文字。
+  function stripTags(raw) {
+    return String(raw || '').replace(/<\/?[a-zA-Z][^>]*>/g, '');
+  }
+  function itemPic(it) { return (it && (it.pic || it.img || it.cover || it.pic_url)) || ''; }
+  function itemTitle(it) { return decodeEntities(stripTags((it && (it.title || it.name)) || '')); }
+  function itemDesc(it) { return decodeEntities(stripTags((it && (it.desc || it.remarks || it.note)) || '')); }
+  // 平铺色块：与海阔 tab 网格同一套色板，字形取标题首个字母/数字
+  // （跳过开头的表情与符号，避免代理对截半个显示成“?”）。
+  var TILE_COLORS = ['#FF8A3D', '#3B82F6', '#A855F7', '#22C55E', '#EF4444', '#14B8A6', '#F59E0B', '#6366F1'];
+  function tileColor(name) {
+    var hash = 0;
+    var s = String(name || '');
+    for (var i = 0; i < s.length; i++) { hash = (hash * 31 + s.charCodeAt(i)) | 0; }
+    return TILE_COLORS[Math.abs(hash) % TILE_COLORS.length];
+  }
+  function tileGlyph(name) {
+    var chars = Array.from(String(name || ''));
+    for (var i = 0; i < chars.length; i++) {
+      if (/[\p{L}\p{N}]/u.test(chars[i])) return chars[i];
+    }
+    return '·';
+  }
+  function colTypeOf(it) { return String((it && (it.col_type || it.colType)) || ''); }
+  function isPlayableUrl(url) {
+    var u = String(url || '');
+    return u !== '' && u.indexOf('hiker://empty') !== 0;
+  }
+  // 详情选集上下文：被点的条目是当前选集之一时，play 消息带上
+  // 全部选集标题 + 序号 + 剧名，原生播放器据此显示选集面板。
+  function episodeContext(item) {
+    var idx = currentEpisodes.indexOf(item);
+    if (idx < 0 && item === headItem && currentEpisodes.length) idx = 0;
+    if (idx < 0) return null;
+    return {
+      episodes: currentEpisodes.map(function (ep) { return itemTitle(ep) || '选集'; }),
+      index: idx,
+      series: detailTitle
+    };
+  }
+  function sendPlay(url, item) {
+    var payload = { type: 'play', url: url, title: itemTitle(item) };
+    var ctx = episodeContext(item);
+    if (ctx) { payload.episodes = ctx.episodes; payload.index = ctx.index; payload.series = ctx.series; }
+    native(payload);
+  }
   function openItem(item) {
     if (!item) return;
     var url = item.url || item.link || '';
@@ -256,7 +366,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
             if (result.indexOf('toast://') === 0) {
               toast(result.slice('toast://'.length) || '解析失败');
             } else if (isMedia(result)) {
-              native({ type: 'play', url: result, title: item.title || item.name || '' });
+              sendPlay(result, item);
             } else if (/^https?:\/\//.test(result)) {
               native({ type: 'open', url: result, title: item.title || item.name || '' });
             } else if (result.indexOf('hiker://') === 0) {
@@ -282,14 +392,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       openDetail(url);
       return;
     }
-    native({ type: isMedia(url) ? 'play' : 'open', url: url,
-      title: item.title || item.name || '' });
+    if (isMedia(url)) { sendPlay(url, item); return; }
+    native({ type: 'open', url: url, title: itemTitle(item) });
   }
   function renderText(text) {
     listEl.innerHTML = '<div class="empty">' + escapeHtml(String(text).slice(0, 4000)) + '</div>';
   }
   function render(items) {
     if (!Array.isArray(items)) items = items ? [items] : [];
+    currentEpisodes = [];
+    detailTitle = '';
+    headItem = null;
+    if (isDetail) { renderDetail(items); return; }
     if (!items.length) {
       listEl.innerHTML = '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
       return;
@@ -300,29 +414,122 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       html = '<div class="grid">';
       items.forEach(function (it, index) {
         var pic = it.pic || it.img || it.cover || '';
-        var title = escapeHtml(it.title || it.name || '');
-        var desc = escapeHtml(it.desc || it.remarks || it.note || '');
+        var rawTitle = itemTitle(it);
+        var title = escapeHtml(rawTitle);
+        var ph = tileGlyph(rawTitle);
+        var desc = escapeHtml(itemDesc(it));
         html += '<div class="card" data-index="' + index + '">' +
           (pic
-            ? '<img class="pic" loading="lazy" src="' + escapeHtml(pic) + '" onerror="this.className=\'pic placeholder\';this.removeAttribute(\'src\');this.textContent=\'' + (title.slice(0, 1) || '·') + '\'">'
-            : '<div class="pic placeholder">' + (title.slice(0, 1) || '·') + '</div>') +
+            ? '<img class="pic" loading="lazy" src="' + escapeHtml(pic) + '" onerror="this.className=\'pic placeholder\';this.removeAttribute(\'src\');this.textContent=\'' + ph + '\'">'
+            : '<div class="pic placeholder">' + escapeHtml(ph) + '</div>') +
           '<div class="meta"><div class="title">' + title + '</div>' +
           (desc ? '<div class="desc">' + desc + '</div>' : '') +
           '</div></div>';
       });
       html += '</div>';
     } else {
-      html = '<div class="rows">';
+      // 无图列表（分类页等）：平铺网格，彩色字形块 + 名称，与海阔 tab 一致。
+      // 空标题仍显示“未命名”占位，块可点、条目不丢。
+      html = '<div class="tiles">';
       items.forEach(function (it, index) {
-        var desc = it.desc || it.remarks || it.note || '';
-        html += '<div class="row" data-index="' + index + '">' +
-          '<div class="idx">' + (index + 1) + '</div>' +
-          '<div class="txt"><div class="t">' + escapeHtml(it.title || it.name || '未命名') + '</div>' +
+        var name = itemTitle(it) || '未命名';
+        var desc = itemDesc(it);
+        html += '<div class="tile" data-index="' + index + '">' +
+          '<div class="glyph" style="background:' + tileColor(name) + '">' + escapeHtml(tileGlyph(name)) + '</div>' +
+          '<div class="t">' + escapeHtml(name) + '</div>' +
           (desc ? '<div class="d">' + escapeHtml(desc) + '</div>' : '') +
-          '</div></div>';
+          '</div>';
       });
       html += '</div>';
     }
+    listEl.innerHTML = html;
+    Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
+      el.addEventListener('click', function () {
+        openItem(items[Number(el.getAttribute('data-index'))]);
+      });
+    });
+  }
+  // 详情页渲染：按 col_type 把条目分成头项 / 章节头 / 简介正文 /
+  // 播放线路 / 选集，不再全画成统一卡片。每个条目仍保留一个
+  // data-index（点选行为与列表页一致；hiker://empty 的行点按无反应）。
+  function renderDetail(items) {
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
+      return;
+    }
+    // 头项：第一条带图、且不是选集/正文行的条目。
+    var headIndex = -1;
+    if (items.length > 1 && itemPic(items[0]) &&
+        !/^text_[2-9]$/.test(colTypeOf(items[0])) && colTypeOf(items[0]) !== 'rich_text') {
+      headIndex = 0;
+    }
+    var html = '';
+    var epGridOpen = false;
+    function closeEpGrid() { if (epGridOpen) { html += '</div>'; epGridOpen = false; } }
+    items.forEach(function (it, index) {
+      var col = colTypeOf(it);
+      var title = itemTitle(it);
+      var desc = itemDesc(it);
+      var url = (it && (it.url || it.link)) || '';
+      if (index === headIndex) {
+        detailTitle = title;
+        headItem = it;
+        var pic = itemPic(it);
+        html += '<div class="d-head" data-index="' + index + '">' +
+          (pic ? '<div class="bg" style="background-image:url(\'' + escapeHtml(pic) + '\')"></div>' : '') +
+          '<div class="fg">' +
+          (pic ? '<img class="poster" loading="lazy" src="' + escapeHtml(pic) + '">' : '') +
+          '<div class="info"><div class="t">' + escapeHtml(title) + '</div>' +
+          (desc ? '<div class="d">' + escapeHtml(desc) + '</div>' : '') +
+          '</div></div></div>';
+        return;
+      }
+      if (col === 'rich_text') {
+        closeEpGrid();
+        // 简介正文在 title 里，带 &nbsp; 缩进与 <br/> 换行：先换行、
+        // 去标签，再还原实体，最后转义后按 pre-wrap 显示。
+        var body = String((it && (it.title || it.desc)) || '');
+        body = body.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+        body = decodeEntities(body);
+        html += '<div class="d-desc" data-index="' + index + '">' + escapeHtml(body) + '</div>';
+        return;
+      }
+      if (col === 'text_center_1') {
+        closeEpGrid();
+        html += '<div class="d-sec center" data-index="' + index + '">' + escapeHtml(title) + '</div>';
+        return;
+      }
+      if (col === 'text_1') {
+        closeEpGrid();
+        html += '<div class="d-line" data-index="' + index + '"><span class="tag">线路</span><span>' + escapeHtml(title) + '</span></div>';
+        return;
+      }
+      if (/^text_[2-9]$/.test(col) || (col === '' && isPlayableUrl(url))) {
+        if (!epGridOpen) { html += '<div class="d-eps">'; epGridOpen = true; }
+        currentEpisodes.push(it);
+        var epPic = itemPic(it);
+        html += '<div class="ep' + (epPic ? '' : ' chip') + '" data-index="' + index + '">' +
+          (epPic ? '<img class="pic" loading="lazy" src="' + escapeHtml(epPic) + '">' : '') +
+          '<div class="lbl">' + escapeHtml(title || '选集') + '</div></div>';
+        return;
+      }
+      if (col === '' && !isPlayableUrl(url)) {
+        closeEpGrid();
+        html += '<div class="d-text" data-index="' + index + '">' + escapeHtml(title) +
+          (desc ? '<br>' + escapeHtml(desc) : '') + '</div>';
+        return;
+      }
+      // 兜底：未知形态按列表卡片画一张，不丢条目。
+      closeEpGrid();
+      var fbPic = itemPic(it);
+      var fbPh = tileGlyph(title);
+      html += '<div class="card" data-index="' + index + '">' +
+        (fbPic ? '<img class="pic" loading="lazy" src="' + escapeHtml(fbPic) + '">'
+          : '<div class="pic placeholder">' + escapeHtml(fbPh) + '</div>') +
+        '<div class="meta"><div class="title">' + escapeHtml(title) + '</div>' +
+        (desc ? '<div class="desc">' + escapeHtml(desc) + '</div>' : '') + '</div></div>';
+    });
+    closeEpGrid();
     listEl.innerHTML = html;
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
       el.addEventListener('click', function () {
@@ -512,10 +719,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // ---------- 全局环境 ----------
   function homeUrl() {
     var rawUrl = String((PROGRAM.rule && PROGRAM.rule.url) || PROGRAM.url || '');
-    var sepIndex = rawUrl.indexOf('##');
-    var myUrl = sepIndex >= 0 ? rawUrl.slice(sepIndex + 2) : rawUrl;
-    if (myUrl.indexOf('hiker://') === 0) myUrl = '';
-    return myUrl.replace('fypage', '1');
+    if (rawUrl.indexOf('##') >= 0) {
+      // 带 ## 占位符的规则地址原样交给规则：规则按 MY_URL.split('##')
+      // 自取分类与页码（与海阔一致）。不要在这里截掉前缀或把 fypage
+      // 换成 1——那样 split 出的 [1] 会变成 '1'，规则会把 '1' 当成
+      // 分类去拼地址，首页取数就空了（鉴黄师 v16 即因此空白）。
+      return rawUrl;
+    }
+    if (rawUrl.indexOf('hiker://') === 0) return '';
+    return rawUrl;
   }
   var MY_URL = homeUrl();
   var MY_RULE = PROGRAM.rule || {};
@@ -550,6 +762,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     navStack.push({ url: MY_URL, page: MY_PAGE });
     setGlobals(url, 1);
     showBack(true);
+    isDetail = true;
     listEl.innerHTML = '';
     runSource(detailScript());
   }
@@ -558,6 +771,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     showBack(navStack.length > 0);
     if (prev) setGlobals(prev.url, prev.page);
     else setGlobals(homeUrl(), 1);
+    isDetail = false;
     listEl.innerHTML = '';
     runSource(PROGRAM.script || '');
   }
@@ -614,9 +828,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   window.fypage = fypage;
   window.fyclass = fyclass;
 
+  // 供原生播放器切集：按详情选集序号重走点选同一集的完整链路
+  // （lazy 解析、saveFile、play 消息都与手动点选一致）。
+  window.__haikuoPlayEpisode = function (index) {
+    var it = currentEpisodes[Number(index)];
+    if (it) openItem(it);
+  };
+  window.__haikuoEpisodeCount = function () { return currentEpisodes.length; };
+
   function boot() {
     var backBtn = document.getElementById('backBtn');
     if (backBtn) backBtn.addEventListener('click', goBack);
+    isDetail = false;
     var source = String(PROGRAM.script || '');
     if (source.indexOf('js:') === 0) source = source.slice(3);
     if (!source.trim()) {

@@ -82,4 +82,98 @@ void main() {
     final reparsed = HaikuoCodec.parseJsonText(exported);
     expect(reparsed.single.name, '往返');
   });
+
+  Map<String, dynamic> ruleVersion(String title, String marker) => {
+    'title': title,
+    'type': 'video',
+    'url': 'hiker://empty##https://example.com/$title',
+    'col_type': 'movie_3',
+    'find_rule': 'js:\nsetResult([{title: "$marker"}]);',
+  };
+
+  test('同名不同内容：选替换则覆盖旧的，只留一份', () async {
+    await store.importText(jsonEncode(ruleVersion('同名', 'v1')));
+    final seen = <HaikuoDuplicate>[];
+    final result = await store.importText(
+      jsonEncode(ruleVersion('同名', 'v2')),
+      onDuplicates: (dups) async {
+        seen.addAll(dups);
+        return HaikuoDuplicateDecision.replace;
+      },
+    );
+    expect(seen, hasLength(1));
+    expect(seen.single.incoming.rawJson, contains('v2'));
+    expect(seen.single.existing.rawJson, contains('v1'));
+    expect(result.updated, hasLength(1));
+    expect(result.added, isEmpty);
+    final programs = await store.list();
+    expect(programs, hasLength(1));
+    expect(programs.single.name, '同名');
+    expect(programs.single.rawJson, contains('v2'));
+  });
+
+  test('同名不同内容：选保留两者则新条目改名 _2，旧的不动', () async {
+    await store.importText(jsonEncode(ruleVersion('同名', 'v1')));
+    final result = await store.importText(
+      jsonEncode(ruleVersion('同名', 'v2')),
+      onDuplicates: (_) async => HaikuoDuplicateDecision.keepBoth,
+    );
+    expect(result.added, hasLength(1));
+    final programs = await store.list();
+    expect(programs.map((p) => p.name).toSet(), {'同名', '同名_2'});
+    final kept = programs.firstWhere((p) => p.name == '同名_2');
+    expect(kept.rawJson, contains('v2'));
+    expect(
+      programs.firstWhere((p) => p.name == '同名').rawJson,
+      contains('v1'),
+    );
+    // 再来一个同名新版：_2 已被占，顺延成 _3。
+    await store.importText(
+      jsonEncode(ruleVersion('同名', 'v3')),
+      onDuplicates: (_) async => HaikuoDuplicateDecision.keepBoth,
+    );
+    expect(
+      (await store.list()).map((p) => p.name).toSet(),
+      {'同名', '同名_2', '同名_3'},
+    );
+  });
+
+  test('同名不同内容：选取消则整批都不导入', () async {
+    await store.importText(jsonEncode(ruleVersion('同名', 'v1')));
+    final result = await store.importText(
+      jsonEncode([ruleVersion('同名', 'v2'), _rule('新来的')]),
+      onDuplicates: (_) async => HaikuoDuplicateDecision.cancel,
+    );
+    expect(result.cancelled, isTrue);
+    expect(result.total, 0);
+    expect(result.summary, '已取消导入');
+    final programs = await store.list();
+    expect(programs, hasLength(1));
+    expect(programs.single.rawJson, contains('v1'));
+  });
+
+  test('同名不同内容：不传回调时默认保留两者', () async {
+    await store.importText(jsonEncode(ruleVersion('同名', 'v1')));
+    await store.importText(jsonEncode(ruleVersion('同名', 'v2')));
+    expect(
+      (await store.list()).map((p) => p.name).toSet(),
+      {'同名', '同名_2'},
+    );
+  });
+
+  test('同名同内容重复导入不问重复，直接更新', () async {
+    final payload = jsonEncode(ruleVersion('同名', 'v1'));
+    await store.importText(payload);
+    var asked = 0;
+    final second = await store.importText(
+      payload,
+      onDuplicates: (_) async {
+        asked++;
+        return HaikuoDuplicateDecision.replace;
+      },
+    );
+    expect(asked, 0);
+    expect(second.updated, hasLength(1));
+    expect(await store.list(), hasLength(1));
+  });
 }

@@ -86,25 +86,88 @@ class HaikuoStore {
     await temp.rename(file.path);
   }
 
+  /// 把一批小程序写进本地库。
+  ///
+  /// 同 id（同名同内容）重复导入只更新，不堆叠；新 id 但与库里已有条目
+  /// 同名时属于重复：经 [onDuplicates] 问用户一次（替换 / 保留两者 /
+  /// 取消），不传 [onDuplicates] 时默认保留两者（新条目改名 _2、_3…）。
+  /// 选取消则整批都不写入。
   Future<HaikuoImportResult> addAll(
     List<HaikuoProgram> incoming, {
     String origin = '',
+    Future<HaikuoDuplicateDecision> Function(List<HaikuoDuplicate> duplicates)?
+    onDuplicates,
   }) async {
     final existing = await list();
     final byId = {for (final program in existing) program.id: program};
+    final byName = <String, HaikuoProgram>{};
+    for (final program in existing) {
+      byName.putIfAbsent(program.name, () => program);
+    }
     final added = <HaikuoProgram>[];
     final updated = <HaikuoProgram>[];
+    final duplicates = <HaikuoDuplicate>[];
     for (final program in incoming) {
       final tagged = program.copyWith(
         origin: origin.isEmpty ? program.origin : origin,
       );
       final previous = byId[tagged.id];
-      if (previous == null) {
-        added.add(tagged);
-      } else {
+      if (previous != null) {
         updated.add(tagged);
+        byId[tagged.id] = tagged;
+        byName[tagged.name] = tagged;
+        continue;
       }
+      final sameName = byName[tagged.name];
+      if (sameName != null) {
+        duplicates.add(HaikuoDuplicate(incoming: tagged, existing: sameName));
+        continue;
+      }
+      added.add(tagged);
       byId[tagged.id] = tagged;
+      byName[tagged.name] = tagged;
+    }
+    if (duplicates.isNotEmpty) {
+      // 同一批里同一名字的多个新版只留最后一个，避免替换/保留时
+      // 互相覆盖后仍剩同名项。
+      final byDuplicateName = <String, HaikuoDuplicate>{};
+      for (final duplicate in duplicates) {
+        byDuplicateName[duplicate.incoming.name] = duplicate;
+      }
+      final effective = byDuplicateName.values.toList();
+      final decision =
+          await onDuplicates?.call(effective) ??
+          HaikuoDuplicateDecision.keepBoth;
+      switch (decision) {
+        case HaikuoDuplicateDecision.cancel:
+          return const HaikuoImportResult(
+            added: [],
+            updated: [],
+            cancelled: true,
+            notes: ['已取消导入'],
+          );
+        case HaikuoDuplicateDecision.replace:
+          for (final duplicate in effective) {
+            final tagged = duplicate.incoming;
+            // 按名字清掉全部同名旧项（含旧逻辑无提示堆出的重复项），
+            // 只留新导入的这一份。
+            byId.removeWhere(
+              (id, program) => program.name == tagged.name && id != tagged.id,
+            );
+            byId[tagged.id] = tagged;
+            byName[tagged.name] = tagged;
+            updated.add(tagged);
+          }
+        case HaikuoDuplicateDecision.keepBoth:
+          final taken = byName.keys.toSet();
+          for (final duplicate in effective) {
+            final renamed = _renameForKeepBoth(duplicate.incoming, taken);
+            taken.add(renamed.name);
+            byId[renamed.id] = renamed;
+            byName[renamed.name] = renamed;
+            added.add(renamed);
+          }
+      }
     }
     if (added.isEmpty && updated.isEmpty) {
       return HaikuoImportResult(added: const [], updated: const []);
@@ -119,6 +182,29 @@ class HaikuoStore {
     return HaikuoImportResult(added: added, updated: updated);
   }
 
+  /// 保留两者时的改名：原名 + _2，_2 已被占就往后顺延（_3、_4…）；
+  /// id 按新名重算，避免改名后的条目与原名条目 id 撞车。
+  HaikuoProgram _renameForKeepBoth(
+    HaikuoProgram program,
+    Set<String> taken,
+  ) {
+    var suffix = 2;
+    var name = '${program.name}_$suffix';
+    while (taken.contains(name)) {
+      suffix++;
+      name = '${program.name}_$suffix';
+    }
+    final body = program.rawJson.isNotEmpty
+        ? program.rawJson
+        : program.script.isNotEmpty
+        ? program.script
+        : program.url;
+    return program.copyWith(
+      name: name,
+      id: HaikuoProgram.makeId(name, body),
+    );
+  }
+
   Future<void> remove(String id) async {
     final programs = await list();
     final remaining = programs.where((program) => program.id != id).toList();
@@ -130,9 +216,17 @@ class HaikuoStore {
   }
 
   /// 导入本地 JSON 文件（.json / .txt / .zip / 口令文本都能吃）。
-  Future<HaikuoImportResult> importFile(File file) async {
+  Future<HaikuoImportResult> importFile(
+    File file, {
+    Future<HaikuoDuplicateDecision> Function(List<HaikuoDuplicate> duplicates)?
+    onDuplicates,
+  }) async {
     final bytes = await file.readAsBytes();
-    return importBytes(bytes, origin: '文件：${p.basename(file.path)}');
+    return importBytes(
+      bytes,
+      origin: '文件：${p.basename(file.path)}',
+      onDuplicates: onDuplicates,
+    );
   }
 
   /// 从内存字节导入：文件选择器在部分机型上拿不到路径时，
@@ -140,15 +234,19 @@ class HaikuoStore {
   Future<HaikuoImportResult> importBytes(
     List<int> bytes, {
     String origin = '文件',
+    Future<HaikuoDuplicateDecision> Function(List<HaikuoDuplicate> duplicates)?
+    onDuplicates,
   }) async {
     final programs = HaikuoCodec.parseBytes(bytes, origin: origin);
-    return addAll(programs, origin: origin);
+    return addAll(programs, origin: origin, onDuplicates: onDuplicates);
   }
 
   /// 导入一段文本：可能是 JSON 正文，也可能是口令。
   Future<HaikuoImportResult> importText(
     String text, {
     String origin = '文本',
+    Future<HaikuoDuplicateDecision> Function(List<HaikuoDuplicate> duplicates)?
+    onDuplicates,
   }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
@@ -162,12 +260,12 @@ class HaikuoStore {
       final resolved = HaikuoCodec.parseCloudApiResponse(
         HaikuoCodec.decodeText(bytes),
       );
-      return importText(resolved, origin: origin);
+      return importText(resolved, origin: origin, onDuplicates: onDuplicates);
     }
     // 纯 JSON 直接走解析，不需要联网。
     if (HaikuoCodec.looksLikeJson(trimmed)) {
       final programs = HaikuoCodec.parseText(trimmed, origin: origin);
-      return addAll(programs, origin: origin);
+      return addAll(programs, origin: origin, onDuplicates: onDuplicates);
     }
     final candidates = HaikuoCodec.extractCandidates(trimmed);
     final errors = <String>[];
@@ -175,7 +273,11 @@ class HaikuoStore {
       try {
         final programs = await _importCandidate(candidate, origin);
         if (programs.isNotEmpty) {
-          return await addAll(programs, origin: origin);
+          return await addAll(
+            programs,
+            origin: origin,
+            onDuplicates: onDuplicates,
+          );
         }
       } on HaikuoFormatException catch (error) {
         errors.add(error.message);
@@ -212,7 +314,11 @@ class HaikuoStore {
   }
 
   /// 从链接导入：可以是 JSON 直链、zip 包，也可以是口令页面。
-  Future<HaikuoImportResult> importUrl(String url) async {
+  Future<HaikuoImportResult> importUrl(
+    String url, {
+    Future<HaikuoDuplicateDecision> Function(List<HaikuoDuplicate> duplicates)?
+    onDuplicates,
+  }) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) {
       throw const HaikuoFormatException('链接为空');
@@ -246,7 +352,7 @@ class HaikuoStore {
         throw const HaikuoFormatException('这个链接里没有找到小程序 JSON');
       }
     }
-    return addAll(programs, origin: '链接');
+    return addAll(programs, origin: '链接', onDuplicates: onDuplicates);
   }
 
   Future<List<int>> _fetch(String url) async {
