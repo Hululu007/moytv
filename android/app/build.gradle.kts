@@ -134,7 +134,7 @@ dependencies {
     implementation("tv.danmaku.ijk.media:ijkplayer-java:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8")
-    implementation(name = "thunder-release", ext = "aar")
+    implementation(files("libs/thunder-release.aar"))
     testImplementation("junit:junit:4.13.2")
 }
 
