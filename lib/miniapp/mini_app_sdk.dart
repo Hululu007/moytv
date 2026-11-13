@@ -81,7 +81,9 @@ class MiniAppSdkScript {
   }
 
   window.ant = {
-    version: 1,
+    // 宿主 SDK 版本：4 = source.* + player.open（含 parse/jx 线路的
+    // 嗅探解析）。影视库按 ant.version >= 4 才放行解析线路。
+    version: 4,
     invoke: invoke,
     on: on,
     off: off,

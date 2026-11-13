@@ -482,11 +482,12 @@ class _CustomSourceEditorState extends State<_CustomSourceEditor> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.existing?.name ?? '');
-    _base = TextEditingController(text: widget.existing?.base ?? '');
-    _rule = TextEditingController(text: widget.existing?.rule ?? '');
-    _ruleMode = widget.existing?.hasRule ?? false;
-    _kind = widget.existing?.kind ?? '';
+    final seed = widget.existing;
+    _name = TextEditingController(text: seed?.name ?? '');
+    _base = TextEditingController(text: seed?.base ?? '');
+    _rule = TextEditingController(text: seed?.rule ?? '');
+    _ruleMode = seed?.hasRule ?? false;
+    _kind = seed?.kind ?? '';
     ensureTelevisionFocus(context);
   }
 

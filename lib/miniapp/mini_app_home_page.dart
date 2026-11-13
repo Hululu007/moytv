@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'mini_app_builtin.dart';
 import 'mini_app_host_page.dart';
 import 'mini_app_manifest.dart';
 import 'mini_app_runtime.dart';
@@ -59,6 +60,8 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       store: MiniAppStore(),
       settings: settings,
     );
+    // 内置小程序首次播种（火蚁TV 同款 17 个）：失败不拦页面。
+    await MiniAppBuiltin.ensureSeeded(runtime.store);
     final installed = await runtime.store.listInstalled();
     if (!mounted) return;
     setState(() {

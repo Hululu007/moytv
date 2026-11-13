@@ -347,16 +347,61 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
   }
 
   Future<void> _export(HaikuoProgram program) async {
-    final json = const JsonEncoder.withIndent('  ').convert({
-      'name': program.name,
-      'version': program.version,
-      'author': program.author,
-      'kind': program.kind.name,
-      'url': program.url,
-      'script': program.script,
-    });
-    await Clipboard.setData(ClipboardData(text: json));
+    // 复制完整规则 JSON（含 class/sort 等声明），不是重建的子集，
+    // 否则粘回去再导入会丢分类。能格式化就格式化，方便人读。
+    final raw = HaikuoCodec.shareJson(program);
+    var text = raw;
+    try {
+      text = const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
+    } on FormatException {
+      // 原始文本不是合法 JSON，原样复制。
+    }
+    await Clipboard.setData(ClipboardData(text: text));
     _snack('已复制「${program.name}」的 JSON 到剪贴板');
+  }
+
+  /// 生成口令分享：把规则编成官方 ￥ 口令，弹窗展示、可一键复制。
+  /// 对方在口令导入里粘贴即可认回（往返已由编解码测试覆盖）。
+  /// 云剪贴板 6 的上传接口未公开，这里不出假短码，只出本地口令。
+  Future<void> _shareCode(HaikuoProgram program) async {
+    final code = HaikuoCodec.buildShareCode(program);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('分享「${program.name}」'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '把下面这段口令发给对方，对方在海阔页点“导入口令”粘贴即可。',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              SelectableText(
+                code,
+                style: const TextStyle(fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: code));
+              if (context.mounted) Navigator.pop(context);
+              _snack('口令已复制到剪贴板');
+            },
+            child: const Text('复制口令'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -477,8 +522,7 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
         return _ProgramTile(
           program: program,
           onTap: () => _open(program),
-          onLongPress: () => _showInfo(program),
-          onMenu: () => _showActions(program),
+          onLongPress: () => _showActions(program),
         );
       },
     );
@@ -508,6 +552,11 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
               onTap: () => Navigator.pop(context, 'export'),
             ),
             ListTile(
+              leading: const Icon(Icons.share_rounded),
+              title: const Text('生成口令分享'),
+              onTap: () => Navigator.pop(context, 'share'),
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline_rounded),
               title: const Text('删除'),
               onTap: () => Navigator.pop(context, 'delete'),
@@ -523,6 +572,8 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
         _showInfo(program);
       case 'export':
         _export(program);
+      case 'share':
+        _shareCode(program);
       case 'delete':
         _delete(program);
     }
@@ -530,19 +581,19 @@ class _HaikuoHomePageState extends State<HaikuoHomePage> {
 }
 
 /// 平铺图标块：与「已安装」tab 的 _MiniAppTile 同一样式（58 圆角块 +
-/// 站名在下），另加一行小字副标题（作者 · 版本 · 类型）与角标 ⋮ 菜单。
+/// 站名在下），另加一行小字副标题（作者 · 版本 · 类型）。点按打开，
+/// 长按弹出操作（打开/详情/复制 JSON/生成口令分享/删除），图标上
+/// 不再放 ⋮ 角标按钮。
 class _ProgramTile extends StatelessWidget {
   const _ProgramTile({
     required this.program,
     required this.onTap,
     required this.onLongPress,
-    required this.onMenu,
   });
 
   final HaikuoProgram program;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
-  final VoidCallback onMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -555,43 +606,33 @@ class _ProgramTile extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [color, Color.lerp(color, Colors.black, 0.28)!],
-                  ),
-                  borderRadius: BorderRadius.circular(15),
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.28),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  _haikuoIconGlyph(program.name),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [color, Color.lerp(color, Colors.black, 0.28)!],
               ),
-              Positioned(
-                right: -6,
-                top: -6,
-                child: _TileMenuButton(onPressed: onMenu),
+              borderRadius: BorderRadius.circular(15),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.28),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _haikuoIconGlyph(program.name),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
               ),
-            ],
+            ),
           ),
           const SizedBox(height: 7),
           Text(
@@ -614,34 +655,6 @@ class _ProgramTile extends StatelessWidget {
             style: TextStyle(fontSize: 9.5, color: colors.onSurfaceVariant),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TileMenuButton extends StatelessWidget {
-  const _TileMenuButton({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.45),
-      shape: const CircleBorder(),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPressed,
-        customBorder: const CircleBorder(),
-        child: const SizedBox(
-          width: 22,
-          height: 22,
-          child: Icon(
-            Icons.more_vert_rounded,
-            size: 14,
-            color: Colors.white,
-          ),
-        ),
       ),
     );
   }

@@ -713,6 +713,28 @@ void main() {
       expect(truthy.containsKey('jx'), isFalse);
     });
 
+    test('解析线路字段 playUrl/jxFrom/key/flag 有则原样带上，无则不编', () {
+      final parsed = HostMiniAppSourceProvider.normalizePlayResult({
+        'url': 'https://site.example.com/play/123',
+        'parse': 1,
+        'playUrl': 'https://jx.example.com/?url=x',
+        'jxFrom': '解析源A',
+        'key': 'k1',
+        'flag': '线路1',
+      });
+      expect(parsed['playUrl'], 'https://jx.example.com/?url=x');
+      expect(parsed['jxFrom'], '解析源A');
+      expect(parsed['key'], 'k1');
+      expect(parsed['flag'], '线路1');
+      final direct = HostMiniAppSourceProvider.normalizePlayResult({
+        'url': 'https://a.example.com/v.mp4',
+      });
+      expect(direct.containsKey('playUrl'), isFalse);
+      expect(direct.containsKey('jxFrom'), isFalse);
+      expect(direct.containsKey('key'), isFalse);
+      expect(direct.containsKey('flag'), isFalse);
+    });
+
     test('classes alias mirrors class without overwriting', () {
       final aliased = HostMiniAppSourceProvider.withClassesAlias({
         'class': [

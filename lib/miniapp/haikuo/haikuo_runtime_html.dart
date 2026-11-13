@@ -30,12 +30,25 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     border: 1px solid rgba(177,75,255,.45); border-radius: 999px; padding: 2px 9px;
     background: transparent; cursor: pointer; white-space: nowrap;
   }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(102px, 1fr)); gap: 12px; }
+  .cats { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px;
+    scrollbar-width: none; }
+  .cats::-webkit-scrollbar { display: none; }
+  .cats.sub { padding-bottom: 12px; }
+  .cat { flex-shrink: 0; font-size: 12.5px; font-weight: 600; color: #D9CDEF;
+    border: 1px solid rgba(177,75,255,.35); border-radius: 999px; padding: 6px 14px;
+    background: rgba(25,16,41,.92); cursor: pointer; white-space: nowrap; }
+  .cat.on { color: #fff; background: linear-gradient(135deg, #B14BFF, #7C3AED);
+    border-color: transparent; box-shadow: 0 2px 10px rgba(177,75,255,.45); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
   .card {
     border-radius: 12px; overflow: hidden; background: rgba(25,16,41,.92);
     border: 1px solid rgba(177,75,255,.28); display: flex; flex-direction: column;
   }
   .card:active { transform: scale(.98); }
+  .card .picwrap { position: relative; }
+  .card .epbadge { position: absolute; left: 6px; bottom: 6px; font-size: 11px;
+    font-weight: 700; color: #fff; background: rgba(0,0,0,.62); border-radius: 6px;
+    padding: 2px 6px; }
   .card .pic {
     width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
     background: linear-gradient(160deg, #22143A, #150C26);
@@ -68,6 +81,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   .d-head .info { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
   .d-head .t { font-size: 17px; font-weight: 800; line-height: 1.4; }
   .d-head .d { margin-top: 6px; font-size: 12px; color: #D9CDEF; line-height: 1.5; }
+  .d-play { display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; margin: 0 0 14px; padding: 13px; font-size: 15px; font-weight: 800;
+    color: #fff; background: linear-gradient(135deg, #B14BFF, #7C3AED);
+    border: none; border-radius: 12px; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(177,75,255,.4); }
+  .d-play:active { transform: scale(.98); }
   .d-sec { display: flex; align-items: center; gap: 8px; margin: 16px 2px 8px;
     font-size: 13px; font-weight: 700; color: #E7DCF7; }
   .d-sec::before { content: ''; width: 3px; height: 14px; border-radius: 2px;
@@ -131,6 +150,85 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   var detailTitle = '';
   // 详情头项条目：点它等同于播第 1 集，play 消息同样带选集上下文。
   var headItem = null;
+  // 站内分类/筛选：只用规则真实声明的 class_name/class_url 与
+  // sort_name/sort_url（& 并列）。规则的 find_rule 从 MY_URL 的
+  // ## 分段读：pp[1] 是分类值、pp[3] 是排序值；area/year 没有
+  // 规则消费的分段约定，不渲染假行。'全部' = 空分类值，规则
+  // 按首页处理。仅当规则地址含 ## 机制时显示胶囊行。
+  var ruleCats = parseRulePairs('class_name', 'class_url');
+  var ruleSorts = parseRulePairs('sort_name', 'sort_url');
+  var selectedCls = '';
+  var selectedSort = ruleSorts.length ? ruleSorts[0].value : '';
+  function parseRulePairs(nameKey, urlKey) {
+    var rule = PROGRAM.rule || {};
+    var names = String(rule[nameKey] || '').split('&');
+    var urls = String(rule[urlKey] || '').split('&');
+    var out = [];
+    var n = Math.min(names.length, urls.length);
+    for (var i = 0; i < n; i++) {
+      var name = String(names[i]).replace(/^\s+|\s+$/g, '');
+      var value = String(urls[i]).replace(/^\s+|\s+$/g, '');
+      if (name && value) out.push({ name: name, value: value });
+    }
+    return out;
+  }
+  function hasCategoryRows() {
+    return ruleCats.length > 0 && homeUrl().indexOf('##') >= 0;
+  }
+  function categoryRowsHtml() {
+    if (!hasCategoryRows()) return '';
+    var html = '<div class="cats">';
+    html += '<button type="button" class="cat' + (selectedCls === '' ? ' on' : '') + '" onclick="__haikuoSelectCat(-1)">全部</button>';
+    ruleCats.forEach(function (c, i) {
+      html += '<button type="button" class="cat' + (selectedCls === c.value ? ' on' : '') + '" onclick="__haikuoSelectCat(' + i + ')">' + escapeHtml(c.name) + '</button>';
+    });
+    html += '</div>';
+    if (ruleSorts.length > 0) {
+      html += '<div class="cats sub">';
+      ruleSorts.forEach(function (s, i) {
+        html += '<button type="button" class="cat' + (selectedSort === s.value ? ' on' : '') + '" onclick="__haikuoSelectSort(' + i + ')">' + escapeHtml(s.name) + '</button>';
+      });
+      html += '</div>';
+    }
+    return html;
+  }
+  function reloadHome() {
+    var url = 'hiker://empty##' + selectedCls + '##1' + (selectedSort ? '##' + selectedSort : '');
+    setGlobals(url, 1);
+    try { window.fyclass = selectedCls; } catch (e) {}
+    navStack.length = 0;
+    showBack(false);
+    isDetail = false;
+    listEl.innerHTML = '';
+    runSource(PROGRAM.script);
+  }
+  window.__haikuoSelectCat = function (index) {
+    selectedCls = index < 0 ? '' : (ruleCats[index] ? ruleCats[index].value : '');
+    reloadHome();
+  };
+  window.__haikuoSelectSort = function (index) {
+    selectedSort = ruleSorts[index] ? ruleSorts[index].value : '';
+    reloadHome();
+  };
+  function selectedCatName() {
+    if (selectedCls === '') return '';
+    for (var i = 0; i < ruleCats.length; i++) {
+      if (ruleCats[i].value === selectedCls) return ruleCats[i].name;
+    }
+    return '';
+  }
+  // 集数徽标：只认条目自带的信息——显式集数字段，或 desc/备注里
+  // 的“共N集/更新至N集/全N集”；没有就不显示，绝不编一个数。
+  function episodeBadge(it) {
+    if (!it) return '';
+    var n = it.episodeCount || it.totalEpisodes || it.episodes;
+    if (typeof n === 'number' && n > 0) return '共' + n + '集';
+    var text = String(it.desc || it.remarks || it.note || '');
+    var m = text.match(/共\s*(\d+)\s*集/) || text.match(/更新至\s*(?:第)?(\d+)\s*集/) ||
+      text.match(/全\s*(\d+)\s*集/) || text.match(/(\d+)\s*集\s*全/);
+    if (m) return '共' + m[1] + '集';
+    return '';
+  }
 
   function native(payload) {
     try { window.HaikuoNative.postMessage(JSON.stringify(payload)); } catch (e) {}
@@ -331,6 +429,17 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var u = String(url || '');
     return u !== '' && u.indexOf('hiker://empty') !== 0;
   }
+  // “立即播放”的目标：优先第一集；无选集时，只有头项本身带
+  // lazy 解析或直链媒体地址才算可播——普通详情链接点按只会
+  // 再次打开详情，不能当播放目标（否则按钮点了没反应）。
+  function firstPlayTarget() {
+    if (currentEpisodes.length) return currentEpisodes[0];
+    if (!headItem) return null;
+    var u = String((headItem.url || headItem.link) || '');
+    if (u.indexOf('@lazyRule=') >= 0) return headItem;
+    if (typeof isMedia === 'function' && isMedia(u)) return headItem;
+    return null;
+  }
   // 详情选集上下文：被点的条目是当前选集之一时，play 消息带上
   // 全部选集标题 + 序号 + 剧名，原生播放器据此显示选集面板。
   function episodeContext(item) {
@@ -404,24 +513,30 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     detailTitle = '';
     headItem = null;
     if (isDetail) { renderDetail(items); return; }
+    var rowsHtml = categoryRowsHtml();
     if (!items.length) {
-      listEl.innerHTML = '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
+      listEl.innerHTML = rowsHtml + '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
       return;
     }
     var hasPic = items.some(function (it) { return it && (it.pic || it.img || it.cover); });
-    var html = '';
+    var html = rowsHtml;
     if (hasPic) {
-      html = '<div class="grid">';
+      html += '<div class="grid">';
       items.forEach(function (it, index) {
         var pic = it.pic || it.img || it.cover || '';
         var rawTitle = itemTitle(it);
         var title = escapeHtml(rawTitle);
         var ph = tileGlyph(rawTitle);
-        var desc = escapeHtml(itemDesc(it));
+        var descText = itemDesc(it) || selectedCatName();
+        var desc = escapeHtml(descText);
+        var badge = episodeBadge(it);
+        var picHtml = pic
+          ? '<img class="pic" loading="lazy" src="' + escapeHtml(pic) + '" onerror="this.className=\'pic placeholder\';this.removeAttribute(\'src\');this.textContent=\'' + ph + '\'">'
+          : '<div class="pic placeholder">' + escapeHtml(ph) + '</div>';
         html += '<div class="card" data-index="' + index + '">' +
-          (pic
-            ? '<img class="pic" loading="lazy" src="' + escapeHtml(pic) + '" onerror="this.className=\'pic placeholder\';this.removeAttribute(\'src\');this.textContent=\'' + ph + '\'">'
-            : '<div class="pic placeholder">' + escapeHtml(ph) + '</div>') +
+          '<div class="picwrap">' + picHtml +
+          (badge ? '<span class="epbadge">' + escapeHtml(badge) + '</span>' : '') +
+          '</div>' +
           '<div class="meta"><div class="title">' + title + '</div>' +
           (desc ? '<div class="desc">' + desc + '</div>' : '') +
           '</div></div>';
@@ -430,7 +545,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     } else {
       // 无图列表（分类页等）：平铺网格，彩色字形块 + 名称，与海阔 tab 一致。
       // 空标题仍显示“未命名”占位，块可点、条目不丢。
-      html = '<div class="tiles">';
+      html += '<div class="tiles">';
       items.forEach(function (it, index) {
         var name = itemTitle(it) || '未命名';
         var desc = itemDesc(it);
@@ -482,6 +597,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
           '<div class="info"><div class="t">' + escapeHtml(title) + '</div>' +
           (desc ? '<div class="d">' + escapeHtml(desc) + '</div>' : '') +
           '</div></div></div>';
+        // 播放按钮占位：循环结束、选集数已知后才决定是否画按钮。
+        html += '<!--HAIKUO_PLAYBTN-->';
         return;
       }
       if (col === 'rich_text') {
@@ -530,6 +647,19 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         (desc ? '<div class="desc">' + escapeHtml(desc) + '</div>' : '') + '</div></div>';
     });
     closeEpGrid();
+    // 详情播放按钮：有选集（或头项本身可播）才画，点它播第一集，
+    // 走与点选集同一条 openItem→sendPlay 链路。有头项时贴在头项
+    // 下方；无头项时放详情最上方。
+    var playTarget = firstPlayTarget();
+    var playBtn = '';
+    if (playTarget) {
+      playBtn = '<button type="button" class="d-play" onclick="__haikuoPlayFirst()">▶ 立即播放</button>';
+    }
+    if (html.indexOf('<!--HAIKUO_PLAYBTN-->') >= 0) {
+      html = html.replace('<!--HAIKUO_PLAYBTN-->', playBtn);
+    } else if (playBtn) {
+      html = playBtn + html;
+    }
     listEl.innerHTML = html;
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
       el.addEventListener('click', function () {
@@ -835,6 +965,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (it) openItem(it);
   };
   window.__haikuoEpisodeCount = function () { return currentEpisodes.length; };
+  // 详情页“立即播放”按钮：播第一集（无选集时播头项本身），与
+  // 手动点选第一集同一条链路。
+  window.__haikuoPlayFirst = function () {
+    var it = firstPlayTarget();
+    if (it) openItem(it);
+  };
 
   function boot() {
     var backBtn = document.getElementById('backBtn');

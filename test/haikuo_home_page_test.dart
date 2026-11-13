@@ -65,7 +65,7 @@ void main() {
     expect(find.textContaining('规则'), findsWidgets);
   });
 
-  testWidgets('长按弹出详情，包含来源与脚本长度', (tester) async {
+  testWidgets('长按弹出操作菜单，点详情显示来源与脚本长度', (tester) async {
     await tester.runAsync(
       () => store.importText(
         jsonEncode([
@@ -82,12 +82,15 @@ void main() {
     await tester.longPress(find.text('详情源'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('详情'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('类型：规则'), findsOneWidget);
     expect(find.text('来源：口令'), findsOneWidget);
     expect(find.textContaining('脚本长度'), findsOneWidget);
   });
 
-  testWidgets('已导入的规则以网格平铺，角标菜单含四项操作', (tester) async {
+  testWidgets('已导入的规则以网格平铺，长按菜单含五项操作、无角标按钮', (tester) async {
     await tester.runAsync(
       () => store.importText(
         jsonEncode([
@@ -106,11 +109,13 @@ void main() {
     expect(find.byType(GridView), findsOneWidget);
     expect(find.text('测试海阔源'), findsOneWidget);
     expect(find.textContaining('规则'), findsWidgets);
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    await tester.longPress(find.text('测试海阔源'));
     await tester.pumpAndSettle();
     expect(find.text('打开'), findsOneWidget);
     expect(find.text('详情'), findsOneWidget);
     expect(find.text('复制 JSON'), findsOneWidget);
+    expect(find.text('生成口令分享'), findsOneWidget);
     expect(find.text('删除'), findsOneWidget);
   });
 

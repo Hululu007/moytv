@@ -5,6 +5,7 @@ import 'content_detail_screen.dart';
 import 'content_models.dart';
 import 'content_registry.dart';
 import 'core_bridge.dart';
+import 'global_search_service.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'novel_reader_page.dart';
@@ -87,25 +88,16 @@ List<GlobalVideoGroup> groupGlobalVideoResults(
   return groups;
 }
 
-class _BookGroup {
-  _BookGroup({
-    required this.section,
-    required this.source,
-    required this.items,
-  });
-
-  final String section;
-  final ContentSource source;
-  final List<ContentBook> items;
-}
-
 class _GlobalSearchPageState extends State<GlobalSearchPage> {
   late final _controller = TextEditingController(text: widget.initialQuery);
   bool _loading = false;
   String _error = '';
   bool _searched = false;
   List<GlobalVideoGroup> _videoGroups = const [];
-  List<_BookGroup> _bookGroups = const [];
+  List<GlobalSearchBookGroup> _bookGroups = const [];
+
+  /// 搜索代次：连续发起两次搜索时，过期那次的结果不写回界面。
+  int _searchGeneration = 0;
 
   @override
   void initState() {
@@ -122,6 +114,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
   Future<void> _search() async {
     final query = _controller.text.trim();
     if (query.isEmpty) return;
+    final generation = ++_searchGeneration;
     setState(() {
       _loading = true;
       _error = '';
@@ -135,31 +128,18 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
         videoPage.items,
         widget.store.sources,
       );
-      final bookGroups = <_BookGroup>[];
-      for (final entry in [
-        ('听书', ContentRegistry.sourcesFor(ContentSection.audio)),
-        ('阅读', ContentRegistry.sourcesFor(ContentSection.novel)),
-      ]) {
-        for (final source in entry.$2) {
-          try {
-            final page = await source.search(query, 1);
-            if (page.items.isNotEmpty) {
-              bookGroups.add(
-                _BookGroup(
-                  section: entry.$1,
-                  source: source,
-                  items: page.items,
-                ),
-              );
-            }
-          } catch (_) {}
-        }
-      }
-      if (!mounted) return;
+      // 阅读侧：注册表全量收录，并行搜、单站超时隔离（见
+      // global_search_service.dart）；视频侧仍走 searchAcross。
+      final bookTargets = globalSearchBookTargets(
+        audioSources: ContentRegistry.sourcesFor(ContentSection.audio),
+        novelSources: ContentRegistry.sourcesFor(ContentSection.novel),
+      );
+      final bookGroups = await searchReadingTargets(query, bookTargets);
+      if (!mounted || generation != _searchGeneration) return;
       bookGroups.sort((a, b) {
         final rank = globalSearchSectionRank(
-          a.section,
-        ).compareTo(globalSearchSectionRank(b.section));
+          a.section.title,
+        ).compareTo(globalSearchSectionRank(b.section.title));
         return rank != 0 ? rank : a.source.name.compareTo(b.source.name);
       });
       setState(() {
@@ -168,7 +148,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
         _bookGroups = bookGroups;
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && generation == _searchGeneration) {
         setState(() {
           _loading = false;
           _error = '搜索失败，请重试';
@@ -191,7 +171,9 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
       if (!sections.contains(group.section)) sections.add(group.section);
     }
     for (final group in _bookGroups) {
-      if (!sections.contains(group.section)) sections.add(group.section);
+      if (!sections.contains(group.section.title)) {
+        sections.add(group.section.title);
+      }
     }
     sections.sort(
       (a, b) =>
@@ -282,7 +264,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
                       ),
                     ],
                     for (final group in _bookGroups.where(
-                      (g) => g.section == section,
+                      (g) => g.section.title == section,
                     )) ...[
                       Padding(
                         padding: const EdgeInsets.only(top: 8, bottom: 4),
@@ -349,11 +331,11 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
     );
   }
 
-  Widget _bookCard(_BookGroup group, ContentBook book) {
+  Widget _bookCard(GlobalSearchBookGroup group, ContentBook book) {
     final colors = Theme.of(context).colorScheme;
     return InkWell(
       onTap: () {
-        if (group.section == '阅读') {
+        if (group.section == ContentSection.novel) {
           Navigator.of(context).push(
             appPageRoute(
               builder: (_) => NovelReaderPage(source: group.source, book: book),

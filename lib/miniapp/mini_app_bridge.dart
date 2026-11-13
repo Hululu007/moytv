@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../playback_sniffer.dart';
 import 'mini_app_manifest.dart';
 import 'mini_app_sources.dart';
 
@@ -33,6 +34,8 @@ class MiniAppBridgeCallbacks {
     required this.openMiniApp,
     required this.resolveMiniAppUrl,
     required this.log,
+    this.openPlayer,
+    this.playerState,
   });
 
   final Future<void> Function(String js) evaluateJavascript;
@@ -51,6 +54,84 @@ class MiniAppBridgeCallbacks {
   final Future<void> Function(String appId) openMiniApp;
   final Future<String?> Function(String appId) resolveMiniAppUrl;
   final void Function(String message) log;
+
+  /// 播放器桥：宿主收到解析好的播放目标后调起宿主播放器（或先嗅探
+  /// 再播），返回 true 表示确实打开了播放器。未提供时 player.open
+  /// 报 NOT_IMPLEMENTED。
+  final Future<bool> Function(MiniAppPlayTarget target)? openPlayer;
+
+  /// 播放器当前状态快照（opened/url/title/playing/positionMs/
+  /// durationMs）；未提供时 player.getState 回 opened:false。
+  final Map<String, dynamic> Function()? playerState;
+}
+
+/// 小程序 player.open 的入参（影视库 lib.js 的 playEpisode 形态）。
+class MiniAppPlayRequest {
+  const MiniAppPlayRequest({
+    required this.url,
+    this.title = '',
+    this.headers = const {},
+    this.parse = '',
+    this.jx = '',
+    this.playUrl = '',
+    this.flag = '',
+    this.jxFrom = '',
+    this.key = '',
+  });
+
+  factory MiniAppPlayRequest.fromParams(Map<String, dynamic> params) {
+    final headers = <String, String>{};
+    final rawHeaders = params['headers'] ?? params['header'];
+    if (rawHeaders is Map) {
+      rawHeaders.forEach((key, value) {
+        if (value != null) headers[key.toString()] = value.toString();
+      });
+    }
+    String text(Object? value) => value?.toString() ?? '';
+    return MiniAppPlayRequest(
+      url: text(params['url']),
+      title: text(params['title']),
+      headers: headers,
+      parse: text(params['parse']),
+      jx: text(params['jx']),
+      playUrl: text(params['playUrl']),
+      flag: text(params['flag']),
+      jxFrom: text(params['jxFrom']),
+      key: text(params['key']),
+    );
+  }
+
+  final String url;
+  final String title;
+  final Map<String, String> headers;
+  final String parse;
+  final String jx;
+  final String playUrl;
+  final String flag;
+  final String jxFrom;
+  final String key;
+
+  bool get needsParse => parse == '1' || jx == '1';
+}
+
+/// 解析好的播放目标：宿主按 kind 分流。
+/// direct：直链地址，直接进播放器；sniff：网页/解析线路地址，
+/// 先过嗅探页找流再播。
+class MiniAppPlayTarget {
+  const MiniAppPlayTarget({
+    required this.kind,
+    required this.url,
+    this.title = '',
+    this.headers = const {},
+  });
+
+  final String kind;
+  final String url;
+  final String title;
+  final Map<String, String> headers;
+
+  bool get isDirect => kind == 'direct';
+  bool get isSniff => kind == 'sniff';
 }
 
 class MiniAppBridge {
@@ -165,7 +246,7 @@ class MiniAppBridge {
       case 'env.getSystemInfo':
         return <String, dynamic>{
           'platform': defaultTargetPlatform.name,
-          'sdkVersion': 1,
+          'sdkVersion': 4,
           'isTV': false,
           'devMode': kDebugMode,
         };
@@ -294,11 +375,10 @@ class MiniAppBridge {
           ),
         );
       case 'player.open':
+        return _playerOpen(params);
       case 'player.getState':
-        throw MiniAppApiException(
-          'NOT_IMPLEMENTED',
-          '播放器桥未接：宿主播放器暂未开放给小程序',
-        );
+        return callbacks.playerState?.call() ??
+            const <String, dynamic>{'opened': false};
       case 'python.call':
         throw MiniAppApiException(
           'NOT_IMPLEMENTED',
@@ -328,6 +408,67 @@ class MiniAppBridge {
     } catch (error) {
       throw MiniAppApiException('SOURCE_FAILED', '采集源调用失败：$error');
     }
+  }
+
+  /// player.open：解析播放目标后交给宿主播放回调。回调返回 true
+  /// 才算打开了播放器（嗅探页被用户取消时返回 false，不报错）。
+  Future<Map<String, dynamic>> _playerOpen(
+    Map<String, dynamic> params,
+  ) async {
+    final request = MiniAppPlayRequest.fromParams(params);
+    if (request.url.isEmpty) {
+      throw MiniAppApiException('INVALID_PARAMS', '播放地址为空');
+    }
+    final openPlayer = callbacks.openPlayer;
+    if (openPlayer == null) {
+      throw MiniAppApiException(
+        'NOT_IMPLEMENTED',
+        '播放器桥未接：宿主未提供播放器回调',
+      );
+    }
+    final target = MiniAppBridge.resolvePlayTarget(request);
+    final opened = await openPlayer(target);
+    return <String, dynamic>{
+      'opened': opened,
+      'kind': target.kind,
+      'url': target.url,
+    };
+  }
+
+  /// 播放目标分流（纯函数，可单测）：
+  /// 1. parse/jx == '1' 是蜘蛛的权威声明：地址是网页/解析线路，
+  ///    走嗅探；有 playUrl（解析服务地址）就嗅探它，否则嗅探 url。
+  ///    这一条优先于媒体特征判断——解析地址里常嵌着 .mp4 串，
+  ///    不能只看特征就直放。
+  /// 2. 无解析声明且地址本身是媒体地址 → 直播。
+  /// 3. 其余非媒体地址 → 嗅探页（页面上找流，用户也能在候选里挑）。
+  static MiniAppPlayTarget resolvePlayTarget(MiniAppPlayRequest request) {
+    if (request.needsParse) {
+      final target = request.playUrl.isNotEmpty &&
+              request.playUrl.startsWith('http')
+          ? request.playUrl
+          : request.url;
+      return MiniAppPlayTarget(
+        kind: 'sniff',
+        url: target,
+        title: request.title,
+        headers: request.headers,
+      );
+    }
+    if (MediaSniffer.isMediaUrl(request.url)) {
+      return MiniAppPlayTarget(
+        kind: 'direct',
+        url: request.url,
+        title: request.title,
+        headers: request.headers,
+      );
+    }
+    return MiniAppPlayTarget(
+      kind: 'sniff',
+      url: request.url,
+      title: request.title,
+      headers: request.headers,
+    );
   }
 
   /// 按契约字段名取参，顺带认几个常见别名；取不到给空串，

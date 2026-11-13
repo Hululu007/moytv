@@ -123,6 +123,29 @@ class MiniAppStore {
     return _promote(staging, target, manifest);
   }
 
+  /// 只带一份 manifest.json 的小程序（manifest-only 在线站点型）：
+  /// 落盘只写 manifest.json，不解包。内置播种用，与火蚁TV 同款。
+  Future<MiniAppManifest> installFromManifestJson(
+    String manifestJson,
+  ) async {
+    final decoded = jsonDecode(manifestJson);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('manifest.json 不合法');
+    }
+    final manifest = MiniAppManifest.fromJson(decoded);
+    if (!manifest.isValid) {
+      throw const FormatException('manifest.json 不合法');
+    }
+    final base = await root;
+    final target = Directory(p.join(base.path, manifest.appId));
+    if (await target.exists()) await target.delete(recursive: true);
+    await target.create(recursive: true);
+    await File(
+      p.join(target.path, 'manifest.json'),
+    ).writeAsString(jsonEncode(manifest.toJson()));
+    return manifest;
+  }
+
   Future<MiniAppManifest> _installArchive(Archive archive) async {
     for (final entry in archive.files) {
       if (!isSafeZipEntryName(entry.name)) {

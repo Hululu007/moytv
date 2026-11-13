@@ -512,12 +512,12 @@ void main() {
       );
     });
 
-    test('env returns sdk version 1', () async {
+    test('env returns sdk version 4 (player bridge + sniff-backed parse lines)', () async {
       const manifest = MiniAppManifest(appId: 'com.example.a', name: 'A');
       final bridge = makeBridge(manifest);
       final info = await bridge.invoke('env.getSystemInfo', {});
       expect(info, isA<Map<String, dynamic>>());
-      expect(info['sdkVersion'], 1);
+      expect(info['sdkVersion'], 4);
     });
   });
 

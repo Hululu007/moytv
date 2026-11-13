@@ -175,4 +175,65 @@ void main() {
       expect(parsed.map((p) => p.name), contains('吾爱破解'));
     });
   });
+
+  group('生成口令分享', () {
+    test('生成的口令走现有导入路径能原样认回，分类声明不丢', () {
+      final ruleJson = jsonEncode({
+        'title': '口令往返源',
+        'author': '皇帝影院',
+        'version': '3',
+        'url': 'hiker://empty##fyclass##fypage',
+        'class_name': '中文字幕&国产传媒',
+        'class_url': '7&8',
+        'sort_name': '最新&最热',
+        'sort_url': 'latest&hot',
+        'find_rule': 'js:\nsetResult([{title:"a", url:"https://a.com/1.m3u8"}]);',
+      });
+      final program = HaikuoCodec.parseText(ruleJson).single;
+      final code = HaikuoCodec.buildShareCode(program);
+      expect(code.startsWith('海阔视界规则分享，当前分享的是：小程序￥home_rule￥'), isTrue);
+      expect(code.endsWith('￥'), isTrue);
+      // 走与正式导入同一条路径：extractCandidates 逐个试 parseText。
+      final reparsed = <HaikuoProgram>[];
+      for (final candidate in HaikuoCodec.extractCandidates(code)) {
+        try {
+          reparsed.addAll(HaikuoCodec.parseText(candidate));
+        } on HaikuoFormatException {
+          // 分段候选里有残缺片段，跳过即可。
+        }
+      }
+      expect(reparsed, isNotEmpty);
+      final back = reparsed.firstWhere((p) => p.name == '口令往返源');
+      expect(back.script, contains('setResult'));
+      expect(back.url, 'hiker://empty##fyclass##fypage');
+      // 原始 JSON 原样进了载荷：分类/排序声明在 rawJson 里都在。
+      expect(back.rawJson, contains('class_name'));
+      expect(back.rawJson, contains('sort_url'));
+    });
+
+    test('没有原始 JSON 的程序也能生成可导入的口令', () {
+      final program = HaikuoProgram(
+        id: 'test-manual',
+        name: '手写源',
+        author: '某人',
+        version: '1',
+        url: 'https://example.com/list',
+        script: 'setResult([{title:"x"}]);',
+      );
+      final code = HaikuoCodec.buildShareCode(program);
+      final reparsed = <HaikuoProgram>[];
+      for (final candidate in HaikuoCodec.extractCandidates(code)) {
+        try {
+          reparsed.addAll(HaikuoCodec.parseText(candidate));
+        } on HaikuoFormatException {
+          // 分段候选里有残缺片段，跳过即可。
+        }
+      }
+      expect(reparsed.map((p) => p.name), contains('手写源'));
+      expect(
+        reparsed.firstWhere((p) => p.name == '手写源').script,
+        contains('setResult'),
+      );
+    });
+  });
 }

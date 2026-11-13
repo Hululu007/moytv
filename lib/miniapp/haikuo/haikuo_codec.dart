@@ -524,6 +524,41 @@ abstract final class HaikuoCodec {
     return data;
   }
 
+  /// 生成口令分享：把一条规则编成官方 ￥ 口令形态
+  /// `海阔视界规则分享，当前分享的是：小程序￥home_rule￥<载荷>￥`，
+  /// 载荷是规则 JSON 的 base64。现有导入（extractCandidates →
+  /// parseBytes → tryBase64）能原样认回，往返不丢字段。
+  ///
+  /// 载荷优先用规则的原始 JSON（rawJson，含 class/sort 等声明）；
+  /// 没有原始 JSON 时按导入器认的字段重建一份最小规则对象。
+  /// 云剪贴板 6 的上传接口未公开（官网无文档），这里不编假短码，
+  /// 只出本地口令：对方在口令导入里粘贴即可。
+  static String buildShareCode(HaikuoProgram program) {
+    final payload = base64Encode(utf8.encode(shareJson(program)));
+    return '海阔视界规则分享，当前分享的是：小程序￥home_rule￥$payload￥';
+  }
+
+  /// 口令载荷用的规则 JSON 文本（buildShareCode 与“复制 JSON”共用）。
+  static String shareJson(HaikuoProgram program) {
+    final raw = program.rawJson.trim();
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return raw;
+      } on FormatException {
+        // 原始文本不是合法 JSON，往下重建。
+      }
+    }
+    final map = <String, dynamic>{
+      'title': program.name,
+      if (program.author.isNotEmpty) 'author': program.author,
+      if (program.version.isNotEmpty) 'version': program.version,
+      if (program.url.isNotEmpty) 'url': program.url,
+      if (program.script.isNotEmpty) 'script': program.script,
+    };
+    return jsonEncode(map);
+  }
+
   static bool looksLikeJson(String text) {
     final trimmed = text.trim();
     return trimmed.startsWith('{') || trimmed.startsWith('[');

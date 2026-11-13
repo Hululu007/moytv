@@ -42,6 +42,12 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      - name: 从分片拼回 drpy-node 内置小程序（59MB 大文件走不了接口上传）
+        run: |
+          cat drpy_chunks/com.leospring.drpy_node.zip.part-* > assets/miniapps/builtin/com.leospring.drpy_node.zip
+          ls -l assets/miniapps/builtin/com.leospring.drpy_node.zip
+          echo "6c47c482170f07d9911ff7257405e8f6  assets/miniapps/builtin/com.leospring.drpy_node.zip" | md5sum -c -
+
       - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:

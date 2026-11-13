@@ -395,7 +395,9 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   }
 
   /// 取流结果归一成契约形状：url（取不到时看 playUrl）、header 一律
-  /// Map、parse/jx 有则归一成 '1'/'0' 字符串、无则不编。
+  /// Map、parse/jx 有则归一成 '1'/'0' 字符串、无则不编。解析线路
+  /// 的 playUrl/jxFrom/key/flag 有则原样带上，宿主播放桥靠它们决定
+  /// 嗅探目标；没有就不编，不替蜘蛛编解析服务地址。
   static Map<String, dynamic> normalizePlayResult(Map<String, dynamic> raw) {
     var url = raw['url']?.toString() ?? '';
     if (url.isEmpty) url = raw['playUrl']?.toString() ?? '';
@@ -414,6 +416,12 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     }
     if (raw.containsKey('jx')) {
       result['jx'] = _parseFlagString(raw['jx']);
+    }
+    for (final key in const ['playUrl', 'jxFrom', 'key', 'flag']) {
+      final value = raw[key];
+      if (value != null && value.toString().isNotEmpty) {
+        result[key] = value.toString();
+      }
     }
     return result;
   }

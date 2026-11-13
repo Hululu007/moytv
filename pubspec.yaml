@@ -66,5 +66,6 @@ flutter:
     - assets/jar_site_configs.json
     - assets/haikuo_samples.json
     - assets/haikuo_builtin_rules.json
+    - assets/miniapps/builtin/
     - assets/novel_covers/
     - assets/ant_logo.png

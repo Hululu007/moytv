@@ -4,11 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'app_page_route.dart';
+import 'audio_background.dart';
+import 'audio_capsule.dart';
 import 'audio_history.dart';
+import 'audio_media_session.dart';
 import 'content_models.dart';
 import 'core_bridge.dart';
 import 'novel_cover.dart';
 import 'novel_reader_page.dart';
+import 'playback_foreground.dart';
 import 'reading_bookshelf.dart';
 
 class ContentDetailScreen extends StatefulWidget {
@@ -43,7 +47,8 @@ String _formatAudioTime(Duration value) {
   return '$mm:$ss';
 }
 
-class _ContentDetailScreenState extends State<ContentDetailScreen> {
+class _ContentDetailScreenState extends State<ContentDetailScreen>
+    with WidgetsBindingObserver {
   ContentBookDetail? _detail;
   String _error = '';
   bool _loading = true;
@@ -65,6 +70,20 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
   int _lastSavedPositionMs = -1;
   final List<StreamSubscription<dynamic>> _subs = [];
 
+  // 听书后台三件的状态。
+  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
+  final ManualPauseTracker _manualPause = ManualPauseTracker();
+  bool _mediaPublished = false;
+  bool _capsuleVisible = false;
+  int _lastMediaStateAtMs = 0;
+
+  /// 当前有没有在播的听书曲目（小说区永远为假，三件只对听书生效）。
+  bool get _audioActive =>
+      widget.source.section == ContentSection.audio &&
+      _detail != null &&
+      _playingIndex >= 0 &&
+      _playingIndex < _detail!.chapters.length;
+
   Widget _coverBox(
     ContentBook book,
     ColorScheme colors,
@@ -84,12 +103,15 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    AudioMediaSession.setActionHandler(_onMediaAction);
     unawaited(_loadShelved());
     unawaited(_loadAudioState());
     _subs.addAll([
       _player.stream.position.listen((value) {
         if (mounted) setState(() => _position = value);
         unawaited(_saveResumeThrottled());
+        _publishMediaStateThrottled();
       }),
       _player.stream.duration.listen((value) {
         if (mounted) setState(() => _duration = value);
@@ -97,6 +119,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
       }),
       _player.stream.playing.listen((value) {
         if (mounted) setState(() => _playing = value);
+        unawaited(_syncBackgroundOutputs());
       }),
       _player.stream.completed.listen((completed) {
         if (completed == true) {
@@ -119,12 +142,150 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    AudioMediaSession.setActionHandler(null);
+    unawaited(_releaseBackgroundOutputs());
     unawaited(_saveResumeNow());
     for (final sub in _subs) {
       sub.cancel();
     }
     _player.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
+    if (!_audioActive) return;
+    if (state == AppLifecycleState.resumed) {
+      // 回前台只同步状态，永不自动播放：播着的本来就没停，
+      // 手动暂停过的不替用户恢复（见 shouldAutoPlayOnResume）。
+      try {
+        final current = _player.state;
+        if (mounted) {
+          setState(() {
+            _playing = current.playing;
+            _position = current.position;
+            _duration = current.duration;
+          });
+        }
+      } catch (_) {}
+      unawaited(_syncBackgroundOutputs());
+    } else if (isAudioBackgroundState(state)) {
+      // 切后台不暂停播放：前台服务保活，播放器继续播。
+      unawaited(_saveResumeNow());
+      unawaited(_syncBackgroundOutputs());
+    } else if (state == AppLifecycleState.detached) {
+      unawaited(_saveResumeNow());
+      unawaited(_releaseBackgroundOutputs());
+    }
+  }
+
+  /// 锁屏按键回落：锁屏上点的暂停同样算手动暂停，点播放算用户意图播放。
+  void _onMediaAction(String action) {
+    if (!mounted || !_audioActive) return;
+    switch (action) {
+      case 'play':
+        if (!_playing && !_trackLoading) {
+          _manualPause.userPlayed();
+          unawaited(_player.play());
+        }
+      case 'pause':
+        if (_playing) {
+          _manualPause.userPaused();
+          unawaited(_player.pause());
+        }
+      case 'previous':
+        if (_playingIndex > 0) _prev();
+      case 'next':
+        _next();
+    }
+  }
+
+  AudioLockscreenInfo _lockscreenInfo() {
+    final detail = _detail!;
+    return AudioLockscreenInfo(
+      bookTitle: detail.book.title,
+      chapterTitle: detail.chapters[_playingIndex].title,
+      coverUrl: detail.book.cover,
+      playing: _playing,
+      positionMs: _position.inMilliseconds,
+      durationMs: _duration.inMilliseconds,
+      hasPrevious: _playingIndex > 0,
+      hasNext: _playingIndex + 1 < detail.chapters.length,
+      rate: _rate,
+    );
+  }
+
+  /// 三路输出同步：前台服务保活 + 锁屏界面 + 胶囊显隐。
+  /// 暂停时也发布锁屏界面（显示播放按钮）；胶囊只在后台且在播时出现。
+  Future<void> _syncBackgroundOutputs() async {
+    if (!_audioActive) return;
+    final info = _lockscreenInfo();
+    if (_playing) {
+      unawaited(PlaybackForeground.acquire(widget.book.title));
+    } else {
+      unawaited(PlaybackForeground.release());
+    }
+    _mediaPublished = await AudioMediaSession.publish(info);
+    unawaited(_refreshCapsule());
+  }
+
+  /// 锁屏进度刷新：播着时每 5 秒推一次播放态，避免每帧都过通道。
+  void _publishMediaStateThrottled() {
+    if (!_audioActive || !_playing || !_mediaPublished) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastMediaStateAtMs < 5000) return;
+    _lastMediaStateAtMs = now;
+    unawaited(
+      AudioMediaSession.updateState(
+        playing: true,
+        positionMs: _position.inMilliseconds,
+        durationMs: _duration.inMilliseconds,
+        rate: _rate,
+      ),
+    );
+  }
+
+  /// 胶囊显隐：后台 + 在播 + 悬浮窗权限，三件齐了才显示；
+  /// 任一不满足就藏起，只留通知栏控制，不反复要权限。
+  Future<void> _refreshCapsule() async {
+    final backgrounded = isAudioBackgroundState(_lifecycleState);
+    final want = _audioActive && _playing && backgrounded;
+    if (want) {
+      final granted = await AudioCapsule.isPermissionGranted();
+      if (!mounted) return;
+      if (granted &&
+          isAudioBackgroundState(_lifecycleState) &&
+          _playing &&
+          _audioActive) {
+        final detail = _detail!;
+        final ready = await AudioCapsule.ensureService();
+        if (!mounted) return;
+        if (ready) {
+          final shown = await AudioCapsule.show(
+            title: detail.book.title,
+            chapter: detail.chapters[_playingIndex].title,
+            playing: true,
+          );
+          _capsuleVisible = shown;
+          return;
+        }
+      }
+    }
+    if (_capsuleVisible) {
+      _capsuleVisible = false;
+      await AudioCapsule.hide();
+    }
+  }
+
+  /// 撤掉三路输出：前台服务标记、锁屏界面、胶囊服务。
+  Future<void> _releaseBackgroundOutputs() async {
+    _mediaPublished = false;
+    _capsuleVisible = false;
+    unawaited(PlaybackForeground.release());
+    await AudioMediaSession.release();
+    await AudioCapsule.stop();
   }
 
   Future<void> _loadAudioState() async {
@@ -349,9 +510,11 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
       await _player.open(Media(track.url));
       await _player.setRate(_rate);
       await _player.play();
+      _manualPause.userPlayed();
       if (mounted) {
         setState(() => _trackLoading = false);
         unawaited(_saveChapterStart(index));
+        unawaited(_syncBackgroundOutputs());
       }
     } on AppFailure catch (e) {
       _pendingSeek = null;
@@ -387,8 +550,10 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
   Future<void> _toggle() async {
     if (_trackLoading || _playingIndex < 0) return;
     if (_playing) {
+      _manualPause.userPaused();
       await _player.pause();
     } else {
+      _manualPause.userPlayed();
       await _player.play();
     }
   }
@@ -400,6 +565,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
 
   Future<void> _stop() async {
     _pendingSeek = null;
+    _manualPause.stopped();
     await _saveResumeNow();
     await _player.stop();
     if (mounted) {
@@ -412,6 +578,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
         _trackError = '';
       });
     }
+    await _releaseBackgroundOutputs();
   }
 
   void _openNovelReader([int? chapterIndex]) {
@@ -467,7 +634,8 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                           width: 40,
                           height: 40,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _coverBox(book, colors, 40, 40),
+                          errorBuilder: (_, _, _) =>
+                              _coverBox(book, colors, 40, 40),
                         )
                       : _coverBox(book, colors, 40, 40),
                 ),
@@ -500,96 +668,95 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                 ),
               ],
             ),
-              if (_trackError.isNotEmpty)
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _trackError,
-                        style: TextStyle(color: colors.error),
-                      ),
-                    ),
-                    FilledButton(
-                      onPressed: () => _playChapter(_playingIndex),
-                      child: const Text('重试'),
-                    ),
-                  ],
-                ),
+            if (_trackError.isNotEmpty)
               Row(
                 children: [
-                  Text(_formatAudioTime(_position)),
                   Expanded(
-                    child: Slider(
-                      value: posMs,
-                      max: maxMs,
-                      onChanged: (value) {
+                    child: Text(
+                      _trackError,
+                      style: TextStyle(color: colors.error),
+                    ),
+                  ),
+                  FilledButton(
+                    onPressed: () => _playChapter(_playingIndex),
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            Row(
+              children: [
+                Text(_formatAudioTime(_position)),
+                Expanded(
+                  child: Slider(
+                    value: posMs,
+                    max: maxMs,
+                    onChanged: (value) {
                       _pendingSeek = null;
-                        _player.seek(Duration(milliseconds: value.toInt()));
-                      },
-                    ),
+                      _player.seek(Duration(milliseconds: value.toInt()));
+                    },
                   ),
-                  Text(_formatAudioTime(_duration)),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    tooltip: '上一集',
-                    icon: const Icon(Icons.skip_previous_rounded),
-                    onPressed: _playingIndex > 0 ? _prev : null,
-                  ),
-                  const SizedBox(width: 12),
-                  _trackLoading
-                      ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : IconButton(
-                          tooltip: _playing ? '暂停' : '播放',
-                          iconSize: 40,
-                          icon: Icon(
-                            _playing
-                                ? Icons.pause_circle_filled_rounded
-                                : Icons.play_circle_filled_rounded,
-                          ),
-                          onPressed: _toggle,
+                ),
+                Text(_formatAudioTime(_duration)),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  tooltip: '上一集',
+                  icon: const Icon(Icons.skip_previous_rounded),
+                  onPressed: _playingIndex > 0 ? _prev : null,
+                ),
+                const SizedBox(width: 12),
+                _trackLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         ),
-                  const SizedBox(width: 12),
-                  IconButton(
-                    tooltip: '下一集',
-                    icon: const Icon(Icons.skip_next_rounded),
-                    onPressed:
-                        _playingIndex + 1 < detail.chapters.length
-                            ? () => _next()
-                            : null,
-                  ),
-                  const SizedBox(width: 12),
-                  PopupMenuButton<double>(
-                    tooltip: '倍速',
-                    initialValue: _rate,
-                    onSelected: _setRate,
-                    itemBuilder: (_) => [
-                      for (final rate in [0.75, 1.0, 1.25, 1.5, 2.0])
-                        PopupMenuItem(value: rate, child: Text('${rate}x')),
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 12,
+                      )
+                    : IconButton(
+                        tooltip: _playing ? '暂停' : '播放',
+                        iconSize: 40,
+                        icon: Icon(
+                          _playing
+                              ? Icons.pause_circle_filled_rounded
+                              : Icons.play_circle_filled_rounded,
+                        ),
+                        onPressed: _toggle,
                       ),
-                      child: Text('${_rate}x'),
+                const SizedBox(width: 12),
+                IconButton(
+                  tooltip: '下一集',
+                  icon: const Icon(Icons.skip_next_rounded),
+                  onPressed: _playingIndex + 1 < detail.chapters.length
+                      ? () => _next()
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                PopupMenuButton<double>(
+                  tooltip: '倍速',
+                  initialValue: _rate,
+                  onSelected: _setRate,
+                  itemBuilder: (_) => [
+                    for (final rate in [0.75, 1.0, 1.25, 1.5, 2.0])
+                      PopupMenuItem(value: rate, child: Text('${rate}x')),
+                  ],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
                     ),
+                    child: Text('${_rate}x'),
                   ),
-                ],
-              ),
-            ],
-          ),
+                ),
+              ],
+            ),
+          ],
         ),
+      ),
     );
   }
 
@@ -598,7 +765,8 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
     final colors = Theme.of(context).colorScheme;
     final book = _detail?.book ?? widget.book;
     final detailNote = _detail?.note ?? '';
-    final showNote = detailNote.isNotEmpty &&
+    final showNote =
+        detailNote.isNotEmpty &&
         detailNote.trim().replaceAll(RegExp(r'\s+'), ' ') !=
             book.intro.trim().replaceAll(RegExp(r'\s+'), ' ');
     return Scaffold(
@@ -680,7 +848,8 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                               fontSize: 12,
                             ),
                           ),
-                          if (widget.source.section == ContentSection.novel) ...[
+                          if (widget.source.section ==
+                              ContentSection.novel) ...[
                             const SizedBox(height: 10),
                             Align(
                               alignment: Alignment.centerLeft,
@@ -689,9 +858,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                                 children: [
                                   FilledButton.icon(
                                     onPressed: () => _openNovelReader(),
-                                    icon: const Icon(
-                                      Icons.menu_book_outlined,
-                                    ),
+                                    icon: const Icon(Icons.menu_book_outlined),
                                     label: const Text('阅读'),
                                   ),
                                   FilledButton.icon(
@@ -704,15 +871,14 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                                           ? Icons.bookmark
                                           : Icons.bookmark_border,
                                     ),
-                                    label: Text(
-                                      _shelved ? '移出书架' : '加入书架',
-                                    ),
+                                    label: Text(_shelved ? '移出书架' : '加入书架'),
                                   ),
                                 ],
                               ),
                             ),
                           ],
-                          if (widget.source.section == ContentSection.audio) ...[
+                          if (widget.source.section ==
+                              ContentSection.audio) ...[
                             const SizedBox(height: 10),
                             Align(
                               alignment: Alignment.centerLeft,

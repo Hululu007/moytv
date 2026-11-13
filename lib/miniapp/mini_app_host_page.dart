@@ -13,6 +13,8 @@ import 'mini_app_manifest.dart';
 import 'mini_app_runtime.dart';
 import 'mini_app_sdk.dart';
 import 'mini_app_settings.dart';
+import '../playback_sniffer.dart';
+import 'haikuo/haikuo_runner_page.dart';
 
 class MiniAppHostPage extends StatefulWidget {
   const MiniAppHostPage({
@@ -35,6 +37,8 @@ class MiniAppHostPage extends StatefulWidget {
 class _MiniAppHostPageState extends State<MiniAppHostPage> {
   WebViewController? _controller;
   MiniAppInstance? _instance;
+  MiniAppBridge? _bridge;
+  Map<String, dynamic> _playerState = const {'opened': false};
   String? _error;
   bool _loading = true;
   bool _showLoadingOverlay = false;
@@ -170,8 +174,11 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
           },
           resolveMiniAppUrl: (appId) => widget.runtime.resolveUrl(appId),
           log: (message) => debugPrint(message),
+          openPlayer: _openPlayer,
+          playerState: () => Map<String, dynamic>.from(_playerState),
         ),
       );
+      _bridge = bridge;
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.transparent)
@@ -213,6 +220,72 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
         });
       }
     }
+  }
+
+  /// 播放器桥的宿主实现：直链直接进播放页；网页/解析线路先过
+  /// 嗅探页找到流再播。播放页与海阔共用同一套控件层（HaikuoPlayPage）。
+  /// 返回 true 表示确实打开了播放器；嗅探页被用户取消时返回 false。
+  Future<bool> _openPlayer(MiniAppPlayTarget target) async {
+    if (!mounted) return false;
+    var url = target.url;
+    if (target.isSniff) {
+      final found = await _sniffPlayTarget(target);
+      if (found == null || found.isEmpty) return false;
+      url = found;
+    }
+    if (!mounted) return false;
+    _playerState = <String, dynamic>{
+      'opened': true,
+      'url': url,
+      'title': target.title,
+      'playing': false,
+      'positionMs': 0,
+      'durationMs': 0,
+    };
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => HaikuoPlayPage(
+          url: url,
+          title: target.title,
+          headers: target.headers,
+          onStateChange: (state) {
+            _playerState = Map<String, dynamic>.from(state);
+            unawaited(_bridge?.emit('player.stateChange', _playerState));
+          },
+        ),
+      ),
+    );
+    _playerState = const {'opened': false};
+    unawaited(_bridge?.emit('player.close', {'url': url}));
+    return true;
+  }
+
+  /// 嗅探页找流：自动播放模式，第一个候选地址一出现就回填并关页；
+  /// 用户直接返回则回 null（不播、不报错）。
+  Future<String?> _sniffPlayTarget(MiniAppPlayTarget target) async {
+    final completer = Completer<String?>();
+    var active = true;
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => SniffWebViewPage(
+          pageUrl: target.url,
+          headers: target.headers,
+          autoPlay: true,
+          onMediaFound: (found) {
+            if (!completer.isCompleted) completer.complete(found);
+            if (active && mounted) {
+              active = false;
+              Navigator.pop(context);
+            }
+          },
+        ),
+      ),
+    );
+    active = false;
+    if (!completer.isCompleted) completer.complete(null);
+    return completer.future;
   }
 
   Future<NavigationDecision> _decideNavigation(String url) async {

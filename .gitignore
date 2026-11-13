@@ -59,3 +59,6 @@ windows/flutter/ephemeral/
 reading_bookshelf_previews/
 drawer_preview/
 android/app/.cxx/
+
+# drpy-node built-in miniapp: 59MB file cannot go through the API upload; repo stores chunks only, CI reassembles
+assets/miniapps/builtin/com.leospring.drpy_node.zip

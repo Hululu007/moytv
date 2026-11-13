@@ -504,6 +504,8 @@ class HaikuoPlayPage extends StatefulWidget {
     this.initialIndex = 0,
     this.controller,
     this.onSelectEpisode,
+    this.headers = const {},
+    this.onStateChange,
   });
 
   final String url;
@@ -520,6 +522,14 @@ class HaikuoPlayPage extends StatefulWidget {
 
   /// 点选第 index 集时调用：回到运行页解析该集地址，返回是否按时递达。
   final Future<bool> Function(int index)? onSelectEpisode;
+
+  /// 取流请求头（蜘蛛回的 header 原样带上，如 Referer/UA）。
+  final Map<String, String> headers;
+
+  /// 播放状态变化回调（小程序播放桥用）：每次播/停切换与整秒
+  /// 进度变化时上报 {opened, url, title, playing, positionMs,
+  /// durationMs}；不传则不上报。
+  final ValueChanged<Map<String, dynamic>>? onStateChange;
 
   @override
   State<HaikuoPlayPage> createState() => _HaikuoPlayPageState();
@@ -556,6 +566,9 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<bool>? _completedSubscription;
+  StreamSubscription<bool>? _playingSubscription;
+  int _lastReportedSecond = -1;
+  bool _lastReportedPlaying = false;
 
   late String _url = widget.url;
   late String _title = widget.title;
@@ -588,11 +601,37 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     });
     _positionSubscription = _player.stream.position.listen((_) {
       unawaited(_speedTracker.tick());
+      _reportState();
     });
     _completedSubscription = _player.stream.completed.listen((completed) {
       if (completed && _hasNext) _switchEpisode(_index + 1);
     });
+    _playingSubscription = _player.stream.playing.listen((_) {
+      _reportState();
+    });
     _open();
+  }
+
+  /// 给 onStateChange 上报当前状态：播/停切换必报，进度只在整秒
+  /// 变化时报，避免每帧刷回调。
+  void _reportState() {
+    final report = widget.onStateChange;
+    if (report == null || !mounted) return;
+    final state = _player.state;
+    final second = state.position.inSeconds;
+    if (second == _lastReportedSecond && state.playing == _lastReportedPlaying) {
+      return;
+    }
+    _lastReportedSecond = second;
+    _lastReportedPlaying = state.playing;
+    report(<String, dynamic>{
+      'opened': true,
+      'url': _url,
+      'title': _displayTitle,
+      'playing': state.playing,
+      'positionMs': state.position.inMilliseconds,
+      'durationMs': state.duration.inMilliseconds,
+    });
   }
 
   @override
@@ -607,6 +646,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     unawaited(_errorSubscription?.cancel());
     unawaited(_positionSubscription?.cancel());
     unawaited(_completedSubscription?.cancel());
+    unawaited(_playingSubscription?.cancel());
     _interactions.dispose();
     _speedTracker.dispose();
     _focus.dispose();
@@ -618,8 +658,9 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
 
   Future<void> _open() async {
     try {
-      await _player.open(Media(_url));
+      await _player.open(Media(_url, httpHeaders: widget.headers));
       await _player.setRate(_speed);
+      _reportState();
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '$error');

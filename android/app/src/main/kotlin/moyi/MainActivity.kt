@@ -243,6 +243,8 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(IjkPlayerPlugin())
         JarBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         FloatingWindowPlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        AudioMediaPlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        AudioCapsulePlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         ProxyKernelBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         val bridge = PyBridge(this)

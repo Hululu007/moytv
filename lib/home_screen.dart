@@ -42,6 +42,7 @@ import 'rankings_screen.dart';
 import 'detail_screen.dart';
 import 'folder_catalog_screen.dart';
 import 'global_search_page.dart';
+import 'web_scrape_page.dart';
 import 'fullscreen_feed_screen.dart';
 import 'hongguo_drama_home.dart';
 import 'import_file_store.dart';
@@ -2435,9 +2436,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 IconButton(
+                  key: const ValueKey('web-scrape'),
+                  tooltip: '网页爬取',
+                  icon: const Icon(Icons.travel_explore_rounded),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      appPageRoute(
+                        builder: (_) => const WebScrapePage(),
+                      ),
+                    );
+                  },
+                ),
+                IconButton(
                   key: const ValueKey('global-search'),
                   tooltip: '全局搜索',
-                  icon: const Icon(Icons.travel_explore_rounded),
+                  icon: const Icon(Icons.manage_search_rounded),
                   onPressed: () {
                     Navigator.of(context).push(
                       appPageRoute(
