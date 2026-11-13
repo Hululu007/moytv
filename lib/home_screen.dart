@@ -75,6 +75,12 @@ bool shouldSilentRefreshOnRestore(DateTime? fetchedAt, DateTime now) {
   return now.difference(fetchedAt) >= const Duration(minutes: 5);
 }
 
+/// 全局路由观察器：首页订阅它感知“上方路由弹出、首页重新成为当前页”
+/// （didPopNext），用于识别返回过渡中的重复投递。MaterialApp 需把它
+/// 放进 navigatorObservers；没放时首页收不到事件，退化为无保护的旧行为。
+final RouteObserver<ModalRoute<dynamic>> homeRouteObserver =
+    RouteObserver<ModalRoute<dynamic>>();
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.repository, required this.store});
   final AppRepository repository;
@@ -105,8 +111,14 @@ typedef _SectionSnapshot = ({
   Map<String, String> selectedFilters,
 });
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
   static const _recommendationCategory = 'app:recommendations';
+  // 返回保护期：上方路由弹出后 400ms 内到达的返回，视为同一手势的
+  // 重复投递，不吞区历史（播放页弹出过渡 220ms，留足余量；人有意
+  // 识的第二次按压一般在 400ms 之后，不受影响）。
+  static const _returnGrace = Duration(milliseconds: 400);
+  bool _justReturned = false;
+  Timer? _returnGraceTimer;
   final _search = TextEditingController();
   final _scroll = ScrollController();
   bool _resetScrollOnNextLoad = false;
@@ -977,6 +989,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _returnGraceTimer?.cancel();
+    homeRouteObserver.unsubscribe(this);
     _updater.removeListener(_updateChanged);
     _updater.dispose();
     _liveRepository.dispose();
@@ -1381,6 +1395,27 @@ class _HomeScreenState extends State<HomeScreen> {
     _applyZoneChange(previous);
     return true;
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      homeRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPopNext() {
+    // 上方路由弹出、首页重新成为当前页：进入短暂保护期。
+    _returnGraceTimer?.cancel();
+    _justReturned = true;
+    _returnGraceTimer = Timer(_returnGrace, () {
+      if (mounted) _justReturned = false;
+    });
+  }
+
+  bool get _settlingAfterPop => _justReturned;
 
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
@@ -2307,6 +2342,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   setState(() => _searchVisible = false);
                   _search.clear();
                   _searchChanged('');
+                } else if (_settlingAfterPop) {
+                  // 上方路由（播放页等）弹出过渡还没跑完：首页尚未落定，
+                  // 此时到达的返回是同一手势的重复投递，不得吞区历史，
+                  // 否则点播播完返回会落到短剧区。落定后的返回照常退区。
                 } else {
                   _popZoneHistory();
                 }

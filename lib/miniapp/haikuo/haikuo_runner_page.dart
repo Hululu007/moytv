@@ -12,8 +12,10 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../app_orientation.dart';
 import '../../app_theme.dart';
 import '../../network_speed.dart';
+import '../../playback_preferences.dart';
 import '../../player_controls.dart';
 import '../../player_interactions.dart';
+import '../../video_output_size.dart';
 import 'haikuo_codec.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runtime_html.dart';
@@ -76,6 +78,21 @@ HaikuoPlayRoute resolvePlayRoute({
   return HaikuoPlayRoute.push;
 }
 
+/// 非全屏播放器槽位高度：按视频宽高比适配，竖屏视频不再被压进
+/// 固定的 16:9 槽位里。上限取可用高度的 56%（与主播放器移动端
+/// 同一比例），给下方的详情/选集留位置；宽高比未知或非法时
+/// 回落 16:9（与旧行为一致）。
+double haikuoSlotHeight({
+  required double aspectRatio,
+  required double maxWidth,
+  required double maxHeight,
+}) {
+  final ratio = aspectRatio.isFinite && aspectRatio > 0
+      ? aspectRatio
+      : 16 / 9;
+  return (maxWidth / ratio).clamp(0.0, maxHeight * 0.56);
+}
+
 /// 一次详情页内嵌播放的参数：播放器槽位据此建 [HaikuoPlayerView]。
 class _InlinePlay {
   const _InlinePlay({
@@ -109,6 +126,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   // 详情页内嵌播放：非空时播放器顶在 WebView 上方，海报墙由 JS 藏起。
   _InlinePlay? _inline;
   bool _inlineFullscreen = false;
+  // 内嵌视频的宽高比（videoParams 到达前默认 16:9）：槽位按它算高，
+  // 竖屏视频不再被压进 16:9 槽位。
+  double _inlineAspectRatio = 16 / 9;
   // 代理请求共用一个 HttpClient：连接复用（keep-alive），反复取数
   // 不再每次重建 TCP+TLS；页面关闭时才关掉。
   HttpClient? _httpClient;
@@ -308,6 +328,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         index: index,
       );
       _inlineFullscreen = false;
+      // 新视频的宽高比未知：先回 16:9，videoParams 到达后再按实调。
+      _inlineAspectRatio = 16 / 9;
     });
     unawaited(_setInlinePlaying(true));
   }
@@ -567,7 +589,11 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                             ? 0
                             : _inlineFullscreen
                             ? constraints.maxHeight
-                            : constraints.maxWidth * 9 / 16,
+                            : haikuoSlotHeight(
+                                aspectRatio: _inlineAspectRatio,
+                                maxWidth: constraints.maxWidth,
+                                maxHeight: constraints.maxHeight,
+                              ),
                         child: inline == null
                             ? null
                             : HaikuoPlayerView(
@@ -583,6 +609,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                                   () => _inlineFullscreen = value,
                                 ),
                                 onClose: _closeInlinePlayer,
+                                onAspectRatioChanged: (ratio) => setState(
+                                  () => _inlineAspectRatio = ratio,
+                                ),
                               ),
                       ),
                       Expanded(child: WebViewWidget(controller: _controller!)),
@@ -668,6 +697,8 @@ class HaikuoPlayerView extends StatefulWidget {
     required this.onFullscreenChanged,
     this.onClose,
     this.onCurrentChanged,
+    this.onAspectRatioChanged,
+    this.orientationMode = PlaybackOrientationMode.auto,
     this.playerFactory,
     this.videoBuilder,
   });
@@ -707,6 +738,14 @@ class HaikuoPlayerView extends StatefulWidget {
   /// 当前集/标题变化时通知宿主（播放页下方的选集条据此高亮）。
   final void Function(int index, String title)? onCurrentChanged;
 
+  /// 视频宽高比变化时通知宿主（宿主据此调整非全屏槽位高度，
+  /// 竖屏视频不再被压进 16:9 槽位）。未知时不报，宿主用默认 16:9。
+  final ValueChanged<double>? onAspectRatioChanged;
+
+  /// 全屏方向模式：与主播放器同一套设置（自动跟视频方向/强制
+  /// 竖屏/强制横屏）。默认自动：竖屏视频全屏进竖屏、横屏进横屏。
+  final PlaybackOrientationMode orientationMode;
+
   /// 测试注入播放器：默认直接 new Player()。
   final Player Function()? playerFactory;
 
@@ -735,6 +774,7 @@ class HaikuoPlayPage extends StatefulWidget {
     this.onSelectEpisode,
     this.headers = const {},
     this.onStateChange,
+    this.orientationMode = PlaybackOrientationMode.auto,
     this.playerFactory,
     this.videoBuilder,
   });
@@ -761,6 +801,9 @@ class HaikuoPlayPage extends StatefulWidget {
   /// 进度变化时上报 {opened, url, title, playing, positionMs,
   /// durationMs}；不传则不上报。
   final ValueChanged<Map<String, dynamic>>? onStateChange;
+
+  /// 全屏方向模式：与主播放器同一套设置，默认自动跟视频方向。
+  final PlaybackOrientationMode orientationMode;
 
   /// 测试注入播放器：默认直接 new Player()。
   final Player Function()? playerFactory;
@@ -804,12 +847,16 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<VideoParams>? _videoParamsSubscription;
   int _lastReportedSecond = -1;
   bool _lastReportedPlaying = false;
 
   late String _url = widget.url;
   late String _title = widget.title;
   late int _index = widget.initialIndex;
+  // 视频宽高比：videoParams 到达前默认 16:9（与旧槽位一致），
+  // 到达后按真实尺寸算，竖屏视频全屏进竖屏、槽位按比例加高。
+  double _aspectRatio = 16 / 9;
   double _speed = 1.0;
   String? _error;
   bool _resolving = false;
@@ -845,6 +892,19 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     });
     _playingSubscription = _player.stream.playing.listen((_) {
       _reportState();
+    });
+    _videoParamsSubscription = _player.stream.videoParams.listen((params) {
+      final size = videoDisplaySize(params);
+      if (size == null || !mounted) return;
+      final ratio = size.width / size.height;
+      if (ratio <= 0 || !ratio.isFinite || ratio == _aspectRatio) return;
+      final wasLandscape = _aspectRatio >= 1;
+      setState(() => _aspectRatio = ratio);
+      widget.onAspectRatioChanged?.call(ratio);
+      // 横竖边翻了、且正在全屏：重落方向，竖屏视频不再被锁横屏。
+      if (widget.fullscreen && wasLandscape != (ratio >= 1)) {
+        unawaited(_applyFullscreen(true));
+      }
     });
     _open();
   }
@@ -893,6 +953,7 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     unawaited(_positionSubscription?.cancel());
     unawaited(_completedSubscription?.cancel());
     unawaited(_playingSubscription?.cancel());
+    unawaited(_videoParamsSubscription?.cancel());
     _interactions.dispose();
     _speedTracker.dispose();
     _focus.dispose();
@@ -946,18 +1007,22 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
   }
 
   Future<void> _applyFullscreen(bool fullscreen) async {
+    // 方向跟视频真实宽高比（与主播放器一致）：竖屏视频全屏进竖屏，
+    // 横屏进横屏；以前写死 16:9，竖屏视频一律被锁横屏。
     if (fullscreen) {
       await _orientation?.setPlayback(
         this,
         fullscreen: true,
-        aspectRatio: 16 / 9,
+        aspectRatio: _aspectRatio,
+        mode: widget.orientationMode,
       );
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
       await _orientation?.setPlayback(
         this,
         fullscreen: false,
-        aspectRatio: 16 / 9,
+        aspectRatio: _aspectRatio,
+        mode: widget.orientationMode,
       );
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
@@ -1231,6 +1296,8 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
 
 class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
   bool _fullscreen = false;
+  // 视频宽高比（videoParams 到达前默认 16:9）：槽位按它算高。
+  double _aspectRatio = 16 / 9;
   late int _currentIndex = _clampIndex(widget.initialIndex);
   late String _currentTitle = widget.title;
 
@@ -1265,6 +1332,8 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
         _currentIndex = index;
         _currentTitle = title;
       }),
+      onAspectRatioChanged: (ratio) => setState(() => _aspectRatio = ratio),
+      orientationMode: widget.orientationMode,
       playerFactory: widget.playerFactory,
       videoBuilder: widget.videoBuilder,
     );
@@ -1327,7 +1396,11 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
                     SizedBox(
                       height: _fullscreen
                           ? constraints.maxHeight
-                          : constraints.maxWidth * 9 / 16,
+                          : haikuoSlotHeight(
+                              aspectRatio: _aspectRatio,
+                              maxWidth: constraints.maxWidth,
+                              maxHeight: constraints.maxHeight,
+                            ),
                       child: _playerView(),
                     ),
                     if (!_fullscreen) Expanded(child: _belowVideo()),

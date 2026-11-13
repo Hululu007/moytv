@@ -421,8 +421,27 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function log() { say(Array.prototype.slice.call(arguments).join(' ')); }
   function sleep() {}
 
+  // ---------- 解析缓存 ----------
+  // 规则常对同一段 HTML 反复调 pdfa/pdfh：列表页整页查多次，每条目
+  // 的片段又各查标题/封面/简介多次；原来每次都重跑 DOMParser，
+  // 整个列表下来要解析上百次，全堵在 WebView 主线程上。
+  // 按字符串同一性缓存最近 4 份解析结果：pdfa/pdfh 只读不改文档，
+  // 缓存的文档不会被规则改脏；不同字符串各占一位，互不干扰。
+  var parseCache = [];
   function parseDoc(html) {
-    return new DOMParser().parseFromString(String(html == null ? '' : html), 'text/html');
+    var text = String(html == null ? '' : html);
+    for (var i = 0; i < parseCache.length; i++) {
+      if (parseCache[i].html === text) {
+        var hit = parseCache[i];
+        parseCache.splice(i, 1);
+        parseCache.unshift(hit);
+        return hit.doc;
+      }
+    }
+    var doc = new DOMParser().parseFromString(text, 'text/html');
+    parseCache.unshift({ html: text, doc: doc });
+    if (parseCache.length > 4) parseCache.pop();
+    return doc;
   }
   function splitRule(rule) {
     var text = String(rule == null ? '' : rule).trim();

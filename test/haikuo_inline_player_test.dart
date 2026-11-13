@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:moyi/app_orientation.dart';
 import 'package:moyi/miniapp/haikuo/haikuo_runner_page.dart';
 
 import 'player_fixtures.dart';
@@ -201,6 +204,189 @@ void main() {
     await tester.pump();
     expect(created, hasLength(1));
     expect(find.byType(ChoiceChip), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pushed page: slot height follows the video aspect ratio',
+      (tester) async {
+    // 手机竖屏面：390x844，16:9 槽位 219.375，竖屏视频槽位压到 56% 上限 472.64。
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final created = <ScriptedPlayer>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HaikuoPlayPage(
+          url: 'https://cdn.example.com/ep1.m3u8',
+          title: '第1集',
+          seriesTitle: '剧A',
+          episodes: const ['第1集'],
+          playerFactory: () => buildPlayer(created),
+          videoBuilder: (_) =>
+              const SizedBox(key: ValueKey('test-video')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    double slotHeight() =>
+        tester.getSize(find.byKey(const ValueKey('test-video'))).height;
+    expect(slotHeight(), closeTo(390 * 9 / 16, 0.5));
+
+    // 竖屏视频参数到达：槽位加高到 56% 上限。
+    created.single.videoSize(720, 1280);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(slotHeight(), closeTo(844 * 0.56, 0.5));
+
+    // 横屏视频参数到达：槽位回到 16:9。
+    created.single.videoSize(1280, 720);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(slotHeight(), closeTo(390 * 9 / 16, 0.5));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fullscreen orientation follows the video aspect ratio',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final orientationCalls = <List<String>>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    // 方向控制器先调 moyi/device 的 setTelevisionMode：无桩时调用挂起、
+    // 2 秒超时后才继续，桩上它让链路立即走通。
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('moyi/device'),
+      (call) async => null,
+    );
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(
+        const MethodChannel('moyi/device'),
+        null,
+      ),
+    );
+    messenger.setMockMethodCallHandler(
+      // SystemChannels.platform 用 JSONMethodCodec，桩必须同编解码，
+      // 否则 Title 的 setApplicationSwitcherDescription 解码即炸。
+      const MethodChannel('flutter/platform', JSONMethodCodec()),
+      (call) async {
+        if (call.method == 'SystemChrome.setPreferredOrientations') {
+          orientationCalls.add(
+            List<String>.from(call.arguments as List<dynamic>),
+          );
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(
+        const MethodChannel('flutter/platform', JSONMethodCodec()),
+        null,
+      ),
+    );
+
+    final created = <ScriptedPlayer>[];
+    var fullscreen = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppOrientationScope(
+          television: false,
+          child: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) => HaikuoPlayerView(
+                url: 'https://cdn.example.com/ep1.m3u8',
+                title: '第1集',
+                fullscreen: fullscreen,
+                onFullscreenChanged: (value) =>
+                    setState(() => fullscreen = value),
+                playerFactory: () => buildPlayer(created),
+                videoBuilder: (_) =>
+                    const SizedBox(key: ValueKey('test-video')),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // 等方向控制器把初始偏好（全部方向）发出去。
+    for (var i = 0; i < 20 && orientationCalls.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(orientationCalls, isNotEmpty);
+
+    // 竖屏视频 + 全屏：应请求竖屏两个方向，不再锁横屏。
+    created.single.videoSize(720, 1280);
+    await tester.pump();
+    await ensureControlsVisible(tester, '旋转与全屏');
+    await tester.tap(find.byTooltip('旋转与全屏'));
+    await tester.pump();
+    for (
+      var i = 0;
+      i < 20 &&
+          (orientationCalls.isEmpty ||
+              orientationCalls.last.length != 2 ||
+              !orientationCalls.last.first.contains('portrait'));
+      i++
+    ) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(orientationCalls.last, [
+      'DeviceOrientation.portraitUp',
+      'DeviceOrientation.portraitDown',
+    ]);
+
+    // 退出全屏：方向限制放开（全部方向）。
+    await ensureControlsVisible(tester, '退出全屏');
+    await tester.tap(find.byTooltip('退出全屏').first);
+    await tester.pump();
+    for (
+      var i = 0;
+      i < 20 && orientationCalls.last.length != 4;
+      i++
+    ) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(orientationCalls.last, [
+      'DeviceOrientation.portraitUp',
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.portraitDown',
+      'DeviceOrientation.landscapeRight',
+    ]);
+
+    // 横屏视频 + 全屏：应请求横屏两个方向。
+    created.single.videoSize(1280, 720);
+    await tester.pump();
+    await ensureControlsVisible(tester, '旋转与全屏');
+    await tester.tap(find.byTooltip('旋转与全屏'));
+    await tester.pump();
+    for (
+      var i = 0;
+      i < 20 &&
+          (orientationCalls.last.length != 2 ||
+              !orientationCalls.last.first.contains('landscape'));
+      i++
+    ) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(orientationCalls.last, [
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight',
+    ]);
+    // debug 变量须在测试体内复位：框架在 tearDown 之前就做不变式检查。
+    debugDefaultTargetPlatformOverride = null;
     expect(tester.takeException(), isNull);
   });
 }

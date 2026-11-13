@@ -4033,6 +4033,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           : episodeIndex.clamp(0, detail.episodes.length - 1);
       await Navigator.of(context).pushReplacement(
         appPageRoute<void>(
+          // 与 playerRoute 同名：返回的 popUntil 靠名字认出播放页，
+          // 无名路由会让 popUntil 停在播放页自己身上、返回失灵。
+          settings: const RouteSettings(name: 'player'),
           builder: (_) => PlayerScreen(
             detail: detail,
             initialIndex: index,

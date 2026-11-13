@@ -385,34 +385,116 @@ class WebScrapeAnalyzer {
   ];
 
   /// 分类页卡片：带图的同站链接，取标题/封面/地址。
+  ///
+  /// 同一地址的多个锚点按一组算：有的站把图和标题分在两个锚点里
+  /// （图锚点无文本、文本锚点无图），只看单个锚点会把真卡片全漏掉。
+  /// 无参数的站点根地址是导航不是卡片，直接跳过。
   List<ScrapedListItem> _extractCards(Document doc, Uri base) {
-    final seen = <String>{};
-    final out = <ScrapedListItem>[];
+    final groups = <String, List<Element>>{};
+    final order = <String>[];
     for (final anchor in doc.querySelectorAll('a[href]')) {
-      final img = anchor.querySelector('img');
-      if (img == null) continue;
       final href = anchor.attributes['href']?.trim() ?? '';
       if (href.isEmpty) continue;
       final resolved = base.resolveUri(Uri.tryParse(href) ?? Uri());
       if (resolved.scheme != 'http' && resolved.scheme != 'https') continue;
       if (resolved.host != base.host) continue;
+      if ((resolved.path.isEmpty || resolved.path == '/') &&
+          resolved.query.isEmpty) {
+        continue;
+      }
       if (_deadSuffixes.any(resolved.path.toLowerCase().endsWith)) continue;
-      final text = anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (text.isEmpty || text.length > 60) continue;
       final url = resolved.toString();
-      if (!seen.add(url)) continue;
-      final src =
-          img.attributes['src'] ??
-          img.attributes['data-src'] ??
-          img.attributes['data-original'] ??
-          '';
-      final cover = src.isEmpty
-          ? ''
-          : base.resolveUri(Uri.tryParse(src) ?? Uri()).toString();
-      out.add(ScrapedListItem(title: text, cover: cover, url: url));
+      if (!groups.containsKey(url)) {
+        groups[url] = [];
+        order.add(url);
+      }
+      groups[url]!.add(anchor);
+    }
+    final out = <ScrapedListItem>[];
+    for (final url in order) {
+      final anchors = groups[url]!;
+      Element? img;
+      for (final anchor in anchors) {
+        img = anchor.querySelector('img');
+        if (img != null) break;
+      }
+      if (img == null) continue;
+      final title = _cardTitle(anchors, img);
+      if (title.isEmpty) continue;
+      final cover = _cardCover(anchors, base);
+      out.add(ScrapedListItem(title: title, cover: cover, url: url));
       if (out.length >= 12) break;
     }
     return out;
+  }
+
+  /// 卡片封面：组内任一图片的懒加载地址（data-src/data-original）优先，
+  /// 否则取第一张图的 src。懒加载站的 src 常是占位图或水印。
+  String _cardCover(List<Element> anchors, Uri base) {
+    String? fallback;
+    for (final anchor in anchors) {
+      for (final img in anchor.querySelectorAll('img')) {
+        final lazy =
+            img.attributes['data-src'] ??
+            img.attributes['data-original'] ??
+            '';
+        if (lazy.trim().isNotEmpty) {
+          return base
+              .resolveUri(Uri.tryParse(lazy.trim()) ?? Uri())
+              .toString();
+        }
+        fallback ??= img.attributes['src']?.trim();
+      }
+    }
+    if (fallback == null || fallback.isEmpty) return '';
+    return base.resolveUri(Uri.tryParse(fallback) ?? Uri()).toString();
+  }
+
+  /// 卡片标题：先取 60 字内的锚点文本（原有行为），再取标题元素文本，
+  /// 再取图片 alt 的首段，最后把最先的非空文本截到 60 字。全部来自实爬页面。
+  String _cardTitle(List<Element> anchors, Element img) {
+    String collapsed(String text) =>
+        text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    String capped(String text) =>
+        text.length > 60 ? text.substring(0, 60).trim() : text;
+    for (final anchor in anchors) {
+      final text = collapsed(anchor.text);
+      if (text.isNotEmpty && text.length <= 60) return text;
+    }
+    for (final anchor in anchors) {
+      final heading = anchor.querySelector('h1,h2,h3,h4,h5,h6');
+      final text = heading == null ? '' : collapsed(heading.text);
+      if (text.isEmpty) continue;
+      return capped(text);
+    }
+    Element? lazyImg;
+    for (final anchor in anchors) {
+      for (final candidate in anchor.querySelectorAll('img')) {
+        if (candidate.attributes.containsKey('data-src') ||
+            candidate.attributes.containsKey('data-original')) {
+          lazyImg = candidate;
+          break;
+        }
+      }
+      if (lazyImg != null) break;
+    }
+    final alt = collapsed((lazyImg ?? img).attributes['alt'] ?? '');
+    const junkAlts = {'watermark', 'logo', 'loading'};
+    if (alt.isNotEmpty && !junkAlts.contains(alt.toLowerCase())) {
+      for (final sep in [' - ', ' | ', '，']) {
+        final idx = alt.indexOf(sep);
+        if (idx >= 2) {
+          final head = alt.substring(0, idx).trim();
+          if (head.isNotEmpty) return capped(head);
+        }
+      }
+      return capped(alt);
+    }
+    for (final anchor in anchors) {
+      final text = collapsed(anchor.text);
+      if (text.isNotEmpty) return capped(text);
+    }
+    return '';
   }
 
   /// 由列表项地址归纳详情链接规律（路径部分的前缀 + 变化段 + 后缀）。
@@ -424,7 +506,7 @@ class WebScrapeAnalyzer {
       if (uri == null || uri.path.isEmpty) continue;
       infos.add(_AnchorInfo(text: '', url: url, path: uri.path));
     }
-    final templates = _induceTemplates(infos);
+    final templates = _induceDetailTemplates(infos);
     if (templates.isEmpty) return null;
     return templates.first.pattern;
   }
@@ -446,9 +528,13 @@ class WebScrapeAnalyzer {
     final cover = _metaContent(doc, 'og:image', property: true) ??
         _firstImage(doc, base) ??
         '';
-    final mediaUrls = _extractMedia(doc, base);
+    final mediaUrls = <String>[..._extractMedia(doc, base)];
+    for (final url in _extractMediaFromText(html, base)) {
+      if (!mediaUrls.contains(url)) mediaUrls.add(url);
+    }
+    final cappedMedia = mediaUrls.take(5).toList();
     final playGroup = _derivePlayGroup(doc, base);
-    final chain = mediaUrls.isNotEmpty
+    final chain = cappedMedia.isNotEmpty
         ? PlayChain.directMedia
         : (playGroup != null ? PlayChain.viaPlayPage : PlayChain.none);
     return (
@@ -456,7 +542,7 @@ class WebScrapeAnalyzer {
         title: title.replaceAll(RegExp(r'\s+'), ' ').trim(),
         description: description.replaceAll(RegExp(r'\s+'), ' ').trim(),
         cover: cover,
-        mediaUrls: mediaUrls,
+        mediaUrls: cappedMedia,
         playLinks: playGroup?.links ?? const <ScrapeLink>[],
         playHrefPattern: playGroup?.pattern,
       ),
@@ -525,6 +611,28 @@ class WebScrapeAnalyzer {
       if (hasMediaSuffix(href)) add(href);
     }
     return out.take(5).toList();
+  }
+
+  /// 原文直链正则：与 py_spider_generator.dart 的 _mediaPattern 同族，
+  /// 两处须保持一致（分析器判链路、生成器取流用同一标准）。
+  static final _rawMediaPattern = RegExp(
+    r'''(?:https?:)?//[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?''',
+  );
+
+  /// 原文直链：扫描整页原文找 .m3u8/.mp4 地址（video 标签的 data-m3u8
+  /// 属性、脚本内地址等标签扫描不到的形态）。`&amp;` 还原，去重，上限 5 条。
+  List<String> _extractMediaFromText(String html, Uri base) {
+    final out = <String>[];
+    final seen = <String>{};
+    for (final match in _rawMediaPattern.allMatches(html)) {
+      var raw = match.group(0)!.replaceAll('&amp;', '&');
+      if (raw.startsWith('//')) raw = 'https:$raw';
+      final resolved =
+          base.resolveUri(Uri.tryParse(raw) ?? Uri()).toString();
+      if (seen.add(resolved)) out.add(resolved);
+      if (out.length >= 5) break;
+    }
+    return out;
   }
 
   static final _episodeText = RegExp(
@@ -602,15 +710,185 @@ class WebScrapeAnalyzer {
       if (entry.value.length < 2) continue;
       final (prefix, suffix) = keys[entry.key]!;
       templates.add(
-        _Template(prefix: prefix, suffix: suffix, members: entry.value),
+        _Template(
+          prefix: prefix,
+          suffix: suffix,
+          members: entry.value,
+          literals: prefix.length + suffix.length,
+        ),
       );
     }
-    templates.sort((a, b) {
-      final bySize = b.members.length.compareTo(a.members.length);
-      if (bySize != 0) return bySize;
-      return b.prefix.length.compareTo(a.prefix.length);
-    });
+    if (templates.isNotEmpty) {
+      templates.sort((a, b) {
+        final bySize = b.members.length.compareTo(a.members.length);
+        if (bySize != 0) return bySize;
+        return b.prefix.length.compareTo(a.prefix.length);
+      });
+    }
     return templates;
+  }
+
+  /// 详情链接模板：前缀+后缀模板与形状模板一起按实测覆盖排序。
+  /// 覆盖 = 样本地址里能被该正则命中的条数；覆盖相同则前缀模板优先，
+  /// 再按成员数/字面量多少排序。形状模板常能命中组外同形地址，覆盖更高。
+  List<_Template> _induceDetailTemplates(List<_AnchorInfo> infos) {
+    final ranked = <_RankedTemplate>[];
+    for (final t in _induceTemplates(infos)) {
+      ranked.add(
+        _RankedTemplate(
+          template: t,
+          coverage: _coverage(t.pattern, infos),
+          isPrefix: true,
+        ),
+      );
+    }
+    for (final t in _induceShapeTemplates(infos)) {
+      ranked.add(
+        _RankedTemplate(
+          template: t,
+          coverage: _coverage(t.pattern, infos),
+          isPrefix: false,
+        ),
+      );
+    }
+    ranked.sort((a, b) {
+      final byCoverage = b.coverage.compareTo(a.coverage);
+      if (byCoverage != 0) return byCoverage;
+      if (a.isPrefix != b.isPrefix) return a.isPrefix ? -1 : 1;
+      final bySize = b.template.members.length.compareTo(
+        a.template.members.length,
+      );
+      if (bySize != 0) return bySize;
+      final byLiterals = b.template.literals.compareTo(a.template.literals);
+      if (byLiterals != 0) return byLiterals;
+      return a.template.pattern.compareTo(b.template.pattern);
+    });
+    return ranked.map((r) => r.template).toList();
+  }
+
+  int _coverage(String pattern, List<_AnchorInfo> infos) {
+    final re = RegExp(pattern);
+    var count = 0;
+    for (final info in infos) {
+      if (re.hasMatch(info.path)) count++;
+    }
+    return count;
+  }
+
+  /// 形状归纳兜底：前缀+后缀模板归纳不到时，按路径形状分组。
+  /// 每段按字符种类泛化（连续数字→\d+、连续大写→[A-Z]+、连续小写→[a-z]+、
+  /// 混合字母数字→[A-Za-z0-9]+，分隔符 -_. 原样保留），形状相同且 ≥2 个成员
+  /// 才成模板，按成员数/字面量多少排序。生成的正则同时是合法的 Dart 正则
+  /// 与 Python re（生成器把它原样写进 py 的 DETAIL_HREF_RE）。
+  List<_Template> _induceShapeTemplates(List<_AnchorInfo> infos) {
+    final groups = <String, _ShapeGroup>{};
+    for (final info in infos) {
+      final shaped = _shapeOf(info.path);
+      if (shaped == null) continue;
+      final group = groups.putIfAbsent(
+        shaped.pattern,
+        () => _ShapeGroup(literals: shaped.literals, members: []),
+      );
+      if (!group.members.any((m) => m.url == info.url)) {
+        group.members.add(info);
+      }
+    }
+    final scored = groups.entries
+        .where((e) => e.value.members.length >= 2)
+        .toList();
+    scored.sort((a, b) {
+      final bySize = b.value.members.length.compareTo(a.value.members.length);
+      if (bySize != 0) return bySize;
+      return b.value.literals.compareTo(a.value.literals);
+    });
+    return scored
+        .map(
+          (e) => _Template(
+            prefix: '',
+            suffix: '',
+            members: e.value.members,
+            explicitPattern: e.key,
+            literals: e.value.literals,
+          ),
+        )
+        .toList();
+  }
+
+  /// 路径形状：无可泛化的段（全是字面量）返回 null，避免把同一字面地址当模板。
+  ({String pattern, int literals})? _shapeOf(String path) {
+    final parts = path.split('/');
+    final out = <String>[];
+    var generalized = false;
+    var literals = 0;
+    for (final segment in parts) {
+      if (segment.isEmpty) {
+        out.add('');
+        literals += 1;
+        continue;
+      }
+      final shaped = _generalizeSegment(segment);
+      if (shaped.generalized) generalized = true;
+      literals += shaped.literals;
+      out.add(shaped.text);
+    }
+    if (!generalized) return null;
+    return (pattern: out.join('/'), literals: literals);
+  }
+
+  ({String text, bool generalized, int literals}) _generalizeSegment(
+    String segment,
+  ) {
+    final buf = StringBuffer();
+    var generalized = false;
+    var literals = 0;
+    var i = 0;
+    while (i < segment.length) {
+      final c = segment[i];
+      if (c == '-' || c == '_') {
+        buf.write(c);
+        literals += 1;
+        i++;
+        continue;
+      }
+      if (c == '.') {
+        buf.write(r'\.');
+        literals += 1;
+        i++;
+        continue;
+      }
+      var j = i;
+      while (j < segment.length && _isAsciiAlnum(segment[j])) {
+        j++;
+      }
+      if (j > i) {
+        buf.write(_classFor(segment.substring(i, j)));
+        generalized = true;
+        i = j;
+        continue;
+      }
+      buf.write(RegExp.escape(c));
+      literals += 1;
+      i++;
+    }
+    return (text: buf.toString(), generalized: generalized, literals: literals);
+  }
+
+  bool _isAsciiAlnum(String c) {
+    final code = c.codeUnitAt(0);
+    return (code >= 48 && code <= 57) ||
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122);
+  }
+
+  String _classFor(String run) {
+    final hasDigit = RegExp(r'[0-9]').hasMatch(run);
+    final hasUpper = RegExp(r'[A-Z]').hasMatch(run);
+    final hasLower = RegExp(r'[a-z]').hasMatch(run);
+    final kinds = (hasDigit ? 1 : 0) + (hasUpper ? 1 : 0) + (hasLower ? 1 : 0);
+    if (kinds > 1) return '[A-Za-z0-9]+';
+    if (hasDigit) return r'\d+';
+    if (hasUpper) return '[A-Z]+';
+    return '[a-z]+';
   }
 
   bool _looksLikeMiddle(String middle) {
@@ -717,13 +995,23 @@ class _Template {
     required this.prefix,
     required this.suffix,
     required this.members,
+    this.explicitPattern,
+    this.literals = 0,
   });
   final String prefix;
   final String suffix;
   final List<_AnchorInfo> members;
 
-  /// 正则表达式源码：变化段全数字用 \d+，否则用 .+?。
+  /// 形状模板直接给出的正则；为空时按前缀+变化段+后缀拼。
+  final String? explicitPattern;
+
+  /// 字面量字符数（前缀+后缀长，或形状里的字面量数），排序时作特异性依据。
+  final int literals;
+
+  /// 正则表达式源码：变化段全数字用 \d+，否则用 .+?；形状模板用既定形状。
   String get pattern {
+    final explicit = explicitPattern;
+    if (explicit != null) return explicit;
     final mids = members.map(
       (m) => m.path.substring(
         prefix.length,
@@ -734,6 +1022,25 @@ class _Template {
     final middle = allDigits ? r'\d+' : '.+?';
     return '${RegExp.escape(prefix)}$middle${RegExp.escape(suffix)}';
   }
+}
+
+class _RankedTemplate {
+  const _RankedTemplate({
+    required this.template,
+    required this.coverage,
+    required this.isPrefix,
+  });
+  final _Template template;
+  final int coverage;
+  final bool isPrefix;
+}
+
+class _ShapeGroup {
+  _ShapeGroup({required this.literals, required this.members});
+
+  /// 形状里的字面量字符数（分隔符与转义字面量），排序时作特异性依据。
+  final int literals;
+  final List<_AnchorInfo> members;
 }
 
 class _PlayGroup {

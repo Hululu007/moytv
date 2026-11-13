@@ -110,6 +110,9 @@ const _mediaPattern =
 const _anchorPattern = r'''<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>''';
 const _imgPattern =
     r'''<img[^>]*?(?:src|data-src|data-original)="([^"]+)"''';
+const _imgDataPattern =
+    r'''(?:data-src|data-original)\s*=\s*"([^"]+)"''';
+const _imgSrcPattern = r'''(?<![\w-])src\s*=\s*"([^"]+)"''';
 const _h1Pattern = r'''<h1[^>]*>(.*?)</h1>''';
 const _titleTagPattern = r'''<title[^>]*>(.*?)</title>''';
 const _metaDescPattern =
@@ -216,25 +219,38 @@ def _norm_pg(pg):
 
 const _htmlHelpers = r'''
 def _parse_cards(html, base):
+    anchors = list(ANCHOR_RE.finditer(html or ''))
+    covers = {}
+    for m in anchors:
+        href = m.group(1).strip()
+        if not DETAIL_HREF_RE.search(href):
+            continue
+        url = urllib.parse.urljoin(base + '/', href)
+        inner = m.group(2)
+        dm = IMG_DATA_RE.search(inner)
+        if dm:
+            covers[url] = urllib.parse.urljoin(base + '/', dm.group(1).strip())
+            continue
+        if url not in covers:
+            sm = IMG_SRC_RE.search(inner)
+            if sm:
+                covers[url] = urllib.parse.urljoin(
+                    base + '/', sm.group(1).strip())
     out = []
     seen = set()
-    for m in ANCHOR_RE.finditer(html or ''):
+    for m in anchors:
         href = m.group(1).strip()
         if not DETAIL_HREF_RE.search(href):
             continue
         url = urllib.parse.urljoin(base + '/', href)
         if url in seen:
             continue
-        seen.add(url)
-        inner = m.group(2)
-        title = _unescape(re.sub(TAG_STRIP_RE, ' ', inner))
+        title = _unescape(re.sub(TAG_STRIP_RE, ' ', m.group(2)))
         if not title:
             continue
-        cover = ''
-        im = IMG_RE.search(inner)
-        if im:
-            cover = urllib.parse.urljoin(base + '/', im.group(1).strip())
-        out.append({'vod_id': url, 'vod_name': title, 'vod_pic': cover, 'vod_remarks': ''})
+        seen.add(url)
+        out.append({'vod_id': url, 'vod_name': title,
+                    'vod_pic': covers.get(url, ''), 'vod_remarks': ''})
     return out
 
 
@@ -258,11 +274,11 @@ def _detail_fields(html):
     title = ''
     hm = H1_RE.search(html or '')
     if hm:
-        title = _unescape(hm.group(1))
+        title = _unescape(re.sub(TAG_STRIP_RE, ' ', hm.group(1)))
     if not title:
         tm = TITLE_TAG_RE.search(html or '')
         if tm:
-            title = _unescape(tm.group(1))
+            title = _unescape(re.sub(TAG_STRIP_RE, ' ', tm.group(1)))
     cover = ''
     om = OG_IMAGE_RE.search(html or '')
     if om:
@@ -375,6 +391,8 @@ String _htmlSpider(ScrapedSiteData data, String key) {
   buf.writeln('MEDIA_RE = re.compile(${_s(_mediaPattern)})');
   buf.writeln('ANCHOR_RE = re.compile(${_s(_anchorPattern)}, re.S)');
   buf.writeln('IMG_RE = re.compile(${_s(_imgPattern)}, re.I)');
+  buf.writeln('IMG_DATA_RE = re.compile(${_s(_imgDataPattern)}, re.I)');
+  buf.writeln('IMG_SRC_RE = re.compile(${_s(_imgSrcPattern)}, re.I)');
   buf.writeln('H1_RE = re.compile(${_s(_h1Pattern)}, re.S)');
   buf.writeln('TITLE_TAG_RE = re.compile(${_s(_titleTagPattern)}, re.S)');
   buf.writeln('DESC_RE = re.compile(${_s(_metaDescPattern)}, re.I)');

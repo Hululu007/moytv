@@ -271,6 +271,7 @@ class MoyiApp extends StatelessWidget {
     themeStyleNotifier.value = store?.themeStyle ?? '';
     return MaterialApp(
     navigatorKey: navigatorKey,
+    navigatorObservers: [homeRouteObserver],
     title: appName,
     debugShowCheckedModeBanner: false,
     locale: const Locale('zh', 'CN'),

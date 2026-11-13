@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/content_http.dart';
@@ -256,5 +257,55 @@ void main() {
       () => analyzer.analyze('ftp://example.com/'),
       throwsA(isA<ScrapeFailure>()),
     );
+  });
+
+  test('javmenu 真页：根级番号链 + 分离式卡片 + 原文直链，可生成', () async {
+    final home = File('test/fixtures/javmenu_home.html').readAsStringSync();
+    final censored =
+        File('test/fixtures/javmenu_censored.html').readAsStringSync();
+    final detail =
+        File('test/fixtures/javmenu_detail.html').readAsStringSync();
+    Future<ContentResponse> fetch(String url) async {
+      if (url == 'https://javmenu.com/' || url == 'https://javmenu.com') {
+        return _resp(home);
+      }
+      if (url.startsWith('https://javmenu.com/api.php/')) {
+        return _resp('nope', status: 404);
+      }
+      final segments = Uri.parse(url).pathSegments;
+      // 详情链：单段且含连字符（如 /START-094）；其余同站地址按分类页处理。
+      if (segments.length == 1 && segments.first.contains('-')) {
+        return _resp(detail);
+      }
+      return _resp(censored);
+    }
+
+    final analyzer = WebScrapeAnalyzer(
+      fetchHtml: fetch,
+      scrapeService: WebScrapeService.forTest(fetch),
+      probe: UrlSiteProbe(fetchHtml: fetch),
+    );
+    final data = await analyzer.analyze('https://javmenu.com/');
+    expect(data.siteName, 'JAV目錄大全');
+    expect(data.categories.length, greaterThanOrEqualTo(2));
+    expect(data.categoryUrlTemplate, 'https://javmenu.com/{cateId}');
+    expect(data.searchUrl, 'https://javmenu.com/search?wd={wd}');
+    expect(data.listItems.length, greaterThanOrEqualTo(2));
+    expect(
+      data.listItems.every(
+        (e) => e.title.isNotEmpty && e.url.contains('javmenu.com/'),
+      ),
+      isTrue,
+    );
+    expect(data.detailHrefPattern, isNotNull);
+    final hrefPattern = RegExp(data.detailHrefPattern!);
+    expect(hrefPattern.hasMatch('/START-094'), isTrue);
+    expect(hrefPattern.hasMatch('/DLDSS-121'), isTrue);
+    expect(hrefPattern.hasMatch('/censored/online'), isFalse);
+    expect(data.detailSample, isNotNull);
+    expect(data.detailSample!.mediaUrls, isNotEmpty);
+    expect(data.detailSample!.mediaUrls.first, contains('.m3u8'));
+    expect(data.playChain, PlayChain.directMedia);
+    expect(generationBlockers(data), isEmpty);
   });
 }
