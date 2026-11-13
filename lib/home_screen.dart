@@ -804,6 +804,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _openWebScrape() {
+    Navigator.of(context).push(
+      appPageRoute(
+        builder: (_) => const WebScrapePage(),
+      ),
+    );
+  }
+
   void _toggleSearch() {
     if (AppLayout.isTelevision(context)) {
       _televisionSearch();
@@ -1942,6 +1950,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   highlighted: _searchVisible,
                   onPressed: _toggleSearch,
                 ),
+                GlassGroupItem(
+                  key: const ValueKey('web-scrape'),
+                  icon: LucideIcons.globe,
+                  tooltip: '网页爬取',
+                  onPressed: _openWebScrape,
+                ),
                 if (!_showRecommendations && !updating)
                   GlassGroupItem(
                     icon: LucideIcons.rotateCw,
@@ -2138,6 +2152,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                   : Icons.search_rounded,
                             ),
                             onPressed: _toggleSearch,
+                          ),
+                          IconButton(
+                            key: const ValueKey('web-scrape'),
+                            tooltip: '网页爬取',
+                            icon: const Icon(
+                              Icons.travel_explore_rounded,
+                            ),
+                            onPressed: _openWebScrape,
                           ),
                         ],
                         if (_isCatalogZone &&
@@ -2434,18 +2456,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         : null,
                     crossSourceCount: _visibleSourceIds.length,
                   ),
-                ),
-                IconButton(
-                  key: const ValueKey('web-scrape'),
-                  tooltip: '网页爬取',
-                  icon: const Icon(Icons.travel_explore_rounded),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      appPageRoute(
-                        builder: (_) => const WebScrapePage(),
-                      ),
-                    );
-                  },
                 ),
                 IconButton(
                   key: const ValueKey('global-search'),

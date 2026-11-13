@@ -118,6 +118,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   #status { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 14px; font-size: 11.5px;
     color: #B4A5CE; background: rgba(11,6,23,.9); max-height: 28vh; overflow: auto; display: none;
     white-space: pre-wrap; }
+  .loading { padding: 40px 10px; text-align: center; color: #B4A5CE; font-size: 13px; }
+  .loading .spin, .play-loading .spin { width: 26px; height: 26px; margin: 0 auto 12px;
+    border-radius: 50%; border: 3px solid rgba(177,75,255,.25); border-top-color: #B14BFF;
+    animation: hkspin .8s linear infinite; }
+  @keyframes hkspin { to { transform: rotate(360deg); } }
+  .play-loading { position: fixed; inset: 0; z-index: 50; display: none;
+    align-items: center; justify-content: center; background: rgba(11,6,23,.55); }
+  .play-loading .box { text-align: center; color: #fff; font-size: 13px; }
+  body.hk-inline-playing .d-head { display: none; }
 </style>
 </head>
 <body>
@@ -129,6 +138,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
 </header>
 <main id="list"></main>
 <div id="status"></div>
+<div id="playLoading" class="play-loading"><div class="box"><div class="spin"></div>正在解析…</div></div>
 <script>
 (function () {
   'use strict';
@@ -192,6 +202,58 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     return html;
   }
+  // ---------- 加载反馈与取数缓存 ----------
+  // 规则脚本里的 fetch() 是同步 XHR：脚本一跑，WebView 在取数回来
+  // 之前画不出任何东西，点分类/点播放看起来像“死了几秒”。所以
+  // 导航与解析都先画加载态、再把执行让到下一个任务，让浏览器
+  // 先把加载态画出来。没有 setTimeout 的求值环境（桩验沙箱）
+  // 同步执行，行为不变。navToken 保证连点时只有最后一次导航
+  // 真正执行，早到的延迟任务直接丢弃。
+  var navToken = 0;
+  function defer(fn) {
+    if (typeof setTimeout === 'function') { setTimeout(fn, 30); }
+    else { fn(); }
+  }
+  function loadingHtml() {
+    return (isDetail ? '' : categoryRowsHtml()) +
+      '<div class="loading"><div class="spin"></div>正在加载…</div>';
+  }
+  function showLoading() { listEl.innerHTML = loadingHtml(); }
+  function showPlayLoading(show) {
+    var el = document.getElementById('playLoading');
+    if (el && el.style) el.style.display = show ? 'flex' : 'none';
+  }
+  // 本次打开内的 GET 响应缓存：来回切分类不再重复全量取数。
+  // 只缓存 GET 成功响应；POST 与失败响应不缓存。条目 60 秒过期，
+  // 最多 60 条、单条超过 2MB 不缓存；页面重载即失效。
+  var fetchCache = {};
+  var fetchCacheKeys = [];
+  var FETCH_CACHE_MAX = 60;
+  var FETCH_CACHE_TTL_MS = 60000;
+  var FETCH_CACHE_MAX_BODY = 2 * 1024 * 1024;
+  function fetchCacheKey(method, url, headers) {
+    return method + '\n' + url + '\n' + JSON.stringify(headers || {});
+  }
+  function fetchCacheGet(key) {
+    var hit = fetchCache[key];
+    if (!hit) return null;
+    if (Date.now() - hit.at > FETCH_CACHE_TTL_MS) {
+      delete fetchCache[key];
+      return null;
+    }
+    resCode = hit.code;
+    return hit.body;
+  }
+  function fetchCachePut(key, code, body) {
+    if (body == null || body.length > FETCH_CACHE_MAX_BODY) return;
+    if (!Object.prototype.hasOwnProperty.call(fetchCache, key)) {
+      fetchCacheKeys.push(key);
+      while (fetchCacheKeys.length > FETCH_CACHE_MAX) {
+        delete fetchCache[fetchCacheKeys.shift()];
+      }
+    }
+    fetchCache[key] = { code: code, body: body, at: Date.now() };
+  }
   function reloadHome() {
     var url = 'hiker://empty##' + selectedCls + '##1' + (selectedSort ? '##' + selectedSort : '');
     setGlobals(url, 1);
@@ -199,8 +261,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     navStack.length = 0;
     showBack(false);
     isDetail = false;
-    listEl.innerHTML = '';
-    runSource(PROGRAM.script);
+    var token = ++navToken;
+    showLoading();
+    defer(function () {
+      if (token !== navToken) return;
+      runSource(PROGRAM.script);
+    });
   }
   window.__haikuoSelectCat = function (index) {
     selectedCls = index < 0 ? '' : (ruleCats[index] ? ruleCats[index].value : '');
@@ -247,6 +313,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (body !== undefined && body !== null && typeof body !== 'string') {
       try { body = JSON.stringify(body); } catch (e) { body = String(body); }
     }
+    var cacheKey = null;
+    if ((method || 'GET').toUpperCase() === 'GET') {
+      cacheKey = fetchCacheKey('GET', url, headers);
+      var cached = fetchCacheGet(cacheKey);
+      if (cached !== null) return cached;
+    }
     var query = '/__fetch?m=' + encodeURIComponent(method || 'GET') +
       '&u=' + encodeURIComponent(url) +
       '&h=' + encodeURIComponent(JSON.stringify(headers)) +
@@ -268,9 +340,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       var parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object' && 'body' in parsed) {
         resCode = parsed.code || 0;
-        return parsed.body == null ? '' : String(parsed.body);
+        var out = parsed.body == null ? '' : String(parsed.body);
+        if (cacheKey) fetchCachePut(cacheKey, resCode, out);
+        return out;
       }
     } catch (e) { /* 不是包装结构，原样返回 */ }
+    if (cacheKey) fetchCachePut(cacheKey, resCode, text);
     return text;
   }
 
@@ -453,7 +528,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     };
   }
   function sendPlay(url, item) {
-    var payload = { type: 'play', url: url, title: itemTitle(item) };
+    // detail：播放是否从详情页发起。原生据此决定内嵌播放
+    // （详情页海报墙就地变播放器）还是推一个新播放页。
+    var payload = { type: 'play', url: url, title: itemTitle(item), detail: isDetail };
     var ctx = episodeContext(item);
     if (ctx) { payload.episodes = ctx.episodes; payload.index = ctx.index; payload.series = ctx.series; }
     native(payload);
@@ -465,26 +542,32 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (url.indexOf('hiker://lazy#') === 0) {
       var fn = lazyMap[url.slice('hiker://lazy#'.length)];
       if (typeof fn === 'function') {
-        try {
-          // 播放函数返回的就是播放地址（或 toast://解析失败）；
-          // 以前这里直接丢掉返回值，点播放没任何反应。
-          var result = fn();
-          if (result === '') {
-            toast('解析失败');
-          } else if (typeof result === 'string' && result) {
-            if (result.indexOf('toast://') === 0) {
-              toast(result.slice('toast://'.length) || '解析失败');
-            } else if (isMedia(result)) {
-              sendPlay(result, item);
-            } else if (/^https?:\/\//.test(result)) {
-              native({ type: 'open', url: result, title: item.title || item.name || '' });
-            } else if (result.indexOf('hiker://') === 0) {
-              var virtual = resolveVirtual(result);
-              if (virtual) { renderText(virtual); }
+        // 解析是同步 XHR 链：先亮遮罩、再延迟执行，让浏览器
+        // 先把“正在解析”画出来；遮罩在解析结束时一定撤掉。
+        showPlayLoading(true);
+        defer(function () {
+          try {
+            // 播放函数返回的就是播放地址（或 toast://解析失败）；
+            // 以前这里直接丢掉返回值，点播放没任何反应。
+            var result = fn();
+            if (result === '') {
+              toast('解析失败');
+            } else if (typeof result === 'string' && result) {
+              if (result.indexOf('toast://') === 0) {
+                toast(result.slice('toast://'.length) || '解析失败');
+              } else if (isMedia(result)) {
+                sendPlay(result, item);
+              } else if (/^https?:\/\//.test(result)) {
+                native({ type: 'open', url: result, title: item.title || item.name || '' });
+              } else if (result.indexOf('hiker://') === 0) {
+                var virtual = resolveVirtual(result);
+                if (virtual) { renderText(virtual); }
+              }
             }
-          }
-          // 返回 undefined/null：函数自己已处理（如内部调了 play），不打扰。
-        } catch (error) { say('执行失败：' + error); }
+            // 返回 undefined/null：函数自己已处理（如内部调了 play），不打扰。
+          } catch (error) { say('执行失败：' + error); }
+          finally { showPlayLoading(false); }
+        });
       }
       return;
     }
@@ -677,7 +760,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function refreshPage() {}
   function setPage() {}
   function join(url) { openItem({ url: url }); }
-  function play(url, title) { native({ type: isMedia(url) ? 'play' : 'open', url: url, title: title || '' }); }
+  function play(url, title) { native({ type: isMedia(url) ? 'play' : 'open', url: url, title: title || '', detail: isDetail }); }
   function open(url) { native({ type: 'open', url: url }); }
   function getVar(key) { try { return localStorage.getItem('v_' + key) || ''; } catch (e) { return ''; } }
   function putVar(key, value) { try { localStorage.setItem('v_' + key, value == null ? '' : String(value)); } catch (e) {} }
@@ -893,8 +976,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     setGlobals(url, 1);
     showBack(true);
     isDetail = true;
-    listEl.innerHTML = '';
-    runSource(detailScript());
+    var token = ++navToken;
+    showLoading();
+    defer(function () {
+      if (token !== navToken) return;
+      runSource(detailScript());
+    });
   }
   function goBack() {
     var prev = navStack.pop();
@@ -902,8 +989,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (prev) setGlobals(prev.url, prev.page);
     else setGlobals(homeUrl(), 1);
     isDetail = false;
-    listEl.innerHTML = '';
-    runSource(PROGRAM.script || '');
+    var token = ++navToken;
+    showLoading();
+    defer(function () {
+      if (token !== navToken) return;
+      runSource(PROGRAM.script || '');
+    });
   }
   function runSource(source) {
     var text = String(source || '');
@@ -965,6 +1056,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (it) openItem(it);
   };
   window.__haikuoEpisodeCount = function () { return currentEpisodes.length; };
+  // 供原生内嵌播放：播放器顶在页面上方时藏起详情头项海报墙，
+  // 海报墙就地由播放器代替；关闭播放器时恢复海报墙。
+  window.__haikuoSetInlinePlaying = function (on) {
+    try {
+      if (document.body && document.body.classList) {
+        if (on) document.body.classList.add('hk-inline-playing');
+        else document.body.classList.remove('hk-inline-playing');
+      }
+    } catch (e) {}
+  };
   // 详情页“立即播放”按钮：播第一集（无选集时播头项本身），与
   // 手动点选第一集同一条链路。
   window.__haikuoPlayFirst = function () {

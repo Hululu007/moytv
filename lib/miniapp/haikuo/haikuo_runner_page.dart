@@ -34,6 +34,8 @@ class HaikuoRunnerPage extends StatefulWidget {
 
 /// 播放器与运行页之间的递送通道：播放器已在栈顶时，切集解析出的新地址
 /// 经它递给播放器，不再另推一页。播放器关闭后控制器失效。
+/// 宿主（播放页下方的选集条）经 [requestEpisode] 请播放器切集，
+/// 复用播放器内部的解析等待与防重入逻辑。
 class HaikuoPlayerController {
   void Function({
     required String url,
@@ -41,6 +43,9 @@ class HaikuoPlayerController {
     required int index,
   })?
   onDeliver;
+
+  /// 播放器视图登记的切集入口（视图初始化时登记、销毁时清空）。
+  Future<void> Function(int index)? onRequestEpisode;
 
   int currentIndex = 0;
 
@@ -52,6 +57,40 @@ class HaikuoPlayerController {
     currentIndex = index;
     onDeliver?.call(url: url, title: title, index: index);
   }
+
+  void requestEpisode(int index) {
+    unawaited(onRequestEpisode?.call(index));
+  }
+}
+
+/// play 消息的去向：播放器已打开时递送（切集），详情页发起时内嵌
+/// （海报墙就地变播放器），其余（列表页发起）推一个新播放页。
+enum HaikuoPlayRoute { deliver, inline, push }
+
+HaikuoPlayRoute resolvePlayRoute({
+  required bool fromDetail,
+  required bool playerActive,
+}) {
+  if (playerActive) return HaikuoPlayRoute.deliver;
+  if (fromDetail) return HaikuoPlayRoute.inline;
+  return HaikuoPlayRoute.push;
+}
+
+/// 一次详情页内嵌播放的参数：播放器槽位据此建 [HaikuoPlayerView]。
+class _InlinePlay {
+  const _InlinePlay({
+    required this.url,
+    required this.title,
+    required this.series,
+    required this.episodes,
+    required this.index,
+  });
+
+  final String url;
+  final String title;
+  final String series;
+  final List<String> episodes;
+  final int index;
 }
 
 class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
@@ -67,6 +106,12 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   Completer<bool>? _pendingEpisodeDelivery;
   int? _pendingEpisodeIndex;
   bool _pendingEpisodeDead = false;
+  // 详情页内嵌播放：非空时播放器顶在 WebView 上方，海报墙由 JS 藏起。
+  _InlinePlay? _inline;
+  bool _inlineFullscreen = false;
+  // 代理请求共用一个 HttpClient：连接复用（keep-alive），反复取数
+  // 不再每次重建 TCP+TLS；页面关闭时才关掉。
+  HttpClient? _httpClient;
 
   @override
   void initState() {
@@ -79,6 +124,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     final server = _server;
     _server = null;
     unawaited(server?.close(force: true));
+    _httpClient?.close(force: true);
+    _httpClient = null;
     super.dispose();
   }
 
@@ -145,7 +192,11 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
           _ => null,
         };
         final controller = _playerController;
-        if (controller != null) {
+        final route = resolvePlayRoute(
+          fromDetail: payload['detail'] == true,
+          playerActive: controller != null,
+        );
+        if (route == HaikuoPlayRoute.deliver && controller != null) {
           // 播放器已在栈顶：这是切集解析的结果，递给播放器。
           final pending = _pendingEpisodeDelivery;
           final pendingIndex = _pendingEpisodeIndex;
@@ -171,6 +222,16 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
             index: index ?? pendingIndex ?? controller.currentIndex,
           );
           if (pending != null && !pending.isCompleted) pending.complete(true);
+          return;
+        }
+        if (route == HaikuoPlayRoute.inline) {
+          _openInlinePlayer(
+            url,
+            title,
+            episodes: episodes,
+            index: index ?? 0,
+            series: series,
+          );
           return;
         }
         _openPlayer(
@@ -224,6 +285,58 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       _pendingEpisodeIndex = null;
       _pendingEpisodeDead = false;
       if (pending != null && !pending.isCompleted) pending.complete(false);
+    }
+  }
+
+  /// 详情页内嵌播放：播放器就地顶在 WebView 上方，海报墙由 JS 藏起，
+  /// 不推新页面。切集与等待复用同一套控制器/pending 机制。
+  void _openInlinePlayer(
+    String url,
+    String title, {
+    List<String> episodes = const [],
+    int index = 0,
+    String series = '',
+  }) {
+    final controller = HaikuoPlayerController()..currentIndex = index;
+    _playerController = controller;
+    setState(() {
+      _inline = _InlinePlay(
+        url: url,
+        title: title,
+        series: series,
+        episodes: episodes,
+        index: index,
+      );
+      _inlineFullscreen = false;
+    });
+    unawaited(_setInlinePlaying(true));
+  }
+
+  void _closeInlinePlayer() {
+    _playerController = null;
+    final pending = _pendingEpisodeDelivery;
+    _pendingEpisodeDelivery = null;
+    _pendingEpisodeIndex = null;
+    _pendingEpisodeDead = false;
+    if (pending != null && !pending.isCompleted) pending.complete(false);
+    if (!mounted) return;
+    setState(() {
+      _inline = null;
+      _inlineFullscreen = false;
+    });
+    unawaited(_setInlinePlaying(false));
+  }
+
+  /// 通知运行时藏起/恢复详情头项海报墙。页面还没准备好时调用
+  /// 失败无妨：只是海报墙显隐，不影响播放本身。
+  Future<void> _setInlinePlaying(bool on) async {
+    try {
+      await _controller?.runJavaScript(
+        'window.__haikuoSetInlinePlaying && '
+        'window.__haikuoSetInlinePlaying($on);',
+      );
+    } catch (_) {
+      // 忽略
     }
   }
 
@@ -375,10 +488,11 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       ...headers,
     };
     try {
-      final client = HttpClient()
+      // 共用客户端：同一主机的连接复用，不再每次取数都重建 TCP+TLS。
+      // UA 走下面逐请求的头设置，不再写客户端默认值（多请求会互相串）。
+      final client = _httpClient ??= HttpClient()
         ..connectionTimeout = const Duration(seconds: 20)
-        ..idleTimeout = const Duration(seconds: 5)
-        ..userAgent = merged['User-Agent'];
+        ..idleTimeout = const Duration(seconds: 15);
       final uri = Uri.parse(target);
       final req = await client.openUrl(method, uri).timeout(
         const Duration(seconds: 25),
@@ -400,7 +514,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         BytesBuilder(copy: false),
         (builder, chunk) => builder..add(chunk),
       );
-      client.close(force: true);
       response.write(
         jsonEncode({
           'code': resp.statusCode,
@@ -416,23 +529,68 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF120B20),
-      appBar: AppBar(
-        title: Text(widget.program.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => _controller?.reload(),
-          ),
-        ],
+    return PopScope(
+      canPop: _inline == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_inlineFullscreen) {
+          setState(() => _inlineFullscreen = false);
+          return;
+        }
+        _closeInlinePlayer();
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF120B20),
+        appBar: AppBar(
+          title: Text(widget.program.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          actions: [
+            IconButton(
+              tooltip: '刷新',
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: () => _controller?.reload(),
+            ),
+          ],
+        ),
+        body: _error != null
+            ? _RunnerError(message: _error!)
+            : _loading || _controller == null
+            ? const Center(child: CircularProgressIndicator())
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  final inline = _inline;
+                  return Column(
+                    children: [
+                      // 播放器槽位始终在树里（未播放时高度为 0），保证
+                      // WebView 的树位置不变，切入切出内嵌播放不重载页面。
+                      SizedBox(
+                        height: inline == null
+                            ? 0
+                            : _inlineFullscreen
+                            ? constraints.maxHeight
+                            : constraints.maxWidth * 9 / 16,
+                        child: inline == null
+                            ? null
+                            : HaikuoPlayerView(
+                                url: inline.url,
+                                title: inline.title,
+                                seriesTitle: inline.series,
+                                episodes: inline.episodes,
+                                initialIndex: inline.index,
+                                controller: _playerController,
+                                onSelectEpisode: _selectEpisode,
+                                fullscreen: _inlineFullscreen,
+                                onFullscreenChanged: (value) => setState(
+                                  () => _inlineFullscreen = value,
+                                ),
+                                onClose: _closeInlinePlayer,
+                              ),
+                      ),
+                      Expanded(child: WebViewWidget(controller: _controller!)),
+                    ],
+                  );
+                },
+              ),
       ),
-      body: _error != null
-          ? _RunnerError(message: _error!)
-          : _loading || _controller == null
-          ? const Center(child: CircularProgressIndicator())
-          : WebViewWidget(controller: _controller!),
     );
   }
 }
@@ -489,13 +647,13 @@ class _HaikuoWebPageState extends State<_HaikuoWebPage> {
   );
 }
 
-/// 媒体播放页：海阔小程序返回直链（m3u8 / mp4）时用它播。
-/// 海阔规则播放页：复用点播区同一套控件层（PlayerControls +
-/// PlayerInteractions），带选集面板、倍速、前后集、全屏、网速显示。
-/// 选集上下文由运行时随 play 消息带上；切集时经 [onSelectEpisode] 回到
-/// 运行页重走该集的 lazy 解析，解析出的地址由 [controller] 递回本页。
-class HaikuoPlayPage extends StatefulWidget {
-  const HaikuoPlayPage({
+/// 海阔播放器视图：播放器本体（media_kit + PlayerControls +
+/// PlayerInteractions），不带脚手架。推页播放（[HaikuoPlayPage]）与
+/// 详情页内嵌播放（运行页顶部的播放器槽位）共用同一套。
+/// 全屏状态由宿主持有：宿主据此决定布局与返回键行为，视图只负责
+/// 上报切换意图并在值变化时落地方向/系统 UI 副作用。
+class HaikuoPlayerView extends StatefulWidget {
+  const HaikuoPlayerView({
     super.key,
     required this.url,
     required this.title,
@@ -506,6 +664,12 @@ class HaikuoPlayPage extends StatefulWidget {
     this.onSelectEpisode,
     this.headers = const {},
     this.onStateChange,
+    required this.fullscreen,
+    required this.onFullscreenChanged,
+    this.onClose,
+    this.onCurrentChanged,
+    this.playerFactory,
+    this.videoBuilder,
   });
 
   final String url;
@@ -531,11 +695,84 @@ class HaikuoPlayPage extends StatefulWidget {
   /// durationMs}；不传则不上报。
   final ValueChanged<Map<String, dynamic>>? onStateChange;
 
+  /// 是否全屏：宿主持有并据此布局。
+  final bool fullscreen;
+
+  /// 全屏切换意图：点全屏/返回键退出全屏时上报，宿主改值后视图跟随。
+  final ValueChanged<bool> onFullscreenChanged;
+
+  /// 非全屏时点返回：传了就调它（内嵌播放关闭播放器），不传则退栈。
+  final VoidCallback? onClose;
+
+  /// 当前集/标题变化时通知宿主（播放页下方的选集条据此高亮）。
+  final void Function(int index, String title)? onCurrentChanged;
+
+  /// 测试注入播放器：默认直接 new Player()。
+  final Player Function()? playerFactory;
+
+  /// 测试注入视频画面：默认真实 Video + VideoController；传了它
+  /// 就不建 VideoController（假播放器没有平台 handle）。
+  final WidgetBuilder? videoBuilder;
+
+  @override
+  State<HaikuoPlayerView> createState() => _HaikuoPlayerViewState();
+}
+
+/// 媒体播放页：海阔小程序返回直链（m3u8 / mp4）时用它播。
+/// 海阔规则播放页：复用点播区同一套控件层（PlayerControls +
+/// PlayerInteractions），带选集面板、倍速、前后集、全屏、网速显示。
+/// 选集上下文由运行时随 play 消息带上；切集时经 [onSelectEpisode] 回到
+/// 运行页重走该集的 lazy 解析，解析出的地址由 [controller] 递回本页。
+class HaikuoPlayPage extends StatefulWidget {
+  const HaikuoPlayPage({
+    super.key,
+    required this.url,
+    required this.title,
+    this.seriesTitle = '',
+    this.episodes = const [],
+    this.initialIndex = 0,
+    this.controller,
+    this.onSelectEpisode,
+    this.headers = const {},
+    this.onStateChange,
+    this.playerFactory,
+    this.videoBuilder,
+  });
+
+  final String url;
+  final String title;
+
+  /// 剧名（详情头项标题），有则显示在顶栏标题前。
+  final String seriesTitle;
+
+  /// 当前详情的全部选集标题（按序），为空表示只有一个可播地址。
+  final List<String> episodes;
+
+  final int initialIndex;
+  final HaikuoPlayerController? controller;
+
+  /// 点选第 index 集时调用：回到运行页解析该集地址，返回是否按时递达。
+  final Future<bool> Function(int index)? onSelectEpisode;
+
+  /// 取流请求头（蜘蛛回的 header 原样带上，如 Referer/UA）。
+  final Map<String, String> headers;
+
+  /// 播放状态变化回调（小程序播放桥用）：每次播/停切换与整秒
+  /// 进度变化时上报 {opened, url, title, playing, positionMs,
+  /// durationMs}；不传则不上报。
+  final ValueChanged<Map<String, dynamic>>? onStateChange;
+
+  /// 测试注入播放器：默认直接 new Player()。
+  final Player Function()? playerFactory;
+
+  /// 测试注入视频画面：默认真实 Video + VideoController。
+  final WidgetBuilder? videoBuilder;
+
   @override
   State<HaikuoPlayPage> createState() => _HaikuoPlayPageState();
 }
 
-class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
+class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
   static const List<double> _speeds = <double>[
     0.5,
     0.75,
@@ -547,7 +784,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     3.0,
   ];
 
-  late final Player _player = Player();
+  late final Player _player = widget.playerFactory?.call() ?? Player();
   late final VideoController _video = VideoController(_player);
   late final PlayerInteractions _interactions = PlayerInteractions(
     player: _player,
@@ -577,7 +814,6 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
   String? _error;
   bool _resolving = false;
   bool _panel = false;
-  bool _fullscreen = false;
 
   bool get _hasEpisodes => widget.episodes.isNotEmpty;
   bool get _hasPrev => _hasEpisodes && _index > 0;
@@ -595,6 +831,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     super.initState();
     if (_index < 0 || _index >= widget.episodes.length) _index = 0;
     widget.controller?.onDeliver = _onDelivered;
+    widget.controller?.onRequestEpisode = _switchEpisode;
     _errorSubscription = _player.stream.error.listen((error) {
       if (!mounted || _error != null) return;
       setState(() => _error = error);
@@ -641,8 +878,17 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
   }
 
   @override
+  void didUpdateWidget(HaikuoPlayerView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.fullscreen != oldWidget.fullscreen) {
+      unawaited(_applyFullscreen(widget.fullscreen));
+    }
+  }
+
+  @override
   void dispose() {
     widget.controller?.onDeliver = null;
+    widget.controller?.onRequestEpisode = null;
     unawaited(_errorSubscription?.cancel());
     unawaited(_positionSubscription?.cancel());
     unawaited(_completedSubscription?.cancel());
@@ -680,6 +926,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
       _resolving = false;
       _error = null;
     });
+    widget.onCurrentChanged?.call(index, title);
     unawaited(_open());
   }
 
@@ -691,34 +938,39 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     await _player.seek(position);
   }
 
+  // 全屏状态由宿主持有：这里只上报切换意图，方向与系统 UI 的
+  // 副作用在 didUpdateWidget 收到新值后由 _applyFullscreen 落地；
+  // 视图在全屏中被直接卸载时，dispose 里的 releasePlayback 兜底。
   Future<void> _toggleFullscreen() async {
-    if (_fullscreen) {
-      await _exitFullscreen();
-    } else {
-      setState(() => _fullscreen = true);
+    widget.onFullscreenChanged(!widget.fullscreen);
+  }
+
+  Future<void> _applyFullscreen(bool fullscreen) async {
+    if (fullscreen) {
       await _orientation?.setPlayback(
         this,
         fullscreen: true,
         aspectRatio: 16 / 9,
       );
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      await _orientation?.setPlayback(
+        this,
+        fullscreen: false,
+        aspectRatio: 16 / 9,
+      );
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
   }
 
-  Future<void> _exitFullscreen() async {
-    if (!_fullscreen) return;
-    setState(() => _fullscreen = false);
-    await _orientation?.setPlayback(
-      this,
-      fullscreen: false,
-      aspectRatio: 16 / 9,
-    );
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  }
-
   void _back() {
-    if (_fullscreen) {
-      unawaited(_exitFullscreen());
+    if (widget.fullscreen) {
+      widget.onFullscreenChanged(false);
+      return;
+    }
+    final close = widget.onClose;
+    if (close != null) {
+      close();
       return;
     }
     Navigator.of(context).maybePop();
@@ -897,11 +1149,12 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Video(
-          controller: _video,
-          fit: BoxFit.contain,
-          controls: (_) => const SizedBox.shrink(),
-        ),
+        widget.videoBuilder?.call(context) ??
+            Video(
+              controller: _video,
+              fit: BoxFit.contain,
+              controls: (_) => const SizedBox.shrink(),
+            ),
         if (_error != null)
           Container(
             color: Colors.black54,
@@ -949,7 +1202,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
               interactions: _interactions,
               enabled: !_resolving,
               panelOpen: _panel,
-              fullscreen: _fullscreen,
+              fullscreen: widget.fullscreen,
               showOnPlaybackReady: false,
               title: _displayTitle,
               onTogglePlayback: _togglePlayback,
@@ -969,6 +1222,51 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
             ),
           ),
       ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => _videoArea();
+}
+
+class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
+  bool _fullscreen = false;
+  late int _currentIndex = _clampIndex(widget.initialIndex);
+  late String _currentTitle = widget.title;
+
+  int _clampIndex(int value) {
+    if (value < 0 || value >= widget.episodes.length) return 0;
+    return value;
+  }
+
+  bool get _hasEpisodes => widget.episodes.isNotEmpty;
+
+  String get _displayTitle {
+    final series = widget.seriesTitle;
+    if (series.isEmpty) return _currentTitle;
+    if (_currentTitle.isEmpty || _currentTitle == series) return series;
+    return '$series · $_currentTitle';
+  }
+
+  Widget _playerView() {
+    return HaikuoPlayerView(
+      url: widget.url,
+      title: widget.title,
+      seriesTitle: widget.seriesTitle,
+      episodes: widget.episodes,
+      initialIndex: widget.initialIndex,
+      controller: widget.controller,
+      onSelectEpisode: widget.onSelectEpisode,
+      headers: widget.headers,
+      onStateChange: widget.onStateChange,
+      fullscreen: _fullscreen,
+      onFullscreenChanged: (value) => setState(() => _fullscreen = value),
+      onCurrentChanged: (index, title) => setState(() {
+        _currentIndex = index;
+        _currentTitle = title;
+      }),
+      playerFactory: widget.playerFactory,
+      videoBuilder: widget.videoBuilder,
     );
   }
 
@@ -997,8 +1295,9 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
               for (var i = 0; i < widget.episodes.length; i++)
                 ChoiceChip(
                   label: Text(widget.episodes[i]),
-                  selected: i == _index,
-                  onSelected: (_) => _switchEpisode(i),
+                  selected: i == _currentIndex,
+                  // 经控制器请播放器视图切集，复用视图的解析等待与防重入。
+                  onSelected: (_) => widget.controller?.requestEpisode(i),
                 ),
             ],
           ),
@@ -1012,22 +1311,31 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
     return PopScope(
       canPop: !_fullscreen,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_exitFullscreen());
+        if (!didPop) setState(() => _fullscreen = false);
       },
       child: Theme(
         data: AppTheme.dark,
         child: Scaffold(
           backgroundColor: Colors.black,
-          body: _fullscreen
-              ? SafeArea(child: _videoArea())
-              : SafeArea(
-                  child: Column(
-                    children: [
-                      AspectRatio(aspectRatio: 16 / 9, child: _videoArea()),
-                      Expanded(child: _belowVideo()),
-                    ],
-                  ),
-                ),
+          // 播放器视图固定在 Column 第 0 位、只改槽位高度，
+          // 全屏切换不换树位置，Player 不重建、不重播。
+          body: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Column(
+                  children: [
+                    SizedBox(
+                      height: _fullscreen
+                          ? constraints.maxHeight
+                          : constraints.maxWidth * 9 / 16,
+                      child: _playerView(),
+                    ),
+                    if (!_fullscreen) Expanded(child: _belowVideo()),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
