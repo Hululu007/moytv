@@ -57,6 +57,7 @@ flutter:
     - assets/video_enhancement/
     - assets/live/
     - assets/proxy_kernel/
+    - assets/torrserver_chunks/
     - assets/audio_spiders/
     - assets/novel_spiders/
     - assets/py_spiders/

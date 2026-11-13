@@ -1,6 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'mini_app_manifest.dart';
+
+/// 图片代理取数回调：source 是内置 py 站 id，param 是 proxy://
+/// rest 解出的参数。返回与 py 宿主 proxy 动作同一形状：
+/// {status, mime, bodyBase64, headers}。
+typedef MiniAppProxyFetch =
+    Future<Map<String, dynamic>> Function(String source, Object? param);
 
 const Map<String, String> kMiniAppMimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -33,6 +40,11 @@ class MiniAppServer {
   final Directory root;
   final String entry;
   final String sdkScript;
+
+  /// /pyproxy 路由的取数回调，由宿主页面在服务启动后设置
+  /// （服务实例会被复用，每次打开都重设一次，幂等）。
+  /// 未设置时 /pyproxy 回 404。
+  MiniAppProxyFetch? proxyFetch;
 
   int get port => _server.port;
 
@@ -88,6 +100,10 @@ class MiniAppServer {
         return;
       }
       var path = request.uri.path;
+      if (path == '/pyproxy') {
+        await _handlePyProxyRequest(request);
+        return;
+      }
       if (path.startsWith('/')) path = path.substring(1);
       if (path.isEmpty) path = entry;
       final filePath = safeJoinPath(root.path, Uri.decodeComponent(path));
@@ -135,6 +151,71 @@ class MiniAppServer {
           ..write('Internal Server Error');
         await request.response.close();
       } catch (_) {}
+    }
+  }
+
+  /// /pyproxy：给 WebView 里的 <img> 用的图片代理。负载格式与
+  /// NativeRepository 的 pyproxy 服务一致：?d=base64url(
+  /// json({source, param}))。只接受本机请求（即使开了局域网
+  /// 共享也不对外提供代理，与原 pyproxy 服务的回环口径一致），
+  /// 取数走注入的回调（蜘蛛 localProxy 的现成路径），响应形态
+  /// （status/mime/headers/body）与原服务一致。
+  Future<void> _handlePyProxyRequest(HttpRequest request) async {
+    final fetch = proxyFetch;
+    if (fetch == null) {
+      request.response
+        ..statusCode = HttpStatus.notFound
+        ..write('Not Found');
+      await request.response.close();
+      return;
+    }
+    final remote = request.connectionInfo?.remoteAddress;
+    if (remote != null && !remote.isLoopback) {
+      request.response
+        ..statusCode = HttpStatus.forbidden
+        ..write('Forbidden');
+      await request.response.close();
+      return;
+    }
+    late final String source;
+    late final Object? param;
+    try {
+      final payload = request.uri.queryParameters['d'] ?? '';
+      if (payload.isEmpty) throw const FormatException('缺少 d 参数');
+      final decoded = jsonDecode(utf8.decode(base64Url.decode(payload)));
+      if (decoded is! Map) throw const FormatException('负载不是对象');
+      final rawSource = decoded['source'];
+      if (rawSource is! String || rawSource.isEmpty) {
+        throw const FormatException('负载缺少 source');
+      }
+      source = rawSource;
+      param = decoded['param'];
+    } on FormatException {
+      request.response
+        ..statusCode = HttpStatus.badRequest
+        ..write('Bad Request');
+      await request.response.close();
+      return;
+    }
+    try {
+      final result = await fetch(source, param);
+      final body = base64Decode(result['bodyBase64'] as String? ?? '');
+      final response = request.response;
+      response.statusCode = result['status'] as int? ?? 200;
+      response.headers.set(
+        HttpHeaders.contentTypeHeader,
+        result['mime'] as String? ?? 'application/octet-stream',
+      );
+      for (final entry in (result['headers'] as Map? ?? {}).entries) {
+        response.headers.set(entry.key.toString(), entry.value.toString());
+      }
+      response.contentLength = body.length;
+      if (request.method == 'GET') response.add(body);
+      await response.close();
+    } catch (error) {
+      request.response.statusCode = HttpStatus.internalServerError;
+      request.response.write('py proxy failed: $error');
+      await request.response.close();
     }
   }
 

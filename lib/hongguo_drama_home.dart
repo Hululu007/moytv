@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'app_page_route.dart';
 import 'compact_chip.dart';
 import 'core_bridge.dart';
+import 'hero_mix.dart';
 import 'hongguo_account.dart';
 import 'hongguo_account_entry.dart';
 import 'hongguo_comment.dart';
@@ -70,6 +71,7 @@ class HongguoDramaHome extends StatefulWidget {
     required this.searchHint,
     required this.onSearchChanged,
     required this.onSearchSubmitted,
+    required this.onOpenGlobalSearch,
     required this.onMenuPressed,
     required this.onFilterPressed,
     required this.onRankingsPressed,
@@ -78,6 +80,7 @@ class HongguoDramaHome extends StatefulWidget {
     required this.newActive,
     required this.onOpenSaved,
     this.onSettingsPressed,
+    this.onOpenFeatured,
   });
 
   final List<Drama> dramas;
@@ -95,6 +98,10 @@ class HongguoDramaHome extends StatefulWidget {
   final String searchHint;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<String> onSearchSubmitted;
+
+  /// 霓虹首页/频道页放大镜的动作：那两处没有输入框，点放大镜直接
+  /// 打开全站全局搜索（剧场页自带输入框，仍走 onSearchSubmitted）。
+  final VoidCallback onOpenGlobalSearch;
   final VoidCallback onMenuPressed;
   final VoidCallback onFilterPressed;
   final VoidCallback onRankingsPressed;
@@ -103,6 +110,10 @@ class HongguoDramaHome extends StatefulWidget {
   final bool newActive;
   final void Function({required bool history}) onOpenSaved;
   final VoidCallback? onSettingsPressed;
+
+  /// 霓虹轮播位点按：混入的其它站源幻灯片由此打开（壳侧先切区切
+  /// 源）；为空时轮播点按走 [onOpenDrama]。
+  final ValueChanged<Drama>? onOpenFeatured;
 
   @override
   State<HongguoDramaHome> createState() => _HongguoDramaHomeState();
@@ -156,6 +167,63 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   List<CatalogCategory> _drillPath = [];
   String _videoKeys = '';
 
+  /// 霓虹轮播混排结果：null = 尚未混入（只显示基础位）；非空 =
+  /// 基础位 + 随机混入的成人站幻灯片。重抽只发生在首页数据刷新时。
+  List<Drama>? _heroMixed;
+  String _heroMixKey = '';
+  int _heroMixGen = 0;
+
+  /// 轮播混排重抽判断：默认首页（无搜词、未选分类）才混入；搜词
+  /// 与分类浏览时轮播保持当前目录原样。键不变时不重抽、不重取。
+  void _maybeRefreshHeroMix() {
+    final base = heroBaseSlides(widget.dramas);
+    final blocked = widget.searchController.text.trim().isNotEmpty ||
+        widget.selectedCategory.isNotEmpty;
+    final key = blocked ? 'blocked:${heroMixKey(base)}' : heroMixKey(base);
+    if (key == _heroMixKey) return;
+    _heroMixKey = key;
+    _heroMixed = null;
+    if (blocked || base.isEmpty) return;
+    final gen = ++_heroMixGen;
+    final sites = sampleAdultSites(
+      widget.store.sources
+          .where((site) => widget.store.siteVisible(site.id))
+          .toList(),
+      random: Random(),
+      excludeIds: base.map((drama) => drama.source).toSet(),
+    );
+    if (sites.isEmpty) return;
+    unawaited(_loadHeroMix(sites, key, gen));
+  }
+
+  /// 异步取成人站首页：单站超时隔离、失败静默跳过；结果只在
+  /// 代次与键都未变时才生效，过期结果直接丢弃。
+  Future<void> _loadHeroMix(
+    List<SourceSite> sites,
+    String key,
+    int gen,
+  ) async {
+    final results = await Future.wait(sites.map((site) async {
+      try {
+        final page = await widget.repository
+            .catalog(site.id)
+            .timeout(heroMixSiteTimeout);
+        return adultHeroCandidates(page.items);
+      } catch (_) {
+        return const <Drama>[];
+      }
+    }));
+    if (!mounted || gen != _heroMixGen || key != _heroMixKey) return;
+    final adult = results.expand((list) => list).toList();
+    if (adult.isEmpty) return;
+    final base = heroBaseSlides(widget.dramas);
+    if (heroMixKey(base) != key) return;
+    setState(() {
+      _heroMixed =
+          mixHeroSlides(base: base, adult: adult, random: Random());
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -186,6 +254,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       });
     }
     unawaited(_accountController.load());
+    _maybeRefreshHeroMix();
   }
 
   String get _siteName {
@@ -269,6 +338,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   void didUpdateWidget(HongguoDramaHome oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _maybeRefreshHeroMix();
     if (widget.selectedCategory != oldWidget.selectedCategory) {
       _theaterTagLevel2 = null;
       _theaterTagLevel3 = null;
@@ -813,12 +883,14 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       brand: '魔蚁box',
       sourceLabel: widget.sourceLabel,
       onOpen: widget.onOpenDrama,
-      onSearch: () => widget.onSearchSubmitted(widget.searchController.text),
+      onSearch: widget.onOpenGlobalSearch,
       onSourceTap: widget.onPickSource,
       onLongPress: widget.onOpenDrama,
       onMenu: widget.onMenuPressed,
       onRankings: widget.onRankingsPressed,
-      onFeaturedPlay: widget.onOpenDrama,
+      onFeaturedPlay: widget.onOpenFeatured ?? widget.onOpenDrama,
+      featuredItems: _heroMixed,
+      onOpenFeatured: widget.onOpenFeatured,
     );
   }
 
@@ -831,7 +903,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onCategory: widget.onCategorySelected,
       onOpen: widget.onOpenDrama,
       onBack: () => _selectTab(_neonHomeTab),
-      onSearch: () => widget.onSearchSubmitted(widget.searchController.text),
+      onSearch: widget.onOpenGlobalSearch,
       onFilter: widget.onFilterPressed,
       onRankings: widget.onRankingsPressed,
       filtersActive: widget.filtersActive,

@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'haikuo_clipboard.dart';
 import 'haikuo_codec.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runner_page.dart';
@@ -55,7 +56,13 @@ Future<HaikuoDuplicateDecision> showHaikuoDuplicateDialog(
 /// 入口在小程序模块里：小程序页「海阔」标签，右上角「+」菜单里也有
 /// 快捷入口。支持三种导入方式：JSON 文件、剪贴板口令、直链。
 class HaikuoHomePage extends StatefulWidget {
-  const HaikuoHomePage({super.key, this.store, this.embedded = false});
+  const HaikuoHomePage({
+    super.key,
+    this.store,
+    this.embedded = false,
+    this.tabIndex,
+    this.clipboardSeenStore,
+  });
 
   /// 测试时注入临时目录用的仓库。
   final HaikuoStore? store;
@@ -64,20 +71,297 @@ class HaikuoHomePage extends StatefulWidget {
   /// 直接复用同一份列表与导入入口。
   final bool embedded;
 
+  /// 嵌进小程序页标签页时，海阔 tab 在 TabBarView 里的下标；
+  /// 用于“回到前台时只在海阔页可见才检测剪贴板”。
+  final int? tabIndex;
+
+  /// 已处理过的剪贴板摘要存取（测试注入内存版；默认走 SharedPreferences）。
+  final HaikuoClipboardSeenStore? clipboardSeenStore;
+
   @override
   State<HaikuoHomePage> createState() => _HaikuoHomePageState();
 }
 
-class _HaikuoHomePageState extends State<HaikuoHomePage> {
+class _HaikuoHomePageState extends State<HaikuoHomePage>
+    with WidgetsBindingObserver {
   late final HaikuoStore _store = widget.store ?? HaikuoStore();
+  late final HaikuoClipboardSeenStore _seenStore =
+      widget.clipboardSeenStore ?? SharedPrefsHaikuoClipboardSeenStore();
   List<HaikuoProgram> _programs = const [];
   bool _loading = true;
   bool _busy = false;
+  String? _seenDigest;
+  late final Future<void> _seenReady = _loadSeenDigest();
+  bool _clipboardChecking = false;
+  bool _clipboardPromptActive = false;
+  TabController? _tabController;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_checkClipboard()),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.embedded && widget.tabIndex != null) {
+      final controller = DefaultTabController.maybeOf(context);
+      if (controller != _tabController) {
+        _tabController?.removeListener(_onTabChanged);
+        _tabController = controller;
+        _tabController?.addListener(_onTabChanged);
+      }
+    } else if (_tabController != null) {
+      _tabController?.removeListener(_onTabChanged);
+      _tabController = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _tabController?.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _isHaikuoVisible()) {
+      unawaited(_checkClipboard());
+    }
+  }
+
+  void _onTabChanged() {
+    final controller = _tabController;
+    if (controller != null && controller.indexIsChanging) return;
+    if (_isHaikuoVisible()) unawaited(_checkClipboard());
+  }
+
+  /// 海阔页当前是否可见：独立路由看路由是否在栈顶；嵌进标签页时
+  /// 还要看选中的是不是海阔 tab，避免在别的 tab 上弹导入窗。
+  bool _isHaikuoVisible() {
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (widget.embedded) {
+      final tabIndex = widget.tabIndex;
+      if (tabIndex == null) return false;
+      final controller = DefaultTabController.maybeOf(context);
+      if (controller == null || controller.index != tabIndex) return false;
+    }
+    return true;
+  }
+
+  Future<void> _loadSeenDigest() async {
+    _seenDigest = await _seenStore.readDigest();
+  }
+
+  /// 剪贴板自动检测：海阔页打开、切回海阔标签、从后台回到前台时各查一次。
+  /// 只认现有导入已支持的口令形态；同一内容只弹一次（摘要比对 + 持久化），
+  /// 取消与导入失败都算处理过，内容不变不再骚扰。
+  Future<void> _checkClipboard() async {
+    if (!mounted || _clipboardChecking || _clipboardPromptActive || _busy) {
+      return;
+    }
+    _clipboardChecking = true;
+    try {
+      await _seenReady;
+      String? text;
+      try {
+        final data = await Clipboard.getData(Clipboard.kTextPlain);
+        text = data?.text;
+      } catch (_) {
+        return;
+      }
+      if (!mounted) return;
+      final digest = HaikuoClipboardScan.digestOf(text);
+      if (digest == _seenDigest) return;
+      // 先记下来再弹窗：取消、导入失败都算处理过，内容不变不再弹。
+      _seenDigest = digest;
+      await _seenStore.writeDigest(digest);
+      final candidates = HaikuoClipboardScan.extract(text);
+      if (candidates.isEmpty || !mounted) return;
+      _clipboardPromptActive = true;
+      try {
+        if (candidates.length == 1) {
+          await _promptSingleClipboardCandidate(candidates.single);
+        } else {
+          await _promptMultipleClipboardCandidates(candidates);
+        }
+      } finally {
+        _clipboardPromptActive = false;
+      }
+    } finally {
+      _clipboardChecking = false;
+    }
+  }
+
+  /// 单个口令：温馨提示对话框，点空白处或取消都能退出，不困住用户。
+  Future<void> _promptSingleClipboardCandidate(
+    HaikuoClipboardCandidate candidate,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('温馨提示'),
+        content: const Text('剪贴板检测到小程序规则，是否立即导入？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('立即导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(
+      () => _store.importText(
+        candidate.text,
+        origin: '剪贴板',
+        onDuplicates: _askDuplicates,
+      ),
+    );
+  }
+
+  /// 多个口令：底部列表，点一项导一项，也可全部导入；划掉或点取消即退出。
+  Future<void> _promptMultipleClipboardCandidates(
+    List<HaikuoClipboardCandidate> candidates,
+  ) async {
+    final pick = await showModalBottomSheet<_ClipboardPick>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        final maxHeight = MediaQuery.sizeOf(context).height * 0.6;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '从剪贴板检测到多个导入口令',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 10),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxHeight),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: candidates.length,
+                    itemBuilder: (context, index) {
+                      final candidate = candidates[index];
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(candidate.label),
+                        subtitle: Text(
+                          candidate.text,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        trailing: const Icon(Icons.download_rounded),
+                        onTap: () => Navigator.pop(
+                          context,
+                          _ClipboardPick(index: index),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => Navigator.pop(
+                          context,
+                          const _ClipboardPick(index: -1),
+                        ),
+                        child: const Text('全部导入'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (pick == null || !mounted) return;
+    if (pick.index < 0) {
+      await _importClipboardBatch(candidates);
+      return;
+    }
+    final candidate = candidates[pick.index];
+    await _run(
+      () => _store.importText(
+        candidate.text,
+        origin: '剪贴板',
+        onDuplicates: _askDuplicates,
+      ),
+    );
+  }
+
+  /// 全部导入：逐个走现有导入流程，某条失败只记该条原因、继续其余，
+  /// 最后统一汇报一次。
+  Future<void> _importClipboardBatch(
+    List<HaikuoClipboardCandidate> candidates,
+  ) async {
+    setState(() => _busy = true);
+    var added = 0;
+    var updated = 0;
+    final failed = <String>[];
+    try {
+      for (final candidate in candidates) {
+        if (!mounted) break;
+        try {
+          final result = await _store.importText(
+            candidate.text,
+            origin: '剪贴板',
+            onDuplicates: _askDuplicates,
+          );
+          if (result.cancelled) {
+            failed.add('${candidate.label}：已取消');
+          } else {
+            added += result.added.length;
+            updated += result.updated.length;
+          }
+        } on HaikuoFormatException catch (error) {
+          failed.add('${candidate.label}：${error.message}');
+        } catch (error) {
+          failed.add('${candidate.label}：$error');
+        }
+      }
+      await _load();
+      if (!mounted) return;
+      final parts = <String>[
+        if (added > 0) '新增 $added 个',
+        if (updated > 0) '更新 $updated 个',
+      ];
+      final summary = parts.isEmpty ? '没有新增条目' : parts.join('，');
+      _snack(
+        failed.isEmpty
+            ? summary
+            : '$summary；${failed.length} 条失败：${failed.join('；')}',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _load() async {
@@ -695,6 +979,13 @@ String _haikuoIconGlyph(String name) {
     if (_letterOrDigit.hasMatch(ch)) return ch;
   }
   return String.fromCharCode(trimmed.runes.first);
+}
+
+/// 多口令底部列表的选择结果：index >= 0 导入指定的一条，-1 全部导入。
+class _ClipboardPick {
+  const _ClipboardPick({required this.index});
+
+  final int index;
 }
 
 /// 供示例资源解析使用的小桥接，避免页面层直接依赖编解码细节。

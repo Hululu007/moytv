@@ -76,17 +76,28 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   .d-head .bg { position: absolute; inset: -18px; background-size: cover;
     background-position: center; filter: blur(18px) brightness(.45); }
   .d-head .fg { position: relative; display: flex; gap: 12px; padding: 14px; }
-  .d-head .poster { width: 96px; aspect-ratio: 2/3; object-fit: cover;
-    border-radius: 10px; flex-shrink: 0; background: linear-gradient(160deg, #22143A, #150C26); }
+  .d-head .posterwrap { position: relative; width: 96px; flex-shrink: 0; align-self: center; }
+  .d-head .poster { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
+    border-radius: 10px; background: linear-gradient(160deg, #22143A, #150C26); }
+  .d-head .posterplay { position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center; cursor: pointer; }
+  .d-head .posterplay span { width: 42px; height: 42px; border-radius: 50%;
+    background: rgba(11,6,23,.6); border: 1.5px solid rgba(255,255,255,.9);
+    color: #fff; font-size: 17px; display: flex; align-items: center;
+    justify-content: center; padding-left: 3px; box-shadow: 0 2px 12px rgba(0,0,0,.5); }
+  .d-head .posterplay:active span { transform: scale(.92); }
+  .d-player { position: relative; aspect-ratio: 16/9; border-radius: 14px;
+    margin-bottom: 14px; background: linear-gradient(160deg, #22143A, #150C26);
+    border: 1px solid rgba(177,75,255,.28); display: flex;
+    align-items: center; justify-content: center; cursor: pointer; }
+  .d-player:active { transform: scale(.99); }
+  .d-player .pbtn { width: 62px; height: 62px; border-radius: 50%;
+    background: linear-gradient(135deg, #B14BFF, #7C3AED); color: #fff;
+    font-size: 25px; display: flex; align-items: center; justify-content: center;
+    padding-left: 4px; box-shadow: 0 4px 18px rgba(177,75,255,.45); }
   .d-head .info { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
   .d-head .t { font-size: 17px; font-weight: 800; line-height: 1.4; }
   .d-head .d { margin-top: 6px; font-size: 12px; color: #D9CDEF; line-height: 1.5; }
-  .d-play { display: flex; align-items: center; justify-content: center; gap: 8px;
-    width: 100%; margin: 0 0 14px; padding: 13px; font-size: 15px; font-weight: 800;
-    color: #fff; background: linear-gradient(135deg, #B14BFF, #7C3AED);
-    border: none; border-radius: 12px; cursor: pointer;
-    box-shadow: 0 4px 16px rgba(177,75,255,.4); }
-  .d-play:active { transform: scale(.98); }
   .d-sec { display: flex; align-items: center; gap: 8px; margin: 16px 2px 8px;
     font-size: 13px; font-weight: 700; color: #E7DCF7; }
   .d-sec::before { content: ''; width: 3px; height: 14px; border-radius: 2px;
@@ -523,7 +534,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var u = String(url || '');
     return u !== '' && u.indexOf('hiker://empty') !== 0;
   }
-  // “立即播放”的目标：优先第一集；无选集时，只有头项本身带
+  // 海报播放键的目标：优先第一集；无选集时，只有头项本身带
   // lazy 解析或直链媒体地址才算可播——普通详情链接点按只会
   // 再次打开详情，不能当播放目标（否则按钮点了没反应）。
   function firstPlayTarget() {
@@ -546,15 +557,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       series: detailTitle
     };
   }
-  function sendPlay(url, item) {
+  function sendPlay(url, item, fromDetail) {
     // detail：播放是否从详情页发起。原生据此决定内嵌播放
     // （详情页海报墙就地变播放器）还是推一个新播放页。
-    var payload = { type: 'play', url: url, title: itemTitle(item), detail: isDetail };
+    // 详情页内的播放入口（海报播放键、选集点按）显式传 true，
+    // 不依赖点击时刻 isDetail 全局变量的状态；列表页不传，
+    // 仍按 isDetail 判定、保持推新页。
+    var payload = { type: 'play', url: url, title: itemTitle(item), detail: fromDetail === true ? true : isDetail };
     var ctx = episodeContext(item);
     if (ctx) { payload.episodes = ctx.episodes; payload.index = ctx.index; payload.series = ctx.series; }
     native(payload);
   }
-  function openItem(item) {
+  function openItem(item, fromDetail) {
     if (!item) return;
     var url = item.url || item.link || '';
     if (!url) return;
@@ -575,7 +589,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
               if (result.indexOf('toast://') === 0) {
                 toast(result.slice('toast://'.length) || '解析失败');
               } else if (isMedia(result)) {
-                sendPlay(result, item);
+                sendPlay(result, item, fromDetail);
               } else if (/^https?:\/\//.test(result)) {
                 native({ type: 'open', url: result, title: item.title || item.name || '' });
               } else if (result.indexOf('hiker://') === 0) {
@@ -603,7 +617,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       openDetail(url);
       return;
     }
-    if (isMedia(url)) { sendPlay(url, item); return; }
+    if (isMedia(url)) { sendPlay(url, item, fromDetail); return; }
     native({ type: 'open', url: url, title: itemTitle(item) });
   }
   function renderText(text) {
@@ -692,15 +706,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         detailTitle = title;
         headItem = it;
         var pic = itemPic(it);
+        // 海报播放键占位（HAIKUO_POSTERPLAY）：循环结束、选集数已知
+        // 后才决定是否在海报上叠播放键。
         html += '<div class="d-head" data-index="' + index + '">' +
           (pic ? '<div class="bg" style="background-image:url(\'' + escapeHtml(pic) + '\')"></div>' : '') +
           '<div class="fg">' +
-          (pic ? '<img class="poster" loading="lazy" src="' + escapeHtml(pic) + '">' : '') +
+          (pic ? '<div class="posterwrap"><img class="poster" loading="lazy" src="' + escapeHtml(pic) + '"><!--HAIKUO_POSTERPLAY--></div>' : '') +
           '<div class="info"><div class="t">' + escapeHtml(title) + '</div>' +
           (desc ? '<div class="d">' + escapeHtml(desc) + '</div>' : '') +
           '</div></div></div>';
-        // 播放按钮占位：循环结束、选集数已知后才决定是否画按钮。
-        html += '<!--HAIKUO_PLAYBTN-->';
         return;
       }
       if (col === 'rich_text') {
@@ -749,23 +763,23 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         (desc ? '<div class="desc">' + escapeHtml(desc) + '</div>' : '') + '</div></div>';
     });
     closeEpGrid();
-    // 详情播放按钮：有选集（或头项本身可播）才画，点它播第一集，
-    // 走与点选集同一条 openItem→sendPlay 链路。有头项时贴在头项
-    // 下方；无头项时放详情最上方。
+    // 海报播放键：有选集（或头项本身可播）才画，点海报播第一集，
+    // 走与点选集同一条 openItem→sendPlay 链路。有头项海报时把
+    // 播放键叠在海报中央；无头项海报时，在详情最上方放一个
+    // 播放器样式的播放区（同样是播放键，不是文字按钮）。
     var playTarget = firstPlayTarget();
-    var playBtn = '';
-    if (playTarget) {
-      playBtn = '<button type="button" class="d-play" onclick="__haikuoPlayFirst()">▶ 立即播放</button>';
-    }
-    if (html.indexOf('<!--HAIKUO_PLAYBTN-->') >= 0) {
-      html = html.replace('<!--HAIKUO_PLAYBTN-->', playBtn);
-    } else if (playBtn) {
-      html = playBtn + html;
+    if (html.indexOf('<!--HAIKUO_POSTERPLAY-->') >= 0) {
+      html = html.replace('<!--HAIKUO_POSTERPLAY-->',
+        playTarget ? '<div class="posterplay" onclick="__haikuoPosterTap(event)"><span>▶</span></div>' : '');
+    } else if (playTarget) {
+      html = '<div class="d-player" onclick="__haikuoPlayFirst()"><div class="pbtn">▶</div></div>' + html;
     }
     listEl.innerHTML = html;
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
       el.addEventListener('click', function () {
-        openItem(items[Number(el.getAttribute('data-index'))]);
+        // 详情页内的一切点按都带 fromDetail：选集、头项点播
+        // 一律走内嵌槽位，不走推新页。
+        openItem(items[Number(el.getAttribute('data-index'))], true);
       });
     });
   }
@@ -1085,11 +1099,17 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       }
     } catch (e) {}
   };
-  // 详情页“立即播放”按钮：播第一集（无选集时播头项本身），与
+  // 详情页海报播放键：播第一集（无选集时播头项本身），与
   // 手动点选第一集同一条链路。
   window.__haikuoPlayFirst = function () {
     var it = firstPlayTarget();
-    if (it) openItem(it);
+    if (it) openItem(it, true);
+  };
+  // 海报播放键点按：截住冒泡，别触发头项的 openItem 重开详情；
+  // 播放链路与 __haikuoPlayFirst 相同。
+  window.__haikuoPosterTap = function (event) {
+    if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+    window.__haikuoPlayFirst();
   };
 
   function boot() {

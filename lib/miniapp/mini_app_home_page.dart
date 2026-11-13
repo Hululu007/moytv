@@ -490,7 +490,9 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
                   Builder(builder: _installedTab),
                   _marketTab(),
                   // 海阔小程序独立界面：规则列表与导入入口都在这页里。
-                  const HaikuoHomePage(embedded: true),
+                  // tabIndex 与上面 tabs 顺序对应（海阔是第 3 个），
+                  // 供剪贴板自动检测判断海阔页是否可见。
+                  const HaikuoHomePage(embedded: true, tabIndex: 2),
                 ],
               ),
       ),

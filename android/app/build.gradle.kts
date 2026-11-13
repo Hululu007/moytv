@@ -134,10 +134,12 @@ dependencies {
     implementation("tv.danmaku.ijk.media:ijkplayer-java:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8")
+    implementation(name = "thunder-release", ext = "aar")
     testImplementation("junit:junit:4.13.2")
 }
 
 repositories {
+    flatDir { dirs("libs") }
     maven { url = uri("https://maven.aliyun.com/repository/jcenter") }
 }
 

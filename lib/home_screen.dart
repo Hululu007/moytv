@@ -1369,6 +1369,39 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _openDrama(drama);
   }
 
+  /// 霓虹轮播位点按：当前站源的幻灯片走普通打开；混入的其它站源
+  /// 幻灯片先切区切源再打开，绝不套在当前站下打开。
+  void _openFeaturedDrama(Drama drama) {
+    final site = widget.store.sources
+        .where((s) => s.id == drama.source)
+        .firstOrNull;
+    if (site == null) {
+      _openDrama(drama);
+      return;
+    }
+    final zone = isVodZoneSource(site) ? HomeZone.vod : HomeZone.drama;
+    if (zone == _zone && (_allSources || site.id == _source.id)) {
+      _openDrama(drama);
+      return;
+    }
+    _openGlobalVideoResult(drama);
+  }
+
+  /// 打开全站全局搜索：搜索行里的全局搜索按钮与霓虹首页/频道页的
+  /// 放大镜共用同一入口，点结果走 _openGlobalVideoResult 切区切源。
+  void _openGlobalSearch() {
+    Navigator.of(context).push(
+      appPageRoute(
+        builder: (_) => GlobalSearchPage(
+          repository: widget.repository,
+          store: widget.store,
+          initialQuery: _search.text,
+          onOpenDrama: _openGlobalVideoResult,
+        ),
+      ),
+    );
+  }
+
   void _setZone(HomeZone zone) {
     if (zone == _zone) return;
     _applyZoneChange(zone, recordHistory: true);
@@ -1611,7 +1644,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       case AppDrawerTool.viewingExperience:
         _pushTool(ViewingExperienceScreen(store: widget.store));
       case AppDrawerTool.torrent:
-        _pushTool(const TorrentHomePage());
+        _pushTool(
+          TorrentHomePage(repository: widget.repository, store: widget.store),
+        );
     }
   }
 
@@ -2057,6 +2092,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     searchHint: _searchHint,
                     onSearchChanged: _searchChanged,
                     onSearchSubmitted: _submitSearch,
+                    onOpenGlobalSearch: _openGlobalSearch,
                     onMenuPressed: _openDrawer,
                     onFilterPressed: () => unawaited(_chooseCatalogView()),
                     onRankingsPressed: _openRankings,
@@ -2068,6 +2104,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         widget.store.catalogView.sort == CatalogSort.date,
                     onOpenSaved: _openSaved,
                     onSettingsPressed: _openZoneSettings,
+                    onOpenFeatured: _openFeaturedDrama,
                   ),
                 ),
               );
@@ -2500,18 +2537,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   key: const ValueKey('global-search'),
                   tooltip: '全局搜索',
                   icon: const Icon(Icons.manage_search_rounded),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      appPageRoute(
-                        builder: (_) => GlobalSearchPage(
-                          repository: widget.repository,
-                          store: widget.store,
-                          initialQuery: _search.text,
-                          onOpenDrama: _openGlobalVideoResult,
-                        ),
-                      ),
-                    );
-                  },
+                  onPressed: _openGlobalSearch,
                 ),
               ],
             ),

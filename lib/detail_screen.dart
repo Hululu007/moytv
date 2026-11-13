@@ -22,6 +22,7 @@ import 'player_screen.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
 import 'episode_browser.dart';
+import 'episode_frame_cache.dart';
 import 'episode_preview_card.dart';
 import 'nonvideo_content.dart';
 import 'follow_state.dart';
@@ -33,6 +34,7 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
+import 'torrent/torrent_engine.dart';
 import 'torrent/torrent_home_screen.dart';
 
 typedef DetailTagTap =
@@ -92,6 +94,7 @@ class _DetailScreenState extends State<DetailScreen> {
   DramaDetail? _detail;
   String? _error;
   bool _loading = true;
+  Set<String> _frameKeys = {};
   int _generation = 0;
   int _episodePage = 0;
   bool _expandedDescription = false;
@@ -124,6 +127,7 @@ class _DetailScreenState extends State<DetailScreen> {
     widget.store.addListener(_onStoreChanged);
     _load();
     unawaited(_loadViewing());
+    unawaited(_loadFrameKeys());
   }
 
   @override
@@ -370,6 +374,21 @@ class _DetailScreenState extends State<DetailScreen> {
       _embeddedFullscreen = false;
       _embeddedKey = null;
     });
+    // 内嵌播放时可能新截了帧，关播后刷新一次，网格卡立即换上帧图。
+    unawaited(_loadFrameKeys());
+  }
+
+  /// 播过留帧：列出已缓存的帧键，网格卡按集合成员关系决定
+  /// 显不显示帧图。缓存读失败时当作没有帧。
+  Future<void> _loadFrameKeys() async {
+    try {
+      final keys = await EpisodeFrameCache.instance.warmUp();
+      if (mounted) {
+        setState(() => _frameKeys = keys);
+      }
+    } catch (_) {
+      // 帧缓存不可用时卡片回落剧照/海报，不影响详情页。
+    }
   }
 
   Widget? _embeddedArea(List<Episode> episodes) {
@@ -804,7 +823,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                         context,
                                         constraints.maxWidth,
                                       ),
-                                      crossAxisSpacing: 10,
+                                      crossAxisSpacing: 8,
                                       mainAxisSpacing: 10,
                                     ),
                                 delegate: SliverChildBuilderDelegate((
@@ -813,6 +832,17 @@ class _DetailScreenState extends State<DetailScreen> {
                                 ) {
                                   final episode = visible[index];
                                   final preview = previews[start + index];
+                                  final frameKey = EpisodeFrameCache.frameKey(
+                                    source: drama.source,
+                                    dramaId: drama.id,
+                                    episodeNumber: episode.number,
+                                  );
+                                  final framePath =
+                                      _frameKeys.contains(frameKey)
+                                      ? EpisodeFrameCache.instance.pathForKey(
+                                          frameKey,
+                                        )
+                                      : null;
                                   return EpisodePreviewCard(
                                     key: ValueKey('episode-${episode.number}'),
                                     episode: episode,
@@ -820,6 +850,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                     stillUrl: preview.stillUrl,
                                     posterUrl: preview.posterUrl,
                                     current: episode.number == watched?.episode,
+                                    framePath: framePath,
                                     onPressed: () => _play(start + index),
                                   );
                                 }, childCount: visible.length),
@@ -1192,7 +1223,9 @@ class _DetailScreenState extends State<DetailScreen> {
           Text('磁力链接', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           Text(
-            '种子引擎未接入：点开可解析与保存，不能下载、不能播放',
+            TorrentEngineFactory.isEngineAvailable
+                ? '点开可解析、选文件、边下边播，也支持导入 txt/csv/xlsx 文件'
+                : '种子播放仅支持安卓：点开可解析与保存，不能下载、不能播放',
             style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -1207,7 +1240,11 @@ class _DetailScreenState extends State<DetailScreen> {
               trailing: const Icon(Icons.chevron_right_rounded),
               onTap: () => Navigator.of(context).push(
                 appPageRoute<void>(
-                  builder: (_) => TorrentHomePage(initialMagnet: magnet.url),
+                  builder: (_) => TorrentHomePage(
+                    initialMagnet: magnet.url,
+                    repository: widget.repository,
+                    store: widget.store,
+                  ),
                 ),
               ),
             ),
@@ -1454,15 +1491,15 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   int _episodeColumns(double width) {
-    // 预览图卡片：单卡最小约 168 逻辑像素，手机 2 列、宽屏最多 4 列。
-    return ((width - 40) / 176).floor().clamp(2, 4);
+    // 预览图卡片：单卡约 104 逻辑像素，手机 3 列、宽屏最多 4 列。
+    return ((width - 40) / 106).floor().clamp(2, 4);
   }
 
   /// 预览图卡片的网格高度：16:9 图 + 文字区（标题一行 + 副标题一行，
   /// 随文字缩放放大，上限 1.4 倍）。网格与定位滚动共用同一算法。
   double _episodeCardExtent(BuildContext context, double width) {
     final columns = _episodeColumns(width);
-    final tileWidth = (width - 40 - (columns - 1) * 10) / columns;
+    final tileWidth = (width - 40 - (columns - 1) * 8) / columns;
     return episodePreviewCardExtent(context, tileWidth);
   }
 

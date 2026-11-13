@@ -57,6 +57,7 @@ class PlayerControls extends StatefulWidget {
     this.networkSpeed,
     this.core,
     this.onCoreTap,
+    this.showTopBarBackButton = true,
   });
 
   final Player player;
@@ -101,6 +102,10 @@ class PlayerControls extends StatefulWidget {
   final ValueListenable<String?>? networkSpeed;
   final PlayerCore? core;
   final VoidCallback? onCoreTap;
+
+  /// 顶栏是否画返回箭头。宿主在同一角落另有常驻返回时传 false，
+  /// 顶栏只留同尺寸占位，避免两个箭头重叠（两者行为相同）。
+  final bool showTopBarBackButton;
 
   @override
   State<PlayerControls> createState() => _PlayerControlsState();
@@ -389,15 +394,20 @@ class _PlayerControlsState extends State<PlayerControls> {
         padding: EdgeInsets.only(top: compact ? 8 : 0),
         child: Row(
           children: [
-            _overlayIconButton(
-              tooltip: widget.fullscreen ? '退出全屏' : '返回',
-              onPressed: widget.fullscreen
-                  ? (widget.onExitFullscreen ?? widget.onFullscreen)
-                  : widget.onBack,
-              icon: widget.fullscreen
-                  ? Icons.arrow_back_rounded
-                  : Icons.arrow_back_ios_new_rounded,
-            ),
+            if (widget.showTopBarBackButton)
+              _overlayIconButton(
+                tooltip: widget.fullscreen ? '退出全屏' : '返回',
+                onPressed: widget.fullscreen
+                    ? (widget.onExitFullscreen ?? widget.onFullscreen)
+                    : widget.onBack,
+                icon: widget.fullscreen
+                    ? Icons.arrow_back_rounded
+                    : Icons.arrow_back_ios_new_rounded,
+              )
+            else
+              // 与 _overlayIconButton 同尺寸占位：标题与右侧图标不左移，
+              // 不会压到宿主常驻返回按钮上。
+              const SizedBox(width: 46, height: 42),
             if (!compact)
               Expanded(
                 child: Text(

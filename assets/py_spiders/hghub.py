@@ -449,6 +449,31 @@ def _post_json_raw(url, obj):
     return json.loads(raw.decode("utf-8", "ignore"))
 
 
+def _edge_call(base, method, path, body_obj=None):
+    if body_obj is not None:
+        encoded = base64.b64encode(json.dumps(body_obj).encode("utf-8")).decode()
+        ctype = "application/json"
+    else:
+        encoded = ""
+        ctype = ""
+    env = {"method": method, "path": path, "body": encoded, "content_type": ctype}
+    try:
+        raw = _http_bytes("POST", base + "/api/edge/request",
+                          data=json.dumps(env).encode("utf-8"), headers={
+                              "Content-Type": "application/json",
+                              "Accept": "application/json",
+                              "Referer": base + "/"}, tries=2)
+        if not raw:
+            return {}
+        res = json.loads(raw.decode("utf-8", "ignore"))
+    except Exception:
+        return {}
+    if not isinstance(res, dict) or res.get("status") != 1:
+        return {}
+    data = res.get("data")
+    return data if isinstance(data, dict) else {}
+
+
 class _EncSession:
     def __init__(self, base):
         d = int.from_bytes(os.urandom(32), "big") % (_P256_N - 1) + 1
@@ -734,10 +759,19 @@ class Spider(BaseSpider):
                 return {}
 
     def _play_video(self, vid, ep):
+        path = "/api/videos/%s/episodes/%s/playback" % (
+            urllib.parse.quote(str(vid), safe=""),
+            urllib.parse.quote(str(ep), safe=""))
         try:
-            data = self._enc_call("POST", "/api/videos/%s/episodes/%s/playback" % (
-                urllib.parse.quote(str(vid), safe=""),
-                urllib.parse.quote(str(ep), safe="")))
+            data = _edge_call(self.base, "POST", path, {})
+            streams = data.get("streams") or {}
+            url = str(streams.get("main") or streams.get("preview") or streams.get("hevc") or "")
+            if url:
+                return url
+        except Exception:
+            pass
+        try:
+            data = self._enc_call("POST", path)
             inner = data.get("data") or {}
             streams = inner.get("streams") or {}
             return str(streams.get("main") or streams.get("preview") or streams.get("hevc") or "")
@@ -745,8 +779,18 @@ class Spider(BaseSpider):
             return ""
 
     def _play_post(self, pid):
+        path = "/api/posts/%s/playback" % urllib.parse.quote(str(pid), safe="")
         try:
-            data = self._enc_call("POST", "/api/posts/%s/playback" % urllib.parse.quote(str(pid), safe=""))
+            data = _edge_call(self.base, "POST", path, {})
+            videos = data.get("videos") or []
+            if videos and isinstance(videos[0], dict):
+                url = str(videos[0].get("url") or "")
+                if url:
+                    return url
+        except Exception:
+            pass
+        try:
+            data = self._enc_call("POST", path)
             inner = data.get("data") or {}
             videos = inner.get("videos") or []
             if videos and isinstance(videos[0], dict):

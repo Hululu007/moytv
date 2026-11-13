@@ -26,6 +26,7 @@ import 'jar_bridge.dart';
 import 'jar_youtube_takeover.dart';
 import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
+import 'episode_frame_cache.dart';
 import 'episode_preview_card.dart';
 import 'follow_state.dart';
 import 'local_store.dart';
@@ -138,6 +139,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _ijkAutoplay = true;
   late PlayerCore _core;
   final _menuRevision = ValueNotifier<int>(0);
+  Set<String> _frameKeys = {};
+  final Set<String> _frameCaptureAttempted = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final _recovery = PlaybackRecovery();
   Object _lanIdentity = Object();
@@ -404,6 +407,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _preloader = PlaybackPreloader(widget.repository);
     unawaited(_loadParseSelection());
     unawaited(_loadTmdb(widget.detail.drama));
+    unawaited(_loadFrameKeys());
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
@@ -513,6 +517,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _syncDanmaku();
         _syncPreload();
         _acknowledgeHandoff();
+        _maybeCaptureEpisodeFrame(position);
       }),
     );
     for (final stream in [
@@ -1939,8 +1944,59 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  /// 退出全屏后把选集横排滚回当前集（每张预览卡 148px 宽 + 8px
-  /// 间距估宽，精确位置由 ListView 的可视钳制兜底）。
+  /// 播过留帧：进页时列出已缓存的帧键，选集卡按集合成员
+  /// 关系决定显不显示帧图。缓存读失败时当作没有帧。
+  Future<void> _loadFrameKeys() async {
+    try {
+      final keys = await EpisodeFrameCache.instance.warmUp();
+      if (mounted && !_closed) {
+        setState(() => _frameKeys = keys);
+      }
+    } catch (_) {
+      // 帧缓存不可用时卡片回落剧照/海报，不影响播放。
+    }
+  }
+
+  /// 播过留帧：当前集播到 3 秒后截一帧存缓存，每集每会话
+  /// 只试一次。只在 media_kit 渲染时截——Tvbox/Exo 原生句柄
+  /// 与 IJK 内核都不走 _player，截了也是空的。
+  void _maybeCaptureEpisodeFrame(Duration position) {
+    if (_closed || !mounted) return;
+    if (_useNativeHandle || _useIjkCore) return;
+    if (position < const Duration(seconds: 3)) return;
+    if (_openedIndex != _index) return;
+    if (!_player.state.playing) return;
+    final episodes = widget.detail.episodes;
+    if (_index < 0 || _index >= episodes.length) return;
+    final drama = widget.detail.drama;
+    final key = EpisodeFrameCache.frameKey(
+      source: drama.source,
+      dramaId: drama.id,
+      episodeNumber: episodes[_index].number,
+    );
+    if (_frameKeys.contains(key) || _frameCaptureAttempted.contains(key)) {
+      return;
+    }
+    _frameCaptureAttempted.add(key);
+    unawaited(_captureAndSaveFrame(key));
+  }
+
+  Future<void> _captureAndSaveFrame(String key) async {
+    try {
+      final bytes = await _player.screenshot(format: 'image/jpeg');
+      if (bytes == null || bytes.isEmpty) return;
+      final saved = await EpisodeFrameCache.instance.saveFrame(key, bytes);
+      if (saved && mounted && !_closed) {
+        setState(() => _frameKeys = {..._frameKeys, key});
+      }
+    } catch (_) {
+      // 截帧失败静默跳过：卡片继续显示剧照/海报。
+    }
+  }
+
+  /// 退出全屏后把选集横排滚回当前集（每张预览卡按
+  /// episodePreviewCardWidth 宽 + 8px 间距估宽，精确位置由
+  /// ListView 的可视钳制兜底）。
   void _scrollEpisodeStripToCurrent() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _closed || !_episodeStripController.hasClients) return;
@@ -3181,6 +3237,22 @@ class _PlayerScreenState extends State<PlayerScreen>
         '${widget.detail.drama.title} · 第 ${widget.detail.episodes[_index].number} 集${_audioMode ? ' · 听书' : ''}${_plan?.local == true ? ' · 本地' : ''}${widget.detail.episodes[_index].vip ? ' · VIP 试看' : ''}${(_plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${_plan!.routeIndex + 1}' : ''}';
     final hideOverlayForPictureInPicture = _pictureInPictureVisible;
     final errorKind = _error == null ? null : classifyPlaybackError(_error!);
+    // 左上角返回箭头只留一个：常驻返回渲染时，控制层顶栏不再画
+    // 第二个箭头；加载/失败全屏时的退出全屏行同理。两者都走
+    // _backToList，藏掉哪一个都不改变返回行为。嗅探态同理：左上角
+    // 只留关嗅探的 X，常驻返回藏掉（X 盖在它下层，留着点不到），
+    // 关掉嗅探后常驻返回随状态恢复；系统返回仍走 _backToList。
+    final permanentBackVisible = _mobile &&
+        !_television &&
+        !_useNativeHandle &&
+        !_useIjkCore &&
+        !_sniffEmbedded &&
+        !hideOverlayForPictureInPicture &&
+        !((_loading || _error != null) && _showFullscreen);
+    final loadingFullscreenExitVisible = (_loading || _error != null) &&
+        !hideOverlayForPictureInPicture &&
+        _showFullscreen &&
+        !_television;
     final Widget controls = hideOverlayForPictureInPicture
         ? const SizedBox.shrink()
         : _television
@@ -3225,6 +3297,8 @@ class _PlayerScreenState extends State<PlayerScreen>
             onPageFullscreen: Platform.isWindows ? _togglePageFullscreen : null,
             onExitFullscreen: _backToList,
             onBack: _backToList,
+            showTopBarBackButton:
+                !permanentBackVisible && !loadingFullscreenExitVisible,
             onFocusSurface: _playerFocus.requestFocus,
             onSeek: _seekTo,
             speed: _speed,
@@ -3329,6 +3403,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(20),
                     child: InkWell(
+                      key: const ValueKey('player-sniff-close'),
                       borderRadius: BorderRadius.circular(20),
                       onTap: _closeSniffer,
                       child: const Padding(
@@ -3509,10 +3584,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ],
                   ),
                 ),
-              if ((_loading || _error != null) &&
-                  !hideOverlayForPictureInPicture &&
-                  _showFullscreen &&
-                  !_television)
+              if (loadingFullscreenExitVisible)
                 SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
@@ -3562,12 +3634,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
-              if (_mobile &&
-                  !_television &&
-                  !_useNativeHandle &&
-                  !_useIjkCore &&
-                  !hideOverlayForPictureInPicture &&
-                  !((_loading || _error != null) && _showFullscreen))
+              if (permanentBackVisible)
                 Positioned(
                   top: 0,
                   left: 0,
@@ -3854,6 +3921,14 @@ class _PlayerScreenState extends State<PlayerScreen>
                 final episode = episodes[realIndex];
                 final preview = previews[realIndex];
                 final selected = realIndex == _index;
+                final frameKey = EpisodeFrameCache.frameKey(
+                  source: widget.detail.drama.source,
+                  dramaId: widget.detail.drama.id,
+                  episodeNumber: episode.number,
+                );
+                final framePath = _frameKeys.contains(frameKey)
+                    ? EpisodeFrameCache.instance.pathForKey(frameKey)
+                    : null;
                 return SizedBox(
                   width: episodePreviewCardWidth,
                   child: EpisodePreviewCard(
@@ -3864,6 +3939,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     stillUrl: preview.stillUrl,
                     posterUrl: preview.posterUrl,
                     current: selected,
+                    framePath: framePath,
                     onPressed: () {
                       if (selected) {
                         // 再点当前集 = 进全屏（FongMi 语义）

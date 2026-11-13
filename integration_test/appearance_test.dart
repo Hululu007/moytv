@@ -136,7 +136,7 @@ void main() {
     expect(tester.takeException(), isNull);
     binding.reportData ??= {};
     binding.reportData!['appearance'] = {
-      'theme': store.themeMode,
+      'theme': store.appTheme.storageValue,
       'tabPreserved': true,
       'keyboardReturn': true,
       'fullscreenReturn': true,

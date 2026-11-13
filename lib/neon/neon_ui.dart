@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../app_theme_config.dart';
+
 /// 霓虹（Neon / 赛博）视觉系统：深紫黑底 + 紫粉青渐变 + 发光描边。
 ///
 /// 这一套是纯展示层，只提供配色与装饰组件，不持有任何业务状态。
@@ -431,6 +433,7 @@ class NeonSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 14, 14, 8),
       child: Row(
@@ -445,7 +448,7 @@ class NeonSectionHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(title, style: Neon.titleStyle),
+          Text(title, style: Neon.titleStyle.copyWith(color: config.textPrimary)),
           const Spacer(),
           if (action != null)
             GestureDetector(
@@ -454,12 +457,12 @@ class NeonSectionHeader extends StatelessWidget {
                 children: [
                   Text(
                     action!,
-                    style: const TextStyle(fontSize: 11, color: Neon.textDim),
+                    style: TextStyle(fontSize: 11, color: config.textSecondary),
                   ),
-                  const Icon(
+                  Icon(
                     LucideIcons.chevronRight,
                     size: 14,
-                    color: Neon.textDim,
+                    color: config.textSecondary,
                   ),
                 ],
               ),
@@ -523,6 +526,7 @@ class NeonTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 6, 12, 2),
       child: Row(
@@ -536,19 +540,19 @@ class NeonTopBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ShaderMask(
-                shaderCallback: (rect) => const LinearGradient(
-                  colors: [Colors.white, Color(0xFFD8B6FF)],
+                shaderCallback: (rect) => LinearGradient(
+                  colors: [config.textPrimary, config.secondaryColor],
                 ).createShader(rect),
                 child: Text(
                   brand,
-                  style: Neon.brandStyle.copyWith(color: Colors.white),
+                  style: Neon.brandStyle.copyWith(color: config.textPrimary),
                 ),
               ),
               if (subtitle != null) ...[
                 const SizedBox(height: 3),
                 Text(
                   subtitle!,
-                  style: const TextStyle(fontSize: 10, color: Neon.textFaint),
+                  style: TextStyle(fontSize: 10, color: config.textSecondary),
                 ),
               ],
             ],

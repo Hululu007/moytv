@@ -476,6 +476,11 @@ abstract final class HaikuoCodec {
     caseSensitive: false,
   );
 
+  /// 从文本里找出全部云口令短码的匹配（不校验云编号、不联网），
+  /// 供剪贴板自动检测用；取回地址的判定仍走 [cloudApiUrl]。
+  static Iterable<RegExpMatch> cloudCodeMatches(String text) =>
+      _cloudCodePattern.allMatches(text);
+
   /// 从文本里找云口令短码，返回取回用的接口地址；没有短码返回 null。
   ///
   /// 未知云编号直接抛错（不在这里返回 null，免得调用方把它当普通口令

@@ -65,6 +65,9 @@ class LocalSnapshot {
     'profiles',
     'activeProfile',
     'displayMode',
+    'appThemeMode',
+    // 旧主题系统的键：不再被读取，只为校验旧快照保留，
+    // migrateLegacyThemeSettings 会删掉它们。
     'themeMode',
     'themeModeStyle',
     'themeStyle',

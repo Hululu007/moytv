@@ -3,11 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
+import 'app_page_route.dart';
 import 'catalog_filters.dart';
 import 'core_bridge.dart';
+import 'detail_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
-import 'playback_launch_screen.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 
@@ -45,7 +46,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
   bool _more = false;
   bool _hasMore = true;
   bool _failedMore = false;
-  bool _openingPlayback = false;
+  bool _openingDetail = false;
   String? _error;
   int _generation = 0;
 
@@ -77,17 +78,23 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
   }
 
   void _openDrama(Drama drama) {
-    if (_openingPlayback) return;
-    _openingPlayback = true;
+    if (_openingDetail) return;
+    _openingDetail = true;
     unawaited(
-      openPlaybackDirectly(
-        context,
-        drama: drama,
-        repository: widget.repository,
-        store: widget.store,
-      ).whenComplete(() {
-        _openingPlayback = false;
-      }),
+      Navigator.of(context)
+          .push(
+            appPageRoute<void>(
+              settings: const RouteSettings(name: 'detail'),
+              builder: (_) => DetailScreen(
+                drama: drama,
+                repository: widget.repository,
+                store: widget.store,
+              ),
+            ),
+          )
+          .whenComplete(() {
+            _openingDetail = false;
+          }),
     );
   }
 

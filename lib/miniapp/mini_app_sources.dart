@@ -23,8 +23,14 @@ class MiniAppSourceFailure implements Exception {
 /// 小程序 source.* 接口的宿主实现契约。
 ///
 /// 返回形状按 window.ant 契约：list 是 [{key, name, type, searchable,
-/// available}]；home/category/detail/search 原样返回蜘蛛的 vod_* 数据；
+/// available}]；home/category/search 原样返回蜘蛛的 vod_* 数据；
+/// detail 返回单个 vod 对象本身（不是 {list:[vod]} 信封），且
+/// vod_play_from / vod_play_url 是按 $$$ 切好的数组——小程序侧
+/// parseLines 按数组读，信封或字符串形态都会报 NO_LINE；
 /// play 返回 {url, header, parse?, jx?}。
+/// py 站的 vod_pic 若是 proxy:// 伪协议，改写成本地服务地址
+/// （见 HostMiniAppSourceProvider.imageBaseUrl），WebView 才能
+/// 加载；普通 http 图一律不动，jar 站不改写。
 abstract class MiniAppSourceProvider {
   Future<List<Map<String, dynamic>>> listSites();
 
@@ -86,9 +92,11 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     )?
     pyCall,
     Duration callTimeout = const Duration(seconds: 60),
+    String? imageBaseUrl,
   }) : _jarCall = jarCall ?? JarBridge.callJson,
        _pyCall = pyCall,
-       _callTimeout = callTimeout;
+       _callTimeout = callTimeout,
+       _imageBaseUrl = imageBaseUrl;
 
   /// 契约上限：单次调用 60 秒超时，最多 3 个并发。
   static const int maxConcurrent = 3;
@@ -105,6 +113,10 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   )?
   _pyCall;
   final Duration _callTimeout;
+
+  /// 小程序本地服务的基址（MiniAppServer.baseUrl，WebView 已在用
+  /// 的同一地址）。为空时不改写图片地址，保持旧行为。
+  final String? _imageBaseUrl;
 
   int _active = 0;
 
@@ -149,7 +161,7 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         return withClassesAlias(raw);
       }
       final raw = await _callPy(site.siteId, {'action': 'home'});
-      return withClassesAlias(raw);
+      return _withProxyImages(withClassesAlias(raw), site.siteId);
     });
   }
 
@@ -193,7 +205,7 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         'filter': ext.isNotEmpty,
         'extend': Map<String, dynamic>.from(ext),
       });
-      return Map<String, dynamic>.from(raw);
+      return _withProxyImages(Map<String, dynamic>.from(raw), site.siteId);
     });
   }
 
@@ -214,13 +226,13 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         final raw = await _jarCall(site.spec!, 'detailContent', {
           'ids': [id],
         });
-        return Map<String, dynamic>.from(raw);
+        return normalizeDetailResult(raw);
       }
       final raw = await _callPy(site.siteId, {
         'action': 'detail',
         'vodId': id,
       });
-      return Map<String, dynamic>.from(raw);
+      return _withProxyImages(normalizeDetailResult(raw), site.siteId);
     });
   }
 
@@ -281,7 +293,7 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         'filter': false,
         'extend': <String, dynamic>{},
       });
-      return Map<String, dynamic>.from(raw);
+      return _withProxyImages(Map<String, dynamic>.from(raw), site.siteId);
     });
   }
 
@@ -382,6 +394,133 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
       'SITE_UNAVAILABLE',
       '该站的 py 蜘蛛文件尚未就绪',
     );
+  }
+
+  /// 详情结果归一成契约形状：蜘蛛 detailContent 回的是
+  /// {list:[vod]} 信封，拆出第一个 vod 原样返回；vod_play_from /
+  /// vod_play_url 是 $$$ 拼的字符串时按 $$$ 切成数组（已是数组
+  /// 的原样保留、缺失的补空数组），其余字段一字不动。蜘蛛一个
+  /// 条目都没回时返回空 Map——小程序侧据此回落到列表摘要并
+  /// 显示“没有返回可播放的线路”，与旧行为一致。
+  static Map<String, dynamic> normalizeDetailResult(
+    Map<String, dynamic> raw,
+  ) {
+    final rows = raw['list'];
+    Map<String, dynamic>? vod;
+    if (rows is List && rows.isNotEmpty && rows.first is Map) {
+      vod = Map<String, dynamic>.from(rows.first as Map);
+    } else if (raw.containsKey('vod_id') ||
+        raw.containsKey('vod_name') ||
+        raw.containsKey('vod_play_url')) {
+      vod = Map<String, dynamic>.from(raw)..remove('list');
+    }
+    if (vod == null) return <String, dynamic>{};
+    vod['vod_play_from'] = _splitPlayField(vod['vod_play_from']);
+    vod['vod_play_url'] = _splitPlayField(vod['vod_play_url']);
+    return vod;
+  }
+
+  static List<String> _splitPlayField(Object? value) {
+    if (value is List) {
+      return [for (final entry in value) entry.toString()];
+    }
+    final text = value?.toString() ?? '';
+    if (text.isEmpty) return const [];
+    return text.split(r'$$$');
+  }
+
+  /// 图片代理取数：本地服务 /pyproxy 路由的回调。只认内置 py 站
+  /// （与 _resolveSite 同一口径），走蜘蛛 localProxy 的现成路径
+  /// （Referer + 解密都在蜘蛛里），不另写取图逻辑。
+  Future<Map<String, dynamic>> proxyFetch(String source, Object? param) async {
+    final site = SourceSite.importedSites[source];
+    if (site == null ||
+        site.importType != 'py' ||
+        site.origin != SourceSite.originBuiltin) {
+      throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到内置站点：$source');
+    }
+    return _callPy(source, {'action': 'proxy', 'param': param});
+  }
+
+  Map<String, dynamic> _withProxyImages(
+    Map<String, dynamic> raw,
+    String source,
+  ) {
+    final base = _imageBaseUrl;
+    if (base == null || base.isEmpty) return raw;
+    return rewriteProxyImages(raw, baseUrl: base, source: source);
+  }
+
+  /// 把结果里的 proxy:// 封面改写成本地服务地址：顶层 vod_pic
+  /// （详情形态）与 list 里每条的 vod_pic（列表形态）都改；
+  /// 只动 proxy:// 开头的字符串，其余字段与非 Map 条目原样保留。
+  /// 返回新 Map，不动入参。
+  static Map<String, dynamic> rewriteProxyImages(
+    Map<String, dynamic> raw, {
+    required String baseUrl,
+    required String source,
+  }) {
+    final copy = Map<String, dynamic>.from(raw);
+    _rewriteVodPic(copy, baseUrl, source);
+    final rows = copy['list'];
+    if (rows is List) {
+      copy['list'] = [
+        for (final row in rows)
+          if (row is Map)
+            _rewriteVodPic(
+              Map<String, dynamic>.from(row),
+              baseUrl,
+              source,
+            )
+          else
+            row,
+      ];
+    }
+    return copy;
+  }
+
+  static Map<String, dynamic> _rewriteVodPic(
+    Map<String, dynamic> vod,
+    String baseUrl,
+    String source,
+  ) {
+    final pic = vod['vod_pic'];
+    if (pic is String && pic.startsWith('proxy://')) {
+      vod['vod_pic'] = proxyImageUrl(baseUrl, source, pic);
+    }
+    return vod;
+  }
+
+  /// proxy:// 封面 → 本地服务地址。负载格式与 NativeRepository 的
+  /// pyproxy 服务同一口径：?d=base64url(json({source, param}))，
+  /// param 是 proxy:// rest 按 _pyProxyParam 规则解出的参数。
+  static String proxyImageUrl(String baseUrl, String source, String proxyUrl) {
+    final base = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    final rest = proxyUrl.substring('proxy://'.length);
+    final payload = base64Url.encode(
+      utf8.encode(jsonEncode({'source': source, 'param': proxyParam(rest)})),
+    );
+    return '$base/pyproxy?d=$payload';
+  }
+
+  /// proxy:// rest → localProxy 参数：含 = 时按 & 切键值对并
+  /// URI 解码，否则整个 rest 当 url。口径与 NativeRepository
+  /// 的 _pyProxyParam 一致，蜘蛛 localProxy 读到的是一样的 map。
+  static Object proxyParam(String rest) {
+    if (rest.contains('=')) {
+      final map = <String, String>{};
+      for (final part in rest.split('&')) {
+        final eq = part.indexOf('=');
+        if (eq > 0) {
+          map[Uri.decodeComponent(part.substring(0, eq))] =
+              Uri.decodeComponent(part.substring(eq + 1));
+        }
+      }
+      if (map.isNotEmpty) return map;
+    }
+    return {'url': rest};
   }
 
   /// 蜘蛛首页用 TVBox 惯例的 `class` 键；契约文字写的是 `classes`，

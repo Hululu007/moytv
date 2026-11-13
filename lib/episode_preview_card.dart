@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,9 +8,11 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'widgets.dart';
 
-/// 播放页横排选集里单张预览卡的固定宽度。详情页网格卡按列宽
-/// 自适应；滚回当前集的估算步长也按它加间距算。
-const double episodePreviewCardWidth = 148;
+/// 播放页横排选集里单张预览卡的固定宽度：104 逻辑像素，一屏
+/// 能完整看到 3 张（360 宽手机：3×104 + 2×8 间距 = 328，
+/// 小于 332 可用宽）。详情页网格卡按列宽自适应；滚回当前集
+/// 的估算步长也按它加间距算。
+const double episodePreviewCardWidth = 104;
 
 /// 预览卡总高度 = 16:9 图高 + 56 文字区，字号缩放钳制在 1.0–1.4。
 /// 详情页网格与播放页横排共用同一公式。
@@ -61,10 +64,11 @@ List<EpisodePreviewData> episodePreviewData({
   ];
 }
 
-/// 选集区的预览图卡片：16:9 剧照（TMDB still 优先、本剧海报
-/// 兜底、都没有时显示带集号的占位块）+ 左上角集号角标 + 可播标题
-/// + TMDB 集名/播出日期副标题。点按播放该集；图片加载失败时只显示
-/// 占位块，不闪退、不留空白。无时长字段，卡片上不显示时长。
+/// 选集区的预览图卡片：16:9 剧照（播过留帧的缓存帧优先、
+/// 其次 TMDB still、本剧海报兜底、都没有时显示带集号的占位块）
+/// + 左上角集号角标 + 可播标题 + TMDB 集名/播出日期副标题。
+/// 点按播放该集；图片加载失败时只显示占位块，不闪退、不留空白。
+/// 无时长字段，卡片上不显示时长。
 class EpisodePreviewCard extends StatelessWidget {
   const EpisodePreviewCard({
     super.key,
@@ -74,6 +78,7 @@ class EpisodePreviewCard extends StatelessWidget {
     required this.posterUrl,
     required this.current,
     required this.onPressed,
+    this.framePath,
   });
 
   final Episode episode;
@@ -82,6 +87,10 @@ class EpisodePreviewCard extends StatelessWidget {
   final String posterUrl;
   final bool current;
   final VoidCallback onPressed;
+
+  /// 播过留帧的本地帧图路径（调用方已确认文件存在）。非空时
+  /// 优先于 still/海报显示；文件读失败时回落占位块。
+  final String? framePath;
 
   @override
   Widget build(BuildContext context) {
@@ -143,7 +152,14 @@ class EpisodePreviewCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (imageUrl.isNotEmpty && !DramaCover.imagesDisabled)
+                      if (framePath != null && framePath!.isNotEmpty)
+                        Image.file(
+                          File(framePath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        )
+                      else if (imageUrl.isNotEmpty &&
+                          !DramaCover.imagesDisabled)
                         Image.network(
                           imageUrl,
                           fit: BoxFit.cover,

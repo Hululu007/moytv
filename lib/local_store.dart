@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_database.dart';
+import 'app_theme_config.dart';
 import 'content_registry.dart';
 import 'custom_headers.dart';
 import 'jar_import.dart';
@@ -632,11 +635,6 @@ class LocalStore extends ChangeNotifier {
     return {'auto', 'television', 'standard'}.contains(value) ? value! : 'auto';
   }
 
-  String get themeMode {
-    final value = _configurationError == null ? _string('themeMode') : null;
-    return {'light', 'dark', 'system'}.contains(value) ? value! : 'system';
-  }
-
   String get source {
     if (locked) return '';
     final visible = visibleSources;
@@ -892,136 +890,49 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
-  Future<void> setThemeMode(String value) =>
-      {'light', 'dark', 'system'}.contains(value)
-      ? _setting('themeMode', value)
-      : Future.value();
-
-  String get themeModeStyle {
+  /// 当前全局主题（8 套固定主题之一），默认紫蓝霓虹。
+  AppThemeMode get appTheme {
     final value = _configurationError == null
-        ? _string('themeModeStyle')
+        ? _string('appThemeMode')
         : null;
-    return {'pureLight', 'pureDark'}.contains(value) ? value! : '';
+    return AppThemeMode.fromStorageValue(value);
   }
 
-  Future<void> setThemeModeStyle(String value) =>
-      {'pureLight', 'pureDark', ''}.contains(value)
-      ? _setting('themeModeStyle', value)
-      : Future.value();
+  Future<void> setAppTheme(AppThemeMode mode) =>
+      _setting('appThemeMode', mode.storageValue);
 
-  String get themeStyle {
-    final value = _configurationError == null ? _string('themeStyle') : null;
-    return {'neon', 'deep', 'candy', 'paper', 'glass', 'aurora'}.contains(value)
-        ? value!
-        : '';
+  /// 旧主题系统（模式/风格/强调色/背景）是否还留有存值。
+  /// 旧值不再被读取，只由迁移清理。
+  bool get hasLegacyThemeSettings {
+    if (_configurationError != null) return false;
+    return _legacyThemeKeys.any((key) => _string(key) != null);
   }
 
-  Future<void> setThemeStyle(String value) =>
-      {'neon', 'deep', 'candy', 'paper', 'glass', 'aurora', ''}.contains(value)
-      ? _setting('themeStyle', value)
-      : Future.value();
+  static const _legacyThemeKeys = [
+    'themeMode',
+    'themeModeStyle',
+    'themeStyle',
+    'themeAccent',
+    'themeBackground',
+    'themeBackgroundImage',
+  ];
 
-  String get themeAccent {
-    final value = _configurationError == null ? _string('themeAccent') : null;
-    if (value != null && _isCustomThemeAccentId(value)) return value;
-    return {
-          'default',
-          'green',
-          'blue',
-          'purple',
-          'red',
-          'orange',
-          'jiucai',
-          'matcha',
-          'luhui',
-          'qingci',
-          'boheqing',
-          'chunrilv',
-          'qingkonglan',
-          'shenhailan',
-          'shilan',
-          'qunqing',
-          'yuanwei',
-          'xunyicao',
-          'meizizi',
-          'putaozi',
-          'xiangyuzi',
-          'shanhuhong',
-          'meiguifen',
-          'zhuanhong',
-        }.contains(value)
-        ? value!
-        : '';
-  }
-
-  static bool _isCustomThemeAccentId(String id) {
-    if (!id.startsWith('custom:')) return false;
-    final hex = id.substring('custom:'.length);
-    return hex.length == 6 && int.tryParse(hex, radix: 16) != null;
-  }
-
-  Future<void> setThemeAccent(String value) =>
-      {
-            'default',
-            'green',
-            'blue',
-            'purple',
-            'red',
-            'orange',
-            'jiucai',
-            'matcha',
-            'luhui',
-            'qingci',
-            'boheqing',
-            'chunrilv',
-            'qingkonglan',
-            'shenhailan',
-            'shilan',
-            'qunqing',
-            'yuanwei',
-            'xunyicao',
-            'meizizi',
-            'putaozi',
-            'xiangyuzi',
-            'shanhuhong',
-            'meiguifen',
-            'zhuanhong',
-            '',
-          }.contains(value) ||
-          _isCustomThemeAccentId(value)
-      ? _setting('themeAccent', value)
-      : Future.value();
-
-  String get themeBackground {
-    final value = _configurationError == null
-        ? _string('themeBackground')
-        : null;
-    return {'theme', 'solid', 'gradient', 'custom'}.contains(value)
-        ? value!
-        : 'theme';
-  }
-
-  Future<void> setThemeBackground(String value) =>
-      {'theme', 'solid', 'gradient', 'custom'}.contains(value)
-      ? _setting('themeBackground', value)
-      : Future.value();
-
-  String get themeBackgroundImage {
-    final value = _configurationError == null
-        ? _string('themeBackgroundImage')
-        : null;
-    return value ?? '';
-  }
-
-  Future<void> setThemeBackgroundImage(String value) =>
-      _setting('themeBackgroundImage', value);
-
-  Future<void> resetThemeSettings() async {
-    await setThemeModeStyle('');
-    await setThemeStyle('');
-    await setThemeAccent('');
-    await setThemeBackground('theme');
-    await setThemeBackgroundImage('');
+  /// 旧主题偏好迁移：删掉旧键，并清掉旧自定义背景图文件。
+  /// 锁定或快照未就绪时跳过，等下次启动再迁；旧值不影响新主题。
+  Future<void> migrateLegacyThemeSettings() async {
+    if (locked || _snapshot == null || !hasLegacyThemeSettings) return;
+    final imageFile = _string('themeBackgroundImage') ?? '';
+    await _queue(() async {
+      await _commit({}, remove: _legacyThemeKeys);
+      _notify();
+    });
+    if (imageFile.isNotEmpty) {
+      try {
+        final docs = await getApplicationDocumentsDirectory();
+        final file = File('${docs.path}/theme_background/$imageFile');
+        if (file.existsSync()) await file.delete();
+      } catch (_) {}
+    }
   }
 
   Future<void> setPlaybackPreferences(PlaybackPreferences value) {

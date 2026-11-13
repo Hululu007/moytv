@@ -10,7 +10,7 @@ enum PythonRuntimeError: Error {
 
   var message: String {
     switch self {
-    case .frameworkMissing: return "未找到 Python.framework（请先跑 scripts/prepare_ios_python.py）"
+    case .frameworkMissing: return "未找到 Python 运行时（请先跑 scripts/prepare_ios_python.py）"
     case .initializeFailed: return "CPython 初始化失败"
     case .hostModuleMissing: return "宿主脚本 py_spider_host 未能导入"
     case .hostFunctionMissing(let name): return "宿主脚本缺少函数：\(name)"
@@ -31,22 +31,21 @@ final class PythonRuntime {
 
   private init() {}
 
-  // PYTHONHOME 布局依据（BeeWare Python-Apple-support iOS 包，PEP 730 框架布局）：
-  // 发布包内 Python.xcframework 的每个切片即一个 Python.framework，其根目录下
-  // 有 lib/python3.12/（stdlib 本体，含 os.py 里程碑文件），框架根目录本身即
-  // 可作 PYTHONHOME；个别版本把 stdlib 放在 Resources/ 下，故按候选顺序实地
-  // 探测 lib/python3.12/os.py，命中哪个用哪个；都不命中即判定运行时缺失，
-  // 绝不用无标准库的主目录硬启解释器（Py_Initialize 对坏主目录会直接致命退出，错误无从捕获）。
+  // PYTHONHOME 布局依据（BeeWare Python-Apple-support 3.13，CPython iOS 官方
+  // install_python 模式）：构建期的“Process Python libraries”阶段调用
+  // xcframework 自带的 build/utils.sh，把标准库拷进包内 python/lib/，并把
+  // 每个 .so 扩展模块转成 Frameworks/<模块>.framework 单独签名（.fwork 占位
+  // + AppleFrameworkLoader 寻址，3.13 起才有此机制）。故 PYTHONHOME = 包内
+  // python/ 目录，以 lib/python3.13/os.py 为里程碑实地探测；不命中即判定
+  // 运行时缺失，绝不用无标准库的主目录硬启解释器（Py_Initialize 对坏主目录
+  // 会直接致命退出，错误无从捕获）。
+  // 注意：不要按 encodings.py 文件判定标准库——真实 CPython 里 encodings
+  // 永远是包目录；stdlib 里程碑只认 os.py。
   private func locatePythonHome() -> String? {
-    guard let frameworks = Bundle.main.privateFrameworksPath else { return nil }
-    let framework = (frameworks as NSString).appendingPathComponent("Python.framework")
-    guard FileManager.default.fileExists(atPath: framework) else { return nil }
-    let candidates = [framework, (framework as NSString).appendingPathComponent("Resources")]
-    for candidate in candidates {
-      let landmark = (candidate as NSString).appendingPathComponent("lib/python3.12/os.py")
-      if FileManager.default.fileExists(atPath: landmark) { return candidate }
-    }
-    return nil
+    let pythonDir = (Bundle.main.bundlePath as NSString).appendingPathComponent("python")
+    let landmark = (pythonDir as NSString).appendingPathComponent("lib/python3.13/os.py")
+    guard FileManager.default.fileExists(atPath: landmark) else { return nil }
+    return pythonDir
   }
 
   func probeAvailable() -> Bool {

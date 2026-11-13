@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/app_build.dart';
+import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/main.dart';
 import 'package:moyi/models.dart';
@@ -47,10 +48,10 @@ void main() {
 
       await tester.pumpWidget(MoyiApp(repository: repository, store: store));
       await tester.pumpAndSettle();
-      expect(store.themeMode, 'system');
+      expect(store.appTheme, AppThemeMode.purpleNeon);
       expect(
         Theme.of(tester.element(find.byType(HomeScreen))).brightness,
-        WidgetsBinding.instance.platformDispatcher.platformBrightness,
+        Brightness.dark,
       );
       final covers = find.byType(DramaCover);
       final firstCover = tester.getRect(covers.first);
@@ -98,13 +99,13 @@ void main() {
         expect(find.text('黄豆'), findsNothing);
         expect(find.text('红果'), findsOneWidget);
       }
-      await store.setThemeMode('dark');
+      await store.setAppTheme(AppThemeMode.purpleNeon);
       await tester.pumpAndSettle();
       await capture('interface-dark-catalog');
       await tester.tap(find.byKey(const ValueKey('bottom-nav-3')));
       await tester.pumpAndSettle();
       await capture('interface-dark-downloads');
-      await store.setThemeMode('light');
+      await store.setAppTheme(AppThemeMode.lightClean);
       await tester.pumpAndSettle();
       final menu = find.byKey(const ValueKey('download-queue-actions'));
       final filters = find.byKey(const ValueKey('download-filters'));

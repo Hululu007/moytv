@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -481,9 +482,9 @@ void main() {
       expect((emptyCategory['list'] as List).length, 1);
 
       final detail = await provider.detail(siteKey: jarSiteId, id: 'v2');
-      final item = (detail['list'] as List).first as Map;
-      expect(item['vod_play_from'], '线路1');
-      expect(item['vod_play_url'], '第1集\$p1');
+      expect(detail['vod_id'], 'v2');
+      expect(detail['vod_play_from'], ['线路1']);
+      expect(detail['vod_play_url'], ['第1集\$p1']);
 
       final play = await provider.play(
         siteKey: jarSiteId,
@@ -561,7 +562,9 @@ void main() {
         siteKey: 'test_py_builtin',
         id: 'a2',
       );
-      expect(((detail['list'] as List).first as Map)['vod_id'], 'a2');
+      expect(detail['vod_id'], 'a2');
+      expect(detail['vod_play_from'], ['默认']);
+      expect(detail['vod_play_url'], ['正片\$q1']);
       final play = await provider.play(
         siteKey: 'test_py_builtin',
         flag: '默认',
@@ -587,6 +590,77 @@ void main() {
       expect(seen[3]['flag'], '默认');
       expect(seen[3]['playId'], 'q1');
       expect(seen[4]['query'], '剧');
+    });
+
+    test('detail unwraps the vod and splits multi-line play fields', () async {
+      final provider = HostMiniAppSourceProvider(
+        jarCall: (_, method, _) async {
+          if (method == 'detailContent') {
+            return {
+              'list': [
+                {
+                  'vod_id': 'v9',
+                  'vod_name': '片九',
+                  'vod_pic': 'https://example.com/p.jpg',
+                  'vod_play_from': '线路1\$\$\$线路2',
+                  'vod_play_url': '第1集\$a1#第2集\$a2\$\$\$正片\$b1',
+                },
+              ],
+            };
+          }
+          return {};
+        },
+      );
+      final detail = await provider.detail(siteKey: jarSiteId, id: 'v9');
+      expect(detail['vod_id'], 'v9');
+      expect(detail['vod_name'], '片九');
+      expect(detail['vod_pic'], 'https://example.com/p.jpg');
+      expect(detail['vod_play_from'], ['线路1', '线路2']);
+      expect(detail['vod_play_url'], ['第1集\$a1#第2集\$a2', '正片\$b1']);
+      expect(detail.containsKey('list'), isFalse);
+    });
+
+    test('detail with an empty list returns an empty map', () async {
+      final provider = HostMiniAppSourceProvider(
+        jarCall: (_, _, _) async => {'list': []},
+      );
+      final detail = await provider.detail(siteKey: jarSiteId, id: 'v0');
+      expect(detail, isEmpty);
+    });
+
+    test('detail keeps array play fields and tolerates missing ones', () async {
+      final provider = HostMiniAppSourceProvider(
+        pyCall: (_, _) async => {
+          'list': [
+            {
+              'vod_id': 'a9',
+              'vod_play_from': ['线路A', '线路B'],
+              'vod_play_url': ['第1集\$x', ''],
+            },
+          ],
+        },
+      );
+      final detail = await provider.detail(
+        siteKey: 'test_py_builtin',
+        id: 'a9',
+      );
+      expect(detail['vod_play_from'], ['线路A', '线路B']);
+      expect(detail['vod_play_url'], ['第1集\$x', '']);
+
+      final missing = HostMiniAppSourceProvider(
+        pyCall: (_, _) async => {
+          'list': [
+            {'vod_id': 'a0', 'vod_name': '无线路片'},
+          ],
+        },
+      );
+      final noLines = await missing.detail(
+        siteKey: 'test_py_builtin',
+        id: 'a0',
+      );
+      expect(noLines['vod_id'], 'a0');
+      expect(noLines['vod_play_from'], isEmpty);
+      expect(noLines['vod_play_url'], isEmpty);
     });
 
     test('spider errors become SOURCE_FAILED', () async {
@@ -648,6 +722,230 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('proxyImageUrl builds a decodable pyproxy payload', () {
+      const proxyPic =
+          'proxy://do=py&siteKey=test_py_builtin&u=https%3A%2F%2Fcdn.example.com%2Fcover.jpg';
+      final url = HostMiniAppSourceProvider.proxyImageUrl(
+        'http://127.0.0.1:18080',
+        'test_py_builtin',
+        proxyPic,
+      );
+      expect(url, startsWith('http://127.0.0.1:18080/pyproxy?d='));
+      final uri = Uri.parse(url);
+      final payload =
+          jsonDecode(utf8.decode(base64Url.decode(uri.queryParameters['d']!)))
+              as Map<String, dynamic>;
+      expect(payload['source'], 'test_py_builtin');
+      expect(payload['param'], {
+        'do': 'py',
+        'siteKey': 'test_py_builtin',
+        'u': 'https://cdn.example.com/cover.jpg',
+      });
+    });
+
+    test('proxyParam without key=value pairs falls back to url', () {
+      expect(
+        HostMiniAppSourceProvider.proxyParam('https://x.example.com/a.jpg'),
+        {'url': 'https://x.example.com/a.jpg'},
+      );
+      expect(
+        HostMiniAppSourceProvider.proxyParam('u=https%3A%2F%2Fx%2Fa.jpg'),
+        {'u': 'https://x/a.jpg'},
+      );
+    });
+
+    test('py home/category/detail/search rewrite proxy pics only', () async {
+      const proxyPic =
+          'proxy://do=py&siteKey=test_py_builtin&u=https%3A%2F%2Fcdn.example.com%2Fcover.jpg';
+      const httpPic = 'https://cdn.example.com/plain.jpg';
+      Map<String, dynamic> vod(String id, String pic) => {
+        'vod_id': id,
+        'vod_name': '片$id',
+        'vod_pic': pic,
+      };
+      var capturedHome = <String, dynamic>{};
+      final provider = HostMiniAppSourceProvider(
+        imageBaseUrl: 'http://127.0.0.1:18080',
+        pyCall: (source, request) async {
+          switch (request['action']) {
+            case 'home':
+              capturedHome = {
+                'class': [
+                  {'type_id': '2', 'type_name': '剧集'},
+                ],
+                'list': [vod('a1', proxyPic), vod('a2', httpPic)],
+              };
+              return capturedHome;
+            case 'catalog':
+              if ((request['query'] as String? ?? '').isNotEmpty) {
+                return {
+                  'list': [vod('a3', proxyPic)],
+                };
+              }
+              return {
+                'list': [vod('a4', proxyPic), vod('a5', httpPic)],
+              };
+            case 'detail':
+              return {
+                'list': [
+                  {
+                    ...vod('a6', proxyPic),
+                    'vod_play_from': '默认',
+                    'vod_play_url': '正片\$q1',
+                  },
+                ],
+              };
+          }
+          return {};
+        },
+      );
+
+      final home = await provider.home('test_py_builtin');
+      final homeList = home['list'] as List;
+      expect(
+        (homeList[0] as Map)['vod_pic'],
+        HostMiniAppSourceProvider.proxyImageUrl(
+          'http://127.0.0.1:18080',
+          'test_py_builtin',
+          proxyPic,
+        ),
+      );
+      expect((homeList[1] as Map)['vod_pic'], httpPic);
+      // 改写不污染蜘蛛原始返回。
+      expect(
+        ((capturedHome['list'] as List)[0] as Map)['vod_pic'],
+        proxyPic,
+      );
+
+      final category = await provider.category(
+        siteKey: 'test_py_builtin',
+        tid: '2',
+        page: 1,
+      );
+      final categoryList = category['list'] as List;
+      expect(
+        ((categoryList[0] as Map)['vod_pic'] as String),
+        startsWith('http://127.0.0.1:18080/pyproxy?d='),
+      );
+      expect((categoryList[1] as Map)['vod_pic'], httpPic);
+
+      final detail = await provider.detail(
+        siteKey: 'test_py_builtin',
+        id: 'a6',
+      );
+      expect(
+        (detail['vod_pic'] as String),
+        startsWith('http://127.0.0.1:18080/pyproxy?d='),
+      );
+      expect(detail['vod_play_from'], ['默认']);
+      expect(detail['vod_play_url'], ['正片\$q1']);
+
+      final search = await provider.search(
+        siteKey: 'test_py_builtin',
+        wd: '剧',
+        page: 1,
+      );
+      expect(
+        (((search['list'] as List)[0] as Map)['vod_pic'] as String),
+        startsWith('http://127.0.0.1:18080/pyproxy?d='),
+      );
+    });
+
+    test('no rewrite without imageBaseUrl, jar pics untouched', () async {
+      const proxyPic = 'proxy://do=py&siteKey=x&u=https%3A%2F%2Fx%2Fa.jpg';
+      final noBase = HostMiniAppSourceProvider(
+        pyCall: (_, _) async => {
+          'list': [
+            {'vod_id': 'a1', 'vod_pic': proxyPic},
+          ],
+        },
+      );
+      final home = await noBase.home('test_py_builtin');
+      expect(((home['list'] as List)[0] as Map)['vod_pic'], proxyPic);
+
+      final jarProvider = HostMiniAppSourceProvider(
+        imageBaseUrl: 'http://127.0.0.1:18080',
+        jarCall: (_, _, _) async => {
+          'list': [
+            {'vod_id': 'v1', 'vod_pic': proxyPic},
+          ],
+        },
+      );
+      final jarHome = await jarProvider.home(jarSiteId);
+      expect(((jarHome['list'] as List)[0] as Map)['vod_pic'], proxyPic);
+    });
+
+    test('rewrite tolerates missing, empty and non-map pics', () {
+      final rewritten = HostMiniAppSourceProvider.rewriteProxyImages(
+        {
+          'list': [
+            {'vod_id': 'a1'},
+            {'vod_id': 'a2', 'vod_pic': ''},
+            {'vod_id': 'a3', 'vod_pic': 42},
+            'not-a-map',
+            {'vod_id': 'a4', 'vod_pic': 'proxy://u=https%3A%2F%2Fx%2Fa.jpg'},
+          ],
+        },
+        baseUrl: 'http://127.0.0.1:18080',
+        source: 'test_py_builtin',
+      );
+      final list = rewritten['list'] as List;
+      expect((list[0] as Map).containsKey('vod_pic'), isFalse);
+      expect((list[1] as Map)['vod_pic'], '');
+      expect((list[2] as Map)['vod_pic'], 42);
+      expect(list[3], 'not-a-map');
+      expect(
+        ((list[4] as Map)['vod_pic'] as String),
+        startsWith('http://127.0.0.1:18080/pyproxy?d='),
+      );
+    });
+
+    test('proxyFetch calls the proxy action for builtin py sites only',
+        () async {
+      final seen = <Map<String, dynamic>>[];
+      final provider = HostMiniAppSourceProvider(
+        pyCall: (source, request) async {
+          seen.add({'source': source, ...request});
+          return {
+            'status': 200,
+            'mime': 'image/jpeg',
+            'bodyBase64': 'aGVsbG8=',
+            'headers': {},
+          };
+        },
+      );
+      final result = await provider.proxyFetch('test_py_builtin', {
+        'u': 'https://cdn.example.com/cover.jpg',
+      });
+      expect(result['status'], 200);
+      expect(result['mime'], 'image/jpeg');
+      expect(seen.length, 1);
+      expect(seen[0]['action'], 'proxy');
+      expect(seen[0]['param'], {'u': 'https://cdn.example.com/cover.jpg'});
+
+      await expectLater(
+        provider.proxyFetch('test_py_config', {'u': 'https://x/a.jpg'}),
+        throwsA(
+          isA<MiniAppSourceFailure>().having(
+            (e) => e.code,
+            'code',
+            'SITE_NOT_FOUND',
+          ),
+        ),
+      );
+      await expectLater(
+        provider.proxyFetch('no_such_site', {'u': 'https://x/a.jpg'}),
+        throwsA(
+          isA<MiniAppSourceFailure>().having(
+            (e) => e.code,
+            'code',
+            'SITE_NOT_FOUND',
+          ),
+        ),
+      );
+      expect(seen.length, 1);
     });
   });
 

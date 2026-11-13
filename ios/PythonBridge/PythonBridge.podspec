@@ -10,8 +10,15 @@ Pod::Spec.new do |spec|
   spec.swift_version = '5.0'
   spec.source_files = 'Sources/**/*.{swift,c,h}'
   spec.public_header_files = 'Sources/**/*.h'
-  spec.resources = 'Resources/**/*'
-  spec.vendored_frameworks = '../Frameworks/Python.xcframework'
+  # Resources must be listed explicitly: a 'Resources/**/*' glob would also
+  # enumerate every file inside PythonVendor.bundle, and CocoaPods would copy
+  # those files flat into the app bundle root next to the bundle itself.
+  # Both entries are produced by scripts/prepare_ios_python.py before pod install.
+  spec.resources = ['Resources/py_spider_host.py', 'Resources/PythonVendor.bundle']
+  # No vendored_frameworks: Python.xcframework is referenced, linked and
+  # embedded by the Runner Xcode project itself (see prepare_ios_python.py).
+  # The pod keeps only the C shim plus the header search path below, so the
+  # framework is signed exactly once, by the Embed Frameworks phase.
   spec.static_framework = true
   spec.dependency 'Flutter'
   spec.frameworks = 'Foundation'

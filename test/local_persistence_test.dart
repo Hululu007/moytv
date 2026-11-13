@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_profiles.dart';
 import 'package:moyi/local_snapshot.dart';
 import 'package:moyi/local_store.dart';
@@ -78,7 +79,7 @@ void main() {
         for (final change in <Future<void> Function()>[
           () => store.toggleFavorite(next),
           () => store.clearHistory(),
-          () => store.setThemeMode('light'),
+          () => store.setAppTheme(AppThemeMode.lightClean),
           () => store.setPlaybackPreferences(
             const PlaybackPreferences(
               speed: 2,
@@ -91,12 +92,12 @@ void main() {
           await expectLater(change(), throwsStateError);
           expect(store.favorites.map((entry) => entry.id), [drama.id]);
           expect(store.watched(drama.id)?.position, 15);
-          expect(store.themeMode, 'system');
+          expect(store.appTheme, AppThemeMode.purpleNeon);
           expect(store.playbackPreferences.speed, 1);
           final restored = await restart(platform);
           expect(restored.favorites.single.id, drama.id);
           expect(restored.watched(drama.id)?.position, 15);
-          expect(restored.themeMode, 'system');
+          expect(restored.appTheme, AppThemeMode.purpleNeon);
           expect(
             restored.preferences.getString('plugin_secret'),
             'outside-the-backup',

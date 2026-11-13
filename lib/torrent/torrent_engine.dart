@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'native_torrent_engine.dart';
 import 'torrent_magnet.dart';
 
 enum TorrentEngineKind { torrServer, thunder, none }
@@ -54,12 +57,16 @@ class EngineTorrent {
     required this.name,
     this.size = 0,
     this.files = const [],
+    this.backendLabel = '',
   });
 
   final String infoHash;
   final String name;
   final int size;
   final List<EngineFile> files;
+
+  /// 实际承接的后端（TorrServer/迅雷），空表示未知。
+  final String backendLabel;
 }
 
 class TorrentStats {
@@ -234,13 +241,15 @@ abstract class TorrentEngine {
 }
 
 class UnavailableTorrentEngine implements TorrentEngine {
-  const UnavailableTorrentEngine();
+  const UnavailableTorrentEngine([this.unavailable = _defaultUnavailable]);
 
-  static const TorrentEngineUnavailable _unavailable =
+  static const TorrentEngineUnavailable _defaultUnavailable =
       TorrentEngineUnavailable(
         '种子引擎未接入：TorrServer 可执行文件与插件桥未接、迅雷 SDK 未接',
         whatIsNeeded: TorrentEngineFactory.missingPieces,
       );
+
+  final TorrentEngineUnavailable unavailable;
 
   @override
   TorrentEngineKind get kind => TorrentEngineKind.none;
@@ -252,21 +261,21 @@ class UnavailableTorrentEngine implements TorrentEngine {
   TorrentEngineStatus get status => TorrentEngineStatus.unavailable;
 
   @override
-  Future<void> start() async => throw _unavailable;
+  Future<void> start() async => throw unavailable;
 
   @override
   Future<void> stop() async {}
 
   @override
   Future<EngineTorrent> addTorrent(TorrentMagnet magnet) async =>
-      throw _unavailable;
+      throw unavailable;
 
   @override
-  Future<List<EngineFile>> files(String infoHash) async => throw _unavailable;
+  Future<List<EngineFile>> files(String infoHash) async => throw unavailable;
 
   @override
   Future<Uri> streamUrl(String infoHash, int fileIndex) async =>
-      throw _unavailable;
+      throw unavailable;
 
   @override
   Future<TorrentStats> stats(String infoHash) async => TorrentStats.empty;
@@ -276,12 +285,21 @@ class TorrentEngineFactory {
   const TorrentEngineFactory._();
 
   static const List<String> missingPieces = [
-    'TorrServer：64M 的 Go 服务端可执行文件（libtorrserver.so）需随包下发、解到应用目录后以子进程启动，并接 HTTP 接口',
-    'TorrServer 插件桥：torrserver_flutter 插件与前台服务（播放时保活）未接',
-    '迅雷：libxl_thunder_sdk.so 是闭源商业 SDK，未接、也不复用打包',
+    'TorrServer：64M 的 Go 服务端可执行文件仅随安卓包下发，无法在当前平台以子进程启动',
+    '迅雷 SDK：libxl_thunder_sdk.so 是安卓闭源商业 SDK，当前平台没有对应模块',
+    '种子播放仅支持安卓：当前平台没有原生种子引擎',
   ];
 
-  static TorrentEngine create() => const UnavailableTorrentEngine();
+  /// 安卓造原生引擎（TorrServer + 迅雷）；其它平台造诚实不可用引擎。
+  static TorrentEngine create() {
+    if (Platform.isAndroid) return NativeTorrentEngine();
+    return const UnavailableTorrentEngine(
+      TorrentEngineUnavailable(
+        '种子播放仅支持安卓：当前平台没有原生种子引擎',
+        whatIsNeeded: missingPieces,
+      ),
+    );
+  }
 
-  static bool get isEngineAvailable => false;
+  static bool get isEngineAvailable => Platform.isAndroid;
 }

@@ -4,9 +4,13 @@
 在 CI 的 iOS 任务里，build_ios.py 之后、upload-artifact 之前跑：
     python3 scripts/check_ios_py_runtime.py [dist/ios]
 
-逐个检查 dist/ios/*.ipa 的 zip 条目：
-  - Payload/*.app/Frameworks/Python.framework/lib/python3.12/os.py
-    （备料脚本并入框架的 stdlib 里程碑，解释器 PYTHONHOME 探测点）
+逐个检查 dist/ios/*.ipa 的 zip 条目（install_python 官方布局）：
+  - Payload/*.app/python/lib/python3.13/os.py
+    （构建期 install_python 拷进包内的标准库里程碑，解释器 PYTHONHOME 探测点）
+  - Payload/*.app/Frameworks/_ssl.framework/_ssl
+    （扩展模块已转成单体 framework 的证明；缺它蜘蛛就没有 HTTPS 能力）
+  - Payload/*.app/python/lib/python3.13/lib-dynload/_ssl.cpython-313-iphoneos.fwork
+    （.so 已被 .fwork 占位替换的证明，AppleFrameworkLoader 寻址用）
   - 任一 py_spider_host.py（宿主脚本，主包根或 Pod 资源包内均可）
   - PythonVendor.bundle/requests/__init__.py 与
     PythonVendor.bundle/certifi/cacert.pem（requests 兼容包）
@@ -31,9 +35,16 @@ def check_ipa(ipa_path):
     if not app_prefixes:
         return ["IPA 内没有 Payload/*.app"]
     for prefix in sorted(app_prefixes):
-        landmark = prefix + "Frameworks/Python.framework/lib/python3.12/os.py"
+        landmark = prefix + "python/lib/python3.13/os.py"
         if landmark not in names:
-            problems.append("%s 缺 Python.framework stdlib 里程碑" % prefix)
+            problems.append("%s 缺包内标准库里程碑 python/lib/python3.13/os.py" % prefix)
+        ssl_framework = prefix + "Frameworks/_ssl.framework/_ssl"
+        if ssl_framework not in names:
+            problems.append("%s 缺 _ssl 扩展 framework（install_python 未处理扩展模块）" % prefix)
+        ssl_fwork = (prefix + "python/lib/python3.13/lib-dynload/"
+                     "_ssl.cpython-313-iphoneos.fwork")
+        if ssl_fwork not in names:
+            problems.append("%s 缺 _ssl .fwork 占位文件" % prefix)
         if not any(name.startswith(prefix) and name.endswith("/py_spider_host.py")
                    for name in names):
             problems.append("%s 缺 py_spider_host.py" % prefix)

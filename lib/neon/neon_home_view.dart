@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../app_theme_config.dart';
 import '../core_bridge.dart';
 import '../models.dart';
 import '../widgets.dart';
@@ -27,6 +28,8 @@ class NeonHomeView extends StatefulWidget {
     this.onMenu,
     this.onRankings,
     this.onFeaturedPlay,
+    this.featuredItems,
+    this.onOpenFeatured,
     this.loading = false,
     this.loadingMore = false,
     this.hasMore = false,
@@ -46,6 +49,14 @@ class NeonHomeView extends StatefulWidget {
   final VoidCallback? onMenu;
   final VoidCallback? onRankings;
   final ValueChanged<Drama>? onFeaturedPlay;
+
+  /// 轮播覆盖位：非空时轮播直接用它（调用方已混排、去重、带真
+  /// 封面），热播推荐/猜你想看两排仍用 [items]，不受影响。
+  final List<Drama>? featuredItems;
+
+  /// 轮播位点按：混入的其它站源幻灯片由此打开（调用方先切区切
+  /// 源）；为空时轮播点按走 [onOpen]。两排点按恒走 [onOpen]。
+  final ValueChanged<Drama>? onOpenFeatured;
   final bool loading;
   final bool loadingMore;
   final bool hasMore;
@@ -62,6 +73,8 @@ class _NeonHomeViewState extends State<NeonHomeView> {
   int _page = 0;
 
   List<Drama> get _featured {
+    final override = widget.featuredItems;
+    if (override != null && override.isNotEmpty) return override;
     final out = <Drama>[];
     for (final drama in widget.items) {
       if (drama.isFolder || drama.cover.trim().isEmpty) continue;
@@ -236,7 +249,10 @@ class _NeonHomeViewState extends State<NeonHomeView> {
               child: Center(
                 child: Text(
                   '这个站源暂时没有内容',
-                  style: TextStyle(color: Neon.textDim, fontSize: 12),
+                  style: TextStyle(
+                    color: AppThemeConfig.of(context).textSecondary,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             )
@@ -303,7 +319,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
           duration: const Duration(milliseconds: 260),
           child: GestureDetector(
             key: ValueKey('neon-hero-${drama.id}'),
-            onTap: () => widget.onOpen(drama),
+            onTap: () => (widget.onOpenFeatured ?? widget.onOpen)(drama),
             onLongPress: () => widget.onLongPress(drama),
             child: Container(
               decoration: BoxDecoration(
@@ -392,6 +408,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                                   label: '马上看',
                                   height: 34,
                                   onTap: () => (widget.onFeaturedPlay ??
+                                          widget.onOpenFeatured ??
                                           widget.onOpen)(drama),
                                 ),
                               ],
@@ -496,9 +513,12 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                   ),
                 ),
               )
-            : const Text(
+            : Text(
                 '已经到底了',
-                style: TextStyle(fontSize: 10.5, color: Neon.textFaint),
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: AppThemeConfig.of(context).textSecondary,
+                ),
               ),
       ),
     );

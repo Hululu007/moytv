@@ -247,6 +247,7 @@ class MainActivity : FlutterActivity() {
         AudioCapsulePlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         ProxyKernelBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        TorrentBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         val bridge = PyBridge(this)
         pyBridge = bridge
         pyChannel = bridge.register(flutterEngine.dartExecutor.binaryMessenger)

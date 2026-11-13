@@ -23,6 +23,7 @@ import 'py_contract.dart';
 import 'background_downloads.dart';
 import 'local_store.dart';
 import 'playback_parse.dart';
+import 'torrent/torrent_playback_source.dart';
 import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
@@ -2469,6 +2470,18 @@ class NativeRepository extends AppRepository {
     int route = 0,
     bool adBlock = true,
   }) async {
+    if (drama.source == torrentPlaybackSourceId) {
+      final url = episode.raw[torrentStreamUrlKey] as String? ?? '';
+      if (url.isEmpty) {
+        throw AppFailure('种子流地址为空，无法播放');
+      }
+      return PlaybackPlan(
+        url: url,
+        originalUrl: url,
+        local: false,
+        needsParse: false,
+      );
+    }
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(drama.source);
     if (haijiaoGo != null) {
       try {

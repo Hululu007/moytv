@@ -13,6 +13,10 @@ on:
         type: choice
         options: [arm64-v8a, armeabi-v7a, x86_64]
         default: arm64-v8a
+      build_ios:
+        description: "同时构建 iOS 未签名包（macOS 任务，需手动勾选；未签名包装不到真 iPhone，需自行签名后侧载）"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths-ignore:
@@ -178,3 +182,90 @@ jobs:
             dist/android/*.apk
             dist/android/SHA256SUMS.txt
           generate_release_notes: true
+
+  ios:
+    # 未签名 IPA：没有开发者账号/签名证书时装不到真 iPhone，只能用于检查
+    # 编译与包结构，或由用户自行签名后侧载。本任务不做签名（用户未提账号）。
+    # 只在手动触发并勾选 build_ios 时跑，push 触发时跳过，不影响安卓任务。
+    if: ${{ inputs.build_ios }}
+    runs-on: macos-15
+    timeout-minutes: 150
+    concurrency:
+      group: ios-${{ github.ref }}-${{ github.event.inputs.variant || 'moyi' }}
+      cancel-in-progress: true
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 从分片拼回 drpy-node 内置小程序（59MB 大文件走不了接口上传）
+        run: |
+          set -e
+          cat drpy_chunks/com.leospring.drpy_node.zip.part-* > assets/miniapps/builtin/com.leospring.drpy_node.zip
+          ls -l assets/miniapps/builtin/com.leospring.drpy_node.zip
+          test "$(md5 -q assets/miniapps/builtin/com.leospring.drpy_node.zip)" = "6c47c482170f07d9911ff7257405e8f6"
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache: true
+          cache-dependency-path: native/go.sum
+
+      - name: 安装 Python 3.11（备料脚本与 requests 兼容包下载需要本机解释器）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 确认 CocoaPods
+        run: pod --version
+
+      - name: 准备 iOS Python 运行时（下载 BeeWare 3.13 包 + 挂接工程 + 同步宿主脚本 + 备 requests 兼容包）
+        run: python3 scripts/prepare_ios_python.py
+
+      - name: 构建 Go 核 + iOS 未签名包
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+          GOSUMDB: sum.golang.org
+        run: |
+          set -e
+          ARGS=""
+          if [ "$VARIANT" = "moyi" ]; then ARGS="$ARGS --all-sources"; fi
+          echo "构建参数：$ARGS"
+          python3 scripts/build_ios.py $ARGS
+
+      - name: 检查 IPA 内 Python 运行时
+        run: python3 scripts/check_ios_py_runtime.py dist/ios
+
+      - name: 列出产物
+        run: |
+          set -e
+          ls -lh dist/ios/ || true
+          cat dist/ios/SHA256SUMS.txt || true
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ env.VARIANT }}-unsigned-${{ github.run_number }}
+          path: |
+            dist/ios/*.ipa
+            dist/ios/SHA256SUMS.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 上传构建日志（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs-${{ github.run_number }}
+          path: |
+            build/logs/**
+          retention-days: 7
+          if-no-files-found: ignore

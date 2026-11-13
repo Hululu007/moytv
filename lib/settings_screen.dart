@@ -22,6 +22,7 @@ import 'py_bridge.dart';
 import 'import_center_screen.dart';
 import 'parse_settings_screen.dart';
 import 'liquid_glass.dart';
+import 'app_theme_config.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
 import 'remote_widgets.dart';
@@ -44,6 +45,8 @@ import 'models.dart';
 import 'playback_launch_screen.dart';
 import 'player_picker.dart';
 import 'saved_library.dart';
+import 'detail_screen.dart';
+import 'vod_detail_route.dart';
 
 String storageSize(int bytes) {
   if (bytes < 0) return '暂不可用';
@@ -135,7 +138,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _openSavedDrama(Drama drama) {
+  void _openSavedDrama(Drama drama, {bool resume = false}) {
+    if (vodOpenAction(
+          isVodZone: isVodZoneSource(SourceSite.byId(drama.source)),
+          resume: resume,
+        ) ==
+        VodOpenAction.detail) {
+      Navigator.of(context).push(
+        appPageRoute<void>(
+          settings: const RouteSettings(name: 'detail'),
+          builder: (_) => DetailScreen(
+            drama: drama,
+            repository: widget.repository,
+            store: widget.store,
+          ),
+        ),
+      );
+      return;
+    }
     unawaited(
       openPlaybackDirectly(
         context,
@@ -157,7 +177,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             store: widget.store,
             history: history,
             onOpen: _openSavedDrama,
-            onContinue: _openSavedDrama,
+            onContinue: (drama) => _openSavedDrama(drama, resume: true),
           ),
         ),
       ),
@@ -235,7 +255,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           lucide: LucideIcons.palette,
           color: const Color(0xFFAF52DE),
           title: '外观主题',
-          detail: '模式、风格、主题色与背景',
+          detail:
+              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 8 套主题',
           onTap: () => _push(ThemeSettingsScreen(store: store)),
         ),
         _SettingsItem(
@@ -367,8 +388,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           lucide: LucideIcons.download,
           color: const Color(0xFF30D158),
           title: '种子',
-          detail: '磁力链接解析与保存',
-          onTap: () => _push(const TorrentHomePage()),
+          detail: '磁力解析、文件导入与播放',
+          onTap: () => _push(
+            TorrentHomePage(repository: widget.repository, store: widget.store),
+          ),
         ),
       ]),
       _SettingsGroup('小程序', [

@@ -7,7 +7,9 @@ class TorrentPlaybackAdapter {
 
   final TorrentEngine engine;
 
-  bool get isAvailable => TorrentEngineFactory.isEngineAvailable;
+  /// 有真引擎（非未接入占位）才算可用：生产上工厂在安卓给原生引擎、
+  /// 其它平台给未接入占位；注入假引擎的测试也能走通取流链路。
+  bool get isAvailable => engine is! UnavailableTorrentEngine;
 
   bool canHandle(String url) => isTorrentLink(url);
 

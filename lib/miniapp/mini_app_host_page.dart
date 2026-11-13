@@ -13,6 +13,7 @@ import 'mini_app_manifest.dart';
 import 'mini_app_runtime.dart';
 import 'mini_app_sdk.dart';
 import 'mini_app_settings.dart';
+import 'mini_app_sources.dart';
 import '../playback_sniffer.dart';
 import 'haikuo/haikuo_runner_page.dart';
 
@@ -61,11 +62,19 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
       final instance = await widget.runtime.ensureRunning(widget.manifest);
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
+      // 封面改写与图片代理共用同一个 provider：改写指向本实例
+      // 的服务基址（WebView 已在用的地址），/pyproxy 路由走
+      // provider 的 proxyFetch（蜘蛛 localProxy 现成路径）。
+      final sourceProvider = HostMiniAppSourceProvider(
+        imageBaseUrl: instance.baseUrl,
+      );
+      instance.server.proxyFetch = sourceProvider.proxyFetch;
       late final MiniAppBridge bridge;
       bridge = MiniAppBridge(
         manifest: widget.manifest,
         appDir: instance.dir,
         prefs: prefs,
+        sourceProvider: sourceProvider,
         launchOptions: widget.launchOptions,
         callbacks: MiniAppBridgeCallbacks(
           evaluateJavascript: (js) async {

@@ -13,7 +13,7 @@ import 'app_update.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
-import 'theme_settings.dart';
+import 'app_theme_config.dart';
 import 'ui_style.dart';
 import 'external_py_import.dart';
 import 'playback_foreground.dart';
@@ -212,6 +212,10 @@ class _AppBootstrapState extends State<AppBootstrap>
         });
       }
       await ZooBuiltinSeeder.seed(repository);
+      final created = store;
+      if (created != null) {
+        unawaited(created.migrateLegacyThemeSettings());
+      }
     } catch (failure) {
       if (mounted) {
         setState(() {
@@ -267,8 +271,13 @@ class MoyiApp extends StatelessWidget {
   );
 
   Widget _application() {
-    // 把当前主题风格同步给全局通知器：抽屉、内容区等深层组件据此决定是否走霓虹视觉。
-    themeStyleNotifier.value = store?.themeStyle ?? '';
+    // 当前全局主题（8 套之一）：配色与亮暗全由主题自身决定；
+    // 同步给全局通知器，抽屉、内容区等深层组件据此决定是否走霓虹视觉。
+    final config = AppThemeConfig.forTheme(
+      store?.appTheme ?? AppThemeMode.purpleNeon,
+    );
+    appThemeNotifier.value = config.mode;
+    final themeData = config.toThemeData();
     return MaterialApp(
     navigatorKey: navigatorKey,
     navigatorObservers: [homeRouteObserver],
@@ -277,43 +286,23 @@ class MoyiApp extends StatelessWidget {
     locale: const Locale('zh', 'CN'),
     supportedLocales: const [Locale('zh', 'CN')],
     localizationsDelegates: GlobalMaterialLocalizations.delegates,
-    theme: applyThemePreferences(
-      AppTheme.platformLight,
-      modeStyle: store?.themeModeStyle ?? '',
-      style: store?.themeStyle ?? '',
-      accent: store?.themeAccent ?? '',
-    ),
-    darkTheme: applyThemePreferences(
-      AppTheme.platformDark,
-      modeStyle: store?.themeModeStyle ?? '',
-      style: store?.themeStyle ?? '',
-      accent: store?.themeAccent ?? '',
-    ),
-    themeMode: themeModeFor(
-      store?.themeModeStyle ?? '',
-      store?.themeMode ?? 'system',
-    ),
+    theme: themeData,
+    darkTheme: themeData,
+    themeMode: config.isDark ? ThemeMode.dark : ThemeMode.light,
     builder: (context, child) {
       final mode = store?.displayMode ?? 'auto';
       final tv = mode == 'television' || mode == 'auto' && television;
       final theme = Theme.of(context);
       return AnnotatedRegion<SystemUiOverlayStyle>(
         value: AppTheme.systemBars(theme.brightness),
-        child: ThemeBackgroundWrapper(
-          store: store,
+        child: AppThemeBackground(
           child: AppOrientationScope(
             television: tv,
             child: AppLayout(
               television: tv,
               version: version,
               child: Theme(
-                data: tv
-                    ? televisionTheme(
-                        theme.brightness == Brightness.dark
-                            ? AppTheme.dark
-                            : AppTheme.light,
-                      )
-                    : theme,
+                data: tv ? televisionTheme(theme) : theme,
                 child: Shortcuts(
                   shortcuts: const {
                     SingleActivator(

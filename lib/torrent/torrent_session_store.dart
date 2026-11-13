@@ -57,6 +57,25 @@ class TorrentSessionStore {
     return sessions;
   }
 
+  /// 批量导入：去重后按文件内顺序插到列表最前面，返回去重后的新会话。
+  Future<({List<TorrentSession> sessions, int added, int duplicates})>
+  addAll(List<TorrentMagnet> magnets) async {
+    final sessions = await load();
+    final existing = {for (final s in sessions) s.id};
+    final fresh = <TorrentSession>[];
+    var duplicates = 0;
+    for (final magnet in magnets) {
+      if (magnet.infoHash.isEmpty || !existing.add(magnet.infoHash)) {
+        duplicates++;
+        continue;
+      }
+      fresh.add(TorrentSession(magnet: magnet));
+    }
+    sessions.insertAll(0, fresh);
+    await save(sessions);
+    return (sessions: sessions, added: fresh.length, duplicates: duplicates);
+  }
+
   Future<List<TorrentSession>> remove(String infoHash) async {
     final sessions = await load();
     sessions.removeWhere((s) => s.id == infoHash);

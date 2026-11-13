@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_theme_config.dart';
+
 enum DramaUiStyle {
   ant;
 
@@ -26,11 +28,14 @@ Future<void> ensureDramaUiStyleLoaded() async {
   _dramaUiStyleLoaded = true;
 }
 
-/// 当前选中的视觉风格（对应设置里「外观主题」的 id，例如 neon / deep / candy）。
+/// 当前选中的全局主题（8 套之一）。
 ///
-/// 主题样式由 LocalStore 持久化，MaterialApp 构建时会把它同步到这里，
+/// 主题由 LocalStore 持久化，MaterialApp 构建时会把它同步到这里，
 /// 让深层组件（抽屉、内容区背景）也能判断要不要走霓虹视觉。
-final themeStyleNotifier = ValueNotifier<String>('');
+final appThemeNotifier = ValueNotifier<AppThemeMode>(
+  AppThemeMode.purpleNeon,
+);
 
-/// 霓虹暗夜风格是否生效。
-bool get neonStyleActive => themeStyleNotifier.value == 'neon';
+/// 霓虹视觉是否生效：当前主题是紫蓝霓虹时生效，其余主题走各自配色。
+bool get neonStyleActive =>
+    appThemeNotifier.value == AppThemeMode.purpleNeon;

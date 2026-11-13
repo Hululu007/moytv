@@ -11,17 +11,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'fixtures.dart';
 
 void main() {
-  test('vod open action routes all card taps to direct playback', () {
+  test('vod open action routes plain card taps to detail, resume to playback', () {
     expect(
       vodOpenAction(isVodZone: true, resume: false),
-      VodOpenAction.directPlayback,
-    );
-    expect(
-      vodOpenAction(isVodZone: true, resume: true),
-      VodOpenAction.directPlayback,
+      VodOpenAction.detail,
     );
     expect(
       vodOpenAction(isVodZone: false, resume: false),
+      VodOpenAction.detail,
+    );
+    expect(
+      vodOpenAction(isVodZone: true, resume: true),
       VodOpenAction.directPlayback,
     );
     expect(

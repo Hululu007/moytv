@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../app_theme_config.dart';
+import '../category_sidebar.dart';
 import '../core_bridge.dart';
 import '../models.dart';
 import '../widgets.dart';
@@ -52,20 +54,31 @@ class NeonChannelView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 600;
+    final config = AppThemeConfig.of(context);
     return Column(
       children: [
-        _header(),
+        _header(config),
         _filterBar(),
         const SizedBox(height: 6),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(width: compact ? 82 : 104, child: _channelRail()),
+              CategorySidebar(
+                config: config,
+                items: [
+                  const CategorySidebarItem(id: '', name: '热门'),
+                  for (final category in categories)
+                    CategorySidebarItem(
+                      id: category.id,
+                      name: category.name,
+                    ),
+                ],
+                selectedId: selectedCategory,
+                onSelect: onCategory,
+              ),
               const SizedBox(width: 8),
-              Expanded(child: _wall()),
+              Expanded(child: _wall(config)),
             ],
           ),
         ),
@@ -73,7 +86,7 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _header() {
+  Widget _header(AppThemeConfig config) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 12, 4),
       child: Row(
@@ -86,14 +99,14 @@ class NeonChannelView extends StatelessWidget {
             highlight: true,
           ),
           const SizedBox(width: 10),
-          const Text(
+          Text(
             '频道分类',
             style: TextStyle(
               fontSize: 25,
               height: 1.0,
               fontWeight: FontWeight.w900,
               letterSpacing: .5,
-              color: Colors.white,
+              color: config.textPrimary,
             ),
           ),
           const Spacer(),
@@ -179,78 +192,7 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _channelRail() {
-    final entries = <(String, String)>[
-      ('', '热门'),
-      for (final category in categories)
-        (category.id, category.name),
-    ];
-    return ListView.builder(
-      key: const ValueKey('neon-channel-rail'),
-      padding: const EdgeInsets.fromLTRB(10, 4, 4, 24),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        final selected = entry.$1 == selectedCategory;
-        return GestureDetector(
-          key: ValueKey('neon-channel-${entry.$1.isEmpty ? 'hot' : entry.$1}'),
-          behavior: HitTestBehavior.opaque,
-          onTap: () => onCategory(entry.$1),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-              decoration: BoxDecoration(
-                gradient: selected ? Neon.cyanGradient : null,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: selected
-                    ? [
-                        BoxShadow(
-                          color: Neon.cyan.withValues(alpha: .40),
-                          blurRadius: 16,
-                          spreadRadius: -4,
-                        ),
-                      ]
-                    : null,
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    index == 0 ? LucideIcons.flame : LucideIcons.clapperboard,
-                    size: 12,
-                    color: selected
-                        ? const Color(0xFF04141C)
-                        : Neon.textFaint,
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      entry.$2,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.0,
-                        fontWeight: selected
-                            ? FontWeight.w800
-                            : FontWeight.w600,
-                        color: selected
-                            ? const Color(0xFF04141C)
-                            : Neon.textDim,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _wall() {
+  Widget _wall(AppThemeConfig config) {
     if (loading && items.isEmpty) {
       return const Center(
         child: CircularProgressIndicator.adaptive(strokeWidth: 2),
@@ -260,7 +202,7 @@ class NeonChannelView extends StatelessWidget {
       return Center(
         child: Text(
           '这个频道暂时没有内容',
-          style: TextStyle(color: Neon.textDim, fontSize: 12),
+          style: TextStyle(color: config.textSecondary, fontSize: 12),
         ),
       );
     }
@@ -318,7 +260,10 @@ class NeonChannelView extends StatelessWidget {
                     )
                   : Text(
                       '已经到底了',
-                      style: TextStyle(fontSize: 10.5, color: Neon.textFaint),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: config.textSecondary,
+                      ),
                     ),
             ),
           ),

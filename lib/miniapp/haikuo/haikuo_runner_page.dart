@@ -563,16 +563,20 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       },
       child: Scaffold(
         backgroundColor: const Color(0xFF120B20),
-        appBar: AppBar(
-          title: Text(widget.program.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          actions: [
-            IconButton(
-              tooltip: '刷新',
-              icon: const Icon(Icons.refresh_rounded),
-              onPressed: () => _controller?.reload(),
-            ),
-          ],
-        ),
+        // 内嵌全屏时顶栏连占位高度一起藏掉，播放器真正占满屏幕；
+        // 退出全屏恢复。非全屏（包括内嵌非全屏）顶栏不动。
+        appBar: _inlineFullscreen
+            ? null
+            : AppBar(
+                title: Text(widget.program.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                actions: [
+                  IconButton(
+                    tooltip: '刷新',
+                    icon: const Icon(Icons.refresh_rounded),
+                    onPressed: () => _controller?.reload(),
+                  ),
+                ],
+              ),
         body: _error != null
             ? _RunnerError(message: _error!)
             : _loading || _controller == null
