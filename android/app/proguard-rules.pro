@@ -3,4 +3,7 @@
 -keep class org.jsoup.** { *; }
 -keep class com.google.gson.** { *; }
 -keep class com.xunlei.** { *; }
+-keep class com.github.catvod.Init { *; }
+-keep class com.github.catvod.utils.Prefers { *; }
+-keep class com.github.catvod.utils.Path { *; }
 -keepattributes Signature

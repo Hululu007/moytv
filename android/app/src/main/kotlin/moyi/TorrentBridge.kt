@@ -3,6 +3,7 @@ package moyi
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.github.catvod.spider.Init
 import com.xunlei.downloadlib.XLTaskHelper
 import com.xunlei.downloadlib.parameter.GetTaskId
 import com.xunlei.downloadlib.parameter.TorrentFileInfo
@@ -58,6 +59,9 @@ object TorrentBridge {
     private val thunderTasks = ConcurrentHashMap<String, ThunderTask>()
 
     fun register(messenger: BinaryMessenger, context: Context) {
+        // 迅雷 aar 构造 XLDownloadManager 时就要 Init.context()，通道接通前先保证
+        // 兼容层已初始化；JarBridge 也调过，init 是幂等赋值，重复调无害。
+        Init.init(context)
         MethodChannel(messenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "torrserverStatus" -> runAsync(result) { torrserverStatus(context) }
