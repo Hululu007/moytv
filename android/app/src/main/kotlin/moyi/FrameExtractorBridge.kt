@@ -81,7 +81,7 @@ object FrameExtractorBridge {
                     return null
                 }
                 val bytes = out.toByteArray()
-                return bytes.ifEmpty { null }
+                return if (bytes.isEmpty()) null else bytes
             } finally {
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
