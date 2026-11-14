@@ -5,6 +5,7 @@ import '../app_theme_config.dart';
 import '../category_sidebar.dart';
 import '../core_bridge.dart';
 import '../models.dart';
+import '../neon_glass_kit.dart';
 import '../widgets.dart';
 import 'neon_ui.dart';
 
@@ -26,6 +27,8 @@ class NeonChannelView extends StatelessWidget {
     required this.onFilter,
     required this.onRankings,
     this.onLoadMore,
+    this.onSwitchSource,
+    this.sourceLabel,
     this.sortLabel = '全部类型',
     this.filtersActive = false,
     this.loading = false,
@@ -45,6 +48,13 @@ class NeonChannelView extends StatelessWidget {
   final VoidCallback onFilter;
   final VoidCallback onRankings;
   final VoidCallback? onLoadMore;
+
+  /// 第一个下拉胶囊（原“全部类型”）现在是站点切换入口：点开站源列表
+  /// 切站，侧栏分类与内容随之走；不传时回落到 onFilter（旧行为）。
+  final VoidCallback? onSwitchSource;
+
+  /// 站点切换胶囊上显示的当前站名；不传时显示 sortLabel。
+  final String? sourceLabel;
   final String sortLabel;
   final bool filtersActive;
   final bool loading;
@@ -58,7 +68,7 @@ class NeonChannelView extends StatelessWidget {
     return Column(
       children: [
         _header(config),
-        _filterBar(),
+        _filterBar(config),
         const SizedBox(height: 6),
         Expanded(
           child: Row(
@@ -128,40 +138,36 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _filterBar() {
+  Widget _filterBar(AppThemeConfig config) {
     return SizedBox(
       height: 40,
       child: Row(
         children: [
           const SizedBox(width: 14),
-          _homeDot(),
+          _homeDot(config),
           const SizedBox(width: 8),
           Expanded(
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.only(right: 12),
               children: [
-                NeonPill(
+                NeonCapsule(
                   key: const ValueKey('neon-filter-all'),
-                  label: sortLabel,
-                  icon: const Icon(
-                    LucideIcons.chevronDown,
-                    size: 11,
-                    color: Neon.textDim,
-                  ),
+                  label: sourceLabel ?? sortLabel,
+                  icon: LucideIcons.chevronDown,
                   selected: filtersActive,
-                  onTap: onFilter,
+                  onTap: onSwitchSource ?? onFilter,
                 ),
                 const SizedBox(width: 7),
-                NeonPill(
+                NeonCapsule(
                   label: '热门',
                   selected: !filtersActive,
                   onTap: onFilter,
                 ),
                 const SizedBox(width: 7),
-                NeonPill(label: '最新', selected: false, onTap: onFilter),
+                NeonCapsule(label: '最新', selected: false, onTap: onFilter),
                 const SizedBox(width: 7),
-                NeonPill(label: '完结', selected: false, onTap: onFilter),
+                NeonCapsule(label: '完结', selected: false, onTap: onFilter),
               ],
             ),
           ),
@@ -170,7 +176,7 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _homeDot() {
+  Widget _homeDot(AppThemeConfig config) {
     return GestureDetector(
       onTap: onBack,
       child: Container(
@@ -178,16 +184,14 @@ class NeonChannelView extends StatelessWidget {
         height: 34,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: Neon.hotGradient,
-          boxShadow: [
-            BoxShadow(
-              color: Neon.pink.withValues(alpha: .45),
-              blurRadius: 14,
-              spreadRadius: -3,
-            ),
-          ],
+          gradient: neonSelectedGradient(config),
+          boxShadow: [neonGlow(config, blur: 14)],
         ),
-        child: const Icon(LucideIcons.house, size: 16, color: Colors.white),
+        child: Icon(
+          LucideIcons.house,
+          size: 16,
+          color: config.selectedText,
+        ),
       ),
     );
   }
@@ -248,13 +252,16 @@ class NeonChannelView extends StatelessWidget {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                            color: Neon.purple.withValues(alpha: .45),
+                            color: config.primaryColor.withValues(alpha: .45),
                           ),
-                          color: Neon.surfaceHigh.withValues(alpha: .8),
+                          color: config.unselectedBg.withValues(alpha: .8),
                         ),
-                        child: const Text(
+                        child: Text(
                           '加载更多',
-                          style: TextStyle(fontSize: 11.5, color: Neon.textDim),
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: config.textSecondary,
+                          ),
                         ),
                       ),
                     )

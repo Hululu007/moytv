@@ -73,7 +73,7 @@ class _FakeSource implements ContentSource {
 ContentBook _book(String id, String title) => ContentBook(id: id, title: title);
 
 void main() {
-  test('收齐两区：听书 8 个 + 阅读 19 个，id 唯一，成人源也在列', () {
+  test('收齐两区：听书 9 个 + 阅读 19 个，id 唯一，成人源也在列', () {
     addTearDown(() => ContentRegistry.setNovelImports([]));
     ContentRegistry.setNovelImports([]);
     final targets = globalSearchBookTargets(
@@ -96,6 +96,7 @@ void main() {
       'hsvoice31',
       'tingyou',
       'hysxs',
+      'asmrmoon',
       'jar_tingshu',
     ]);
     expect(novel.length, 19);
@@ -104,7 +105,7 @@ void main() {
       containsAll(['aabook', 'buliang', 'mhbl', 'ho5ho', 'kxmanhua']),
     );
     // 无门禁：成人源 id 都在列；全表 id 不重复。
-    expect(targets.map((t) => t.source.id).toSet().length, 27);
+    expect(targets.map((t) => t.source.id).toSet().length, 28);
   });
 
   test('去重：同 id 两区都出现只留一个，听书优先', () {

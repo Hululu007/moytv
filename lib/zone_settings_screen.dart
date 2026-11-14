@@ -26,8 +26,7 @@ class ZoneSettingsScreen extends StatelessWidget {
   final VoidCallback? onHideAdult;
 
   String get title => switch (zone) {
-    HomeZone.drama => '短剧设置',
-    HomeZone.vod => '点播设置',
+    HomeZone.library => '片库设置',
     HomeZone.live => '直播设置',
     HomeZone.audio => '听书设置',
     HomeZone.novel => '阅读设置',
@@ -61,8 +60,7 @@ class ZoneSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final entries = <Widget>[];
     switch (zone) {
-      case HomeZone.drama:
-      case HomeZone.vod:
+      case HomeZone.library:
         break;
       case HomeZone.live:
         entries.add(
@@ -77,9 +75,7 @@ class ZoneSettingsScreen extends StatelessWidget {
       case HomeZone.novel:
         break;
     }
-    if (zone == HomeZone.drama ||
-        zone == HomeZone.vod ||
-        zone == HomeZone.live) {
+    if (zone == HomeZone.library || zone == HomeZone.live) {
       entries.add(
         _entry(
           icon: Icons.play_circle_rounded,
@@ -97,7 +93,7 @@ class ZoneSettingsScreen extends StatelessWidget {
         ),
       );
     }
-    if (zone == HomeZone.vod) {
+    if (zone == HomeZone.library) {
       entries.add(
         _entry(
           icon: Icons.link_rounded,
@@ -107,7 +103,7 @@ class ZoneSettingsScreen extends StatelessWidget {
         ),
       );
     }
-    if (zone == HomeZone.vod) {
+    if (zone == HomeZone.library) {
       entries.add(
         _entry(
           icon: Icons.dns_rounded,
@@ -120,14 +116,14 @@ class ZoneSettingsScreen extends StatelessWidget {
         ),
       );
     }
-    // 点播区是合并后的唯一视频区，未成年保护开关跟到点播区设置里，
-    // 语义与火蚁TV午夜区设置里的一致：一次性离开视频区、回到短剧区。
-    if (zone == HomeZone.vod && onHideAdult != null) {
+    // 片库是合并后的唯一视频区，未成年保护开关跟到片库设置里，
+    // 语义与火蚁TV午夜区设置里的一致：一次性切回短剧站。
+    if (zone == HomeZone.library && onHideAdult != null) {
       entries.add(
         SwitchListTile(
           secondary: const Icon(Icons.shield_rounded),
           title: const Text('未成年保护'),
-          subtitle: const Text('开启后隐藏成人站并回到短剧区'),
+          subtitle: const Text('开启后隐藏成人站并切回短剧站'),
           value: false,
           onChanged: (value) {
             if (value) {

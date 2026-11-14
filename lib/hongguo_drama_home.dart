@@ -4,8 +4,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import 'app_page_route.dart';
+import 'app_theme_config.dart';
+import 'category_levels.dart';
 import 'compact_chip.dart';
+import 'content_tier_filter.dart';
 import 'core_bridge.dart';
+import 'feed_adult_mix.dart';
 import 'hero_mix.dart';
 import 'hongguo_account.dart';
 import 'hongguo_account_entry.dart';
@@ -14,11 +18,13 @@ import 'hongguo_danmaku.dart';
 import 'hongguo_playback_page.dart';
 import 'hongguo_preload.dart';
 import 'local_store.dart';
+import 'midnight_zone.dart';
 import 'models.dart';
 import 'neon/neon_channel_view.dart';
 import 'neon/neon_home_view.dart';
 import 'neon/neon_ui.dart';
 import 'playback_foreground.dart';
+import 'theme_settings_screen.dart';
 import 'tvbox_player_bridge.dart';
 import 'watchroom/player.dart';
 import 'widgets.dart';
@@ -54,6 +60,9 @@ Future<int?> hongguoFirstPlayableEpisode({
 }
 
 class HongguoDramaHome extends StatefulWidget {
+  /// “我的”页的内层页签下标（0 全屏流 / 1 剧场 / 2 我的 / 3 霓虹首页 / 4 频道）。
+  static const mineTabIndex = 2;
+
   const HongguoDramaHome({
     super.key,
     required this.dramas,
@@ -81,6 +90,10 @@ class HongguoDramaHome extends StatefulWidget {
     required this.onOpenSaved,
     this.onSettingsPressed,
     this.onOpenFeatured,
+    this.currentSourceLabel,
+    this.requestedTab,
+    this.contentTier,
+    this.tierEmpty = false,
   });
 
   final List<Drama> dramas;
@@ -114,6 +127,23 @@ class HongguoDramaHome extends StatefulWidget {
   /// 霓虹轮播位点按：混入的其它站源幻灯片由此打开（壳侧先切区切
   /// 源）；为空时轮播点按走 [onOpenDrama]。
   final ValueChanged<Drama>? onOpenFeatured;
+
+  /// 频道页站点切换胶囊上显示的当前站名（全部站源时为“全部站源”）；
+  /// 不传时胶囊显示旧的 sortLabel。
+  final String? currentSourceLabel;
+
+  /// 外层请求的内层页签：非空且与上次不同时，state 把页签驱过去
+  /// （底部 Tab“我的”由此进入“我的”页）；胶囊栏点按不受其影响。
+  final int? requestedTab;
+
+  /// 当前主题绑定的内容档：非全部档时，频道行只显示该档对应的频道，
+  /// 且当前频道被锁定在该档上（漫剧/真人剧档的内容由上游选类保证，
+  /// 成人档走成人聚合流）。不传或全部档时行为与原来一致。
+  final ContentTier? contentTier;
+
+  /// 内容档锁定的分类在本站不存在：所有内容页签（除“我的”页）显示
+  /// 诚实空态，不拿别的分类内容冒充。
+  final bool tierEmpty;
 
   @override
   State<HongguoDramaHome> createState() => _HongguoDramaHomeState();
@@ -173,6 +203,103 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   String _heroMixKey = '';
   int _heroMixGen = 0;
 
+  /// 成人频道条目：null = 尚未取到（加载中显示转圈，不显示空状态）；
+  /// [] = 取过但无内容（显示诚实空状态）。只在重抽键变化时重取。
+  List<Drama>? _adultFeed;
+  String _adultFeedKey = '';
+  int _adultFeedGen = 0;
+
+  /// 推荐频道混排结果：基础目录 + 均匀混入的成人条目；null = 尚未
+  /// 混入（显示未混排的基础目录）。与成人频道共用同一重抽键。
+  List<Drama>? _recommendMixed;
+
+  /// 成人频道与推荐混排的重抽判断：只在成人/推荐频道才取数；键
+  /// 不变时不重抽、不重取，牌序一会话内固定。
+  void _maybeRefreshAdultFeed() {
+    if (_channel != 'adult' && _channel != 'recommend') return;
+    final base = widget.dramas.where((drama) => drama.kind == 'video').toList();
+    final visibleAdultIds = widget.store.sources
+        .where(
+          (site) =>
+              widget.store.siteVisible(site.id) &&
+              isAdultSourceName(site.name),
+        )
+        .map((site) => site.id)
+        .toList();
+    final key = feedMixKey(visibleAdultIds, heroMixKey(base));
+    if (key == _adultFeedKey) {
+      if (_recommendMixed == null && _adultFeed != null) {
+        _recommendMixed = mixRecommendFeed(
+          base: base,
+          adult: _adultFeed!,
+          random: Random(key.hashCode),
+        );
+      }
+      return;
+    }
+    final hadFeed = _adultFeed != null;
+    _adultFeedKey = key;
+    _adultFeed = null;
+    _recommendMixed = null;
+    if (visibleAdultIds.isEmpty) {
+      _adultFeed = const [];
+      if (hadFeed && mounted) setState(() {});
+      return;
+    }
+    final gen = ++_adultFeedGen;
+    final sites = sampleAdultSites(
+      widget.store.sources
+          .where((site) => widget.store.siteVisible(site.id))
+          .toList(),
+      random: Random(),
+      count: feedAdultMaxSites,
+    );
+    if (sites.isEmpty) {
+      _adultFeed = const [];
+      if (hadFeed && mounted) setState(() {});
+      return;
+    }
+    unawaited(_loadAdultFeed(sites, key, gen));
+  }
+
+  /// 异步取成人站首页：单站超时隔离、失败静默跳过；结果只在代次
+  /// 与键都未变时才生效，过期结果直接丢弃（与轮播混排同一做法）。
+  Future<void> _loadAdultFeed(
+    List<SourceSite> sites,
+    String key,
+    int gen,
+  ) async {
+    final results = await Future.wait(sites.map((site) async {
+      try {
+        final page = await widget.repository
+            .catalog(site.id)
+            .timeout(heroMixSiteTimeout);
+        return feedAdultCandidates(page.items);
+      } catch (_) {
+        return const <Drama>[];
+      }
+    }));
+    if (!mounted || gen != _adultFeedGen || key != _adultFeedKey) return;
+    final adult = buildAdultFeed(results);
+    final base = widget.dramas.where((drama) => drama.kind == 'video').toList();
+    setState(() {
+      _adultFeed = adult;
+      _recommendMixed = mixRecommendFeed(
+        base: base,
+        adult: adult,
+        random: Random(key.hashCode),
+      );
+    });
+    // 成人频道刚取到内容时主动起播首条；推荐频道若已在播则不打断，
+    // 混排只影响下一刷的顺序。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _videos.isEmpty) return;
+      if (_channel == 'adult' || !_player.hasVideo) {
+        unawaited(_playCurrent());
+      }
+    });
+  }
+
   /// 轮播混排重抽判断：默认首页（无搜词、未选分类）才混入；搜词
   /// 与分类浏览时轮播保持当前目录原样。键不变时不重抽、不重取。
   void _maybeRefreshHeroMix() {
@@ -227,6 +354,10 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   void initState() {
     super.initState();
+    final requested = widget.requestedTab;
+    if (requested != null) _tab = requested;
+    final locked = _lockedChannelKey;
+    if (locked != null) _channel = locked;
     final videos = _videos;
     _videoKeys = videos.map(_keyFor).join('|');
     final resume = _resume;
@@ -255,6 +386,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     }
     unawaited(_accountController.load());
     _maybeRefreshHeroMix();
+    _maybeRefreshAdultFeed();
   }
 
   String get _siteName {
@@ -338,15 +470,23 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   void didUpdateWidget(HongguoDramaHome oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.requestedTab != null &&
+        widget.requestedTab != oldWidget.requestedTab) {
+      _selectTab(widget.requestedTab!);
+    }
     _maybeRefreshHeroMix();
     if (widget.selectedCategory != oldWidget.selectedCategory) {
       _theaterTagLevel2 = null;
       _theaterTagLevel3 = null;
       _drillPath = [];
     }
-    if (_channel != 'follow') {
+    if (_channel != 'follow' && _channel != 'adult') {
       _channel = _channelForCategory(widget.selectedCategory) ?? '';
     }
+    // 内容档锁定位于选类同步之后：锁定的档优先于选类推导出的频道。
+    final locked = _lockedChannelKey;
+    if (locked != null && _channel != locked) _channel = locked;
+    _maybeRefreshAdultFeed();
     final next = _videos;
     final nextKeys = next.map(_keyFor).join('|');
     if (nextKeys == _videoKeys) return;
@@ -431,6 +571,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   String _keyFor(Drama drama) => '${drama.source}|${drama.id}';
 
   List<Drama> get _videos {
+    // 内容档锁定的分类不存在：绝不拿别的分类内容冒充。
+    if (widget.tierEmpty) return const [];
     if (_channel == 'follow') {
       return widget.store.favorites
           .where(
@@ -440,7 +582,12 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           )
           .toList();
     }
-    return widget.dramas.where((drama) => drama.kind == 'video').toList();
+    if (_channel == 'adult') return _adultFeed ?? const [];
+    final base = widget.dramas.where((drama) => drama.kind == 'video').toList();
+    if (_channel == 'recommend' && _recommendMixed != null) {
+      return _recommendMixed!;
+    }
+    return base;
   }
 
   _Channel _recommendChannel() {
@@ -470,6 +617,10 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
+  /// 内容档锁定的频道键；全部档（或未传档）不锁定。
+  String? get _lockedChannelKey =>
+      tierChannelKey(widget.contentTier ?? ContentTier.all);
+
   List<_Channel> get _channels {
     final byKey = <String, _Channel>{'recommend': _recommendChannel()};
     for (final category in widget.categories) {
@@ -487,10 +638,21 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       }
     }
     byKey['follow'] = (key: 'follow', label: '关注', categoryId: null);
-    return [
-      for (final key in ['follow', 'comic', 'real', 'recommend'])
+    byKey['adult'] = (key: 'adult', label: '成人视频', categoryId: null);
+    final all = [
+      for (final key in ['follow', 'comic', 'real', 'adult', 'recommend'])
         if (byKey.containsKey(key)) byKey[key]!,
     ];
+    // 内容档锁定时频道行只留该档对应的频道；对应分类不存在时仍显示
+    // 该档标签（内容区由诚实空态接管），不回落到别的频道。
+    final locked = _lockedChannelKey;
+    if (locked != null) {
+      final hit = all.where((channel) => channel.key == locked).toList();
+      if (hit.isNotEmpty) return hit;
+      final tier = widget.contentTier ?? ContentTier.all;
+      return [(key: locked, label: tier.label, categoryId: null)];
+    }
+    return all;
   }
 
   String? _channelForCategory(String categoryId) {
@@ -796,7 +958,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       _synopsisExpanded = false;
       _detailError = null;
     });
-    if (channel.key == 'follow') {
+    if (channel.key == 'follow' || channel.key == 'adult') {
       _goToPage(0);
     } else if (channel.categoryId != null &&
         channel.categoryId != widget.selectedCategory) {
@@ -804,6 +966,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     } else {
       _goToPage(0);
     }
+    _maybeRefreshAdultFeed();
   }
 
   void _selectTab(int index) {
@@ -844,10 +1007,14 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   Widget build(BuildContext context) {
     final neonTab = _tab >= 3;
+    // 内容档锁定的分类不存在：除“我的”页外，所有内容页签都显示诚实空态。
+    final tierGated = widget.tierEmpty && _tab != HongguoDramaHome.mineTabIndex;
     return Scaffold(
       backgroundColor: _tab == 0 ? Colors.black : (neonTab ? Neon.bg : null),
       extendBody: neonTab,
-      body: neonTab
+      body: tierGated
+          ? _tierEmptyView()
+          : neonTab
           ? NeonBackdrop(
               // 频道页参考图是「顶部紫色主光 + 左中光更弱」的布局。
               intensity: _tab == _neonHomeTab ? 1 : .58,
@@ -906,18 +1073,60 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onSearch: widget.onOpenGlobalSearch,
       onFilter: widget.onFilterPressed,
       onRankings: widget.onRankingsPressed,
+      onSwitchSource: widget.onPickSource,
+      sourceLabel: widget.currentSourceLabel,
       filtersActive: widget.filtersActive,
+    );
+  }
+
+  /// 内容档锁定的分类在本站不存在时的诚实空态：两个动作都是真实的——
+  /// 切回全部内容档（写回当前主题的显示方案）、切换站点（外层选源）。
+  /// 空态本身不提供抽屉入口，这两个出口就是逃生通道，不可删。
+  Widget _tierEmptyView() {
+    final tier = widget.contentTier ?? ContentTier.all;
+    return SafeArea(
+      child: StatusPanel(
+        title: '暂无${tier.label}',
+        message: '当前站点没有「${tier.label}」分类，切回全部内容或换个站点。',
+        action: '切回全部内容',
+        onRetry: () => saveUserChange(
+          context,
+          () => widget.store.setDisplayScheme(
+            widget.store.appTheme,
+            widget.store
+                .displayScheme(widget.store.appTheme)
+                .copyWith(contentTier: ContentTier.all),
+          ),
+        ),
+        secondaryAction: TextButton(
+          onPressed: widget.onPickSource,
+          child: const Text('切换站点'),
+        ),
+      ),
     );
   }
 
   Widget _feed(BuildContext context) {
     final videos = _videos;
     if (videos.isEmpty) {
+      if (_channel == 'adult' && _adultFeed == null) {
+        return const SafeArea(
+          child: Center(
+            child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+          ),
+        );
+      }
       return SafeArea(
         child: StatusPanel(
-          title: _channel == 'follow' ? '暂无关注短剧' : '暂无可播短剧',
+          title: _channel == 'follow'
+              ? '暂无关注短剧'
+              : _channel == 'adult'
+              ? '暂无成人视频'
+              : '暂无可播短剧',
           message: _channel == 'follow'
               ? '在剧集上点收藏后，这里会显示你关注的短剧。'
+              : _channel == 'adult'
+              ? '没有可见的成人站，或成人站暂无内容。'
               : '可以换个分类或刷新后重试。',
         ),
       );
@@ -1374,6 +1583,44 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
+  /// 剧场分类的两级拆分（见 [splitCategoryLevels]）。
+  ({List<CatalogCategory> level1, List<CatalogCategory> level2})
+  get _theaterLevels => splitCategoryLevels(widget.categories);
+
+  /// 剧场分类单排：一级排与二级排同一渲染与点选行为。
+  Widget _theaterCategoryRow(List<CatalogCategory> categories) {
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: categories
+            .map(
+              (category) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: ChoiceChip(
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(category.name),
+                      if (category.isFolder) ...[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.folder_open, size: 14),
+                      ],
+                    ],
+                  ),
+                  selected:
+                      widget.selectedCategory ==
+                      (category.isFolder ? category.drillId : category.id),
+                  onSelected: (_) => _onTheaterCategoryTap(category),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+
   Widget _theater(BuildContext context) {
     final videos = _theaterVideos;
     return SafeArea(
@@ -1497,40 +1744,13 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
                 ),
               ),
             ),
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height: 48,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: widget.categories
-                    .map(
-                      (category) => Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: ChoiceChip(
-                          label: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(category.name),
-                              if (category.isFolder) ...[
-                                const SizedBox(width: 4),
-                                const Icon(Icons.folder_open, size: 14),
-                              ],
-                            ],
-                          ),
-                          selected: widget.selectedCategory ==
-                              (category.isFolder
-                                  ? category.drillId
-                                  : category.id),
-                          onSelected: (_) =>
-                              _onTheaterCategoryTap(category),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
+          // 分类分两级显示：第一排一级（站方分类），第二排二级（本地
+          // 筛分类）；没有二级时只显示第一排（见 splitCategoryLevels）。
+          SliverToBoxAdapter(child: _theaterCategoryRow(_theaterLevels.level1)),
+          if (_theaterLevels.level2.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _theaterCategoryRow(_theaterLevels.level2),
             ),
-          ),
           if (_theaterLevel2Tags.isNotEmpty)
             SliverToBoxAdapter(
               child: SizedBox(
@@ -1707,6 +1927,24 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             title: const Text('最近观看'),
             trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => widget.onOpenSaved(history: true),
+          ),
+          ListTile(
+            key: const ValueKey('mine-theme-entry'),
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('主题切换'),
+            subtitle: Text(
+              '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 8 套主题',
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+              appPageRoute<void>(
+                builder: (_) => ThemeSettingsScreen(
+                  store: widget.store,
+                  repository: widget.repository,
+                  sourceId: widget.store.source,
+                ),
+              ),
+            ),
           ),
           if (widget.onSettingsPressed != null)
             ListTile(

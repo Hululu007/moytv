@@ -228,7 +228,7 @@ void main() {
       for (final id in pendingLiveApiSources.keys) {
         expect(LiveSource.byId(id), isNull);
       }
-      expect(LiveSource.values, hasLength(15));
+      expect(LiveSource.values, hasLength(37)); // 15 个原有 + 22 个内置 m3u 清单。
       expect(LiveSource.visible(true), hasLength(11));
     });
   });

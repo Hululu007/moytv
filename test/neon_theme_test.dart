@@ -57,7 +57,7 @@ void main() {
         MaterialApp(
           theme: AppThemeConfig.forTheme(mode).toThemeData(),
           home: AppDrawer(
-            zone: HomeZone.vod,
+            zone: HomeZone.library,
             currentVersion: '1.0.0',
             onZoneSelected: (_) {},
             onWatchRoom: () {},

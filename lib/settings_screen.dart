@@ -14,6 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'core_bridge.dart';
 import 'app_update.dart';
 import 'app_update_screen.dart';
+import 'audio_capsule.dart';
+import 'floating_window.dart';
 import 'clearance_bridge.dart';
 import 'crack_config_section.dart';
 import 'custom_headers_screen.dart';
@@ -22,6 +24,7 @@ import 'py_bridge.dart';
 import 'import_center_screen.dart';
 import 'parse_settings_screen.dart';
 import 'liquid_glass.dart';
+import 'neon_glass_kit.dart';
 import 'app_theme_config.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
@@ -73,14 +76,54 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with WidgetsBindingObserver {
   String _appUpdateSummary = '检查整包新版本';
+  bool _capsuleGranted = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     ensureTelevisionFocus(context);
     _loadAppUpdateSummary();
+    _loadCapsuleState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadCapsuleState();
+  }
+
+  /// 听书胶囊悬浮窗权限状态：从系统授权页回来时刷新，显示以实测为准。
+  Future<void> _loadCapsuleState() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final granted = await AudioCapsule.isPermissionGranted();
+      if (mounted) setState(() => _capsuleGranted = granted);
+    } catch (_) {}
+  }
+
+  /// 手动再开悬浮窗授权：不受“只主动跳一次”标记限制，点一次跳一次。
+  Future<void> _requestCapsulePermission() async {
+    try {
+      await FloatingWindow.requestPermission();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('打开授权页失败')));
+      }
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await _loadCapsuleState();
   }
 
   Future<void> _loadAppUpdateSummary() async {
@@ -134,6 +177,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await saveUserChange(
         context,
         () => widget.store.setDisplayMode(selection),
+      );
+    }
+  }
+
+  /// 导航样式：改的是当前主题绑定的显示方案，切主题后随新主题的方案走。
+  Future<void> _chooseNavStyle() async {
+    final store = widget.store;
+    final current = store.displayScheme(store.appTheme).navStyle;
+    final selection = await showDialog<NavStyle>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('导航样式'),
+        children: [
+          RadioGroup<NavStyle>(
+            groupValue: current,
+            onChanged: (value) => Navigator.pop(context, value),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final style in NavStyle.values)
+                  RadioListTile<NavStyle>(
+                    value: style,
+                    autofocus: style == current,
+                    title: Text(style.label),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selection != null && mounted) {
+      final scheme = store.displayScheme(store.appTheme);
+      await saveUserChange(
+        context,
+        () => store.setDisplayScheme(
+          store.appTheme,
+          scheme.copyWith(navStyle: selection),
+        ),
       );
     }
   }
@@ -194,7 +276,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ? LucideIcons.circlePlay
             : Icons.play_circle_filled_rounded,
         size: 48,
-        color: const Color(0xFFFF765F),
+        color: AppThemeConfig.of(context).primaryColor,
       ),
       children: [const Text('独立运行，打开即可浏览和播放。观看记录与追剧收藏保存在当前设备。')],
     );
@@ -224,7 +306,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'player-entry',
           icon: Icons.play_circle_outline_rounded,
           lucide: LucideIcons.circlePlay,
-          color: const Color(0xFF5E5CE6),
           title: '播放器选择',
           detail: '解码内核与播放优先级',
           onTap: () => _push(PlayerPickerScreen(store: store)),
@@ -233,7 +314,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'viewing-experience-entry',
           icon: Icons.visibility_outlined,
           lucide: LucideIcons.sparkles,
-          color: const Color(0xFFFF9F0A),
           title: '观看体验',
           detail: '沉浸式详情 · TMDB 海报 · 弹幕与手势',
           onTap: () => _push(ViewingExperienceScreen(store: store)),
@@ -242,28 +322,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'parse-settings-entry',
           icon: Icons.alt_route_rounded,
           lucide: LucideIcons.route,
-          color: const Color(0xFF30B0C7),
           title: '解析接口',
           detail: '播放解析接口列表与默认选中',
           onTap: () => _push(const ParseSettingsScreen()),
         ),
+        if (Platform.isAndroid)
+          _SettingsItem(
+            keyName: 'audio-capsule-entry',
+            icon: Icons.picture_in_picture_alt_rounded,
+            lucide: LucideIcons.pictureInPicture2,
+            title: '听书胶囊悬浮窗',
+            detail: _capsuleGranted
+                ? '已开启 · 切后台听书时显示胶囊'
+                : '未开启 · 点此打开系统授权页',
+            onTap: _requestCapsulePermission,
+          ),
       ]),
       _SettingsGroup('外观与界面', [
         _SettingsItem(
           keyName: 'theme-settings-entry',
           icon: Icons.palette_outlined,
           lucide: LucideIcons.palette,
-          color: const Color(0xFFAF52DE),
           title: '外观主题',
           detail:
               '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 8 套主题',
-          onTap: () => _push(ThemeSettingsScreen(store: store)),
+          onTap: () => _push(
+            ThemeSettingsScreen(
+              store: store,
+              repository: widget.repository,
+              sourceId: store.source,
+            ),
+          ),
+        ),
+        _SettingsItem(
+          keyName: 'nav-style-entry',
+          icon: Icons.view_day_outlined,
+          lucide: LucideIcons.panelBottom,
+          title: '导航样式',
+          detail:
+              '当前：${store.displayScheme(store.appTheme).navStyle.label} · 随当前主题',
+          onTap: _chooseNavStyle,
         ),
         _SettingsItem(
           keyName: 'display-mode-entry',
           icon: Icons.display_settings_outlined,
           lucide: LucideIcons.monitor,
-          color: const Color(0xFF5E5CE6),
           title: '界面模式',
           detail: _displayModeLabel(store.displayMode),
           onTap: _chooseDisplayMode,
@@ -275,7 +378,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             keyName: 'network-resource-entry',
             icon: Icons.settings_ethernet_rounded,
             lucide: LucideIcons.network,
-            color: const Color(0xFF5E5CE6),
             title: '网络与资源',
             detail: '代理、请求间隔与站源目录',
             onTap: () => _push(
@@ -289,7 +391,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'proxy-kernel-entry',
           icon: Icons.shield_outlined,
           lucide: LucideIcons.shield,
-          color: const Color(0xFF5E5CE6),
           title: '代理内核',
           detail: 'mihomo 本地代理 · 订阅与选节点',
           onTap: () => _push(ProxyKernelScreen(repository: widget.repository)),
@@ -298,7 +399,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'clearance-entry',
           icon: Icons.verified_user_outlined,
           lucide: LucideIcons.shieldCheck,
-          color: const Color(0xFF34C759),
           title: '站点验证',
           detail: '为被拦截的站点完成浏览器验证',
           onTap: () => openClearanceFlow(context, widget.repository),
@@ -310,7 +410,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             keyName: 'sources-entry',
             icon: Icons.dns_outlined,
             lucide: LucideIcons.server,
-            color: const Color(0xFF0A84FF),
             title: '站点区',
             detail: '统一站点区 · 独立更新、连接与播放检测',
             onTap: () => _push(
@@ -321,7 +420,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'content-sources-entry',
           icon: Icons.layers_outlined,
           lucide: LucideIcons.libraryBig,
-          color: const Color(0xFF30D158),
           title: '内容源管理',
           detail: '远程配置 / py 站 / 蜘蛛源 / 书源',
           onTap: () => _push(
@@ -332,7 +430,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'site-check-entry',
           icon: Icons.fact_check_outlined,
           lucide: LucideIcons.listChecks,
-          color: const Color(0xFF34C759),
           title: '站点检查',
           detail: '逐站测活，失效站自动隐藏',
           onTap: () => _push(
@@ -343,7 +440,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'rule-editor-entry',
           icon: Icons.code_rounded,
           lucide: LucideIcons.code,
-          color: const Color(0xFF8E8E93),
           title: '蜘蛛规则编辑器',
           detail: '编辑、校验与本地试跑 XBPQ 规则',
           onTap: () => _push(RuleEditorScreen(repository: widget.repository)),
@@ -352,7 +448,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'crack-config-entry',
           icon: Icons.security_rounded,
           lucide: LucideIcons.fingerprint,
-          color: const Color(0xFFFF765F),
           title: '过盾、指纹与请求头',
           detail: '指纹过盾开关 · 自定义请求头 · VIP 配置',
           onTap: () => _push(
@@ -365,7 +460,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'storage-entry',
           icon: Icons.sd_storage_outlined,
           lucide: LucideIcons.arrowDownToLine,
-          color: const Color(0xFF30B0C7),
           title: '存储空间',
           detail: '下载目录、占用与迁移',
           onTap: () =>
@@ -375,7 +469,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'import-center-entry',
           icon: Icons.library_add_outlined,
           lucide: LucideIcons.download,
-          color: const Color(0xFF30D158),
           title: '导入中心',
           detail: 'TVBox 远程配置与 jar 直导入',
           onTap: () => _push(
@@ -386,7 +479,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'torrent-entry',
           icon: Icons.download_outlined,
           lucide: LucideIcons.download,
-          color: const Color(0xFF30D158),
           title: '种子',
           detail: '磁力解析、文件导入与播放',
           onTap: () => _push(
@@ -399,7 +491,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'miniapp-entry',
           icon: Icons.widgets_outlined,
           lucide: LucideIcons.layoutGrid,
-          color: const Color(0xFF30B0C7),
           title: '小程序',
           detail: '已安装、市场与小程序设置',
           onTap: () => _push(const MiniAppHomePage()),
@@ -410,7 +501,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'saved-drama-entry',
           icon: Icons.bookmark_outline_rounded,
           lucide: LucideIcons.bookmark,
-          color: const Color(0xFFFF9F0A),
           title: '追剧',
           detail: '收藏的剧集与更新',
           onTap: () => _openSavedLibrary(history: false),
@@ -419,7 +509,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'saved-history-entry',
           icon: Icons.history_rounded,
           lucide: LucideIcons.history,
-          color: const Color(0xFF30B0C7),
           title: '最近观看',
           detail: '本机观看记录与续播',
           onTap: () => _openSavedLibrary(history: true),
@@ -430,7 +519,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'lan-settings',
           icon: Icons.devices_rounded,
           lucide: LucideIcons.monitorSmartphone,
-          color: const Color(0xFF0A84FF),
           title: '设备互联',
           detail: '局域网同步追剧与推送播放',
           onTap: () => openLanSync(context),
@@ -439,7 +527,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'hongguo-device-entry',
           icon: Icons.badge_outlined,
           lucide: LucideIcons.badge,
-          color: const Color(0xFFFF765F),
           title: '设备注册档案',
           detail: '设备身份与注册状态',
           onTap: () =>
@@ -449,7 +536,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'hongguo-account-entry',
           icon: Icons.account_circle_outlined,
           lucide: LucideIcons.user,
-          color: const Color(0xFFFF2D55),
           title: '红果账号',
           detail: '手机号 / 扫码登录、账号收藏与云端记录',
           onTap: () => _push(
@@ -462,7 +548,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'profiles-entry',
           icon: Icons.people_outline_rounded,
           lucide: LucideIcons.users,
-          color: const Color(0xFF34C759),
           title: '用户管理',
           detail: '当前：${store.profile.name}',
           onTap: () => _push(ProfilesScreen(store: store)),
@@ -471,7 +556,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'app-update-entry',
           icon: Icons.system_update_outlined,
           lucide: LucideIcons.arrowDownToLine,
-          color: const Color(0xFF30B0C7),
           title: '软件更新',
           detail: _appUpdateSummary,
           onTap: () => _push(const AppUpdateScreen()),
@@ -480,7 +564,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyName: 'about-entry',
           icon: Icons.info_outlined,
           lucide: LucideIcons.info,
-          color: const Color(0xFF8E8E93),
           title: '关于$appName',
           detail: '版本与许可',
           onTap: _showAbout,
@@ -490,7 +573,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _materialBody() {
-    final colors = Theme.of(context).colorScheme;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
@@ -500,93 +582,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             for (final group in _settingGroups())
               if (group.items.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-                  child: Text(
-                    group.title,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                Material(
-                  color: colors.surfaceContainerHighest.withValues(alpha: 0.35),
-                  clipBehavior: Clip.antiAlias,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(
-                      color: colors.outlineVariant.withValues(alpha: 0.5),
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < group.items.length; i++) ...[
-                        if (i > 0)
-                          Divider(
-                            height: 1,
-                            thickness: 1,
-                            indent: 56,
-                            endIndent: 12,
-                            color: colors.outlineVariant.withValues(
-                              alpha: 0.35,
-                            ),
-                          ),
-                        ListTile(
-                          key: ValueKey(group.items[i].keyName),
-                          contentPadding: const EdgeInsets.fromLTRB(
-                            14,
-                            0,
-                            10,
-                            0,
-                          ),
-                          leading: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              color: group.items[i].color.withValues(
-                                alpha: 0.14,
-                              ),
-                              borderRadius: BorderRadius.circular(9),
-                            ),
-                            child: Icon(
-                              group.items[i].icon,
-                              size: 18,
-                              color: group.items[i].color,
-                            ),
-                          ),
-                          title: Text(
-                            group.items[i].title,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          subtitle: group.items[i].detail.isEmpty
-                              ? null
-                              : Text(
-                                  group.items[i].detail,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    color: colors.onSurfaceVariant,
-                                  ),
-                                ),
-                          trailing: Icon(
-                            Icons.chevron_right_rounded,
-                            size: 18,
-                            color: colors.onSurfaceVariant.withValues(
-                              alpha: 0.7,
-                            ),
-                          ),
-                          onTap: group.items[i].onTap,
-                        ),
-                      ],
-                    ],
-                  ),
+                NeonSectionTitle(group.title),
+                NeonRowGroup(
+                  children: [
+                    for (final item in group.items)
+                      NeonRow(
+                        key: ValueKey(item.keyName),
+                        icon: item.icon,
+                        title: item.title,
+                        detail: item.detail.isEmpty ? null : item.detail,
+                        onTap: item.onTap,
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 12),
               ],
@@ -598,61 +605,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _push(Widget page) =>
       Navigator.push(context, appPageRoute<void>(builder: (_) => page));
-  Widget _glassIcon(IconData icon, Color color) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: color,
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: SizedBox.square(
-      dimension: 30,
-      child: Icon(icon, size: 18, color: Colors.white),
-    ),
-  );
+  Widget _glassIcon(IconData icon) =>
+      NeonIconTile(icon: icon, size: 30, iconSize: 18, radius: 8);
 
   Widget _glassSection(
     String? header,
     List<Widget> children, {
     String? footer,
   }) {
-    final colors = Theme.of(context).colorScheme;
+    final config = AppThemeConfig.of(context);
     final caption = TextStyle(
       fontSize: 12,
       letterSpacing: 0,
-      color: colors.onSurfaceVariant,
+      color: config.textSecondary,
     );
     if (iosDesign(context)) {
       return CupertinoListSection.insetGrouped(
         backgroundColor: Colors.transparent,
         decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
+          color: config.surfaceColor,
           borderRadius: BorderRadius.circular(18),
         ),
-        separatorColor: colors.outlineVariant,
+        separatorColor: config.dividerColor,
         header: header == null ? null : Text(header, style: caption),
         footer: footer == null ? null : Text(footer, style: caption),
         children: children,
       );
     }
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (header != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-              child: Text(header, style: caption),
-            ),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: ColoredBox(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              child: Column(children: children),
-            ),
-          ),
+          if (header != null) NeonSectionTitle(header),
+          NeonRowGroup(children: children),
           if (footer != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
               child: Text(footer, style: caption),
             ),
         ],
@@ -663,7 +652,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _glassRow({
     Key? key,
     required IconData icon,
-    required Color color,
     required String title,
     String? detail,
     Widget? trailing,
@@ -671,57 +659,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }) {
     final colors = Theme.of(context).colorScheme;
     if (!iosDesign(context)) {
-      return GlassTapTarget(
+      return NeonRow(
         key: key,
+        icon: icon,
+        title: title,
+        detail: detail,
+        trailing: trailing,
         onTap: onTap,
-        borderRadius: BorderRadius.zero,
-        child: SizedBox(
-          height: 62,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                _glassIcon(icon, color),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: onTap == null && trailing == null
-                              ? colors.onSurface.withValues(alpha: .4)
-                              : colors.onSurface,
-                        ),
-                      ),
-                      if (detail != null)
-                        Text(
-                          detail,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: colors.onSurfaceVariant),
-                        ),
-                    ],
-                  ),
-                ),
-                ?trailing,
-                if (trailing == null && onTap != null)
-                  Icon(
-                    LucideIcons.chevronRight,
-                    size: 18,
-                    color: colors.onSurfaceVariant,
-                  ),
-              ],
-            ),
-          ),
-        ),
       );
     }
     return CupertinoListTile.notched(
       key: key,
-      leading: _glassIcon(icon, color),
+      leading: _glassIcon(icon),
       title: Text(
         title,
         style: TextStyle(
@@ -732,16 +681,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               : colors.onSurface,
         ),
       ),
-      additionalInfo: detail == null
+      subtitle: detail == null
           ? null
-          : ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 150),
-              child: Text(
-                detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: colors.onSurfaceVariant),
-              ),
+          : Text(
+              detail,
+              style: TextStyle(color: colors.onSurfaceVariant),
             ),
       trailing:
           trailing ?? (onTap == null ? null : const CupertinoListTileChevron()),
@@ -767,7 +711,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _glassRow(
                   key: ValueKey(item.keyName),
                   icon: item.lucide,
-                  color: item.color,
                   title: item.title,
                   detail: item.detail.isEmpty ? null : item.detail,
                   onTap: item.onTap,
@@ -958,7 +901,6 @@ class _SettingsItem {
     required this.keyName,
     required this.icon,
     required this.lucide,
-    required this.color,
     required this.title,
     required this.onTap,
     this.detail = '',
@@ -967,7 +909,6 @@ class _SettingsItem {
   final String keyName;
   final IconData icon;
   final IconData lucide;
-  final Color color;
   final String title;
   final String detail;
   final VoidCallback onTap;
@@ -1008,58 +949,68 @@ class _AntiBotScreenState extends State<_AntiBotScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('过盾、指纹与请求头')),
       body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: [
-          SwitchListTile.adaptive(
-            key: const ValueKey('python-cf-disguise-entry'),
-            secondary: const Icon(LucideIcons.fingerprint),
-            title: const Text('Python 指纹过盾'),
-            subtitle: Text(
-              store.pythonCfDisguise ? '已开启 · 按蜘蛛 UA 匹配浏览器' : '已关闭 · 只用普通请求',
-            ),
-            value: store.pythonCfDisguise,
-            onChanged: (value) => _toggle(() async {
-              await store.setPythonCfDisguise(value);
-              await PyBridge.setCfDisguise(value);
-            }),
-          ),
-          SwitchListTile.adaptive(
-            key: const ValueKey('jar-fingerprint-entry'),
-            secondary: const Icon(LucideIcons.fingerprint),
-            title: const Text('Jar 指纹过盾'),
-            subtitle: Text(
-              store.jarFingerprintEnabled
-                  ? '已开启 · 按蜘蛛 UA 匹配浏览器'
-                  : '已关闭 · 只用普通请求',
-            ),
-            value: store.jarFingerprintEnabled,
-            onChanged: (value) => _toggle(() async {
-              await store.setJarFingerprintEnabled(value);
-              await JarBridge.setJarFingerprint(value);
-            }),
-          ),
-          ListTile(
-            key: const ValueKey('custom-headers-entry'),
-            leading: const Icon(LucideIcons.slidersHorizontal),
-            title: const Text('自定义请求头'),
-            subtitle: Text(
-              store.customHeadersEnabled
-                  ? '已开启 · ${store.customHeaderRules.length} 条规则'
-                  : '已关闭',
-            ),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.push(
-              context,
-              appPageRoute<void>(
-                builder: (_) => CustomHeadersScreen(store: store),
+          NeonRowGroup(
+            children: [
+              NeonRow(
+                key: const ValueKey('python-cf-disguise-entry'),
+                icon: LucideIcons.fingerprint,
+                title: 'Python 指纹过盾',
+                detail: store.pythonCfDisguise
+                    ? '已开启 · 按蜘蛛 UA 匹配浏览器'
+                    : '已关闭 · 只用普通请求',
+                onTap: () => _toggle(() async {
+                  final next = !store.pythonCfDisguise;
+                  await store.setPythonCfDisguise(next);
+                  await PyBridge.setCfDisguise(next);
+                }),
+                trailing: NeonSwitch(
+                  value: store.pythonCfDisguise,
+                  onChanged: (value) => _toggle(() async {
+                    await store.setPythonCfDisguise(value);
+                    await PyBridge.setCfDisguise(value);
+                  }),
+                ),
               ),
-            ),
+              NeonRow(
+                key: const ValueKey('jar-fingerprint-entry'),
+                icon: LucideIcons.fingerprint,
+                title: 'Jar 指纹过盾',
+                detail: store.jarFingerprintEnabled
+                    ? '已开启 · 按蜘蛛 UA 匹配浏览器'
+                    : '已关闭 · 只用普通请求',
+                onTap: () => _toggle(() async {
+                  final next = !store.jarFingerprintEnabled;
+                  await store.setJarFingerprintEnabled(next);
+                  await JarBridge.setJarFingerprint(next);
+                }),
+                trailing: NeonSwitch(
+                  value: store.jarFingerprintEnabled,
+                  onChanged: (value) => _toggle(() async {
+                    await store.setJarFingerprintEnabled(value);
+                    await JarBridge.setJarFingerprint(value);
+                  }),
+                ),
+              ),
+              NeonRow(
+                key: const ValueKey('custom-headers-entry'),
+                icon: LucideIcons.slidersHorizontal,
+                title: '自定义请求头',
+                detail: store.customHeadersEnabled
+                    ? '已开启 · ${store.customHeaderRules.length} 条规则'
+                    : '已关闭',
+                onTap: () => Navigator.push(
+                  context,
+                  appPageRoute<void>(
+                    builder: (_) => CustomHeadersScreen(store: store),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const Divider(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: CrackConfigSection(repository: widget.repository),
-          ),
+          const SizedBox(height: 16),
+          CrackConfigSection(repository: widget.repository),
         ],
       ),
     );

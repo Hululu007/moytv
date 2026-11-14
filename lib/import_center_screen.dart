@@ -11,6 +11,7 @@ import 'import_center.dart';
 import 'jar_bridge_handoff.dart';
 import 'jar_import.dart';
 import 'local_store.dart';
+import 'neon_glass_kit.dart';
 import 'tvbox_config.dart';
 import 'widgets.dart';
 
@@ -403,11 +404,10 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
                 '同目录的站点配置 JSON 也会在导 jar 时自动匹配；没有配置的站点会明确提醒。',
               ),
               const SizedBox(height: 16),
-              Text(
+              NeonSectionTitle(
                 'TVBox 配置（${configs.length}）',
-                style: Theme.of(context).textTheme.titleMedium,
+                padding: const EdgeInsets.only(bottom: 8),
               ),
-              const SizedBox(height: 8),
               if (configs.isEmpty)
                 const StatusPanel(
                   title: '还没有导入任何 TVBox 配置',
@@ -416,11 +416,10 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
               else
                 for (final record in configs) _configCard(record),
               const SizedBox(height: 16),
-              Text(
+              NeonSectionTitle(
                 'jar 直导入站点（${jarSites.length}）',
-                style: Theme.of(context).textTheme.titleMedium,
+                padding: const EdgeInsets.only(bottom: 8),
               ),
-              const SizedBox(height: 8),
               if (jarSites.isEmpty)
                 const StatusPanel(
                   title: '还没有 jar 直导入站点',
@@ -437,17 +436,15 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
 
   Widget _configCard(TvBoxConfigRecord record) {
     final colors = Theme.of(context).colorScheme;
-    return Card(
+    return NeonGlassCard(
       key: ValueKey('tvbox-${record.configId}'),
       margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        leading: const Icon(Icons.settings_input_component_outlined),
-        title: Text(record.name),
-        subtitle: Text(
-          '${record.summaryLine}'
-          '${record.url.isEmpty ? '' : '\n${record.url}'}',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+      child: NeonRow(
+        icon: Icons.settings_input_component_outlined,
+        title: record.name,
+        detail:
+            '${record.summaryLine}'
+            '${record.url.isEmpty ? '' : '\n${record.url}'}',
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -472,17 +469,15 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
 
   Widget _jarSiteCard(StandaloneJarSite site) {
     final colors = Theme.of(context).colorScheme;
-    return Card(
+    return NeonGlassCard(
       key: ValueKey('jar-${site.siteId}'),
       margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        leading: const Icon(Icons.extension_outlined),
-        title: Text(site.name),
-        subtitle: Text(
-          '${site.className}\next：${site.ext.isEmpty ? '未填' : site.ext}'
-          '${site.missingConfig ? '\n未找到站点配置，注册后可能跑不起来' : ''}',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+      child: NeonRow(
+        icon: Icons.extension_outlined,
+        title: site.name,
+        detail:
+            '${site.className}\next：${site.ext.isEmpty ? '未填' : site.ext}'
+            '${site.missingConfig ? '\n未找到站点配置，注册后可能跑不起来' : ''}',
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -542,7 +537,10 @@ class _ImportUrlDialogState extends State<_ImportUrlDialog> {
           decoration: const InputDecoration(
             labelText: '配置地址',
             hintText: 'https://…/config.json',
-            border: OutlineInputBorder(),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(14)),
+              borderSide: BorderSide.none,
+            ),
             helperText: '远程 jar 会下载到本机执行，仅导入你自己信任的配置。',
             helperMaxLines: 2,
           ),

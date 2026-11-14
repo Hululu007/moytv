@@ -54,13 +54,36 @@ void main() {
     });
   });
 
-  group('直播区：修仙版四源 + 绿果鉴十一源', () {
+  group('直播区：修仙版四源 + 绿果鉴十一源 + 内置 m3u 二十二源', () {
     test('内置直播源清单与协议/端点锁定', () {
       expect(LiveSource.values.map((s) => s.id), [
         'xiuguo',
         'maiyoux',
         'bnzb',
         'user_m3u',
+        // 2026-11-14 内置的 22 个清洗版 m3u 清单（TG 私发）。
+        'm3u_zhubo',
+        'm3u_luanlun',
+        'm3u_huayu',
+        'm3u_guochan',
+        'm3u_xuesheng',
+        'm3u_tanhua',
+        'm3u_riben',
+        'm3u_oumei',
+        'm3u_heilian',
+        'm3u_community10',
+        'm3u_community11',
+        'm3u_wuma',
+        'm3u_wanghong',
+        'm3u_xingba',
+        'm3u_chengtou',
+        'm3u_zhifu',
+        'm3u_qunjiao',
+        'm3u_mingxing',
+        'm3u_zipai',
+        'm3u_avxiongdi',
+        'm3u_guochanse',
+        'm3u_riben2',
         'bilibili',
         'huya',
         'pandalive',
@@ -78,6 +101,28 @@ void main() {
         '🔞欲火聚合',
         '🔞百年直播',
         '🔞成人点播',
+        '🔞主播网红',
+        '🔞乱伦精品',
+        '🔞华语精品',
+        '🔞国产精品',
+        '🔞学生合集',
+        '🔞探花约炮',
+        '🔞日本有码',
+        '🔞欧美大屌',
+        '🔞黑料吃瓜',
+        '🔞社区合集 10',
+        '🔞社区合集 11',
+        '🔞無碼專區',
+        '🔞網紅頭條',
+        '🔞杏吧原創',
+        '🔞成人頭條',
+        '🔞制服絲襪',
+        '🔞群交淫亂',
+        '🔞明星換臉',
+        '🔞自拍偷拍',
+        '🔞AV兄弟无码',
+        '🔞国产色情',
+        '🔞日本有码 2',
         '哔哩哔哩',
         '虎牙',
         'PandaLive',
@@ -130,7 +175,7 @@ void main() {
       expect(LiveSource.byId('douyu'), isNull);
     });
 
-    test('绿色模式下四个成人源全部隐藏，主流源全部可见', () {
+    test('绿色模式下成人源全部隐藏，主流源全部可见', () {
       expect(
         LiveSource.visible(true).map((s) => s.id),
         [
@@ -147,7 +192,8 @@ void main() {
           'm3u_yy',
         ],
       );
-      expect(LiveSource.visible(false), hasLength(15));
+      // 11 个主流源 + 26 个成人源（4 个原有 + 22 个内置 m3u 清单）。
+      expect(LiveSource.visible(false), hasLength(37));
     });
   });
 

@@ -1,0 +1,206 @@
+{
+ "station": "youzidj",
+ "stationUrl": "https://youzidj.com",
+ "fetchedAt": "2026-11-14",
+ "fetchedVia": "assets/py_spiders/youzidj.py homeContent() via egress proxy",
+ "categories": [
+  {
+   "id": "dramas",
+   "name": "全部短剧"
+  },
+  {
+   "id": "dramas/category/cultivation",
+   "name": "修仙"
+  },
+  {
+   "id": "dramas/category/wealthy-family",
+   "name": "豪门"
+  },
+  {
+   "id": "dramas/category/urban",
+   "name": "都市"
+  },
+  {
+   "id": "dramas/category/costume",
+   "name": "古装"
+  },
+  {
+   "id": "dramas/category/family-ethics",
+   "name": "家庭伦理"
+  },
+  {
+   "id": "dramas/category/martial-arts",
+   "name": "武侠"
+  },
+  {
+   "id": "dramas/category/campus",
+   "name": "校园"
+  },
+  {
+   "id": "ai-adult",
+   "name": "AI成人视频"
+  },
+  {
+   "id": "ai-adult/real",
+   "name": "AI真人"
+  },
+  {
+   "id": "ai-adult/anime",
+   "name": "AI动漫"
+  },
+  {
+   "id": "ai-adult/remix",
+   "name": "AI魔改"
+  },
+  {
+   "id": "ai-face-swap",
+   "name": "AI换脸"
+  }
+ ],
+ "items": [
+  {
+   "id": "dramas/creator-flow-test-20261112/season-1",
+   "title": "城市微光",
+   "cover": "https://youzidj.com/catalogue-art/668e5935-5ac3-4082-8f88-5c00445f9fc8-960.webp",
+   "description": "更新至3集"
+  },
+  {
+   "id": "dramas/the-rich-woman-s-playground/season-1",
+   "title": "富婆的游乐场",
+   "cover": "https://youzidj.com/catalogue-art/fd1b768b-2831-4eae-96e1-617e96e687e6-960.webp",
+   "description": "更新至4集"
+  },
+  {
+   "id": "dramas/dafeng-night-watchman/season-1",
+   "title": "大奉打更人",
+   "cover": "https://youzidj.com/catalogue-art/89dd71ab-6ad7-4512-8ae8-50d76463a46a-960.webp",
+   "description": "更新至8集"
+  },
+  {
+   "id": "dramas/sister-s-gift/season-1",
+   "title": "姐姐的馈赠",
+   "cover": "https://youzidj.com/catalogue-art/12751c99-0392-418c-a3b0-9230288c93d3-960.webp",
+   "description": "更新至13集"
+  },
+  {
+   "id": "dramas/super-civil-servant/season-1",
+   "title": "超级公务员",
+   "cover": "https://youzidj.com/catalogue-art/ad993d57-f766-430c-8af9-ad93dd1e4d49-960.webp",
+   "description": "更新至8集"
+  },
+  {
+   "id": "dramas/my-sister-is-a-sex-worker/season-1",
+   "title": "我的妹妹是风俗娘",
+   "cover": "https://youzidj.com/catalogue-art/92902ac8-a1bc-4fc5-a909-a9272d6e3669-960.webp",
+   "description": "更新至6集"
+  },
+  {
+   "id": "dramas/soybean-high/season-1",
+   "title": "黄豆高中",
+   "cover": "https://youzidj.com/catalogue-art/7d7750ce-3158-4986-a77c-148838a9eca8-960.webp",
+   "description": "更新至7集"
+  },
+  {
+   "id": "dramas/mother-and-son-s-shared-joy/season-2",
+   "title": "母子同欢",
+   "cover": "https://youzidj.com/catalogue-art/cbbcb15c-8de0-43d7-a398-1bb124d9459c-960.webp",
+   "description": "更新至4集"
+  },
+  {
+   "id": "dramas/mother-and-son-s-shared-joy/season-1",
+   "title": "母子同欢",
+   "cover": "https://youzidj.com/catalogue-art/6b29a55d-8ff6-4410-9a0f-3250a6c158d0-960.webp",
+   "description": "更新至16集"
+  },
+  {
+   "id": "dramas/staying-at-mom-s-best-friend-s-place/season-1",
+   "title": "寄宿妈妈闺蜜家",
+   "cover": "https://youzidj.com/catalogue-art/47ad0108-68b6-4cc9-ab70-49bf77c56ff8-960.webp",
+   "description": "更新至4集"
+  },
+  {
+   "id": "dramas/xu-jiayin-s-empire-of-excess/season-1",
+   "title": "万亿帝国崛起- 逼王许家印的酒池肉林",
+   "cover": "https://youzidj.com/catalogue-art/2f20b1f4-fef3-4b72-a368-9d9798a58537-960.webp",
+   "description": "更新至3集"
+  },
+  {
+   "id": "dramas/addictive-dreams/season-1",
+   "title": "瘾梦",
+   "cover": "https://youzidj.com/catalogue-art/28105220-2ac3-48ca-bcf1-724cf650f985-960.webp",
+   "description": "更新至3集"
+  },
+  {
+   "id": "dramas/the-beauty-trap/season-1",
+   "title": "美人局",
+   "cover": "https://youzidj.com/catalogue-art/128c6451-81a3-4606-9b95-6a30c65e385f-960.webp",
+   "description": "更新至7集"
+  },
+  {
+   "id": "dramas/a-night-of-secret-control-and-betrayal/season-1",
+   "title": "妻绿偷控夜",
+   "cover": "https://youzidj.com/catalogue-art/bda728cb-43c1-44f1-a000-5840a6241406-960.webp",
+   "description": "更新至16集"
+  },
+  {
+   "id": "dramas/the-anywhere-door/season-1",
+   "title": "任意门",
+   "cover": "https://youzidj.com/catalogue-art/e7edb6e4-ac50-4b7b-a006-2dd032bfb0b7-960.webp",
+   "description": "更新至2集"
+  },
+  {
+   "id": "dramas/into-another-world-with-my-ai-wife/season-1",
+   "title": "带着AI老婆穿越",
+   "cover": "https://youzidj.com/catalogue-art/effe3b17-d5ed-4246-9597-98bf1572e257-960.webp",
+   "description": "更新至8集"
+  },
+  {
+   "id": "dramas/great-grandma-at-18-back-to-1955/season-1",
+   "title": "18岁太奶驾到回到1955",
+   "cover": "https://youzidj.com/catalogue-art/0636bb9b-6047-46c2-a43f-56c15f8231ca-960.webp",
+   "description": "更新至3集"
+  },
+  {
+   "id": "dramas/the-lust-demon-agency/season-1",
+   "title": "淫魔事务所",
+   "cover": "https://youzidj.com/catalogue-art/d67ef180-5843-4243-95f9-1b1b77b5cced-960.webp",
+   "description": "更新至10集"
+  },
+  {
+   "id": "dramas/a-splendid-destiny/season-1",
+   "title": "谋一世锦绣",
+   "cover": "https://youzidj.com/catalogue-art/789865eb-d7a3-40c0-a8e3-015c33d5a0cb-960.webp",
+   "description": "更新至10集"
+  },
+  {
+   "id": "dramas/open-up-sis-in-law-i-m-my-brother/season-1",
+   "title": "嫂子开门，我是我哥",
+   "cover": "https://youzidj.com/catalogue-art/9559a99e-f634-4a81-bb56-af4dc59bf591-960.webp",
+   "description": "更新至3集"
+  },
+  {
+   "id": "dramas/secretly-filming-mom-for-game-skins/season-1",
+   "title": "偷拍妈妈换游戏皮肤",
+   "cover": "https://youzidj.com/catalogue-art/8b9fbfa9-19a8-4cb0-821c-b2aa04d39a5e-960.webp",
+   "description": "更新至6集"
+  },
+  {
+   "id": "dramas/caged-sparrow-the-caged-sparrow/season-1",
+   "title": "春申江上笼中雀",
+   "cover": "https://youzidj.com/catalogue-art/fa980f7b-dd12-4bca-b2c9-6f2a2a05159c-960.webp",
+   "description": "更新至5集"
+  },
+  {
+   "id": "dramas/idol-showdown-sex-for-stardom/season-1",
+   "title": "肉体上位偶像对决",
+   "cover": "https://youzidj.com/catalogue-art/0b298bc9-c1ec-4ec8-a77b-4966f423d642-960.webp",
+   "description": "更新至4集"
+  },
+  {
+   "id": "dramas/i-made-a-flight-attendant-kneel-and-apologize/season-1",
+   "title": "我让空姐下跪道歉",
+   "cover": "https://youzidj.com/catalogue-art/464b116a-aaa5-4f49-8912-396c70fb4e33-960.webp",
+   "description": "更新至5集"
+  }
+ ]
+}

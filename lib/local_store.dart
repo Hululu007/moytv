@@ -901,6 +901,19 @@ class LocalStore extends ChangeNotifier {
   Future<void> setAppTheme(AppThemeMode mode) =>
       _setting('appThemeMode', mode.storageValue);
 
+  /// 某套主题绑定的显示方案（导航样式 + 内容档），默认抽屉 + 全部内容。
+  ThemeDisplayScheme displayScheme(AppThemeMode mode) {
+    final value = _configurationError == null
+        ? _string('themeScheme_${mode.storageValue}')
+        : null;
+    return ThemeDisplayScheme.fromStorageValue(value);
+  }
+
+  Future<void> setDisplayScheme(
+    AppThemeMode mode,
+    ThemeDisplayScheme scheme,
+  ) => _setting('themeScheme_${mode.storageValue}', scheme.storageValue);
+
   /// 旧主题系统（模式/风格/强调色/背景）是否还留有存值。
   /// 旧值不再被读取，只由迁移清理。
   bool get hasLegacyThemeSettings {

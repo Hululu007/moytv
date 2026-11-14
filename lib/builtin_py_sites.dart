@@ -538,6 +538,32 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const duoduoSiteId = 'duoduo';
+  static const duoduoAssetPath = 'assets/py_spiders/duoduo.py';
+  static const duoduoFileId = 'builtin_duoduo';
+
+  static const duoduoSite = SourceSite(
+    duoduoSiteId,
+    '多多影视',
+    '内置 py · duoduo',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const javmenuSiteId = 'javmenu';
+  static const javmenuAssetPath = 'assets/py_spiders/javmenu.py';
+  static const javmenuFileId = 'builtin_javmenu';
+
+  static const javmenuSite = SourceSite(
+    javmenuSiteId,
+    '🔞JAV目錄大全',
+    '内置 py · javmenu',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   static Future<bool> register() async {
     try {
       final bytes = await rootBundle.load(hmavAssetPath);
@@ -588,6 +614,8 @@ class BuiltinPySites {
       await _registerHeitao();
       await _registerJinguo();
       await _registerJinguoJg();
+      await _registerDuoduo();
+      await _registerJavmenu();
       return true;
     } catch (_) {
       return false;
@@ -1111,6 +1139,32 @@ class BuiltinPySites {
       );
       SourceSite.importedSites[jinguoJgSiteId] = jinguoJgSite;
       SourceSite.importedPyFiles[jinguoJgSiteId] = fileName;
+    } catch (_) {}
+  }
+
+  static Future<void> _registerDuoduo() async {
+    try {
+      final bytes = await rootBundle.load(duoduoAssetPath);
+      final fileName = await ImportFileStore.save(
+        duoduoFileId,
+        'py',
+        bytes.buffer.asUint8List(),
+      );
+      SourceSite.importedSites[duoduoSiteId] = duoduoSite;
+      SourceSite.importedPyFiles[duoduoSiteId] = fileName;
+    } catch (_) {}
+  }
+
+  static Future<void> _registerJavmenu() async {
+    try {
+      final bytes = await rootBundle.load(javmenuAssetPath);
+      final fileName = await ImportFileStore.save(
+        javmenuFileId,
+        'py',
+        bytes.buffer.asUint8List(),
+      );
+      SourceSite.importedSites[javmenuSiteId] = javmenuSite;
+      SourceSite.importedPyFiles[javmenuSiteId] = fileName;
     } catch (_) {}
   }
 }

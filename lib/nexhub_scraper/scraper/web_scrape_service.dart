@@ -5,6 +5,8 @@
 // 的 VerificationDetector，命中时同样抛 VerificationRequiredException，契约不变。
 // 抽取逻辑（ScrapeMode/ScrapeResult/ScrapeLink 与各模式分支）与原文一致。
 // 另加可注入的 fetchHtml 供测试使用（默认走真实网络）。
+// 2026-11-14 补万象同款两处行为：空页面抛错、视频模式原文直链兜底
+// （见 scrape 内注释）；类型与字段不改，videoUrls 仍为 List<String>。
 /// 网页爬取服务。
 ///
 /// 基于魔蚁 [ContentHttp] 拉取 HTML，再用 [HtmlUtils] 按模式抽取内容。
@@ -86,6 +88,12 @@ class WebScrapeService {
       response.bodyBytes,
       contentType: response.headers['content-type'],
     );
+    // 空页面不是「无结果」：HTTP 成功却返回空正文，说明响应被截断或
+    // 站点根本没吐内容，必须当错误报出来，否则用户看到的只是空态，
+    // 无法区分「网没通」与「页上真没东西」。
+    if (html.trim().isEmpty) {
+      throw Exception('服务器返回了空页面，无内容可爬：$url');
+    }
     if (VerificationDetector.isVerificationRequired(
       statusCode: response.statusCode,
       body: html,
@@ -182,6 +190,22 @@ class WebScrapeService {
     for (final e in HtmlUtils.elements(html, 'iframe')) {
       final src = e.attributes['src'];
       if (src != null && src.isNotEmpty) list.add(src);
+    }
+    // 兜底：多数视频站把流地址藏在 <script>/JSON 里，页面上根本没有
+    // <video> 标签。直接在原文里扫流媒体直链（m3u8/mp4 等），否则
+    // 视频模式对这类站永远是空结果。只认绝对地址与 // 协议相对地址，
+    // 去重、上限 100 条，避免把页面噪音全捞进来。
+    final seen = list.toSet();
+    final streamPattern = RegExp(
+      r'''(?:https?:)?//[^\s"'<>\\]+\.(?:m3u8|mp4|m4v|mov|flv|mkv|avi|webm)(?:\?[^\s"'<>\\]*)?''',
+      caseSensitive: false,
+    );
+    for (final m in streamPattern.allMatches(html)) {
+      if (list.length >= 100) break;
+      final candidate = m.group(0)!;
+      if (seen.add(candidate)) {
+        list.add(candidate);
+      }
     }
     return list;
   }

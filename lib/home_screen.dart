@@ -10,6 +10,9 @@ import 'app_layout.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
 import 'app_drawer.dart';
+import 'app_theme_config.dart';
+import 'bottom_tab_bar.dart';
+import 'content_tier_filter.dart';
 import 'neon/neon_ui.dart';
 import 'ui_style.dart';
 import 'content_zone_binding.dart';
@@ -26,6 +29,7 @@ import 'clearance_bridge.dart';
 import 'miniapp/mini_app_home_page.dart';
 import 'viewing_experience_screen.dart';
 import 'torrent/torrent_home_screen.dart';
+import 'theme_settings_screen.dart';
 import 'rule_editor_screen.dart';
 
 import 'watchroom/room_screen.dart';
@@ -89,28 +93,6 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-typedef _SectionSnapshot = ({
-  List<Drama> items,
-  List<CatalogTag> tags,
-  bool hasMore,
-  String? error,
-  List<({String folderId, String name, String sourceId})> drillStack,
-  SourceSite source,
-  bool allSources,
-  String category,
-  String categoryGroupId,
-  String query,
-  String submittedQuery,
-  bool searchVisible,
-  bool crossSource,
-  String? categoriesError,
-  double scrollOffset,
-  String? tagLevel2,
-  String? tagLevel3,
-  List<CatalogFilterGroup> filters,
-  Map<String, String> selectedFilters,
-});
-
 class _HomeScreenState extends State<HomeScreen> with RouteAware {
   static const _recommendationCategory = 'app:recommendations';
   // 返回保护期：上方路由弹出后 400ms 内到达的返回，视为同一手势的
@@ -134,17 +116,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _hasMore = true;
   String? _error;
   int _generation = 0;
-  HomeZone _zone = HomeZone.drama;
+  HomeZone _zone = HomeZone.library;
   final _zoneHistory = BackHistory<HomeZone>();
+
+  /// 底部 Tab 点了“我的”后为真：短剧首页分支据此把短剧首页内层
+  /// 页签驱到“我的”页；离开片库区或点其它 Tab 时清掉。
+  bool _mineRequested = false;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   String _currentVersion = '';
-  String _catalogSection = SourceSite.sectionDrama;
-  final _sectionSourceIds = <String, String>{};
-  HomeZone _sectionZone = HomeZone.drama;
   final _lastZoneSource = <String, String>{};
   late final ContentZoneBinding _contentBinding;
-  final _sectionSnapshots = <String, _SectionSnapshot>{};
-  final _sectionFetchedAt = <String, DateTime>{};
   List<Drama>? _visibleCache;
   String _visibleCacheKey = '';
   List<String>? _level2TagsCache;
@@ -186,32 +167,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _autoLoadedOnce = false;
   bool _openingPlayback = false;
 
-  bool get _isCatalogZone => _zone == HomeZone.drama || _zone == HomeZone.vod;
+  bool get _isCatalogZone => _zone == HomeZone.library;
 
   String get _zoneTitle => switch (_zone) {
-    HomeZone.vod => '点播',
+    HomeZone.library => '片库',
     HomeZone.live => '直播',
     HomeZone.audio => '听书',
     HomeZone.novel => '阅读',
-
-    _ => appName,
   };
 
-  List<SourceSite> get _sectionSources {
-    return [
-      for (final site in widget.store.visibleSources)
-        if (_zone == HomeZone.vod
-            ? isVodZoneSource(site)
-            : _catalogSection == SourceSite.sectionVideo
-            ? site.isVideoSection || site.origin == SourceSite.originConfig
-            : site.isDramaSection && site.origin != SourceSite.originConfig)
-          site,
-    ];
-  }
+  /// 片库区容纳全部视频站源（短剧站与点播站），切站决定显示哪站内容，
+  /// 不再按短剧/点播两个区过滤站源。
+  List<SourceSite> get _librarySources =>
+      List.of(widget.store.visibleSources);
 
   List<SourceGroup> get _sourceGroups {
     // 首页只显示「源显示列表」中开启的站源，被隐藏的站源不出现在分组里。
-    final visible = _sectionSources;
+    final visible = _librarySources;
     final groups = SourceGroup.fromSources(visible);
     return [
       if (groups.length > 1) SourceGroup('all', '全部站源', visible),
@@ -224,7 +196,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .where((group) => group.id == (_allSources ? 'all' : _source.groupId))
           .firstOrNull ??
       (() {
-        final visible = _sectionSources;
+        final visible = _librarySources;
         final site = visible.any((s) => s.id == _source.id)
             ? _source
             : (visible.firstOrNull ?? _source);
@@ -253,7 +225,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       !_selectionMode;
   // 跨源聚合搜索打的是站源管理里勾选显示的可见源，被隐藏的源不参与。
   List<String> get _visibleSourceIds => [
-    for (final source in _sectionSources) source.id,
+    for (final source in _librarySources) source.id,
   ];
   // 勾选跨源后，即便当前分组本身不支持在线搜索，也按全部可见源发起在线搜索。
   // 自定义源在 Dart 侧 onlineSearch 恒为 false，但 Go 侧 searchAcross 能识别
@@ -280,14 +252,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   String get _category => _categorySelections[_categoryKey(_group.id)] ?? '';
   List<CatalogCategory> get _categories => _browser.categories(_group);
-  String get _displayCategory =>
-      _showRecommendations ? _recommendationCategory : _category;
-  List<CatalogCategory> get _displayCategories => [
-    CatalogCategory.all,
-    if (_group.id == 'hongguo')
-      const CatalogCategory(_recommendationCategory, '推荐'),
-    ..._categories.where((entry) => entry.id.isNotEmpty),
-  ];
+  String get _displayCategory {
+    // 内容档锁定时：命中分类即为显示分类；命中不到显示空（由空态接管）。
+    if (_contentTier == ContentTier.manhua ||
+        _contentTier == ContentTier.liveAction) {
+      return _tierCategoryId ?? '';
+    }
+    return _showRecommendations ? _recommendationCategory : _category;
+  }
+
+  List<CatalogCategory> get _displayCategories {
+    // 内容档锁定时只显示命中的那一个分类；命中不到显示空集合。
+    if (_contentTier == ContentTier.manhua ||
+        _contentTier == ContentTier.liveAction) {
+      return tierCategories(_contentTier, _categories);
+    }
+    return [
+      CatalogCategory.all,
+      if (_group.id == 'hongguo')
+        const CatalogCategory(_recommendationCategory, '推荐'),
+      ..._categories.where((entry) => entry.id.isNotEmpty),
+    ];
+  }
 
   Future<void> _loadCategories({
     bool force = false,
@@ -332,6 +318,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await _loadCategories(force: true);
     if (mounted) await _load(force: true);
   }
+
+  /// 内容档锁定的分类在本站不存在时的诚实空态：只说明事实，
+  /// 动作是真实的——切回全部内容档（写回当前主题的显示方案）。
+  Widget _tierEmptyPanel() => StatusPanel(
+    title: '暂无${_contentTier.label}',
+    message: '当前站点没有「${_contentTier.label}」分类，切回全部内容或换个站点。',
+    action: '切回全部内容',
+    onRetry: () => saveUserChange(
+      context,
+      () => widget.store.setDisplayScheme(
+        widget.store.appTheme,
+        widget.store
+            .displayScheme(widget.store.appTheme)
+            .copyWith(contentTier: ContentTier.all),
+      ),
+    ),
+  );
 
   void _updateChanged() {
     if (mounted) setState(() {});
@@ -414,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   static const _allSourcesEntryId = '__all__';
 
   bool get _canSwitchSource =>
-      _sectionSources.length + (_sourceGroups.length > 1 ? 1 : 0) > 1;
+      _librarySources.length + (_sourceGroups.length > 1 ? 1 : 0) > 1;
 
   List<SourcePickerGroup> _sourcePickerGroups() => [
     if (_sourceGroups.length > 1)
@@ -422,27 +425,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         title: '',
         entries: [SourcePickerEntry(id: _allSourcesEntryId, name: '全部站源')],
       ),
-    for (final group in SourceGroup.sectionGroups(_sectionSources))
-      if ((_catalogSection == SourceSite.sectionVideo
-          ? group.id != 'builtin:drama'
-          : group.id != 'builtin:video'))
-        SourcePickerGroup(
-          title: group.name,
-          entries: [
-            for (final site in group.sources)
-              SourcePickerEntry(
-                id: site.id,
-                name: site.name,
-                deletable:
-                    SourceSite.importedSites.containsKey(site.id) ||
-                    site.origin == SourceSite.originBuiltin,
-              ),
-          ],
-        ),
+    for (final group in SourceGroup.sectionGroups(_librarySources))
+      SourcePickerGroup(
+        title: group.name,
+        entries: [
+          for (final site in group.sources)
+            SourcePickerEntry(
+              id: site.id,
+              name: site.name,
+              deletable:
+                  SourceSite.importedSites.containsKey(site.id) ||
+                  site.origin == SourceSite.originBuiltin,
+            ),
+        ],
+      ),
   ];
 
-  String _sourcePickerSectionName() =>
-      _catalogSection == SourceSite.sectionVideo ? '点播' : '短剧';
+  String _sourcePickerSectionName() => '片库';
 
   Future<void> _pickSource({bool editMode = false}) async {
     final picked = await showSitePickerDialog(
@@ -474,8 +473,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Future<bool> _deleteSourceEntry(SourcePickerEntry entry) async {
     if (entry.id == _allSourcesEntryId) return false;
-    if (_sectionSources.length <= 1 &&
-        _sectionSources.any((site) => site.id == entry.id)) {
+    if (_librarySources.length <= 1 &&
+        _librarySources.any((site) => site.id == entry.id)) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('至少保留一个站源')));
@@ -518,7 +517,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _afterSourceDeleted(entry.id);
       return true;
     }
-    final site = _sectionSources
+    final site = _librarySources
         .where((site) => site.id == entry.id)
         .firstOrNull;
     if (site == null || site.origin != SourceSite.originBuiltin) return false;
@@ -546,8 +545,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _afterSourceDeleted(String id) {
-    if (!_allSources && _source.id == id && _sectionSources.isNotEmpty) {
-      _changeSource(_sectionSources.first);
+    if (!_allSources && _source.id == id && _librarySources.isNotEmpty) {
+      _changeSource(_librarySources.first);
     } else if (mounted) {
       setState(() {});
     }
@@ -558,7 +557,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _changeGroup(_sourceGroups.firstWhere((group) => group.id == 'all'));
       return;
     }
-    final site = _sectionSources.where((site) => site.id == picked).firstOrNull;
+    final site = _librarySources.where((site) => site.id == picked).firstOrNull;
     if (site != null) _changeSource(site);
   }
 
@@ -666,143 +665,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
-  void _saveSectionSnapshot() {
-    _sectionSnapshots[_catalogSection] = (
-      items: List.of(_items),
-      tags: List.of(_catalogTags),
-      hasMore: _hasMore,
-      error: _error,
-      drillStack: List.of(_drillStack),
-      source: _source,
-      allSources: _allSources,
-      category: _category,
-      categoryGroupId: _group.id,
-      query: _search.text,
-      submittedQuery: _submittedQuery,
-      searchVisible: _searchVisible,
-      crossSource: _crossSourceSearch,
-      categoriesError: _categoriesError,
-      scrollOffset: _scroll.hasClients ? _scroll.offset : 0,
-      tagLevel2: _tagLevel2,
-      tagLevel3: _tagLevel3,
-      filters: List.of(_catalogFilters),
-      selectedFilters: Map.of(_selectedFilters),
-    );
-  }
-
-  void _restoreSectionSnapshot(String section, _SectionSnapshot snapshot) {
-    setState(() {
-      _catalogSection = section;
-      _drillStack
-        ..clear()
-        ..addAll(snapshot.drillStack);
-      _catalogTags = List.of(snapshot.tags);
-      _catalogFilters = List.of(snapshot.filters);
-      _selectedFilters
-        ..clear()
-        ..addAll(snapshot.selectedFilters);
-      _tagLevel2 = snapshot.tagLevel2;
-      _tagLevel3 = snapshot.tagLevel3;
-      _showRecommendations = false;
-      _selectionMode = false;
-      _selectedDramas.clear();
-      _search.text = snapshot.query;
-      _submittedQuery = snapshot.submittedQuery;
-      _searchVisible = snapshot.searchVisible;
-      _crossSourceSearch = snapshot.crossSource;
-      _items = List.of(snapshot.items);
-      _hasMore = snapshot.hasMore;
-      _error = snapshot.error;
-      _loading = false;
-      _loadingMore = false;
-      _categoriesLoading = false;
-      _categoriesError = snapshot.categoriesError;
-      _source = snapshot.source;
-      _allSources = snapshot.allSources;
-      _categorySelections[_categoryKey(snapshot.categoryGroupId)] =
-          snapshot.category;
-    });
-    final offset = snapshot.scrollOffset;
-    if (offset > 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_scroll.hasClients) return;
-        final target = offset.clamp(0.0, _scroll.position.maxScrollExtent);
-        if (_scroll.offset != target) _scroll.jumpTo(target);
-      });
-    }
-    if (_sectionSources.isNotEmpty &&
-        shouldSilentRefreshOnRestore(
-          _sectionFetchedAt[section],
-          DateTime.now(),
-        )) {
-      unawaited(_load(silent: true));
-    }
-  }
-
-  void _changeSection(String section) {
-    final sameSection = _catalogSection == section;
-    if (sameSection && _sectionZone == _zone) return;
-    _sectionSourceIds[_catalogSection] = _source.id;
-    _pauseCatalog();
-    _resetAutoLoad();
-    if (!sameSection) {
-      _saveSectionSnapshot();
-      final snapshot = _sectionSnapshots[section];
-      if (snapshot != null) {
-        _restoreSectionSnapshot(section, snapshot);
-        _sectionZone = _zone;
-        return;
-      }
-    }
-    final remembered = _rememberedForCurrentZone();
-    final sectionRemembered = _sectionSourceIds[section];
-    setState(() {
-      _catalogSection = section;
-      _sectionZone = _zone;
-      _drillStack.clear();
-      _catalogTags = const [];
-      _catalogFilters = const [];
-      _selectedFilters.clear();
-      _tagLevel2 = null;
-      _tagLevel3 = null;
-      _showRecommendations = false;
-      _selectionMode = false;
-      _selectedDramas.clear();
-      _search.clear();
-      _submittedQuery = '';
-      _items = [];
-      _hasMore = true;
-      _error = null;
-      final candidates = _sectionSources;
-      if (candidates.isNotEmpty) {
-        if (remembered != null) {
-          _source = remembered.site;
-          _allSources = remembered.allSources;
-        } else {
-          final site = sectionRemembered == null
-              ? null
-              : candidates
-                    .where((site) => site.id == sectionRemembered)
-                    .firstOrNull;
-          if (site != null) {
-            _source = site;
-            _allSources = false;
-          } else if (!candidates.any((site) => site.id == _source.id)) {
-            _source = candidates.first;
-            _allSources = false;
-          }
-        }
-      }
-    });
-    if (_scroll.hasClients) _scroll.jumpTo(0);
-    if (_sectionSources.isNotEmpty) {
-      unawaited(_loadWithAutoRetry(useCache: true));
-      _loadCategories();
-    } else {
-      setState(() => _loading = false);
-    }
-  }
-
   void _swipeCategory(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity.abs() < 240) return;
@@ -847,7 +709,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           repository: widget.repository,
           store: widget.store,
           initialGroup: _group.id,
-          sourceIds: _zone == HomeZone.drama ? null : _visibleSourceIds.toSet(),
+          sourceIds: null,
         ),
       ),
     );
@@ -878,7 +740,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           () => widget.store.setSiteVisible(site.id, true),
         );
         if (!mounted) return;
-        _setZone(site.isDramaSection ? HomeZone.drama : HomeZone.vod);
+        _setZone(HomeZone.library);
         _changeSource(site);
       }
     }
@@ -934,8 +796,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _televisionBack() {
     if (_selectionMode) {
       _cancelSelection();
-    } else if (_zone != HomeZone.drama) {
-      _applyZoneChange(HomeZone.drama);
+    } else if (_zone != HomeZone.library) {
+      _applyZoneChange(HomeZone.library);
     } else if (_search.text.isNotEmpty) {
       _search.clear();
       _searchChanged('');
@@ -953,18 +815,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       },
     );
     _source = SourceSite.byId(widget.store.source);
-    _catalogSection = SourceSite.sectionDrama;
-    _zone = HomeZone.drama;
+    _zone = HomeZone.library;
     _allSources = widget.store.catalogView.allSources;
-    if (_sectionSources.isNotEmpty) {
+    if (_librarySources.isNotEmpty) {
       final remembered = _rememberedForCurrentZone();
       if (remembered != null) {
         _source = remembered.site;
         _allSources = remembered.allSources;
-      } else if (!_sectionSources.any((site) => site.id == _source.id)) {
-        _source = _sectionSources.first;
+      } else if (!_librarySources.any((site) => site.id == _source.id)) {
+        _source = _librarySources.first;
         _allSources = false;
-        _sectionSourceIds[_catalogSection] = _source.id;
       }
     }
     _browser = CatalogBrowser(widget.repository);
@@ -977,7 +837,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     widget.repository.catalogUpdates.addListener(_metadataChanged);
     _firstLaunch =
         widget.store.preferences.getBool('first_catalog_loaded') != true;
-    if (_sectionSources.isNotEmpty) {
+    if (_librarySources.isNotEmpty) {
       unawaited(_loadWithAutoRetry(useCache: !_firstLaunch));
       _loadCategories();
     } else {
@@ -1059,12 +919,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (_autoLoadScheduled || _autoLoadedOnce || !mounted) return;
     if (!_isCatalogZone) return;
     if (_items.isNotEmpty || _loading || _showRecommendations) return;
-    if (_sectionSources.isEmpty) return;
+    if (_librarySources.isEmpty) return;
     _autoLoadScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoLoadScheduled = false;
       if (!mounted || _loading || _loadingMore || _showRecommendations) return;
-      if (_items.isNotEmpty || _sectionSources.isEmpty) return;
+      if (_items.isNotEmpty || _librarySources.isEmpty) return;
       _autoLoadedOnce = true;
       unawaited(_loadWithAutoRetry(useCache: true));
     });
@@ -1085,7 +945,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     for (var attempt = 0; attempt < 2; attempt++) {
       if (_loading || _loadingMore || _showRecommendations) return;
       if (_items.isNotEmpty || _error != null) return;
-      if (_sectionSources.isEmpty) return;
+      if (_librarySources.isEmpty) return;
       if (attempt > 0) {
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         if (!mounted) return;
@@ -1137,7 +997,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _loading = silent ? false : (cached && !result.fresh);
         _loadingMore = false;
         _error = result.warning.isEmpty ? null : result.warning;
-        _sectionFetchedAt[_catalogSection] = DateTime.now();
       });
       if (!more && _resetScrollOnNextLoad) {
         _resetScrollOnNextLoad = false;
@@ -1183,7 +1042,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final value =
         _lastZoneSource[_zone.name] ?? widget.store.zoneSource(_zone.name);
     if (value.isEmpty) return null;
-    final candidates = _sectionSources;
+    final candidates = _librarySources;
     if (candidates.isEmpty) return null;
     if (value == LocalStore.zoneSourceAll) {
       return (site: candidates.first, allSources: _sourceGroups.length > 1);
@@ -1325,7 +1184,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (_openingPlayback) return;
     _pauseCatalog();
     final contextQueue = queue ?? _queueAround(drama, _visible);
-    if (vodOpenAction(isVodZone: _zone == HomeZone.vod, resume: resume) ==
+    if (vodOpenAction(
+          isVodZone: isVodZoneSource(SourceSite.byId(drama.source)),
+          resume: resume,
+        ) ==
         VodOpenAction.detail) {
       Navigator.of(context).push(
         appPageRoute<void>(
@@ -1363,8 +1225,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _openDrama(drama);
       return;
     }
-    final zone = isVodZoneSource(site) ? HomeZone.vod : HomeZone.drama;
-    if (zone != _zone) _setZone(zone);
+    if (_zone != HomeZone.library) _setZone(HomeZone.library);
     _changeSource(site);
     _openDrama(drama);
   }
@@ -1379,8 +1240,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _openDrama(drama);
       return;
     }
-    final zone = isVodZoneSource(site) ? HomeZone.vod : HomeZone.drama;
-    if (zone == _zone && (_allSources || site.id == _source.id)) {
+    if (_zone == HomeZone.library && (_allSources || site.id == _source.id)) {
       _openDrama(drama);
       return;
     }
@@ -1407,19 +1267,87 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _applyZoneChange(zone, recordHistory: true);
   }
 
+  /// 当前主题绑定的导航样式（存于显示方案，切主题即变）。
+  NavStyle get _navStyle =>
+      widget.store.displayScheme(widget.store.appTheme).navStyle;
+
+  /// 当前主题绑定的内容档（存于显示方案，切主题即变）。
+  ContentTier get _contentTier =>
+      widget.store.displayScheme(widget.store.appTheme).contentTier;
+
+  /// 内容档命中的分类 id（漫剧/真人剧档）；全部/成人档或命中不到为 null。
+  String? get _tierCategoryId => tierCategoryId(_contentTier, _categories);
+
+  /// 内容档锁定的分类在本站不存在：分类已取回（非空）且命中不到。
+  /// 分类尚未取回时不判缺，避免加载中闪空态。
+  bool get _tierMissing =>
+      (_contentTier == ContentTier.manhua ||
+          _contentTier == ContentTier.liveAction) &&
+      _categories.isNotEmpty &&
+      _tierCategoryId == null;
+
+  /// 上次已驱动过的内容档选类（`档:分类id`），避免同一决议反复发请求。
+  String? _lastTierDriveKey;
+
+  /// 内容档选类驱动：漫剧/真人剧档命中分类后，把当前选类切过去，
+  /// 取数随之只取该分类（复用 _changeCategory 的整条取数链）。
+  /// 在 build 里以 post-frame 方式调度：主题切换只触发重建，不触发
+  /// _loadCategories，必须在重建后把选类推过去；守卫键保证同一决议
+  /// 只推一次，_changeCategory 自身也会因选类相同而提前返回。
+  void _driveTierCategory() {
+    final tierId = _tierCategoryId;
+    if (tierId == null || _drillStack.isNotEmpty) return;
+    final key = '${_contentTier.storageValue}:$tierId';
+    if (_category == tierId || _lastTierDriveKey == key) return;
+    _lastTierDriveKey = key;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _changeCategory(tierId);
+    });
+  }
+
+  int get _bottomTabIndex => switch (_zone) {
+    HomeZone.library => 0,
+    HomeZone.live => 1,
+    HomeZone.audio => 2,
+    HomeZone.novel => 3,
+  };
+
+  void _onBottomTab(int tabIndex) {
+    final wantMine = tabIndex == 4;
+    final zone = switch (tabIndex) {
+      1 => HomeZone.live,
+      2 => HomeZone.audio,
+      3 => HomeZone.novel,
+      _ => HomeZone.library,
+    };
+    if (wantMine == _mineRequested && zone == _zone) return;
+    // 同区点“我的”时 _setZone 会提前返回，必须先 setState 递出请求。
+    setState(() => _mineRequested = wantMine);
+    _setZone(zone);
+  }
+
+  /// 底部标签样式的底栏：只在手机端通用分支显示；电视/桌面走
+  /// 各自导航，选片模式下隐藏。短剧首页分支不叠加此栏（其胶囊
+  /// 栏是进“频道”页的唯一入口，不能藏）。
+  Widget? _bottomTabBar({required bool television, required bool desktop}) {
+    if (_navStyle != NavStyle.bottomTabs ||
+        television ||
+        desktop ||
+        _selectionMode) {
+      return null;
+    }
+    return MoyiBottomTabBar(index: _bottomTabIndex, onSelect: _onBottomTab);
+  }
+
   void _applyZoneChange(HomeZone zone, {bool recordHistory = false}) {
     if (recordHistory && zone != _zone) _zoneHistory.push(_zone);
     _resetAutoLoad();
     setState(() {
       _zone = zone;
+      if (zone != HomeZone.library) _mineRequested = false;
       _selectionMode = false;
       _selectedDramas.clear();
     });
-    if (zone == HomeZone.drama) {
-      _changeSection(SourceSite.sectionDrama);
-    } else if (zone == HomeZone.vod) {
-      _changeSection(SourceSite.sectionVideo);
-    }
   }
 
   bool _popZoneHistory() {
@@ -1490,6 +1418,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   AppDrawer _drawer() => AppDrawer(
     zone: _zone,
     currentVersion: _currentVersion,
+    appTheme: widget.store.appTheme,
     onZoneSelected: _onZoneSelected,
     onWatchRoom: _onWatchRoom,
     onTool: _onTool,
@@ -1497,9 +1426,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   );
 
   void _openZoneSettings() {
-    if (_zone == HomeZone.drama ||
-        _zone == HomeZone.vod ||
-        _zone == HomeZone.live) {
+    if (_zone == HomeZone.library || _zone == HomeZone.live) {
       _pushTool(
         ZoneSettingsScreen(
           repository: widget.repository,
@@ -1548,19 +1475,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   int? get _railIndex => switch (_zone) {
-    HomeZone.drama => 0,
-    HomeZone.vod => 1,
-    HomeZone.live => 2,
+    HomeZone.library => 0,
+    HomeZone.live => 1,
     _ => null,
   };
 
   void _onRailSelected(int index) {
     switch (index) {
       case 0:
-        _setZone(HomeZone.drama);
+        _setZone(HomeZone.library);
       case 1:
-        _setZone(HomeZone.vod);
-      case 2:
         _setZone(HomeZone.live);
       default:
         _openDrawer();
@@ -1647,6 +1571,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _pushTool(
           TorrentHomePage(repository: widget.repository, store: widget.store),
         );
+      case AppDrawerTool.themeSettings:
+        _pushTool(
+          ThemeSettingsScreen(
+            store: widget.store,
+            repository: widget.repository,
+            sourceId: widget.store.source,
+          ),
+        );
     }
   }
 
@@ -1659,13 +1591,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   /// 未成年保护（与火蚁TV现行做法一致的一次性动作，无持久开关）：
-  /// 点按后离开统一视频区、回到短剧区；下次再进点播区仍可见成人站，
+  /// 点按后在片库区内切回短剧站；下次再切到点播站仍可见成人站，
   /// 与火蚁TV点按后离开午夜区、下次仍可再进午夜区的语义相同。
   Future<void> _onMinorProtectionChanged(bool enabled) async {
     if (!enabled) return;
-    if (_zone == HomeZone.vod) {
-      _applyZoneChange(HomeZone.drama);
-    }
+    if (_zone != HomeZone.library || !_source.isVideoSection) return;
+    final drama = _librarySources
+        .where((site) => site.isDramaSection)
+        .firstOrNull;
+    if (drama != null && drama.id != _source.id) _changeSource(drama);
   }
 
   Future<void> _loadCurrentVersion() async {
@@ -1913,7 +1847,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final updating = _group.sources.any((source) => _updater.busy(source.id));
     final Widget title;
     if (_selectionMode) {
-      title = Text('选择短剧', style: largeTitle);
+      title = Text('选择视频', style: largeTitle);
     } else if (_isCatalogZone) {
       title = GlassTapTarget(
         key: const ValueKey('source-switch'),
@@ -2004,13 +1938,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       ? null
                       : _openRankings,
                 ),
-                if (_zone == HomeZone.drama)
-                  GlassGroupItem(
-                    key: const ValueKey('open-fullscreen-feed'),
-                    icon: LucideIcons.play,
-                    tooltip: '全屏流',
-                    onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
-                  ),
+                GlassGroupItem(
+                  key: const ValueKey('open-fullscreen-feed'),
+                  icon: LucideIcons.play,
+                  tooltip: '全屏流',
+                  onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
+                ),
                 GlassGroupItem(
                   key: const ValueKey('toggle-search'),
                   icon: _searchVisible
@@ -2038,9 +1971,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
             const SizedBox(width: 8),
           ],
+          // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
           if (!AppLayout.isTelevision(context) &&
-              (_isCatalogZone || _zone == HomeZone.live) &&
-              (_zone != HomeZone.drama || wide))
+              _zone == HomeZone.live)
             GlassIconButton(
               key: const ValueKey('open-settings'),
               icon: LucideIcons.settings,
@@ -2058,6 +1991,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     animation: widget.store,
     builder: (context, _) {
       _scheduleAutoLoad();
+      _driveTierCategory();
       return LayoutBuilder(
         builder: (context, constraints) {
           final television = AppLayout.isTelevision(context);
@@ -2068,7 +2002,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           if (!television &&
               !desktop &&
               !_selectionMode &&
-              _zone == HomeZone.drama) {
+              _zone == HomeZone.library) {
             if (isHongguoDramaGroup(_group.id)) {
               return Scaffold(
                 key: _scaffoldKey,
@@ -2084,10 +2018,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onOpenFeed: _openFullscreenFeed,
                     onPickSource: () => unawaited(_pickSource()),
                     sourceLabel: '${_group.name} (${_group.sources.length})',
+                    currentSourceLabel: _allSources
+                        ? '全部站源'
+                        : _source.name,
                     feedEnabled: _visible.isNotEmpty,
                     categories: _displayCategories,
                     selectedCategory: _displayCategory,
                     onCategorySelected: _changeCategory,
+                    contentTier: _contentTier,
+                    tierEmpty: _tierMissing,
                     searchController: _search,
                     searchHint: _searchHint,
                     onSearchChanged: _searchChanged,
@@ -2105,6 +2044,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onOpenSaved: _openSaved,
                     onSettingsPressed: _openZoneSettings,
                     onOpenFeatured: _openFeaturedDrama,
+                    requestedTab: _mineRequested
+                        ? HongguoDramaHome.mineTabIndex
+                        : null,
                   ),
                 ),
               );
@@ -2114,6 +2056,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             key: _scaffoldKey,
             drawer: _drawer(),
             extendBody: glass && !desktop,
+            bottomNavigationBar: _bottomTabBar(
+              television: television,
+              desktop: desktop,
+            ),
             appBar: glass
                 ? _glassAppBar()
                 : AppBar(
@@ -2126,7 +2072,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     leading: _appBarLeading(),
                     title: _selectionMode
                         ? const Text(
-                            '选择短剧',
+                            '选择视频',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           )
@@ -2198,17 +2144,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 : _openRankings,
                             icon: const Icon(Icons.leaderboard_outlined),
                           ),
-                          if (_zone == HomeZone.drama)
-                            IconButton(
-                              key: const ValueKey('open-fullscreen-feed'),
-                              tooltip: '全屏流',
-                              onPressed: _visible.isEmpty
-                                  ? null
-                                  : _openFullscreenFeed,
-                              icon: const Icon(Icons.play_arrow_rounded),
-                            ),
-                          if ((_isCatalogZone || _zone == HomeZone.live) &&
-                              !television)
+                          IconButton(
+                            key: const ValueKey('open-fullscreen-feed'),
+                            tooltip: '全屏流',
+                            onPressed: _visible.isEmpty
+                                ? null
+                                : _openFullscreenFeed,
+                            icon: const Icon(Icons.play_arrow_rounded),
+                          ),
+                          // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
+                          if (_zone == HomeZone.live && !television)
                             IconButton(
                               key: const ValueKey('open-settings'),
                               tooltip: '设置',
@@ -2283,23 +2228,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       width: 164,
                       child: RemoteList(
                         key: _navKey,
-                        itemKeys: const ['drama', 'video', 'live', 'settings'],
+                        itemKeys: const ['library', 'live', 'settings'],
                         itemExtent: 64,
                         spacing: 14,
                         padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
                         autofocus: true,
                         itemBuilder: (_, index, node, onFocus) {
                           final entries = [
-                            (Icons.movie_rounded, '短剧'),
-                            (Icons.video_library_rounded, '影视'),
+                            (Icons.video_library_rounded, '片库'),
                             (Icons.live_tv_rounded, '直播'),
                             (Icons.settings_rounded, '设置'),
                           ];
                           final entry = entries[index];
                           final selected = switch (index) {
-                            0 => _zone == HomeZone.drama,
-                            1 => _zone == HomeZone.vod,
-                            2 => _zone == HomeZone.live,
+                            0 => _zone == HomeZone.library,
+                            1 => _zone == HomeZone.live,
                             _ => false,
                           };
                           return RemoteButton(
@@ -2312,10 +2255,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             onPressed: () {
                               switch (index) {
                                 case 0:
-                                  _setZone(HomeZone.drama);
+                                  _setZone(HomeZone.library);
                                 case 1:
-                                  _setZone(HomeZone.vod);
-                                case 2:
                                   _setZone(HomeZone.live);
                                 default:
                                   _openDrawer();
@@ -2334,14 +2275,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       groupAlignment: -.8,
                       destinations: const [
                         NavigationRailDestination(
-                          icon: Icon(Icons.movie_outlined),
-                          selectedIcon: Icon(Icons.movie),
-                          label: Text('短剧'),
-                        ),
-                        NavigationRailDestination(
                           icon: Icon(Icons.video_library_outlined),
                           selectedIcon: Icon(Icons.video_library),
-                          label: Text('影视'),
+                          label: Text('片库'),
                         ),
                         NavigationRailDestination(
                           icon: Icon(Icons.live_tv_outlined),
@@ -2382,7 +2318,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 } else if (_settlingAfterPop) {
                   // 上方路由（播放页等）弹出过渡还没跑完：首页尚未落定，
                   // 此时到达的返回是同一手势的重复投递，不得吞区历史，
-                  // 否则点播播完返回会落到短剧区。落定后的返回照常退区。
+                  // 否则播完返回会误退区。落定后的返回照常退区。
                 } else {
                   _popZoneHistory();
                 }
@@ -2442,13 +2378,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         binding: _contentBinding,
       );
     }
-    if (_sectionSources.isEmpty) {
+    if (_librarySources.isEmpty) {
       return StatusPanel(
-        title: _zone == HomeZone.vod
-            ? '暂无显示中的点播站源'
-            : _catalogSection == SourceSite.sectionVideo
-            ? '暂无显示中的点播站源'
-            : '暂无显示中的站源',
+        title: '暂无显示中的站源',
         message: widget.store.sources.isEmpty
             ? '请联系管理员为当前用户开放站源。'
             : '所有站源已在「源显示列表」中关闭，请到站源管理中重新开启。',
@@ -2456,7 +2388,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
     final catalog = _catalog(selectionInBody: desktop || television);
     if (!neonStyleActive || television) return catalog;
-    // 霓虹风格下，内容区（点播 / 短剧目录）铺同一套氛围光，
+    // 霓虹风格下，内容区（片库目录）铺同一套氛围光，
     // 与抽屉共用 NeonBackdrop.app 这一份定义，不再只有首页和频道页
     // 是霓虹、点播区还是原来的纯色底。
     return NeonBackdrop.app(child: catalog);
@@ -2720,6 +2652,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
             ),
           )
+        else if (_tierMissing)
+          Expanded(child: _tierEmptyPanel())
         else ...[
           if (_loading && _items.isNotEmpty)
             const LinearProgressIndicator(minHeight: 2),

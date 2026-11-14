@@ -632,4 +632,34 @@ void main() {
       expect(isVodZoneSource(BuiltinPySites.xhongyanSite), isTrue);
     });
   });
+
+  group('内置 py 视频站', () {
+    test('多多影视 站注册值：视频分区、内置来源、py 类型', () {
+      final site = BuiltinPySites.duoduoSite;
+      expect(site.id, 'duoduo');
+      expect(site.name, '多多影视');
+      expect(site.section, SourceSite.sectionVideo);
+      expect(site.origin, SourceSite.originBuiltin);
+      expect(site.importType, 'py');
+      expect(BuiltinPySites.duoduoAssetPath, 'assets/py_spiders/duoduo.py');
+    });
+    test('多多影视 站进点播区（统一视频区）', () {
+      expect(isVodZoneSource(BuiltinPySites.duoduoSite), isTrue);
+    });
+  });
+
+  group('内置 py 视频站', () {
+    test('JavMenu 站注册值：视频分区、内置来源、py 类型、🔞 名', () {
+      final site = BuiltinPySites.javmenuSite;
+      expect(site.id, 'javmenu');
+      expect(site.name, '🔞JAV目錄大全');
+      expect(site.section, SourceSite.sectionVideo);
+      expect(site.origin, SourceSite.originBuiltin);
+      expect(site.importType, 'py');
+      expect(BuiltinPySites.javmenuAssetPath, 'assets/py_spiders/javmenu.py');
+    });
+    test('JavMenu 站进点播区（统一视频区）', () {
+      expect(isVodZoneSource(BuiltinPySites.javmenuSite), isTrue);
+    });
+  });
 }

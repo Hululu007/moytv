@@ -62,6 +62,24 @@ class SourceFixtureRepository extends FixtureRepository {
   }
 }
 
+/// 把 [finder] 拖进视口：玻璃卡片变高后诊断按钮常落到测试视口之下，
+/// 而 ensureVisible/scrollUntilVisible 在此列表上是空操作（矩形实测
+/// 前后不变），只能用真实拖动并按矩形校验。手动泵帧，不用
+/// pumpAndSettle（检测轮询定时器会让它等不到静止）。
+Future<void> _dragIntoView(WidgetTester tester, Finder finder) async {
+  for (var i = 0; i < 12; i++) {
+    final rect = tester.getRect(finder);
+    final height =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    if (rect.top >= 0 && rect.bottom <= height) return;
+    final direction = rect.top < 0 ? 200.0 : -200.0;
+    await tester.drag(find.byType(ListView), Offset(0, direction));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+  throw StateError('widget 拖 12 次仍不在视口内');
+}
+
 void main() {
   test(
     'twelve short-drama sources are registered and paged search is scoped',
@@ -263,7 +281,7 @@ void main() {
         await tester.pump();
         expect(repository.operations, ['hongguo:$operation']);
         expect(sample, findsOneWidget);
-        await tester.ensureVisible(toggle);
+        await _dragIntoView(tester, toggle);
         await tester.tap(toggle);
         await tester.pump();
         expect(sample, findsNothing);
@@ -366,7 +384,7 @@ void main() {
       expect(find.textContaining('检测未通过'), findsOneWidget);
       expect(find.textContaining('HTTP 403'), findsNothing);
       final toggle = find.byKey(const ValueKey('health-toggle-hongguo'));
-      await tester.ensureVisible(toggle);
+      await _dragIntoView(tester, toggle);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       expect(find.textContaining('HTTP 403'), findsOneWidget);

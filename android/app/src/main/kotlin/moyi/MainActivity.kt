@@ -248,6 +248,7 @@ class MainActivity : FlutterActivity() {
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         ProxyKernelBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         TorrentBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        FrameExtractorBridge.register(flutterEngine.dartExecutor.binaryMessenger)
         val bridge = PyBridge(this)
         pyBridge = bridge
         pyChannel = bridge.register(flutterEngine.dartExecutor.binaryMessenger)

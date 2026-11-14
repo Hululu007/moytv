@@ -196,7 +196,7 @@ void main() {
     try {
       await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
       await settlePreview(tester);
-      await tester.tap(find.text('点播区'));
+      await tester.tap(find.text('片库'));
       await settlePreview(tester);
     } catch (_) {}
     final boundary =
@@ -222,7 +222,7 @@ void main() {
     try {
       await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
       await settlePreview(tester);
-      await tester.tap(find.text('点播'));
+      await tester.tap(find.text('片库'));
       await settlePreview(tester);
     } catch (_) {}
     final boundary =
@@ -341,7 +341,6 @@ void main() {
           protocol: LiveProtocol.list,
         ),
         store: LiveStore(prefs, 'default'),
-        onExit: () {},
       ),
       'preview_player_live',
     );
@@ -433,7 +432,7 @@ void main() {
       Scaffold(
         key: scaffoldKey,
         drawer: AppDrawer(
-          zone: HomeZone.drama,
+          zone: HomeZone.library,
           currentVersion: '1.0.0',
           onZoneSelected: (_) {},
           onWatchRoom: () {},
@@ -476,7 +475,7 @@ void main() {
             child: Scaffold(
               key: scaffoldKey,
               drawer: AppDrawer(
-                zone: HomeZone.drama,
+                zone: HomeZone.library,
                 currentVersion: '1.0.0',
                 onZoneSelected: (_) {},
                 onWatchRoom: () {},

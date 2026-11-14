@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'app_theme_config.dart';
+import 'neon_glass_kit.dart';
+
 class SourcePickerEntry {
   const SourcePickerEntry({
     required this.id,
@@ -165,7 +168,10 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                             setState(() => _query = '');
                           },
                         ),
-                  border: const OutlineInputBorder(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 8,
@@ -196,16 +202,11 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                         children: [
                           for (final group in visible) ...[
                             if (!searching && group.title.isNotEmpty)
-                              Padding(
+                              NeonSectionTitle(
+                                '${group.title}（${group.entries.length}）',
                                 padding: const EdgeInsets.only(
                                   top: 12,
                                   bottom: 4,
-                                ),
-                                child: Text(
-                                  '${group.title}（${group.entries.length}）',
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    color: colors.onSurfaceVariant,
-                                  ),
                                 ),
                               ),
                             GridView.builder(
@@ -216,28 +217,40 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                                     maxCrossAxisExtent: 128,
                                     mainAxisSpacing: 8,
                                     crossAxisSpacing: 8,
-                                    childAspectRatio: 2.7,
+                                    childAspectRatio: 2.4,
                                   ),
                               itemCount: group.entries.length,
                               itemBuilder: (context, index) {
                                 final entry = group.entries[index];
                                 final selected = entry.id == widget.currentId;
+                                final config = AppThemeConfig.of(context);
                                 return InkWell(
                                   key: ValueKey('site-picker-row-${entry.id}'),
-                                  borderRadius: BorderRadius.circular(10),
+                                  borderRadius: BorderRadius.circular(12),
                                   onTap: _editMode
                                       ? null
                                       : () => Navigator.pop(context, entry.id),
                                   child: Container(
                                     key: selected ? _currentKey : null,
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
+                                      horizontal: 10,
                                     ),
                                     decoration: BoxDecoration(
+                                      gradient: selected
+                                          ? neonSelectedGradient(config)
+                                          : null,
                                       color: selected
-                                          ? colors.primaryContainer
-                                          : colors.surfaceContainerHighest,
-                                      borderRadius: BorderRadius.circular(10),
+                                          ? null
+                                          : config.unselectedBg,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: selected
+                                            ? Colors.transparent
+                                            : config.dividerColor,
+                                      ),
+                                      boxShadow: selected
+                                          ? [neonGlow(config)]
+                                          : null,
                                     ),
                                     child: Row(
                                       children: [
@@ -245,12 +258,19 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                                           child: Text(
                                             entry.name,
                                             maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
                                             style: theme.textTheme.bodyMedium
                                                 ?.copyWith(
+                                                  // 长站名缩小字号换行显示，
+                                                  // 不截断、不省略号。
+                                                  fontSize:
+                                                      entry.name.length > 12
+                                                      ? 9.5
+                                                      : entry.name.length > 8
+                                                      ? 10.5
+                                                      : 12,
                                                   color: selected
-                                                      ? colors.primary
-                                                      : null,
+                                                      ? config.selectedText
+                                                      : config.unselectedText,
                                                   fontWeight: selected
                                                       ? FontWeight.w600
                                                       : null,
@@ -261,7 +281,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                                           Icon(
                                             Icons.check,
                                             size: 18,
-                                            color: colors.primary,
+                                            color: config.selectedText,
                                           )
                                         else if (_editMode &&
                                             entry.deletable &&

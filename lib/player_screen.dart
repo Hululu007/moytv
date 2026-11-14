@@ -12,7 +12,9 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'audio_background.dart';
 import 'audio_continue.dart';
+import 'audio_playback.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
@@ -199,6 +201,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   NonVideoContent? _nonVideo;
   bool _audioMode = false;
   OverlayEntry? _audioMiniBar;
+
+  // 音频模式的后台输出认领：只在音频模式下向听书单例认领三路输出
+  //（保活 + 锁屏 + 胶囊），视频播放链不走这里。
+  late final String _externalAudioOwnerId =
+      'player_screen@${identityHashCode(this)}';
+  bool _externalAudioClaimed = false;
+  int _lastExternalReportAtMs = 0;
+  bool _lastExternalPlaying = false;
+  int _lastExternalIndex = -1;
 
   void _removeAudioMiniBar() {
     _audioMiniBar?.remove();
@@ -518,6 +529,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _syncPreload();
         _acknowledgeHandoff();
         _maybeCaptureEpisodeFrame(position);
+        _claimOrReportExternalAudio();
       }),
     );
     for (final stream in [
@@ -538,6 +550,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _subscriptions.add(
       _player.stream.playing.listen((playing) {
+        _claimOrReportExternalAudio();
         final plan = _plan;
         if (!playing || plan == null || plan.routeIndex == _routeIndex) {
           return;
@@ -1347,6 +1360,103 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _playText(int index) {
     _audioMode = false;
     unawaited(_play(index, showControlsOnReady: false));
+  }
+
+  /// 音频模式的锁屏载荷：与详情页听书链同一套六项。
+  AudioLockscreenInfo _externalAudioInfo() {
+    final state = _player.state;
+    return AudioLockscreenInfo(
+      bookTitle: widget.detail.drama.title,
+      chapterTitle: '第 ${_index + 1} 集',
+      coverUrl: widget.detail.drama.cover,
+      playing: _enginePlaying,
+      positionMs: state.position.inMilliseconds,
+      durationMs: state.duration.inMilliseconds,
+      hasPrevious: _index > 0,
+      hasNext: _index + 1 < widget.detail.episodes.length,
+      rate: _preferences.speed,
+    );
+  }
+
+  /// 音频模式的后台输出认领与状态上报。
+  ///
+  /// 只在播着时认领（暂停时不抢），认领后播/停切换与换集立即上报，
+  /// 进度节流 5 秒；切出音频模式或页面关闭时放弃认领。
+  /// 认领会停掉详情页听书链的旧声（播新章停旧声），反之亦然。
+  void _claimOrReportExternalAudio() {
+    if (_closed || !_audioMode) {
+      _releaseExternalAudio();
+      return;
+    }
+    final playing = _enginePlaying;
+    if (!_externalAudioClaimed) {
+      if (!playing) return;
+      _externalAudioClaimed = true;
+      _lastExternalPlaying = playing;
+      _lastExternalIndex = _index;
+      _lastExternalReportAtMs = DateTime.now().millisecondsSinceEpoch;
+      AudioPlaybackController.instance.claimExternalAudio(
+        ExternalAudioSession(
+          ownerId: _externalAudioOwnerId,
+          infoProvider: _externalAudioInfo,
+          onAction: _onExternalMediaAction,
+          onTakeover: _onExternalTakeover,
+        ),
+      );
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (playing != _lastExternalPlaying || _index != _lastExternalIndex) {
+      _lastExternalPlaying = playing;
+      _lastExternalIndex = _index;
+      _lastExternalReportAtMs = now;
+      AudioPlaybackController.instance.reportExternalAudio();
+      return;
+    }
+    if (now - _lastExternalReportAtMs >= 5000) {
+      _lastExternalReportAtMs = now;
+      AudioPlaybackController.instance.reportExternalAudio();
+    }
+  }
+
+  void _releaseExternalAudio() {
+    if (!_externalAudioClaimed) return;
+    _externalAudioClaimed = false;
+    AudioPlaybackController.instance.releaseExternalAudio(
+      _externalAudioOwnerId,
+    );
+  }
+
+  /// 锁屏按键回落：复用页内播控口径（播/停走总开关，上下集走 _playAudio）。
+  void _onExternalMediaAction(String action) {
+    if (_closed || !_audioMode || !mounted) return;
+    switch (action) {
+      case 'play':
+        if (!_enginePlaying) _togglePlayback();
+      case 'pause':
+        if (_enginePlaying) _togglePlayback();
+      case 'previous':
+        if (_index > 0) _playAudio(_index - 1);
+      case 'next':
+        _playAudio(_index + 1);
+    }
+  }
+
+  /// 另一路音频（详情页听书）接管：停掉本路，不再认领。
+  /// 直接停引擎（不走总开关的加载门），并关掉 _playIntent，
+  /// 这样加载中的一集也不会在就绪后自动播出来抢声。
+  void _onExternalTakeover() {
+    _externalAudioClaimed = false;
+    if (_closed || !_audioMode) return;
+    _playIntent = false;
+    if (_useNativeHandle) {
+      unawaited(_tvboxHandle.pause());
+    } else if (_useIjkCore) {
+      unawaited(_ijkHandle.pause());
+    } else {
+      unawaited(_player.pause());
+    }
+    unawaited(_saveProgress(flush: true));
   }
 
   Future<void> _play(
@@ -2650,6 +2760,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     _closed = true;
     _removeAudioMiniBar();
+    _releaseExternalAudio();
     if (_playbackServiceHeld) {
       _playbackServiceHeld = false;
       unawaited(PlaybackForeground.release());

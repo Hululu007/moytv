@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
+import 'category_levels.dart';
 import 'compact_chip.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
@@ -65,66 +66,101 @@ class _CatalogFiltersState extends State<CatalogFilters> {
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
+    // 电视遥控路径保持单排：焦点在 RemoteRow 内左右走，分两排会
+    // 打乱上下焦点链；手机/平板路径按两级分两排。
+    if (television) {
+      return SizedBox(
+        height: 64,
+        child: Row(children: [_remoteRow(), _errorButton(), _trailing()]),
+      );
+    }
+    final levels = splitCategoryLevels(widget.categories);
+    final rows = [
+      levels.level1,
+      if (levels.level2.isNotEmpty) levels.level2,
+    ];
+    final chipHeight = compactChipHeight(context);
     return SizedBox(
-      height: television ? 64 : compactChipHeight(context),
-      child: Row(
+      height: chipHeight * rows.length + (rows.length > 1 ? 4 : 0),
+      child: Column(
         children: [
-          Expanded(
-            child: television
-                ? RemoteRow(
-                    key: widget.remoteKey,
-                    itemKeys: [for (final entry in widget.categories) entry.id],
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    initialIndex: _selectedIndex,
-                    autofocus: widget.remoteAutofocus,
-                    onExitUp: widget.onExitUp,
-                    onExitDown: widget.onExitDown,
-                    itemBuilder: (_, index, node, onFocus) {
-                      final entry = widget.categories[index];
-                      return KeyedSubtree(
-                        key: _anchors.putIfAbsent(entry.id, GlobalKey.new),
-                        child: RemoteButton(
-                          key: ValueKey('category-${entry.id}'),
-                          label: entry.name,
-                          selected: entry.id == widget.category,
-                          focusNode: node,
-                          onFocus: onFocus,
-                          onPressed: () => widget.onCategory(entry.id),
-                        ),
-                      );
-                    },
-                  )
-                : SingleChildScrollView(
-                    key: const ValueKey('catalog-categories'),
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      children: [
-                        for (final entry in widget.categories)
-                          Padding(
-                            key: _anchors.putIfAbsent(entry.id, GlobalKey.new),
-                            padding: const EdgeInsets.only(right: 3),
-                            child: CompactFilterChip(
-                              key: ValueKey('category-${entry.id}'),
-                              label: entry.name,
-                              selected: entry.id == widget.category,
-                              onSelected: () => widget.onCategory(entry.id),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-          ),
-          if (widget.error != null)
-            IconButton(
-              tooltip: widget.error,
-              onPressed: widget.onRetry,
-              icon: Icon(
-                Icons.refresh_rounded,
-                color: Theme.of(context).colorScheme.error,
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) const SizedBox(height: 4),
+            SizedBox(
+              height: chipHeight,
+              child: Row(
+                children: [
+                  Expanded(child: _chipRow(i, rows[i])),
+                  if (i == 0) ...[_errorButton(), _trailing()],
+                ],
               ),
             ),
-          if (widget.trailing != null) widget.trailing!,
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _errorButton() {
+    if (widget.error == null) return const SizedBox.shrink();
+    return IconButton(
+      tooltip: widget.error,
+      onPressed: widget.onRetry,
+      icon: Icon(
+        Icons.refresh_rounded,
+        color: Theme.of(context).colorScheme.error,
+      ),
+    );
+  }
+
+  Widget _trailing() => widget.trailing ?? const SizedBox.shrink();
+
+  Widget _remoteRow() {
+    return Expanded(
+      child: RemoteRow(
+        key: widget.remoteKey,
+        itemKeys: [for (final entry in widget.categories) entry.id],
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        initialIndex: _selectedIndex,
+        autofocus: widget.remoteAutofocus,
+        onExitUp: widget.onExitUp,
+        onExitDown: widget.onExitDown,
+        itemBuilder: (_, index, node, onFocus) {
+          final entry = widget.categories[index];
+          return KeyedSubtree(
+            key: _anchors.putIfAbsent(entry.id, GlobalKey.new),
+            child: RemoteButton(
+              key: ValueKey('category-${entry.id}'),
+              label: entry.name,
+              selected: entry.id == widget.category,
+              focusNode: node,
+              onFocus: onFocus,
+              onPressed: () => widget.onCategory(entry.id),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _chipRow(int rowIndex, List<CatalogCategory> entries) {
+    return SingleChildScrollView(
+      key: ValueKey('catalog-categories-$rowIndex'),
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          for (final entry in entries)
+            Padding(
+              key: _anchors.putIfAbsent(entry.id, GlobalKey.new),
+              padding: const EdgeInsets.only(right: 3),
+              child: CompactFilterChip(
+                key: ValueKey('category-${entry.id}'),
+                label: entry.name,
+                selected: entry.id == widget.category,
+                onSelected: () => widget.onCategory(entry.id),
+              ),
+            ),
         ],
       ),
     );

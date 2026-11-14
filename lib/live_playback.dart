@@ -26,7 +26,6 @@ class LivePlaybackController extends ChangeNotifier {
   static const _stallTimeout = Duration(seconds: 15);
 
   final LiveRepository repository;
-
   late final sleepTimer = SleepTimerController(
     onExpire: () => unawaited(pauseForSleep()),
   );

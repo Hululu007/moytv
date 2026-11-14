@@ -47,16 +47,16 @@ void main() {
     return drawer.zone;
   }
 
-  Future<void> switchToVod(WidgetTester tester) async {
+  Future<void> switchToLive(WidgetTester tester) async {
     await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    final vod = find.descendant(
+    final live = find.descendant(
       of: find.byType(Drawer),
-      matching: find.text('点播'),
+      matching: find.text('直播'),
     );
-    expect(vod, findsOneWidget);
-    await tester.tap(vod);
+    expect(live, findsOneWidget);
+    await tester.tap(live);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }
@@ -85,29 +85,29 @@ void main() {
     return homeContext;
   }
 
-  testWidgets('点播区播放返回后仍在点播区，不回短剧区', (tester) async {
+  testWidgets('直播区播放返回后仍在直播区，不回片库区', (tester) async {
     final homeContext = await pumpHome(tester);
-    await switchToVod(tester);
-    expect(await currentZone(tester), HomeZone.vod);
+    await switchToLive(tester);
+    expect(await currentZone(tester), HomeZone.live);
 
-    // 推一个与播放页同名('player')的路由，模拟点播直达播放。
+    // 推一个与播放页同名('player')的路由，模拟直播直达播放。
     Navigator.of(homeContext).push(playerRoute(const _StubPlayer()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('stub-player'), findsOneWidget);
 
-    // 系统返回（手势/返回键）：应回到点播区。
+    // 系统返回（手势/返回键）：应回到直播区。
     await tester.binding.handlePopRoute();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('stub-player'), findsNothing);
-    expect(await currentZone(tester), HomeZone.vod);
+    expect(await currentZone(tester), HomeZone.live);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('点播区播放返回后，再按一次返回才回短剧区（区历史一次只退一级）',
+  testWidgets('直播区播放返回后，再按一次返回才回片库区（区历史一次只退一级）',
       (tester) async {
     final homeContext = await pumpHome(tester);
-    await switchToVod(tester);
+    await switchToLive(tester);
     Navigator.of(homeContext).push(playerRoute(const _StubPlayer()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -115,18 +115,18 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(await currentZone(tester), HomeZone.vod);
+    expect(await currentZone(tester), HomeZone.live);
 
-    // 首页再按一次返回：按现有区历史语义退回短剧区。
+    // 首页再按一次返回：按现有区历史语义退回片库区。
     await tester.binding.handlePopRoute();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    expect(await currentZone(tester), HomeZone.drama);
+    expect(await currentZone(tester), HomeZone.library);
   }, skip: !allSourcesEnabled);
 
   testWidgets('播放页返回过渡中多余的返回不吞区历史', (tester) async {
     final homeContext = await pumpHome(tester);
-    await switchToVod(tester);
+    await switchToLive(tester);
     Navigator.of(homeContext).push(playerRoute(const _StubPlayer()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -139,6 +139,6 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('stub-player'), findsNothing);
-    expect(await currentZone(tester), HomeZone.vod);
+    expect(await currentZone(tester), HomeZone.live);
   }, skip: !allSourcesEnabled);
 }

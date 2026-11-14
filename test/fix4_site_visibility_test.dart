@@ -24,6 +24,14 @@ void main() {
   test('audio zone exposes its built-in source for management', () {
     expect(ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.id), [
       'tingshuwang',
+      'ximalaya',
+      'hongguo_audio',
+      'lrts',
+      'hsvoice31',
+      'tingyou',
+      'hysxs',
+      'asmrmoon',
+      'jar_tingshu',
     ]);
   });
 

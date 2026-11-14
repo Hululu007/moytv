@@ -16,12 +16,13 @@ void main() {
           'hsvoice31',
           'tingyou',
           'hysxs',
+          'asmrmoon',
           'jar_tingshu',
         ],
       );
       expect(
         ContentRegistry.sourcesFor(ContentSection.audio).map((s) => s.name),
-        ['听书网', '喜马拉雅', '红果听书', '懒人听书', '🔞黄色有声小说', '听友听书', '🔞H有声小说', '飞卢听书'],
+        ['听书网', '喜马拉雅', '红果听书', '懒人听书', '🔞黄色有声小说', '听友听书', '🔞H有声小说', '🔞ASMR MOON', '飞卢听书'],
       );
     });
 
@@ -36,6 +37,7 @@ void main() {
           'hsvoice31',
           'tingyou',
           'hysxs',
+          'asmrmoon',
           'jar_tingshu',
         ],
       );
@@ -85,6 +87,7 @@ void main() {
           'hsvoice31',
           'tingyou',
           'hysxs',
+          'asmrmoon',
           'jar_tingshu',
         ],
       );

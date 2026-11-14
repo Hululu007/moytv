@@ -34,35 +34,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('drama zone settings carry drama entries only', (tester) async {
-    await pumpZone(tester, HomeZone.drama);
-    expect(find.text('短剧设置'), findsOneWidget);
-    expect(find.text('短剧区风格'), findsOneWidget);
-    expect(find.text('播放设置'), findsOneWidget);
-    expect(find.text('播放器选择'), findsOneWidget);
-    expect(find.text('通用设置'), findsOneWidget);
-    expect(find.text('点播区 UI 风格'), findsNothing);
-    expect(find.text('解析接口'), findsNothing);
-    expect(find.text('未成年保护'), findsNothing);
-  });
-
-  testWidgets('vod zone settings carry vod entries only', (tester) async {
-    await pumpZone(tester, HomeZone.vod);
-    expect(find.text('点播设置'), findsOneWidget);
-    expect(find.text('点播区 UI 风格'), findsNothing);
+  testWidgets('library zone settings carry library entries only', (
+    tester,
+  ) async {
+    await pumpZone(tester, HomeZone.library);
+    expect(find.text('片库设置'), findsOneWidget);
     expect(find.text('播放设置'), findsOneWidget);
     expect(find.text('播放器选择'), findsOneWidget);
     expect(find.text('解析接口'), findsOneWidget);
     expect(find.text('内容源管理'), findsOneWidget);
     expect(find.text('通用设置'), findsOneWidget);
     expect(find.text('短剧区风格'), findsNothing);
+    expect(find.text('点播区 UI 风格'), findsNothing);
     expect(find.text('未成年保护'), findsNothing);
   });
 
-  testWidgets('vod zone settings carry protection switch', (tester) async {
+  testWidgets('library zone settings carry protection switch', (
+    tester,
+  ) async {
     var hidden = 0;
-    await pumpZone(tester, HomeZone.vod, onHideAdult: () => hidden++);
-    expect(find.text('点播设置'), findsOneWidget);
+    await pumpZone(tester, HomeZone.library, onHideAdult: () => hidden++);
+    expect(find.text('片库设置'), findsOneWidget);
     expect(find.text('未成年保护'), findsOneWidget);
     expect(find.text('解析接口'), findsOneWidget);
     expect(find.text('通用设置'), findsOneWidget);

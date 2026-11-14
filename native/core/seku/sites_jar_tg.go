@@ -12,7 +12,7 @@ package seku
 //   Play:  {mirror}/media/{user}/{id}/video.mp4 (the jar's videoUrl
 //   also knows a /media?ch=&id= form; the RESTful form matches the
 //   mirror's own /media/{ch}/{id}/ routes used by its RSS mode).
-//   Channels are the jar config's ext channels (103, formerly the
+//   Channels are the jar config's ext channels (101, formerly the
 //   jar registration's ext list).
 //   Search: the jar filters channel message text locally; here the
 //   first page of every channel is scanned for the keyword.
@@ -62,7 +62,6 @@ var tgChannels = []htmlCat{
 	{ID: "seliao212", Name: "抖音网红丨色料吃瓜"},
 	{ID: "haijiao133", Name: "糖心丨麻豆丨swag丨国产AV"},
 	{ID: "jianhuangxxiaoz", Name: "鉴黄小镇"},
-	{ID: "hfdtydhgfdhtr", Name: "萝莉自拍偷拍"},
 	{ID: "hg678678", Name: "网红主播直播"},
 	{ID: "lspjsn", Name: "淫妻反差俱乐部"},
 	{ID: "xiezhen1", Name: "（海角 ）绿茶写真"},
@@ -74,7 +73,6 @@ var tgChannels = []htmlCat{
 	{ID: "youwu1av", Name: "AV｜有码AV｜无码AV"},
 	{ID: "pianduoduo9", Name: "【片多多】交流社区"},
 	{ID: "duanjvshev1", Name: "🅰️明星短剧|Ai短剧社🅰️"},
-	{ID: "qifulaoshirenbis", Name: "萝莉💕足控"},
 	{ID: "YSxiaoshuo01", Name: "成人小说/色情有声小说🔴"},
 	{ID: "link_ces", Name: "甄选AI | AI成人短剧 |黄果短剧"},
 	{ID: "xianfeng192", Name: "酒店 监控 直播 偷窥 大学城"},

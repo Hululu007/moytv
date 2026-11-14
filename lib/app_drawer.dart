@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import 'app_build.dart';
+import 'app_theme_config.dart';
 import 'neon/neon_ui.dart';
+import 'neon_glass_kit.dart';
 import 'ui_style.dart';
 
-enum HomeZone { drama, vod, live, audio, novel }
+enum HomeZone { library, live, audio, novel }
 
 enum AppDrawerTool {
   sources,
@@ -21,17 +23,17 @@ enum AppDrawerTool {
   miniApp,
   viewingExperience,
   torrent,
+  themeSettings,
 }
 
 /// 抽屉头部横向切换的内容板块。
-enum DrawerShelf { video, music, reading, comic, miniApp }
+enum DrawerShelf { video, music, reading, miniApp }
 
 extension DrawerShelfLabel on DrawerShelf {
   String get label => switch (this) {
     DrawerShelf.video => '影视',
     DrawerShelf.music => '音乐',
     DrawerShelf.reading => '阅读',
-    DrawerShelf.comic => '漫画',
     DrawerShelf.miniApp => '小程序',
   };
 }
@@ -44,14 +46,15 @@ class SiteSourceBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
+    final config = AppThemeConfig.of(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          border: Border.all(color: colors.outlineVariant),
+          color: config.unselectedBg,
+          border: Border.all(color: config.dividerColor),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -60,8 +63,6 @@ class SiteSourceBox extends StatelessWidget {
             Flexible(
               child: Text(
                 label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -95,43 +96,40 @@ class _DrawerRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final foreground = selected ? colors.primary : colors.onSurfaceVariant;
+    final config = AppThemeConfig.of(context);
     final tile = ListTile(
       contentPadding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
       minLeadingWidth: 32,
       horizontalTitleGap: 12,
-      leading: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: selected
-              ? colors.primary.withValues(alpha: 0.14)
-              : colors.surface.withValues(alpha: 0.75),
-          borderRadius: BorderRadius.circular(9),
-        ),
-        child: Icon(icon, size: 18, color: foreground),
-      ),
+      leading: selected
+          ? NeonIconTile(icon: icon, size: 32, iconSize: 18, radius: 9)
+          : Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: config.unselectedBg,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 18, color: config.textSecondary),
+            ),
       title: Text(
         label,
         style: TextStyle(
           fontSize: 14,
           fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-          color: selected ? colors.primary : colors.onSurface,
+          color: selected ? config.primaryColor : config.textPrimary,
         ),
       ),
       subtitle: description == null
           ? null
           : Text(
               description!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+              style: TextStyle(fontSize: 11, color: config.textSecondary),
             ),
       trailing: Icon(
         Icons.chevron_right_rounded,
         size: 18,
-        color: colors.onSurfaceVariant.withValues(alpha: 0.7),
+        color: config.textSecondary.withValues(alpha: 0.7),
       ),
       selected: selected,
       onTap: onTap,
@@ -154,72 +152,17 @@ class _DrawerSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final rows = <Widget>[];
-    for (var i = 0; i < children.length; i++) {
-      if (i > 0) {
-        rows.add(
-          Divider(
-            height: 1,
-            thickness: 1,
-            indent: 56,
-            endIndent: 12,
-            color: colors.outlineVariant.withValues(alpha: 0.35),
-          ),
-        );
-      }
-      rows.add(children[i]);
-    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
+          NeonSectionTitle(
+            title,
+            hint: hint,
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-            child: Row(
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.6,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-                if (hint != null) ...[
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      hint!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: colors.onSurfaceVariant.withValues(alpha: 0.7),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
           ),
-          Material(
-            color: neonStyleActive
-                ? Neon.surfaceGlass.withValues(alpha: 0.72)
-                : colors.surfaceContainerHighest.withValues(alpha: 0.4),
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: neonStyleActive
-                    ? Neon.purple.withValues(alpha: 0.26)
-                    : colors.outlineVariant.withValues(alpha: 0.5),
-              ),
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: rows),
-          ),
+          NeonRowGroup(children: children),
         ],
       ),
     );
@@ -235,6 +178,7 @@ class AppDrawer extends StatefulWidget {
     required this.onWatchRoom,
     required this.onTool,
     required this.onMinorProtectionChanged,
+    this.appTheme = AppThemeMode.purpleNeon,
   });
 
   final HomeZone zone;
@@ -243,6 +187,10 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback onWatchRoom;
   final ValueChanged<AppDrawerTool> onTool;
   final ValueChanged<bool> onMinorProtectionChanged;
+
+  /// 当前全局主题：只用于主题切换行的“当前：X”显示，
+  /// 调用方（首页）从 LocalStore 传入真实值。
+  final AppThemeMode appTheme;
 
   @override
   State<AppDrawer> createState() => _AppDrawerState();
@@ -256,9 +204,7 @@ class _AppDrawerState extends State<AppDrawer> {
       : 'v${widget.currentVersion} ($appBuild)';
 
   bool get _videoZone =>
-      widget.zone == HomeZone.drama ||
-      widget.zone == HomeZone.vod ||
-      widget.zone == HomeZone.live;
+      widget.zone == HomeZone.library || widget.zone == HomeZone.live;
 
   void _selectShelf(DrawerShelf shelf) {
     if (_shelf == shelf) return;
@@ -311,7 +257,6 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   Widget _shelfTabs(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return SizedBox(
       height: 34,
       child: SingleChildScrollView(
@@ -322,7 +267,7 @@ class _AppDrawerState extends State<AppDrawer> {
             for (final shelf in DrawerShelf.values)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: _shelfChip(colors, shelf),
+                child: _shelfChip(shelf),
               ),
           ],
         ),
@@ -330,72 +275,31 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _shelfChip(ColorScheme colors, DrawerShelf shelf) {
-    final active = _shelf == shelf;
-    return InkWell(
+  Widget _shelfChip(DrawerShelf shelf) {
+    return NeonCapsule(
+      label: shelf.label,
+      selected: _shelf == shelf,
       onTap: () => _selectShelf(shelf),
-      borderRadius: BorderRadius.circular(999),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: neonStyleActive
-              ? (active ? null : Colors.white.withValues(alpha: 0.06))
-              : (active
-                    ? colors.primary
-                    : colors.surface.withValues(alpha: 0.55)),
-          gradient: neonStyleActive && active ? Neon.hotGradient : null,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: neonStyleActive
-                ? (active
-                      ? Neon.pink.withValues(alpha: .9)
-                      : Colors.white.withValues(alpha: .14))
-                : (active
-                      ? colors.primary
-                      : colors.outlineVariant.withValues(alpha: 0.6)),
-          ),
-          boxShadow: neonStyleActive && active
-              ? [Neon.bloom(Neon.pink, blur: 18)]
-              : null,
-        ),
-        child: Text(
-          shelf.label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: neonStyleActive
-                ? (active ? Colors.white : Neon.textDim)
-                : (active ? colors.onPrimary : colors.onSurfaceVariant),
-          ),
-        ),
-      ),
     );
   }
 
   Widget _header(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
+    final config = AppThemeConfig.of(context);
     return Container(
       key: const ValueKey('drawer-header'),
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 0, 6, 12),
       decoration: BoxDecoration(
-        gradient: neonStyleActive
-            ? const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0x4DB14BFF),
-                  Color(0x1AFF4FA3),
-                  Color(0x00120B20),
-                ],
-                stops: [0, .55, 1],
-              )
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [colors.primaryContainer, colors.surface],
-              ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            config.primaryColor.withValues(alpha: 0.30),
+            config.secondaryColor.withValues(alpha: 0.12),
+            config.surfaceColor.withValues(alpha: 0),
+          ],
+          stops: const [0, .55, 1],
+        ),
       ),
       child: SafeArea(
         bottom: false,
@@ -410,9 +314,9 @@ class _AppDrawerState extends State<AppDrawer> {
                   height: 46,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: colors.surface,
+                    color: config.surfaceColor,
                     border: Border.all(
-                      color: colors.primary.withValues(alpha: 0.25),
+                      color: config.primaryColor.withValues(alpha: 0.25),
                     ),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -422,7 +326,7 @@ class _AppDrawerState extends State<AppDrawer> {
                     errorBuilder: (context, error, stackTrace) => Icon(
                       Icons.play_circle_fill_rounded,
                       size: 26,
-                      color: colors.primary,
+                      color: config.primaryColor,
                     ),
                   ),
                 ),
@@ -437,7 +341,7 @@ class _AppDrawerState extends State<AppDrawer> {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
-                          color: colors.onSurface,
+                          color: config.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -446,7 +350,7 @@ class _AppDrawerState extends State<AppDrawer> {
                         key: const ValueKey('drawer-version'),
                         style: TextStyle(
                           fontSize: 11,
-                          color: colors.onSurfaceVariant,
+                          color: config.textSecondary,
                         ),
                       ),
                     ],
@@ -477,16 +381,10 @@ class _AppDrawerState extends State<AppDrawer> {
             hint: _videoZone ? '当前所在板块' : null,
             children: [
               _zoneRow(
-                icon: Icons.movie_rounded,
-                label: '短剧',
-                description: '竖屏短剧 · 按站源聚合',
-                target: HomeZone.drama,
-              ),
-              _zoneRow(
-                icon: Icons.movie_filter_rounded,
-                label: '点播',
-                description: '电影 / 剧集 / 动漫站源',
-                target: HomeZone.vod,
+                icon: Icons.video_library_rounded,
+                label: '片库',
+                description: '短剧与点播站源 · 切站看',
+                target: HomeZone.library,
               ),
               _zoneRow(
                 icon: Icons.live_tv_rounded,
@@ -506,15 +404,9 @@ class _AppDrawerState extends State<AppDrawer> {
       case DrawerShelf.music:
         return [
           _DrawerSection(
-            title: '音乐与音频',
-            hint: '音频源来自内容源管理',
+            title: '音乐',
+            hint: '音乐源来自内容源管理',
             children: [
-              _zoneRow(
-                icon: Icons.headphones_rounded,
-                label: '听书',
-                description: '有声书 / 播客 · 音频源',
-                target: HomeZone.audio,
-              ),
               _row(
                 icon: Icons.library_music_rounded,
                 label: '音乐源',
@@ -528,7 +420,7 @@ class _AppDrawerState extends State<AppDrawer> {
         return [
           _DrawerSection(
             title: '阅读模块',
-            hint: '小说与书源',
+            hint: '小说 · 漫画 · 听书',
             children: [
               _zoneRow(
                 icon: Icons.menu_book_rounded,
@@ -537,9 +429,28 @@ class _AppDrawerState extends State<AppDrawer> {
                 target: HomeZone.novel,
               ),
               _row(
+                icon: Icons.auto_stories_rounded,
+                label: '漫画区',
+                description: '打开阅读区 · sourceType=2 的源即漫画源',
+                selected: widget.zone == HomeZone.novel,
+                onTap: () => widget.onZoneSelected(HomeZone.novel),
+              ),
+              _zoneRow(
+                icon: Icons.headphones_rounded,
+                label: '听书',
+                description: '有声书 / 播客 · 音频源',
+                target: HomeZone.audio,
+              ),
+              _row(
                 icon: Icons.collections_bookmark_rounded,
                 label: '小说源',
                 description: '导入 Legado / 蜘蛛书源',
+                onTap: () => widget.onTool(AppDrawerTool.contentSources),
+              ),
+              _row(
+                icon: Icons.image_rounded,
+                label: '漫画源',
+                description: '导入 Legado / 漫画源包',
                 onTap: () => widget.onTool(AppDrawerTool.contentSources),
               ),
               _row(
@@ -547,28 +458,6 @@ class _AppDrawerState extends State<AppDrawer> {
                 label: '书源文件',
                 description: '本地 txt / epub / 书源包',
                 onTap: () => widget.onTool(AppDrawerTool.importCenter),
-              ),
-            ],
-          ),
-        ];
-      case DrawerShelf.comic:
-        return [
-          _DrawerSection(
-            title: '漫画模块',
-            hint: '漫画源在阅读区内识别',
-            children: [
-              _row(
-                icon: Icons.auto_stories_rounded,
-                label: '漫画区',
-                description: '打开阅读区 · sourceType=2 的源即漫画源',
-                selected: widget.zone == HomeZone.novel,
-                onTap: () => widget.onZoneSelected(HomeZone.novel),
-              ),
-              _row(
-                icon: Icons.image_rounded,
-                label: '漫画源',
-                description: '导入 Legado / 漫画源包',
-                onTap: () => widget.onTool(AppDrawerTool.contentSources),
               ),
             ],
           ),
@@ -633,6 +522,12 @@ class _AppDrawerState extends State<AppDrawer> {
           description: _versionText,
           onTap: () => widget.onTool(AppDrawerTool.appUpdate),
         ),
+        _toolRow(
+          AppDrawerTool.themeSettings,
+          Icons.palette_outlined,
+          '主题切换',
+          '当前：${AppThemeConfig.forTheme(widget.appTheme).themeName} · 8 套主题',
+        ),
         _row(
           icon: Icons.settings_outlined,
           label: '设置',
@@ -644,10 +539,10 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   Widget _guardianSection() {
-    final colors = Theme.of(context).colorScheme;
+    final config = AppThemeConfig.of(context);
     return _DrawerSection(
       title: '青少年保护',
-      hint: '开启后隐藏成人站并回到短剧区',
+      hint: '开启后隐藏成人站并切回短剧站',
       children: [
         SwitchListTile.adaptive(
           contentPadding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
@@ -655,22 +550,26 @@ class _AppDrawerState extends State<AppDrawer> {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: colors.surface.withValues(alpha: 0.75),
+              color: config.unselectedBg,
               borderRadius: BorderRadius.circular(9),
             ),
             child: Icon(
               Icons.shield_rounded,
               size: 18,
-              color: colors.onSurfaceVariant,
+              color: config.textSecondary,
             ),
           ),
-          title: const Text(
+          title: Text(
             '未成年保护',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: config.textPrimary,
+            ),
           ),
           subtitle: Text(
-            '开启后隐藏成人站并回到短剧区',
-            style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+            '开启后隐藏成人站并切回短剧站',
+            style: TextStyle(fontSize: 11, color: config.textSecondary),
           ),
           value: false,
           onChanged: (value) {
@@ -728,13 +627,13 @@ class _AppDrawerState extends State<AppDrawer> {
       ],
     );
     if (!neonStyleActive) {
-      // 非霓虹风格：抽屉底与点播区（Scaffold 背景）用同一个主题背景色。
+      // 非霓虹风格：抽屉底与片库区（Scaffold 背景）用同一个主题背景色。
       return Drawer(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         child: content,
       );
     }
-    // 霓虹风格：抽屉跟点播区 / 内容区同一套氛围光（NeonBackdrop.app），
+    // 霓虹风格：抽屉跟片库区 / 内容区同一套氛围光（NeonBackdrop.app），
     // 不再是一块单独的纯色板，也不再是自己一份参数。
     return Drawer(
       key: const ValueKey('drawer-neon'),

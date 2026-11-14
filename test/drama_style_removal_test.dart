@@ -26,14 +26,14 @@ void main() {
     expect(find.text('首页全屏'), findsNothing);
   });
 
-  testWidgets('drama zone settings has no drama style row', (tester) async {
+  testWidgets('library zone settings has no drama style row', (tester) async {
     final store = await _store();
     await tester.pumpWidget(
       MaterialApp(
         home: ZoneSettingsScreen(
           repository: FixtureRepository(),
           store: store,
-          zone: HomeZone.drama,
+          zone: HomeZone.library,
         ),
       ),
     );

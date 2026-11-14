@@ -27,13 +27,16 @@ class LivePlayerScreen extends StatefulWidget {
     required this.playback,
     required this.source,
     required this.store,
-    required this.onExit,
+    this.videoBuilder,
   });
 
   final LivePlaybackController playback;
   final LiveSource source;
   final LiveStore store;
-  final VoidCallback onExit;
+
+  /// 测试注入：同 LiveScreen.videoBuilder，代替真实 Video。
+  final Widget Function(LivePlaybackController playback, bool fullscreen)?
+  videoBuilder;
 
   @override
   State<LivePlayerScreen> createState() => _LivePlayerScreenState();
@@ -48,6 +51,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   bool _panel = false;
   bool _playbackServiceHeld = false;
   bool _immersed = false;
+  bool _exiting = false;
   AppOrientationController? _orientationController;
   bool _television = false;
   bool _landscape = true;
@@ -231,8 +235,15 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   }
 
   void _exit() {
-    widget.onExit();
-    Navigator.maybePop(context);
+    // 唯一退出路径：直接 pop，不走 maybePop。
+    // PopScope(canPop: false) 下 maybePop 不弹路由、只回调 onPopInvokedWithResult，
+    // 回调又调回 _liveBack/_exit，形成无界重入环，路由永远弹不出（真机死机）。
+    // Navigator.pop 绕过 veto，didPop=true 时回调里的 !didPop 守卫会跳过 _liveBack。
+    // 内嵌 Video 的重新挂载只由 LiveScreen 在 push Future 完成后复位 _detached，
+    // 这里不再提前回调，避免退场过渡期间两个 Video 同挂一个 controller。
+    if (_exiting) return;
+    _exiting = true;
+    Navigator.pop(context);
   }
 
   void _liveBack() {
@@ -439,7 +450,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (controller != null)
+              if (widget.videoBuilder != null)
+                widget.videoBuilder!(_playback, true)
+              else if (controller != null)
                 Video(
                   controller: controller,
                   fit: BoxFit.contain,

@@ -155,7 +155,7 @@ void main() {
         await tester.pumpAndSettle();
         await press(tester, LogicalKeyboardKey.select);
         expect(repository.detailCalls, 1);
-        expect(find.byKey(const ValueKey('start-play')), findsOneWidget);
+        expect(find.byKey(const ValueKey('episode-1')), findsOneWidget);
         focusRemote(tester, find.byKey(const ValueKey('episode-1')));
         await tester.pumpAndSettle();
         await press(tester, LogicalKeyboardKey.select);

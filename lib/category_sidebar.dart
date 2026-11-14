@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_theme_config.dart';
+import 'neon_glass_kit.dart';
 
 /// 侧边栏条目：id 与名字取自真实分类数据；filters 只有站方真实
 /// 返回筛选数据时才有，没有就不画筛选区，绝不编假筛选。
@@ -203,6 +204,7 @@ class _DarkSidebar extends StatelessWidget {
                     gradient: selected ? theme.selectedGradient : null,
                     color: selected ? null : theme.unselectedBg,
                     borderRadius: BorderRadius.circular(10),
+                    boxShadow: selected ? [neonGlow(theme)] : null,
                   ),
                   child: Material(
                     color: Colors.transparent,
@@ -218,8 +220,6 @@ class _DarkSidebar extends StatelessWidget {
                     ),
                     title: Text(
                       item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: selected
                             ? theme.selectedText
@@ -259,14 +259,13 @@ class _ColorBlockSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = config;
-    const colors = [
-      Color(0xFFFF7096),
-      Color(0xFF4FC3F7),
-      Color(0xFFFFD166),
-      Color(0xFF81C784),
-      Color(0xFFBA68C8),
-      Color(0xFFFFA726),
-    ];
+    // 色块取色：主色→辅色 6 档取样，色块缤纷但不出当前主题色系。
+    Color blockTint(int index) {
+      final t = (index % 6) / 5;
+      return Color.lerp(theme.primaryColor, theme.secondaryColor, t)!
+          .withValues(alpha: 0.35);
+    }
+
     return Container(
       width: width,
       color: theme.surfaceColor,
@@ -295,14 +294,14 @@ class _ColorBlockSidebar extends StatelessWidget {
                   key: _itemKey(item.id),
                   onTap: () => onTap(index),
                   child: Container(
-                    height: 46,
+                    constraints: const BoxConstraints(minHeight: 46),
                     alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: selected
-                          ? theme.selectedBg
-                          : colors[index % colors.length].withValues(
-                              alpha: 0.35,
-                            ),
+                      color: selected ? theme.selectedBg : blockTint(index),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: selected
@@ -310,11 +309,11 @@ class _ColorBlockSidebar extends StatelessWidget {
                             : Colors.transparent,
                         width: 2,
                       ),
+                      boxShadow: selected ? [neonGlow(theme)] : null,
                     ),
                     child: Text(
                       item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                         color: selected
                             ? theme.selectedText
@@ -373,11 +372,16 @@ class _MiniIconSidebar extends StatelessWidget {
                   key: _itemKey(item.id),
                   onTap: () => onTap(index),
                   child: Container(
-                    height: 56,
+                    constraints: const BoxConstraints(minHeight: 56),
                     margin: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: selected ? theme.selectedBg : Colors.transparent,
                       borderRadius: BorderRadius.circular(10),
+                      boxShadow: selected ? [neonGlow(theme)] : null,
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -391,8 +395,7 @@ class _MiniIconSidebar extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           item.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
                           style: TextStyle(
                             color: selected
                                 ? theme.selectedText
@@ -510,8 +513,6 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
                     ),
                     child: Text(
                       filter.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: theme.textSecondary,
                         fontSize: 13,
@@ -546,11 +547,16 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
           onTap: () => widget.onTap(index),
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-            color: selected ? theme.selectedBg : Colors.transparent,
+            decoration: BoxDecoration(
+              color: selected ? theme.selectedBg : Colors.transparent,
+              border: selected
+                  ? Border(
+                      left: BorderSide(color: theme.primaryColor, width: 3),
+                    )
+                  : null,
+            ),
             child: Text(
               cat.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: selected ? theme.selectedText : theme.unselectedText,
               ),
@@ -604,18 +610,21 @@ class _LightSidebar extends StatelessWidget {
                       vertical: 6,
                       horizontal: 10,
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 10,
+                      horizontal: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: selected
                           ? theme.selectedBg
                           : theme.unselectedBg,
                       borderRadius: BorderRadius.circular(10),
+                      boxShadow: selected ? [neonGlow(theme)] : null,
                     ),
                     child: Center(
                       child: Text(
                         item.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: selected
                               ? theme.selectedText
@@ -698,6 +707,7 @@ class _GoldSidebar extends StatelessWidget {
                           ? theme.selectedBg
                           : Colors.transparent,
                     ),
+                    boxShadow: selected ? [neonGlow(theme)] : null,
                   ),
                   child: Material(
                     color: Colors.transparent,
@@ -713,8 +723,6 @@ class _GoldSidebar extends StatelessWidget {
                     ),
                     title: Text(
                       item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: selected
                             ? theme.selectedText
@@ -761,8 +769,7 @@ class _CyberSidebar extends StatelessWidget {
         children: [
           Text(
             'CYBER TV',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: theme.primaryColor,
               fontWeight: FontWeight.bold,
@@ -813,8 +820,6 @@ class _CyberSidebar extends StatelessWidget {
                     ),
                     title: Text(
                       item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: selected
                             ? theme.selectedText
@@ -884,6 +889,7 @@ class _TvWideSidebar extends StatelessWidget {
                     gradient: selected ? theme.selectedGradient : null,
                     color: selected ? null : theme.unselectedBg,
                     borderRadius: BorderRadius.circular(12),
+                    boxShadow: selected ? [neonGlow(theme)] : null,
                   ),
                   child: Material(
                     color: Colors.transparent,
@@ -898,8 +904,6 @@ class _TvWideSidebar extends StatelessWidget {
                     ),
                     title: Text(
                       item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: selected
                             ? theme.selectedText

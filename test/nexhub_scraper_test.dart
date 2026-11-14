@@ -382,6 +382,77 @@ https://ad.example/ad2.ts
         throwsA(isA<VerificationRequiredException>()),
       );
     });
+
+    test('空页面抛错而不是静默空结果', () async {
+      for (final body in ['', '  \n\t ']) {
+        final service = WebScrapeService.forTest((_) async => resp(body));
+        await expectLater(
+          service.scrape('https://example.com/p', ScrapeMode.general),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'message',
+              contains('空页面'),
+            ),
+          ),
+        );
+      }
+    });
+
+    test('video 模式：原文兜底扫出脚本内直链与协议相对地址', () async {
+      const scriptPage =
+          '<html><head><title>播</title></head><body>'
+          '<video src="/v/movie.mp4"></video>'
+          '<video><source src="https://cdn.example.com/a.m3u8"></video>'
+          '<iframe src="https://player.example.com/embed/1"></iframe>'
+          '<script>var src="https://cdn.example.com/hls/play.m3u8?token=abc";'
+          'var src2="//cdn2.example.com/clip.mp4";</script>'
+          '</body></html>';
+      final service = WebScrapeService.forTest((_) async => resp(scriptPage));
+      final video = await service.scrape(
+        'https://example.com/p',
+        ScrapeMode.video,
+      );
+      expect(video.videoUrls, contains('https://example.com/v/movie.mp4'));
+      expect(video.videoUrls, contains('https://cdn.example.com/a.m3u8'));
+      expect(video.videoUrls, contains('https://player.example.com/embed/1'));
+      expect(
+        video.videoUrls,
+        contains('https://cdn.example.com/hls/play.m3u8?token=abc'),
+      );
+      expect(video.videoUrls, contains('https://cdn2.example.com/clip.mp4'));
+    });
+
+    test('video 模式：原文兜底去重且上限 100 条', () async {
+      final buffer = StringBuffer('<html><body>');
+      buffer.write('<video src="https://cdn.example.com/tag.mp4"></video>');
+      // 同一地址在脚本里重复出现 3 次，只应保留 1 条兜底结果。
+      for (var i = 0; i < 3; i++) {
+        buffer.write(
+          '<script>var u="https://cdn.example.com/dup.m3u8";</script>',
+        );
+      }
+      // 105 条互不相同的直链，加上标签 1 条与去重后 1 条，截断后共 100 条。
+      for (var i = 0; i < 105; i++) {
+        buffer.write(
+          '<script>var u$i="https://cdn.example.com/s$i.m3u8";</script>',
+        );
+      }
+      buffer.write('</body></html>');
+      final service = WebScrapeService.forTest(
+        (_) async => resp(buffer.toString()),
+      );
+      final video = await service.scrape(
+        'https://example.com/p',
+        ScrapeMode.video,
+      );
+      expect(video.videoUrls, hasLength(100));
+      expect(
+        video.videoUrls.where((u) => u.endsWith('/dup.m3u8')),
+        hasLength(1),
+      );
+      expect(video.videoUrls.first, 'https://cdn.example.com/tag.mp4');
+    });
   });
 
   group('ParseDiagnostics', () {

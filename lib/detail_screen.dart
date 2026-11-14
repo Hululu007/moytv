@@ -5,12 +5,12 @@ import 'app_page_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'app_layout.dart';
 import 'atmosphere_background.dart';
+import 'crosssite_probe.dart';
+import 'crosssite_probe_section.dart';
 import 'ios_dialogs.dart';
-import 'liquid_glass.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -23,7 +23,9 @@ import 'widgets.dart';
 import 'sources_screen.dart';
 import 'episode_browser.dart';
 import 'episode_frame_cache.dart';
+import 'episode_frame_service.dart';
 import 'episode_preview_card.dart';
+import 'frame_extractor.dart';
 import 'nonvideo_content.dart';
 import 'follow_state.dart';
 import 'watchroom/controller.dart';
@@ -95,13 +97,13 @@ class _DetailScreenState extends State<DetailScreen> {
   String? _error;
   bool _loading = true;
   Set<String> _frameKeys = {};
+  late final EpisodeFrameService _frameService;
   int _generation = 0;
   int _episodePage = 0;
   bool _expandedDescription = false;
   bool _episodesExpanded = false;
   final _episodeAnchor = GlobalKey();
   final _detailScroll = ScrollController();
-  final _playFocus = FocusNode(debugLabel: 'tv-detail-play');
   bool _initialActionHandled = false;
   int? _embeddedIndex;
   bool _audioLine = false;
@@ -125,6 +127,20 @@ class _DetailScreenState extends State<DetailScreen> {
     super.initState();
     _profileEpoch = widget.store.profileEpoch;
     widget.store.addListener(_onStoreChanged);
+    // 未播集真帧：后台取帧服务随详情页创建，复用播放链解析、
+    // 原生取帧、现有帧缓存；帧到后并入 _frameKeys，网格卡刷新显示。
+    final extractor = FrameExtractor();
+    _frameService = EpisodeFrameService(
+      resolve: widget.repository.resolve,
+      extract: extractor.extract,
+      release: widget.repository.release,
+      cachedKeys: () => _frameKeys,
+      onFrame: (key) {
+        if (mounted) {
+          setState(() => _frameKeys = {..._frameKeys, key});
+        }
+      },
+    );
     _load();
     unawaited(_loadViewing());
     unawaited(_loadFrameKeys());
@@ -141,8 +157,8 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    _frameService.dispose();
     _detailScroll.dispose();
-    _playFocus.dispose();
     widget.store.removeListener(_onStoreChanged);
     _generation++;
     super.dispose();
@@ -250,6 +266,15 @@ class _DetailScreenState extends State<DetailScreen> {
         widget.repository.catalogUpdates.current(widget.drama),
         retryCover: true,
       );
+    } finally {
+      // 兜底：提前返回（画像切换、异常）也不能把 _loading 挂死——
+      // 挂死后海报点按会被门控卡住，而选集数据明明已显示。
+      // 被更新一代取代时不碰（新一代自己负责复位），已卸载时不碰。
+      if (mounted && generation == _generation && _loading) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -284,6 +309,9 @@ class _DetailScreenState extends State<DetailScreen> {
         !widget.store.allowsSource(rawDetail.drama.source)) {
       return;
     }
+    // 播放优先：停掉后台取帧（取帧解析与播放解析共用序列号通道），
+    // 关播后网格重建时再续取剩余的集。
+    _frameService.cancel();
     final detail = _displayDetail(rawDetail);
     if (detail.episodes[index].vip &&
         detail.drama.source != SourceSite.dsd.id) {
@@ -365,6 +393,46 @@ class _DetailScreenState extends State<DetailScreen> {
     final displayed = _displayEpisodes(detail);
     if (identical(displayed, detail.episodes)) return detail;
     return detail.withEpisodes(displayed);
+  }
+
+  /// 跨站选线路起播：与本源线路同一条播放链（pushPlayer），
+  /// 详情与集序号来自探活取回的对方站源详情。
+  Future<void> _playCrossSite(DramaDetail detail, int index) async {
+    if (index < 0 ||
+        index >= detail.episodes.length ||
+        _profileEpoch != widget.store.profileEpoch ||
+        !widget.store.allowsSource(detail.drama.source)) {
+      return;
+    }
+    _frameService.cancel();
+    await pushPlayer<void>(
+      context,
+      detail: detail,
+      initialIndex: index,
+      repository: widget.repository,
+      store: widget.store,
+      queue: widget.queue,
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  /// 跨站选线路区：只有带番号的片才显示，无番号返回空盒子。
+  Widget _crossSiteSection(Drama drama) {
+    final avId = extractAvId(
+      title: drama.title,
+      id: drama.id,
+      sourceId: drama.sourceId,
+    );
+    if (avId == null) return const SizedBox.shrink();
+    return CrossSiteProbeSection(
+      key: ValueKey('crosssite-$avId-${drama.source}-${drama.id}'),
+      repository: widget.repository,
+      store: widget.store,
+      avId: avId,
+      onPlayLine: _playCrossSite,
+    );
   }
 
   void _closeEmbedded() {
@@ -643,7 +711,6 @@ class _DetailScreenState extends State<DetailScreen> {
     final allowed =
         widget.store.profileEpoch == _profileEpoch &&
         widget.store.allowsSource(drama.source);
-    final useGlass = glassDesign(context) && _viewing.immersive;
     if (_embeddedIndex != null && _detail != null && _embeddedFullscreen) {
       return PopScope(
         canPop: false,
@@ -720,6 +787,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                   _overview(drama),
                                   _descriptionSection(drama),
                                   _magnetSection(),
+                                  _crossSiteSection(drama),
                                   _tmdbEpisodeSection(),
                                   _relatedSection(drama),
                                 ],
@@ -741,8 +809,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                         child: EpisodeBrowser(
                                           episodes: episodes,
                                           currentNumber: watched?.episode,
-                                          onExitDown: () =>
-                                              _playFocus.requestFocus(),
+                                          autofocus: true,
                                           onSelected: (index) => _play(index),
                                         ),
                                       ),
@@ -774,8 +841,10 @@ class _DetailScreenState extends State<DetailScreen> {
                           SliverToBoxAdapter(
                             child: _hero(
                               drama,
-                              ready:
-                                  allowed && !_loading && episodes.isNotEmpty,
+                              // 海报点按只认“有可播的集”：重载/刷新中的
+                              // 瞬时加载态不许卡死海报播放入口（与已删
+                              // 底部钮的行为一致，_play 自带空详情守卫）。
+                              ready: allowed && episodes.isNotEmpty,
                               resumeIndex: resumeIndex,
                             ),
                           ),
@@ -831,6 +900,11 @@ class _DetailScreenState extends State<DetailScreen> {
                                   index,
                                 ) {
                                   final episode = visible[index];
+                                  // 卡片建出来（进入可见/预取范围）才请求取帧：
+                                  // 服务内部去重，只补新增的；内嵌播时不取。
+                                  if (_embeddedIndex == null) {
+                                    _frameService.prefetch(drama, [episode]);
+                                  }
                                   final preview = previews[start + index];
                                   final frameKey = EpisodeFrameCache.frameKey(
                                     source: drama.source,
@@ -859,127 +933,15 @@ class _DetailScreenState extends State<DetailScreen> {
                           ],
                         ],
                         if (!_loading) ...[
+                          SliverToBoxAdapter(child: _crossSiteSection(drama)),
                           SliverToBoxAdapter(child: _descriptionSection(drama)),
                           SliverToBoxAdapter(child: _magnetSection()),
                           SliverToBoxAdapter(child: _relatedSection(drama)),
                         ],
-                        if (useGlass)
-                          SliverToBoxAdapter(
-                            child: SizedBox(
-                              height: 88 + MediaQuery.paddingOf(context).bottom,
-                            ),
-                          ),
                       ],
                     );
                   },
                 ),
-              ),
-            ),
-          ),
-          extendBody: useGlass,
-          bottomNavigationBar: useGlass
-              ? _glassPlayBar(allowed, episodes, resumeIndex, watched)
-              : Material(
-                  color: Theme.of(context).colorScheme.surface,
-                  child: SafeArea(
-                    top: false,
-                    child: Center(
-                      heightFactor: 1,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1000),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
-                                  key: const ValueKey('start-play'),
-                                  autofocus: television,
-                                  focusNode: _playFocus,
-                                  style: FilledButton.styleFrom(
-                                    minimumSize: const Size(0, 52),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  onPressed:
-                                      !allowed || _loading || episodes.isEmpty
-                                      ? null
-                                      : () => _play(resumeIndex, resume: true),
-                                  icon: const Icon(
-                                    Icons.play_arrow_rounded,
-                                    size: 26,
-                                  ),
-                                  label: Text(
-                                    watched != null && episodes.isNotEmpty
-                                        ? '继续播放 · 第 ${episodes[resumeIndex].number} 集'
-                                        : '立即播放',
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      ),
-    );
-  }
-
-  Widget _glassPlayBar(
-    bool allowed,
-    List<Episode> episodes,
-    int resumeIndex,
-    WatchEntry? watched,
-  ) {
-    final bottom = MediaQuery.paddingOf(context).bottom;
-    final ready = allowed && !_loading && episodes.isNotEmpty;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 0, 16, bottom < 18 ? 12 : bottom - 6),
-      child: Center(
-        heightFactor: 1,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: LiquidGlass(
-            borderRadius: const BorderRadius.all(Radius.circular(34)),
-            child: Padding(
-              padding: const EdgeInsets.all(7),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: PressableScale(
-                      enabled: ready,
-                      pressedScale: .97,
-                      child: FilledButton.icon(
-                        key: const ValueKey('start-play'),
-                        focusNode: _playFocus,
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 52),
-                          padding: const EdgeInsets.symmetric(horizontal: 18),
-                        ),
-                        onPressed: ready
-                            ? () {
-                                HapticFeedback.lightImpact();
-                                _play(resumeIndex, resume: true);
-                              }
-                            : null,
-                        icon: const Icon(LucideIcons.play, size: 20),
-                        label: Text(
-                          watched != null && episodes.isNotEmpty
-                              ? '继续播放 · 第 ${episodes[resumeIndex].number} 集'
-                              : '立即播放',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
               ),
             ),
           ),
@@ -990,19 +952,22 @@ class _DetailScreenState extends State<DetailScreen> {
 
   Widget _hero(Drama drama, {required bool ready, required int resumeIndex}) {
     Widget playButton() {
-      return Center(
-        child: Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.black.withValues(alpha: 0.3),
-            border: Border.all(color: Colors.white70, width: 1.5),
-          ),
-          child: const Icon(
-            Icons.play_arrow_rounded,
-            color: Colors.white,
-            size: 44,
+      // 纯装饰：不接手势，整张海报（含圆心）都由 posterTap 接管点播。
+      return IgnorePointer(
+        child: Center(
+          child: Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black.withValues(alpha: 0.3),
+              border: Border.all(color: Colors.white70, width: 1.5),
+            ),
+            child: const Icon(
+              Icons.play_arrow_rounded,
+              color: Colors.white,
+              size: 44,
+            ),
           ),
         ),
       );
@@ -1013,6 +978,7 @@ class _DetailScreenState extends State<DetailScreen> {
         child: Material(
           color: Colors.transparent,
           child: InkWell(
+            key: const ValueKey('detail-poster-play'),
             onTap: ready ? () => _play(resumeIndex, resume: true) : null,
           ),
         ),
@@ -1704,4 +1670,3 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 }
-

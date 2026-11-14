@@ -1,18 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:media_kit/media_kit.dart';
 
 import 'app_page_route.dart';
-import 'audio_background.dart';
-import 'audio_capsule.dart';
 import 'audio_history.dart';
-import 'audio_media_session.dart';
+import 'audio_playback.dart';
 import 'content_models.dart';
 import 'core_bridge.dart';
 import 'novel_cover.dart';
 import 'novel_reader_page.dart';
-import 'playback_foreground.dart';
 import 'reading_bookshelf.dart';
 
 class ContentDetailScreen extends StatefulWidget {
@@ -47,42 +43,31 @@ String _formatAudioTime(Duration value) {
   return '$mm:$ss';
 }
 
-class _ContentDetailScreenState extends State<ContentDetailScreen>
-    with WidgetsBindingObserver {
+class _ContentDetailScreenState extends State<ContentDetailScreen> {
   ContentBookDetail? _detail;
   String _error = '';
   bool _loading = true;
   bool _shelved = false;
-  late final Player _player = Player();
-  int _playingIndex = -1;
-  Duration _position = Duration.zero;
-  Duration _duration = Duration.zero;
-  bool _playing = false;
   bool _autoPlayed = false;
-  bool _trackLoading = false;
-  String _trackError = '';
-  bool _autoRetried = false;
-  double _rate = 1.0;
   AudioListenRecord? _resume;
   bool _favorited = false;
-  ({int chapter, int ms})? _pendingSeek;
-  int _lastSavedAtMs = 0;
-  int _lastSavedPositionMs = -1;
-  final List<StreamSubscription<dynamic>> _subs = [];
+  int _lastSeenPlayingIndex = -1;
 
-  // 听书后台三件的状态。
-  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
-  final ManualPauseTracker _manualPause = ManualPauseTracker();
-  bool _mediaPublished = false;
-  bool _capsuleVisible = false;
-  int _lastMediaStateAtMs = 0;
+  /// 播放器归应用级单例所有，详情页只挂接界面：离开页面播放继续，
+  /// 重进显示当前真实状态（播/停/进度/章节）。
+  AudioPlaybackController get _audio => AudioPlaybackController.instance;
 
-  /// 当前有没有在播的听书曲目（小说区永远为假，三件只对听书生效）。
-  bool get _audioActive =>
-      widget.source.section == ContentSection.audio &&
-      _detail != null &&
-      _playingIndex >= 0 &&
-      _playingIndex < _detail!.chapters.length;
+  bool get _isCurrentBook =>
+      _audio.isCurrentBook(widget.source.id, widget.book.id);
+
+  /// 以下播放态只在单例播的正是本书时取单例的值，否则闲置态。
+  int get _playingIndex => _isCurrentBook ? _audio.playingIndex : -1;
+  Duration get _position => _isCurrentBook ? _audio.position : Duration.zero;
+  Duration get _duration => _isCurrentBook ? _audio.duration : Duration.zero;
+  bool get _playing => _isCurrentBook && _audio.playing;
+  double get _rate => _audio.rate;
+  bool get _trackLoading => _isCurrentBook && _audio.trackLoading;
+  String get _trackError => _isCurrentBook ? _audio.trackError : '';
 
   Widget _coverBox(
     ContentBook book,
@@ -103,189 +88,27 @@ class _ContentDetailScreenState extends State<ContentDetailScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    AudioMediaSession.setActionHandler(_onMediaAction);
+    _audio.addListener(_onAudioChanged);
     unawaited(_loadShelved());
     unawaited(_loadAudioState());
-    _subs.addAll([
-      _player.stream.position.listen((value) {
-        if (mounted) setState(() => _position = value);
-        unawaited(_saveResumeThrottled());
-        _publishMediaStateThrottled();
-      }),
-      _player.stream.duration.listen((value) {
-        if (mounted) setState(() => _duration = value);
-        _applyPendingSeek();
-      }),
-      _player.stream.playing.listen((value) {
-        if (mounted) setState(() => _playing = value);
-        unawaited(_syncBackgroundOutputs());
-      }),
-      _player.stream.completed.listen((completed) {
-        if (completed == true) {
-          unawaited(_saveResumeNow());
-          _next(auto: true);
-        }
-      }),
-      _player.stream.error.listen((_) {
-        if (!mounted || _trackError.isNotEmpty) return;
-        if (!_autoRetried) {
-          _autoRetried = true;
-          unawaited(_playChapter(_playingIndex));
-        } else {
-          setState(() => _trackError = '音频播放出错');
-        }
-      }),
-    ]);
     _load();
+  }
+
+  void _onAudioChanged() {
+    if (!mounted) return;
+    final current = _playingIndex;
+    if (current != _lastSeenPlayingIndex) {
+      _lastSeenPlayingIndex = current;
+      unawaited(_loadAudioState());
+    }
+    setState(() {});
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    AudioMediaSession.setActionHandler(null);
-    unawaited(_releaseBackgroundOutputs());
-    unawaited(_saveResumeNow());
-    for (final sub in _subs) {
-      sub.cancel();
-    }
-    _player.dispose();
+    // 只摘监听：播放器与三路后台输出归单例所有，离页继续播。
+    _audio.removeListener(_onAudioChanged);
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _lifecycleState = state;
-    if (!_audioActive) return;
-    if (state == AppLifecycleState.resumed) {
-      // 回前台只同步状态，永不自动播放：播着的本来就没停，
-      // 手动暂停过的不替用户恢复（见 shouldAutoPlayOnResume）。
-      try {
-        final current = _player.state;
-        if (mounted) {
-          setState(() {
-            _playing = current.playing;
-            _position = current.position;
-            _duration = current.duration;
-          });
-        }
-      } catch (_) {}
-      unawaited(_syncBackgroundOutputs());
-    } else if (isAudioBackgroundState(state)) {
-      // 切后台不暂停播放：前台服务保活，播放器继续播。
-      unawaited(_saveResumeNow());
-      unawaited(_syncBackgroundOutputs());
-    } else if (state == AppLifecycleState.detached) {
-      unawaited(_saveResumeNow());
-      unawaited(_releaseBackgroundOutputs());
-    }
-  }
-
-  /// 锁屏按键回落：锁屏上点的暂停同样算手动暂停，点播放算用户意图播放。
-  void _onMediaAction(String action) {
-    if (!mounted || !_audioActive) return;
-    switch (action) {
-      case 'play':
-        if (!_playing && !_trackLoading) {
-          _manualPause.userPlayed();
-          unawaited(_player.play());
-        }
-      case 'pause':
-        if (_playing) {
-          _manualPause.userPaused();
-          unawaited(_player.pause());
-        }
-      case 'previous':
-        if (_playingIndex > 0) _prev();
-      case 'next':
-        _next();
-    }
-  }
-
-  AudioLockscreenInfo _lockscreenInfo() {
-    final detail = _detail!;
-    return AudioLockscreenInfo(
-      bookTitle: detail.book.title,
-      chapterTitle: detail.chapters[_playingIndex].title,
-      coverUrl: detail.book.cover,
-      playing: _playing,
-      positionMs: _position.inMilliseconds,
-      durationMs: _duration.inMilliseconds,
-      hasPrevious: _playingIndex > 0,
-      hasNext: _playingIndex + 1 < detail.chapters.length,
-      rate: _rate,
-    );
-  }
-
-  /// 三路输出同步：前台服务保活 + 锁屏界面 + 胶囊显隐。
-  /// 暂停时也发布锁屏界面（显示播放按钮）；胶囊只在后台且在播时出现。
-  Future<void> _syncBackgroundOutputs() async {
-    if (!_audioActive) return;
-    final info = _lockscreenInfo();
-    if (_playing) {
-      unawaited(PlaybackForeground.acquire(widget.book.title));
-    } else {
-      unawaited(PlaybackForeground.release());
-    }
-    _mediaPublished = await AudioMediaSession.publish(info);
-    unawaited(_refreshCapsule());
-  }
-
-  /// 锁屏进度刷新：播着时每 5 秒推一次播放态，避免每帧都过通道。
-  void _publishMediaStateThrottled() {
-    if (!_audioActive || !_playing || !_mediaPublished) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastMediaStateAtMs < 5000) return;
-    _lastMediaStateAtMs = now;
-    unawaited(
-      AudioMediaSession.updateState(
-        playing: true,
-        positionMs: _position.inMilliseconds,
-        durationMs: _duration.inMilliseconds,
-        rate: _rate,
-      ),
-    );
-  }
-
-  /// 胶囊显隐：后台 + 在播 + 悬浮窗权限，三件齐了才显示；
-  /// 任一不满足就藏起，只留通知栏控制，不反复要权限。
-  Future<void> _refreshCapsule() async {
-    final backgrounded = isAudioBackgroundState(_lifecycleState);
-    final want = _audioActive && _playing && backgrounded;
-    if (want) {
-      final granted = await AudioCapsule.isPermissionGranted();
-      if (!mounted) return;
-      if (granted &&
-          isAudioBackgroundState(_lifecycleState) &&
-          _playing &&
-          _audioActive) {
-        final detail = _detail!;
-        final ready = await AudioCapsule.ensureService();
-        if (!mounted) return;
-        if (ready) {
-          final shown = await AudioCapsule.show(
-            title: detail.book.title,
-            chapter: detail.chapters[_playingIndex].title,
-            playing: true,
-          );
-          _capsuleVisible = shown;
-          return;
-        }
-      }
-    }
-    if (_capsuleVisible) {
-      _capsuleVisible = false;
-      await AudioCapsule.hide();
-    }
-  }
-
-  /// 撤掉三路输出：前台服务标记、锁屏界面、胶囊服务。
-  Future<void> _releaseBackgroundOutputs() async {
-    _mediaPublished = false;
-    _capsuleVisible = false;
-    unawaited(PlaybackForeground.release());
-    await AudioMediaSession.release();
-    await AudioCapsule.stop();
   }
 
   Future<void> _loadAudioState() async {
@@ -300,79 +123,6 @@ class _ContentDetailScreenState extends State<ContentDetailScreen>
         });
       }
     } catch (_) {}
-  }
-
-  AudioListenRecord _recordFor(int chapterIndex, int positionMs) {
-    final detail = _detail;
-    final chapter =
-        detail != null &&
-            chapterIndex >= 0 &&
-            chapterIndex < detail.chapters.length
-        ? detail.chapters[chapterIndex]
-        : null;
-    return AudioListenRecord(
-      sourceId: widget.source.id,
-      sourceName: widget.source.name,
-      bookId: widget.book.id,
-      title: widget.book.title,
-      cover: widget.book.cover,
-      author: widget.book.author,
-      chapterIndex: chapterIndex,
-      chapterTitle: chapter?.title ?? '',
-      positionMs: positionMs,
-      durationMs: _duration.inMilliseconds,
-      updatedAtMs: DateTime.now().millisecondsSinceEpoch,
-    );
-  }
-
-  Future<void> _saveChapterStart(int index) async {
-    if (widget.source.section != ContentSection.audio) return;
-    try {
-      final record = _recordFor(index, 0);
-      await saveAudioResume(record);
-      await recordAudioHistory(record);
-      if (mounted) setState(() => _resume = record);
-    } catch (_) {}
-  }
-
-  Future<void> _saveResumeNow() async {
-    if (widget.source.section != ContentSection.audio) return;
-    if (_playingIndex < 0 || _position.inMilliseconds <= 0) return;
-    try {
-      final record = _recordFor(_playingIndex, _position.inMilliseconds);
-      await saveAudioResume(record);
-      await recordAudioHistory(record);
-      if (mounted) setState(() => _resume = record);
-    } catch (_) {}
-  }
-
-  Future<void> _saveResumeThrottled() async {
-    if (widget.source.section != ContentSection.audio) return;
-    if (_playingIndex < 0 || !_playing) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final positionMs = _position.inMilliseconds;
-    if (positionMs <= 0) return;
-    if (now - _lastSavedAtMs < 5000 &&
-        (positionMs - _lastSavedPositionMs).abs() < 5000) {
-      return;
-    }
-    _lastSavedAtMs = now;
-    _lastSavedPositionMs = positionMs;
-    try {
-      final record = _recordFor(_playingIndex, positionMs);
-      await saveAudioResume(record);
-      if (mounted) setState(() => _resume = record);
-    } catch (_) {}
-  }
-
-  void _applyPendingSeek() {
-    final pending = _pendingSeek;
-    if (pending == null) return;
-    if (pending.chapter != _playingIndex) return;
-    if (_duration.inMilliseconds <= 0) return;
-    final target = pending.ms.clamp(0, _duration.inMilliseconds);
-    _pendingSeek = null;
-    unawaited(_player.seek(Duration(milliseconds: target)));
   }
 
   Future<void> _toggleFavorite() async {
@@ -492,93 +242,31 @@ class _ContentDetailScreenState extends State<ContentDetailScreen>
   Future<void> _playChapter(int index, {int seekMs = 0}) async {
     final detail = _detail;
     if (detail == null || index < 0 || index >= detail.chapters.length) return;
-    _pendingSeek = seekMs > 0 ? (chapter: index, ms: seekMs) : null;
-    setState(() {
-      _playingIndex = index;
-      _trackLoading = true;
-      _trackError = '';
-      _autoRetried = false;
-      _position = Duration.zero;
-      _duration = Duration.zero;
-    });
-    try {
-      final track = await widget.source.audioTrack(
-        detail.book.id,
-        detail.chapters[index],
-      );
-      if (!mounted) return;
-      await _player.open(Media(track.url));
-      await _player.setRate(_rate);
-      await _player.play();
-      _manualPause.userPlayed();
-      if (mounted) {
-        setState(() => _trackLoading = false);
-        unawaited(_saveChapterStart(index));
-        unawaited(_syncBackgroundOutputs());
-      }
-    } on AppFailure catch (e) {
-      _pendingSeek = null;
-      if (mounted) {
-        setState(() {
-          _trackLoading = false;
-          _trackError = e.message;
-        });
-      }
-    } catch (_) {
-      _pendingSeek = null;
-      if (mounted) {
-        setState(() {
-          _trackLoading = false;
-          _trackError = '音频加载失败';
-        });
-      }
-    }
+    await _audio.playChapter(widget.source, detail, index, seekMs: seekMs);
   }
 
-  void _next({bool auto = false}) {
-    final detail = _detail;
-    if (detail == null) return;
-    if (_playingIndex + 1 >= detail.chapters.length) return;
-    _playChapter(_playingIndex + 1);
+  void _next() {
+    if (!_isCurrentBook) return;
+    _audio.next();
   }
 
   void _prev() {
-    if (_playingIndex - 1 < 0) return;
-    _playChapter(_playingIndex - 1);
+    if (!_isCurrentBook) return;
+    _audio.previous();
   }
 
   Future<void> _toggle() async {
-    if (_trackLoading || _playingIndex < 0) return;
-    if (_playing) {
-      _manualPause.userPaused();
-      await _player.pause();
-    } else {
-      _manualPause.userPlayed();
-      await _player.play();
-    }
+    if (!_isCurrentBook) return;
+    await _audio.toggle();
   }
 
   Future<void> _setRate(double rate) async {
-    setState(() => _rate = rate);
-    await _player.setRate(rate);
+    await _audio.setRate(rate);
   }
 
   Future<void> _stop() async {
-    _pendingSeek = null;
-    _manualPause.stopped();
-    await _saveResumeNow();
-    await _player.stop();
-    if (mounted) {
-      setState(() {
-        _playingIndex = -1;
-        _position = Duration.zero;
-        _duration = Duration.zero;
-        _playing = false;
-        _trackLoading = false;
-        _trackError = '';
-      });
-    }
-    await _releaseBackgroundOutputs();
+    if (!_isCurrentBook) return;
+    await _audio.stop();
   }
 
   void _openNovelReader([int? chapterIndex]) {
@@ -691,8 +379,9 @@ class _ContentDetailScreenState extends State<ContentDetailScreen>
                     value: posMs,
                     max: maxMs,
                     onChanged: (value) {
-                      _pendingSeek = null;
-                      _player.seek(Duration(milliseconds: value.toInt()));
+                      unawaited(
+                        _audio.seek(Duration(milliseconds: value.toInt())),
+                      );
                     },
                   ),
                 ),

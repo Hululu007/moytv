@@ -27,6 +27,8 @@ class LiveScreen extends StatefulWidget {
     this.greenMode = true,
     this.onExitLeft,
     this.appStore,
+    this.playbackController,
+    this.videoBuilder,
   });
 
   final LiveRepository repository;
@@ -34,6 +36,14 @@ class LiveScreen extends StatefulWidget {
   final bool greenMode;
   final VoidCallback? onExitLeft;
   final LocalStore? appStore;
+
+  /// 测试注入：传了就用现成的播放控制器，不再自建。
+  final LivePlaybackController? playbackController;
+
+  /// 测试注入：传了就用它画播放画面，代替真实 Video（真机原生层
+  /// 在测试环境建不起来）；不传则走真实 Video，行为不变。
+  final Widget Function(LivePlaybackController playback, bool fullscreen)?
+  videoBuilder;
 
   @override
   State<LiveScreen> createState() => _LiveScreenState();
@@ -64,8 +74,10 @@ class _LiveScreenState extends State<LiveScreen> {
   @override
   void initState() {
     super.initState();
-    _playback = LivePlaybackController(repository: widget.repository)
-      ..addListener(_playbackChanged);
+    _playback =
+        widget.playbackController ??
+        LivePlaybackController(repository: widget.repository);
+    _playback.addListener(_playbackChanged);
     widget.store.addListener(_storeChanged);
     widget.appStore?.addListener(_appStoreChanged);
     _syncSources();
@@ -325,18 +337,38 @@ class _LiveScreenState extends State<LiveScreen> {
     if (source == null) return;
     if (_playback.channel == null || _playback.channels.isEmpty) return;
     setState(() => _detached = true);
-    await Navigator.push<void>(
-      context,
-      playerRoute(
-        LivePlayerScreen(
-          playback: _playback,
-          source: source,
-          store: widget.store,
-          onExit: () => setState(() => _detached = false),
-        ),
+    final route = playerRoute(
+      LivePlayerScreen(
+        playback: _playback,
+        source: source,
+        store: widget.store,
+        videoBuilder: widget.videoBuilder,
       ),
     );
+    await Navigator.push<void>(context, route);
+    // push Future 在退场动画开始前就完成（Route.didComplete 在动画前调），
+    // 必须等动画彻底结束（路由卸载、全屏 Video 已卸）再复位，否则
+    // 退场过渡期间内嵌 Video 与全屏 Video 同挂一个 controller。
+    await _waitForRouteDismissed(route);
     if (mounted) setState(() => _detached = false);
+  }
+
+  Future<void> _waitForRouteDismissed(Route<void> route) {
+    final transitionRoute = route is TransitionRoute<void> ? route : null;
+    final animation = transitionRoute?.animation;
+    if (animation == null || animation.status == AnimationStatus.dismissed) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    late final void Function(AnimationStatus) listener;
+    listener = (status) {
+      if (status == AnimationStatus.dismissed && !completer.isCompleted) {
+        animation.removeStatusListener(listener);
+        completer.complete();
+      }
+    };
+    animation.addStatusListener(listener);
+    return completer.future;
   }
 
   List<LiveSource> get _sources => LiveSource.visible(widget.greenMode);
@@ -421,7 +453,9 @@ class _LiveScreenState extends State<LiveScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (controller != null && !_detached)
+          if (widget.videoBuilder != null && !_detached)
+            widget.videoBuilder!(_playback, false)
+          else if (controller != null && !_detached)
             Video(
               controller: controller,
               fit: BoxFit.contain,

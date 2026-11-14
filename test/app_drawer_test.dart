@@ -19,7 +19,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AppDrawer(
-            zone: HomeZone.drama,
+            zone: HomeZone.library,
             currentVersion: '1.0.1',
             onZoneSelected: zones.add,
             onWatchRoom: onWatchRoom,
@@ -41,13 +41,13 @@ void main() {
       tools: [],
       onWatchRoom: () => room++,
     );
-    await tester.tap(find.text('点播'));
-    expect(zones, [HomeZone.vod]);
+    await tester.tap(find.text('片库'));
+    expect(zones, [HomeZone.library]);
     await tester.tap(find.text('直播'));
-    expect(zones, [HomeZone.vod, HomeZone.live]);
+    expect(zones, [HomeZone.library, HomeZone.live]);
     await tester.tap(find.text('一起看房间'));
     expect(room, 1);
-    await tester.tap(find.text('音乐'));
+    await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('听书'));
     expect(zones.last, HomeZone.audio);
@@ -81,17 +81,22 @@ void main() {
     expect(find.text('影视模块'), findsOneWidget);
     expect(find.text('应用工具'), findsOneWidget);
     expect(find.text('常用入口 · 完整设置见「设置」'), findsOneWidget);
-    for (final label in ['短剧', '点播', '直播', '一起看房间', '站点区', '软件更新']) {
+    for (final label in ['片库', '直播', '一起看房间', '站点区', '软件更新']) {
       expect(find.text(label), findsOneWidget);
     }
     await tester.tap(find.text('音乐'));
     await tester.pumpAndSettle();
-    expect(find.text('音乐与音频'), findsOneWidget);
-    expect(find.text('听书'), findsOneWidget);
+    expect(find.text('音乐源'), findsOneWidget);
+    expect(find.text('听书'), findsNothing);
     await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
     expect(find.text('阅读模块'), findsOneWidget);
     expect(find.text('小说'), findsOneWidget);
+    expect(find.text('漫画区'), findsOneWidget);
+    expect(find.text('听书'), findsOneWidget);
+    expect(find.text('小说源'), findsOneWidget);
+    expect(find.text('漫画源'), findsOneWidget);
+    expect(find.text('书源文件'), findsOneWidget);
   });
 
   testWidgets('site source box keeps its key and tap callback', (tester) async {
@@ -139,13 +144,15 @@ void main() {
 
     await tester.tap(find.text('音乐'));
     await tester.pumpAndSettle();
-    expect(find.text('音乐与音频'), findsOneWidget);
-    expect(find.text('听书'), findsOneWidget);
+    expect(find.text('音乐源'), findsOneWidget);
+    expect(find.text('听书'), findsNothing);
 
-    await tester.tap(find.text('漫画'));
+    await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
-    expect(find.text('漫画模块'), findsOneWidget);
+    expect(find.text('阅读模块'), findsOneWidget);
     expect(find.text('漫画区'), findsOneWidget);
+    expect(find.text('听书'), findsOneWidget);
+    expect(find.text('漫画'), findsNothing);
 
     await tester.ensureVisible(find.text('小程序'));
     await tester.pumpAndSettle();

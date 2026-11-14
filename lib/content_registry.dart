@@ -41,6 +41,11 @@ class ContentRegistry {
       name: '🔞H有声小说',
       assetPath: 'assets/audio_spiders/hysxs.py',
     ),
+    PyContentSource(
+      id: 'asmrmoon',
+      name: '🔞ASMR MOON',
+      assetPath: 'assets/audio_spiders/asmrmoon.py',
+    ),
     JarAudioContentSource(),
   ];
 

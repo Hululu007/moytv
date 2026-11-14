@@ -45,7 +45,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AppDrawer(
-            zone: HomeZone.drama,
+            zone: HomeZone.library,
             currentVersion: '1.4.25',
             onZoneSelected: onZoneSelected,
             onWatchRoom: () {},
@@ -68,8 +68,9 @@ void main() {
       onTool: (_) {},
       onMinorProtectionChanged: (_) {},
     );
-    expect(find.text('短剧'), findsOneWidget);
-    expect(find.text('点播'), findsOneWidget);
+    expect(find.text('片库'), findsOneWidget);
+    expect(find.text('短剧'), findsNothing);
+    expect(find.text('点播'), findsNothing);
     expect(find.text('直播'), findsOneWidget);
     expect(find.text('听书'), findsNothing);
     // 午夜区已并入统一站点区：抽屉里不再有午夜区入口。
@@ -79,7 +80,7 @@ void main() {
     // 统一站点区是唯一的管理入口。
     expect(find.text('站点区'), findsOneWidget);
     expect(find.text('站源管理'), findsNothing);
-    await tester.tap(find.text('音乐'));
+    await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
     expect(find.text('听书'), findsOneWidget);
     await tester.ensureVisible(find.text('听书'));

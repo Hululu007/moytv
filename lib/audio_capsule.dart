@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 灵动岛胶囊通道：原生悬浮窗服务。
 ///
@@ -69,5 +70,30 @@ class AudioCapsule {
     } catch (_) {
       return false;
     }
+  }
+}
+
+/// 悬浮窗授权“只主动跳一次”的持久标记。
+///
+/// 首次听书切后台且在播、权限未给时，控制器跳一次系统授权页并记下；
+/// 之后无论用户给没给，都不再主动跳（拒绝后静默降级，只留通知栏控制）。
+/// 用户事后在设置里手动点的“听书胶囊悬浮窗”入口不受此标记限制。
+class AudioCapsulePermissionPrompt {
+  static const _key = 'audio_capsule_overlay_prompted';
+
+  static Future<bool> hasPrompted() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      return preferences.getBool(_key) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> markPrompted() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setBool(_key, true);
+    } catch (_) {}
   }
 }

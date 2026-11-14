@@ -9,6 +9,7 @@ import 'core_bridge.dart';
 import 'custom_sources_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'neon_glass_kit.dart';
 import 'remote_widgets.dart';
 import 'source_status.dart';
 import 'widgets.dart';
@@ -322,18 +323,15 @@ class _SourcesScreenState extends State<SourcesScreen> {
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
                 children: [
-                  Card(
+                  NeonGlassCard(
                     key: const ValueKey('source-visibility-entry'),
                     margin: const EdgeInsets.only(bottom: 16),
-                    clipBehavior: Clip.antiAlias,
-                    child: ListTile(
-                      leading: const Icon(Icons.visibility_outlined),
-                      title: const Text('源显示列表'),
-                      subtitle: Text(
-                        '控制在首页显示的站源（含内置站源）· 当前 '
-                        '${widget.store.visibleSources.length}/${widget.store.sources.length} 个可见',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                    child: NeonRow(
+                      icon: Icons.visibility_outlined,
+                      title: '源显示列表',
+                      detail:
+                          '控制在首页显示的站源（含内置站源）· 当前 '
+                          '${widget.store.visibleSources.length}/${widget.store.sources.length} 个可见',
                       onTap: () => Navigator.push<void>(
                         context,
                         appPageRoute<void>(
@@ -343,17 +341,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
                       ),
                     ),
                   ),
-                  Card(
+                  NeonGlassCard(
                     key: const ValueKey('custom-sources-entry'),
                     margin: const EdgeInsets.only(bottom: 16),
-                    clipBehavior: Clip.antiAlias,
-                    child: ListTile(
-                      leading: const Icon(Icons.add_circle_outline),
-                      title: const Text('自定义源'),
-                      subtitle: const Text(
-                        '录入 MacCMS 站点地址或粘贴 XBPQ 爬虫规则，支持批量导入与导出',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                    child: NeonRow(
+                      icon: Icons.add_circle_outline,
+                      title: '自定义源',
+                      detail: '录入 MacCMS 站点地址或粘贴 XBPQ 爬虫规则，支持批量导入与导出',
                       onTap: () => Navigator.push<void>(
                         context,
                         appPageRoute<void>(
@@ -379,7 +373,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   if (groups.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
+                      // 窄屏 + 大字号时 Row 会横向溢出，改 Wrap：放得下时
+                      // 一行两端对齐（与原来一致），放不下时计数换行。
+                      child: Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        alignment: WrapAlignment.spaceBetween,
                         children: [
                           TextButton.icon(
                             key: const ValueKey('expand-all-source-groups'),
@@ -395,20 +395,19 @@ class _SourcesScreenState extends State<SourcesScreen> {
                             icon: const Icon(Icons.unfold_less_rounded),
                             label: const Text('全部折叠'),
                           ),
-                          const Spacer(),
                           Text('${sources.length} 个站源'),
                         ],
                       ),
                     ),
                   for (final group in groups)
-                    Card(
-                      clipBehavior: Clip.antiAlias,
+                    NeonGlassCard(
+                      margin: const EdgeInsets.only(bottom: 10),
                       child: ExpansionTile(
                         key: ValueKey('source-group-${group.id}-$_expandEpoch'),
                         initiallyExpanded: _expandedGroups.contains(group.id),
                         onExpansionChanged: (expanded) =>
                             _setGroupExpanded(group.id, expanded),
-                        leading: Icon(_groupIcon(group)),
+                        leading: NeonIconTile(icon: _groupIcon(group)),
                         title: Text(group.name),
                         subtitle: Text(
                           '${group.sources.length} 个站源 · ${group.sources.fold<int>(0, (count, source) => count + (_statuses[source.id]?.count ?? 0))} 部',
@@ -442,17 +441,16 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final health = status?.health;
     final healthExpanded = _expandedHealth.contains(source.id);
     final colors = Theme.of(context).colorScheme;
-    return Card(
+    return NeonGlassCard(
       key: ValueKey('source-${source.id}'),
       margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+      padding: const EdgeInsets.all(16),
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.dns_outlined),
+                const NeonIconTile(icon: Icons.dns_outlined),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -678,7 +676,6 @@ class _SourcesScreenState extends State<SourcesScreen> {
               const Text('尚未检测连接'),
             ],
           ],
-        ),
       ),
     );
   }
@@ -732,7 +729,7 @@ class _SourceVisibilityScreenState extends State<SourceVisibilityScreen> {
                     child: Text('当前用户没有可用站源'),
                   ),
                 for (final group in SourceGroup.sectionGroups(sources))
-                  Card(
+                  NeonGlassCard(
                     margin: const EdgeInsets.only(bottom: 12),
                     child: Column(
                       children: [
@@ -749,23 +746,32 @@ class _SourceVisibilityScreenState extends State<SourceVisibilityScreen> {
                                 ),
                               ),
                               if (group.isConfig)
-                                const Chip(label: Text('导入配置')),
+                                const NeonBadge(label: '导入配置'),
                             ],
                           ),
                         ),
                         for (final source in group.sources)
-                          SwitchListTile(
-                            secondary: const Icon(Icons.dns_outlined),
-                            title: Text(
-                              group.id == 'huangguo' && group.sources.length > 1
-                                  ? source.entryName
-                                  : source.name,
-                            ),
-                            subtitle: Text(source.description),
-                            value: !hidden.contains(source.id),
-                            onChanged: _pending.contains(source.id)
+                          NeonRow(
+                            icon: Icons.dns_outlined,
+                            title:
+                                group.id == 'huangguo' &&
+                                    group.sources.length > 1
+                                ? source.entryName
+                                : source.name,
+                            detail: source.description,
+                            showChevron: false,
+                            onTap: _pending.contains(source.id)
                                 ? null
-                                : (value) => _toggle(source, value),
+                                : () => _toggle(
+                                    source,
+                                    hidden.contains(source.id),
+                                  ),
+                            trailing: NeonSwitch(
+                              value: !hidden.contains(source.id),
+                              onChanged: _pending.contains(source.id)
+                                  ? null
+                                  : (value) => _toggle(source, value),
+                            ),
                           ),
                       ],
                     ),

@@ -30,6 +30,94 @@ enum AppThemeMode {
       );
 }
 
+/// 导航样式：抽屉导航（默认）或底部标签导航（LwLive 式 5 Tab 底栏）。
+enum NavStyle {
+  drawer,
+  bottomTabs;
+
+  String get storageValue => name;
+
+  String get label => switch (this) {
+    NavStyle.drawer => '抽屉',
+    NavStyle.bottomTabs => '底部标签',
+  };
+
+  static NavStyle fromStorageValue(String? value) => NavStyle.values
+      .firstWhere(
+        (style) => style.name == value,
+        orElse: () => NavStyle.drawer,
+      );
+}
+
+/// 内容档：主题绑定的内容过滤（第三阶段生效；第二阶段只存取、不过滤）。
+enum ContentTier {
+  all,
+  manhua,
+  liveAction,
+  adult;
+
+  String get storageValue => name;
+
+  String get label => switch (this) {
+    ContentTier.all => '全部内容',
+    ContentTier.manhua => '漫剧',
+    ContentTier.liveAction => '真人剧',
+    ContentTier.adult => '成人视频',
+  };
+
+  static ContentTier fromStorageValue(String? value) =>
+      ContentTier.values.firstWhere(
+        (tier) => tier.name == value,
+        orElse: () => ContentTier.all,
+      );
+}
+
+/// 主题绑定的显示方案：导航样式 + 内容档。切主题时两件一起变。
+///
+/// 存储值格式为 `导航样式:内容档`（如 `bottomTabs:manhua`）；只写导航
+/// 样式的旧值（如 `drawer`）解析时内容档回落全部内容；非法值整体回默认。
+class ThemeDisplayScheme {
+  const ThemeDisplayScheme({
+    this.navStyle = NavStyle.drawer,
+    this.contentTier = ContentTier.all,
+  });
+
+  const ThemeDisplayScheme.defaults() : this();
+
+  final NavStyle navStyle;
+  final ContentTier contentTier;
+
+  String get storageValue => '${navStyle.name}:${contentTier.name}';
+
+  static ThemeDisplayScheme fromStorageValue(String? value) {
+    if (value == null || value.isEmpty) {
+      return const ThemeDisplayScheme.defaults();
+    }
+    final parts = value.split(':');
+    return ThemeDisplayScheme(
+      navStyle: NavStyle.fromStorageValue(parts.first),
+      contentTier: parts.length > 1
+          ? ContentTier.fromStorageValue(parts[1])
+          : ContentTier.all,
+    );
+  }
+
+  ThemeDisplayScheme copyWith({NavStyle? navStyle, ContentTier? contentTier}) =>
+      ThemeDisplayScheme(
+        navStyle: navStyle ?? this.navStyle,
+        contentTier: contentTier ?? this.contentTier,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is ThemeDisplayScheme &&
+      other.navStyle == navStyle &&
+      other.contentTier == contentTier;
+
+  @override
+  int get hashCode => Object.hash(navStyle, contentTier);
+}
+
 enum CategoryNavStyle {
   darkSidebar,
   colorBlockSidebar,

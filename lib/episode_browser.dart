@@ -155,6 +155,7 @@ class EpisodeBrowser extends StatefulWidget {
     this.keyPrefix = 'episode',
     this.title = '选集',
     this.compact = false,
+    this.autofocus = false,
     this.onExitUp,
     this.onExitDown,
   });
@@ -165,6 +166,9 @@ class EpisodeBrowser extends StatefulWidget {
   final String keyPrefix;
   final String title;
   final bool compact;
+  /// 详情页电视分支用：无底部播放钮后，遥控默认焦点落到当前集
+  /// chip 上。默认 false，各旧调用点行为不变。
+  final bool autofocus;
   final VoidCallback? onExitUp;
   final VoidCallback? onExitDown;
   @override
@@ -283,7 +287,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
               return RemoteGrid(
                 key: ValueKey('episode-page-$_page-$_located'),
                 controller: _scroll,
-                autofocus: television && _located != null,
+                autofocus: widget.autofocus || (television && _located != null),
                 initialIndex: target,
                 onExitUp: widget.onExitUp,
                 onExitDown: widget.onExitDown,
@@ -405,7 +409,7 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
             child: RemoteGrid(
               key: ValueKey('episode-continuous-$_located'),
               controller: _scroll,
-              autofocus: television && _located != null,
+              autofocus: widget.autofocus || (television && _located != null),
               initialIndex: target,
               itemKeys: widget.episodes
                   .map((episode) => '${episode.number}')

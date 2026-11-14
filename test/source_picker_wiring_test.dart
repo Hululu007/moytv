@@ -21,6 +21,27 @@ class _FailingLiveRepository extends LiveRepository {
   }) async => throw AppFailure('合成直播失败');
 }
 
+/// 把弹窗里的站点瓦片拖进视口：内置源增至 37 个后，虎牙瓦片落到
+/// 测试视口之下（弹窗 ListView 可滚、瓦片全量构建，scrollUntilVisible
+/// 是空操作），直接点按会落空关弹窗、源换不成。真实拖动并按矩形校验。
+Future<void> _dragPickerTileIntoView(WidgetTester tester, Finder finder) async {
+  final listView = find.descendant(
+    of: find.byType(Dialog),
+    matching: find.byType(ListView),
+  );
+  for (var i = 0; i < 12; i++) {
+    final rect = tester.getRect(finder);
+    final height =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    if (rect.top >= 0 && rect.bottom <= height) return;
+    final direction = rect.top < 0 ? 200.0 : -200.0;
+    await tester.drag(listView, Offset(0, direction));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+  throw StateError('瓦片拖 12 次仍不在视口内');
+}
+
 void main() {
   Future<LocalStore> makeStore() async {
     SharedPreferences.setMockInitialValues({});
@@ -83,12 +104,20 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('秀果 直播源暂时不可用'), findsOneWidget);
+    expect(find.text('🔞秀果 直播源暂时不可用'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('live-source-button')));
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsOneWidget);
-    expect(find.text('当前：秀果'), findsOneWidget);
-    await tester.tap(find.text('虎牙'));
+    // 弹窗无“当前：X”文字，当前源以选中态瓦片表示（渐变 + 对勾）。
+    expect(
+      find.byKey(const ValueKey('site-picker-row-xiuguo')),
+      findsOneWidget,
+    );
+    await _dragPickerTileIntoView(
+      tester,
+      find.byKey(const ValueKey('site-picker-row-huya')),
+    );
+    await tester.tap(find.byKey(const ValueKey('site-picker-row-huya')));
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsNothing);
     expect(find.text('虎牙 直播源暂时不可用'), findsOneWidget);
