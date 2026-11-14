@@ -72,6 +72,11 @@ class TmdbConfig {
 
   String imageUrl(String? path, {String size = 'w500'}) {
     if (path == null || path.isEmpty) return '';
+    // 无 key 刮削源（TVMaze/Bangumi）给的是绝对地址，原样返回，
+    // 不拼 TMDB 图床前缀；TMDB 自身的相对路径才走下面拼装。
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return path;
+    }
     if (!RegExp(r'^(w\d+|original)$').hasMatch(size)) return '';
     final base = imageBaseUri.toString();
     final clean = path.startsWith('/') ? path : '/$path';

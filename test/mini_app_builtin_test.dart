@@ -27,14 +27,16 @@ void main() {
   });
 
   List<int> zipWithManifest(String appId, String name) {
-    final manifest = utf8.encode(jsonEncode({
-      'appId': appId,
-      'name': name,
-      'version': '1.0.0',
-      'versionCode': 1,
-      'entry': 'index.html',
-      'permissions': ['ui'],
-    }));
+    final manifest = utf8.encode(
+      jsonEncode({
+        'appId': appId,
+        'name': name,
+        'version': '1.0.0',
+        'versionCode': 1,
+        'entry': 'index.html',
+        'permissions': ['ui'],
+      }),
+    );
     final archive = Archive()
       ..addFile(ArchiveFile('manifest.json', manifest.length, manifest))
       ..addFile(ArchiveFile('index.html', 4, [60, 104, 62, 10]));
@@ -90,10 +92,10 @@ void main() {
       expect(first.failed, isEmpty);
       expect(first.unavailable, isEmpty);
       final installed = await store.listInstalled();
-      expect(installed.map((m) => m.appId), containsAll([
-        'com.example.demo',
-        'com.example.site',
-      ]));
+      expect(
+        installed.map((m) => m.appId),
+        containsAll(['com.example.demo', 'com.example.site']),
+      );
 
       final second = await MiniAppBuiltin.ensureSeeded(store, loadAsset: load);
       expect(second.installed, isEmpty);
@@ -123,6 +125,7 @@ void main() {
             : zipBytes;
         return ByteData.view(Uint8List.fromList(bytes).buffer);
       }
+
       final result = await MiniAppBuiltin.ensureSeeded(store, loadAsset: load);
       expect(result.installed, isEmpty);
       expect(result.skipped, ['com.example.demo']);
@@ -149,6 +152,7 @@ void main() {
             : zipBytes;
         return ByteData.view(Uint8List.fromList(bytes).buffer);
       }
+
       final store = MiniAppStore(rootOverride: temp);
       final result = await MiniAppBuiltin.ensureSeeded(store, loadAsset: load);
       expect(result.failed.map((f) => f.appId), ['com.example.demo']);
@@ -177,6 +181,7 @@ void main() {
         }
         throw StateError('asset missing');
       }
+
       final store = MiniAppStore(rootOverride: temp);
       final result = await MiniAppBuiltin.ensureSeeded(store, loadAsset: load);
       expect(result.unavailable, ['com.example.gone']);
@@ -189,7 +194,14 @@ void main() {
       final marketFile = File('assets/miniapps/builtin/market.json');
       expect(marketFile.existsSync(), isTrue);
       final items = parseMiniAppMarketJson(marketFile.readAsStringSync());
-      expect(items, hasLength(17));
+      // 只留 4 个：影视库、CMS 转 T4 服务、采集源转 T4 服务、
+      // drpy-node 影视源 (Node)。
+      expect(items.map((item) => item.appId), [
+        'com.ant.emby',
+        'com.leospring.cms_t4_bridge',
+        'com.leospring.source_t4_bridge',
+        'com.leospring.drpy_node',
+      ]);
       for (final item in items) {
         final fileName = item.url.endsWith('.json')
             ? '${item.appId}.manifest.json'
@@ -197,11 +209,7 @@ void main() {
         final file = File('assets/miniapps/builtin/$fileName');
         expect(file.existsSync(), isTrue, reason: '缺资产：$fileName');
         if (item.size != null) {
-          expect(
-            file.lengthSync(),
-            item.size,
-            reason: '大小不一致：$fileName',
-          );
+          expect(file.lengthSync(), item.size, reason: '大小不一致：$fileName');
         }
         // 大包（drpy_node）只验大小，md5 由播种时 installFromZipBytes 验；
         // 其余小包在这里就把 md5 对上。
@@ -215,6 +223,47 @@ void main() {
       }
       // 影视库（桥接播放的入口）必须在清单里。
       expect(items.map((i) => i.appId), contains('com.ant.emby'));
+    });
+  });
+
+  group('已撤内置应用的市场过滤', () {
+    test('filterRemovedMarketItems 滤掉 13 个被删的、保留其余', () {
+      final items = [
+        const MiniAppMarketItem(
+          appId: 'com.leospring.tetris',
+          name: '俄罗斯方块',
+          url: 'https://example.com/tetris.zip',
+        ),
+        const MiniAppMarketItem(
+          appId: 'com.leospring.drpy_node',
+          name: 'drpy-node 影视源 (Node)',
+          url: 'https://example.com/drpy.zip',
+        ),
+        const MiniAppMarketItem(
+          appId: 'com.example.future',
+          name: '上游新应用',
+          url: 'https://example.com/future.zip',
+        ),
+        const MiniAppMarketItem(
+          appId: 'com.logvar.danmu',
+          name: 'LogVar 弹幕服务',
+          url: 'https://example.com/danmu.zip',
+        ),
+      ];
+      final kept = filterRemovedMarketItems(items);
+      expect(kept.map((item) => item.appId), [
+        'com.leospring.drpy_node',
+        'com.example.future',
+      ]);
+    });
+
+    test('removedBuiltinAppIds 与 market.json 的删减一致', () {
+      expect(removedBuiltinAppIds, hasLength(13));
+      final marketFile = File('assets/miniapps/builtin/market.json');
+      final items = parseMiniAppMarketJson(marketFile.readAsStringSync());
+      for (final item in items) {
+        expect(removedBuiltinAppIds, isNot(contains(item.appId)));
+      }
     });
   });
 }

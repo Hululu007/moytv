@@ -68,6 +68,18 @@ void main() {
       expect(testConfig.imageUrl(null), isEmpty);
     });
 
+    test('image url passes absolute urls through unchanged', () {
+      // 无 key 源的海报是绝对地址，不拼 TMDB 图床前缀。
+      expect(
+        testConfig.imageUrl('https://static.tvmaze.com/o.jpg'),
+        'https://static.tvmaze.com/o.jpg',
+      );
+      expect(
+        testConfig.imageUrl('http://lain.bgm.tv/pic/cover/l/x.jpg'),
+        'http://lain.bgm.tv/pic/cover/l/x.jpg',
+      );
+    });
+
     test('save and load round-trip', () async {
       final prefs = await freshPrefs();
       await const TmdbConfig(apiKey: 'TEST_KEY', language: 'en-US').save(prefs);
@@ -114,7 +126,7 @@ void main() {
   });
 
   group('TmdbService', () {
-    test('no key means no request and null metadata', () async {
+    test('no key attempts the keyless sources instead of skipping', () async {
       var requests = 0;
       final service = TmdbService(
         client: MockClient((_) async {
@@ -127,8 +139,9 @@ void main() {
         title: '测试影片',
         config: const TmdbConfig(),
       );
+      // 两家无 key 源都探了（TVMaze + Bangumi），都无果才返回 null。
       expect(meta, isNull);
-      expect(requests, 0);
+      expect(requests, 2);
     });
 
     test('movie search, detail and cache hit', () async {
@@ -321,7 +334,9 @@ void main() {
         prefs: prefs,
       );
       expect(first, isNull);
-      expect(requests, 1);
+      // TMDB 无果后又探了两家无 key 源（同一 Mock 客户端都回 TMDB
+      // 形态数据，两家都认不出），三次请求后写负缓存。
+      expect(requests, 3);
       final second = await service.fetchMetadata(
         title: '测试影片',
         year: '2024',
@@ -329,7 +344,7 @@ void main() {
         prefs: prefs,
       );
       expect(second, isNull);
-      expect(requests, 1, reason: 'negative result must be cached');
+      expect(requests, 3, reason: 'negative result must be cached');
     });
 
     test('401 surfaces as an invalid key error', () async {
@@ -369,6 +384,233 @@ void main() {
         empty.testConnection(const TmdbConfig()),
         throwsA(isA<TmdbConnectionException>()),
       );
+    });
+  });
+
+  group('TmdbService keyless chain', () {
+    List<Map<String, dynamic>> tvMazeFixture() => [
+      {
+        'score': 1.1,
+        'show': {
+          'id': 169,
+          'name': 'Breaking Bad',
+          'premiered': '2008-01-20',
+          'runtime': 60,
+          'rating': {'average': 9.2},
+          'image': {
+            'medium': 'https://static.tvmaze.com/m.jpg',
+            'original': 'https://static.tvmaze.com/o.jpg',
+          },
+          'summary': '<p><b>Breaking Bad</b> follows Walter.</p>',
+        },
+      },
+    ];
+
+    Map<String, dynamic> bangumiFixture() => {
+      'results': 1,
+      'list': [
+        {
+          'id': 55770,
+          'type': 2,
+          'name': '進撃の巨人',
+          'name_cn': '进击的巨人',
+          'summary': '人类与巨人的故事',
+          'air_date': '2013-04-07',
+          'images': {
+            'large': 'http://lain.bgm.tv/pic/cover/l/xx.jpg',
+            'common': 'http://lain.bgm.tv/pic/cover/c/xx.jpg',
+            'medium': 'http://lain.bgm.tv/pic/cover/m/xx.jpg',
+          },
+        },
+      ],
+    };
+
+    test('empty key hits TVMaze and maps to TmdbMetadata', () async {
+      final prefs = await freshPrefs();
+      final hosts = <String>[];
+      final service = TmdbService(
+        client: MockClient((request) async {
+          hosts.add(request.url.host);
+          if (request.url.host == 'api.tvmaze.com') {
+            return jsonResponse(tvMazeFixture());
+          }
+          return jsonResponse({'list': []});
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final meta = await service.fetchMetadata(
+        title: 'Breaking Bad',
+        config: const TmdbConfig(),
+        prefs: prefs,
+      );
+      expect(meta, isNotNull);
+      expect(meta!.tmdbId, 0);
+      expect(meta.mediaType, 'tv');
+      expect(meta.title, 'Breaking Bad');
+      expect(meta.year, '2008');
+      expect(meta.overview, 'Breaking Bad follows Walter.');
+      expect(meta.voteAverage, 9.2);
+      expect(
+        meta.posterUrl(const TmdbConfig()),
+        'https://static.tvmaze.com/o.jpg',
+      );
+      expect(hosts, ['api.tvmaze.com']);
+    });
+
+    test('TVMaze miss falls through to Bangumi', () async {
+      final prefs = await freshPrefs();
+      final service = TmdbService(
+        client: MockClient((request) async {
+          if (request.url.host == 'api.tvmaze.com') return jsonResponse([]);
+          if (request.url.host == 'api.bgm.tv') {
+            return jsonResponse(bangumiFixture());
+          }
+          return http.Response('{}', 404);
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final meta = await service.fetchMetadata(
+        title: '进击的巨人',
+        config: const TmdbConfig(),
+        prefs: prefs,
+      );
+      expect(meta, isNotNull);
+      expect(meta!.title, '进击的巨人');
+      expect(meta.originalTitle, '進撃の巨人');
+      expect(meta.year, '2013');
+      expect(meta.overview, '人类与巨人的故事');
+      expect(
+        meta.posterUrl(const TmdbConfig()),
+        'http://lain.bgm.tv/pic/cover/l/xx.jpg',
+      );
+    });
+
+    test('keyless failure returns null and is cached', () async {
+      var requests = 0;
+      final prefs = await freshPrefs();
+      final service = TmdbService(
+        client: MockClient((_) async {
+          requests++;
+          throw http.ClientException('boom');
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final first = await service.fetchMetadata(
+        title: '查不到的剧',
+        config: const TmdbConfig(),
+        prefs: prefs,
+      );
+      expect(first, isNull);
+      expect(requests, 2);
+      final second = await service.fetchMetadata(
+        title: '查不到的剧',
+        config: const TmdbConfig(),
+        prefs: prefs,
+      );
+      expect(second, isNull);
+      expect(requests, 2, reason: 'negative result must be cached');
+    });
+
+    test('TMDB miss falls back to the keyless source', () async {
+      final prefs = await freshPrefs();
+      final hosts = <String>[];
+      final service = TmdbService(
+        client: MockClient((request) async {
+          hosts.add(request.url.host);
+          if (request.url.host == 'api.themoviedb.org') {
+            return jsonResponse({'results': []});
+          }
+          if (request.url.host == 'api.tvmaze.com') {
+            return jsonResponse(tvMazeFixture());
+          }
+          return jsonResponse({'list': []});
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final meta = await service.fetchMetadata(
+        title: 'Breaking Bad',
+        config: testConfig,
+        prefs: prefs,
+      );
+      expect(meta, isNotNull);
+      expect(meta!.title, 'Breaking Bad');
+      expect(meta.tmdbId, 0, reason: 'result came from the keyless source');
+      expect(hosts, ['api.themoviedb.org', 'api.tvmaze.com']);
+    });
+
+    test('TMDB hit does not call the keyless sources', () async {
+      final prefs = await freshPrefs();
+      final hosts = <String>[];
+      final service = TmdbService(
+        client: MockClient((request) async {
+          hosts.add(request.url.host);
+          if (request.url.path == '/3/search/multi') {
+            return jsonResponse({
+              'results': [
+                {
+                  'id': 123,
+                  'media_type': 'movie',
+                  'title': '测试影片',
+                  'release_date': '2024-05-01',
+                  'overview': '',
+                  'poster_path': '/p.jpg',
+                  'backdrop_path': '',
+                },
+              ],
+            });
+          }
+          if (request.url.path == '/3/movie/123') {
+            return jsonResponse({'id': 123, 'overview': '', 'credits': {}});
+          }
+          return http.Response('{}', 404);
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final meta = await service.fetchMetadata(
+        title: '测试影片',
+        config: testConfig,
+        prefs: prefs,
+      );
+      expect(meta, isNotNull);
+      expect(meta!.tmdbId, 123);
+      expect(hosts, everyElement('api.themoviedb.org'));
+    });
+
+    test('movie hint skips TVMaze but still tries Bangumi', () async {
+      final prefs = await freshPrefs();
+      final hosts = <String>[];
+      final service = TmdbService(
+        client: MockClient((request) async {
+          hosts.add(request.url.host);
+          return jsonResponse({'list': []});
+        }),
+        prefsProvider: () async => prefs,
+      );
+      final meta = await service.fetchMetadata(
+        title: '测试影片',
+        typeHint: 'movie',
+        config: const TmdbConfig(),
+        prefs: prefs,
+      );
+      expect(meta, isNull);
+      expect(hosts, ['api.bgm.tv']);
+    });
+
+    test('empty search title makes no request', () async {
+      var requests = 0;
+      final service = TmdbService(
+        client: MockClient((_) async {
+          requests++;
+          return http.Response('{}', 200);
+        }),
+        prefsProvider: () => freshPrefs(),
+      );
+      final meta = await service.fetchMetadata(
+        title: '第2季',
+        config: const TmdbConfig(),
+      );
+      expect(meta, isNull);
+      expect(requests, 0);
     });
   });
 

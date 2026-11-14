@@ -27,6 +27,9 @@ import 'builtin_py_sites.dart';
 import 'jar_import.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
+import 'cloud_drive/cloud_credential_store.dart';
+import 'cloud_drive/cloud_drive_stations.dart';
+import 'lan_web/lan_web_server.dart';
 import 'package_smoke.dart';
 import 'lan_controller.dart';
 import 'player_picker.dart';
@@ -77,6 +80,8 @@ class _AppBootstrapState extends State<AppBootstrap>
     WidgetsBinding.instance.removeObserver(this);
     LanController.current?.dispose();
     LanController.current = null;
+    unawaited(LanWebController.current?.stop());
+    LanWebController.current = null;
     store?.dispose();
     super.dispose();
   }
@@ -212,6 +217,25 @@ class _AppBootstrapState extends State<AppBootstrap>
         });
       }
       await ZooBuiltinSeeder.seed(repository);
+      // 网盘站源恢复：登录过的网盘重新注册进站点列表。
+      // 局域网服务恢复：上次开启的服务自动重启（启动失败不阻塞启动）。
+      final createdStore = store;
+      if (createdStore != null) {
+        final credentialStore = CloudCredentialStore(preferences);
+        CloudDriveStations.refresh(credentialStore);
+        await LanWebController.current?.stop();
+        final lanWeb = LanWebController(
+          LanWebRepositoryBridge(
+            repository: repository,
+            store: createdStore,
+            credentialStore: credentialStore,
+          ),
+        );
+        LanWebController.current = lanWeb;
+        if (createdStore.lanWebEnabled) {
+          unawaited(lanWeb.start(createdStore.lanWebPort));
+        }
+      }
       final created = store;
       if (created != null) {
         unawaited(created.migrateLegacyThemeSettings());

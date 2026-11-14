@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/app_build.dart';
 import 'package:moyi/app_drawer.dart';
 import 'package:moyi/app_theme_config.dart';
@@ -30,10 +31,7 @@ Future<void> _pumpBar(
       theme: AppThemeConfig.forTheme(mode).toThemeData(),
       home: Scaffold(
         body: const SizedBox.shrink(),
-        bottomNavigationBar: MoyiBottomTabBar(
-          index: index,
-          onSelect: onSelect,
-        ),
+        bottomNavigationBar: MoyiBottomTabBar(index: index, onSelect: onSelect),
       ),
     ),
   );
@@ -44,13 +42,22 @@ Future<void> _pumpBar(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('底部标签多媒体图标是硬盘', (tester) async {
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.purpleNeon,
+      index: 0,
+      onSelect: (_) {},
+    );
+    expect(find.text('多媒体'), findsOneWidget);
+    expect(find.byIcon(LucideIcons.hardDrive), findsOneWidget);
+    expect(find.byIcon(LucideIcons.film), findsNothing);
+  });
+
   testWidgets('显示方案默认全部抽屉加全部内容', (tester) async {
     final store = await _makeStore();
     for (final mode in AppThemeMode.values) {
-      expect(
-        store.displayScheme(mode),
-        const ThemeDisplayScheme.defaults(),
-      );
+      expect(store.displayScheme(mode), const ThemeDisplayScheme.defaults());
     }
   });
 
@@ -127,22 +134,23 @@ void main() {
             widget is Container &&
             widget.decoration is BoxDecoration &&
             (widget.decoration as BoxDecoration).shape == BoxShape.circle &&
-            (widget.decoration as BoxDecoration).color ==
-                config.primaryColor,
+            (widget.decoration as BoxDecoration).color == config.primaryColor,
       );
       expect(dots, findsOneWidget);
       for (final element in find.byType(Text).evaluate()) {
-        expect(
-          (element.widget as Text).overflow,
-          isNot(TextOverflow.ellipsis),
-        );
+        expect((element.widget as Text).overflow, isNot(TextOverflow.ellipsis));
       }
     });
   }
 
   testWidgets('底栏 5 个 Tab 点按回传下标', (tester) async {
     final tapped = <int>[];
-    await _pumpBar(tester, mode: AppThemeMode.purpleNeon, index: 0, onSelect: tapped.add);
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.purpleNeon,
+      index: 0,
+      onSelect: tapped.add,
+    );
     for (var i = 0; i < 5; i++) {
       await tester.tap(find.byKey(ValueKey('moyi-bottom-tab-$i')));
       await tester.pump();
@@ -151,13 +159,23 @@ void main() {
   });
 
   testWidgets('切主题后底栏立即变色', (tester) async {
-    await _pumpBar(tester, mode: AppThemeMode.purpleNeon, index: 0, onSelect: (_) {});
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.purpleNeon,
+      index: 0,
+      onSelect: (_) {},
+    );
     final neonLabel = tester.widget<Text>(find.text('片库'));
     expect(
       neonLabel.style?.color,
       AppThemeConfig.forTheme(AppThemeMode.purpleNeon).selectedText,
     );
-    await _pumpBar(tester, mode: AppThemeMode.lightClean, index: 0, onSelect: (_) {});
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.lightClean,
+      index: 0,
+      onSelect: (_) {},
+    );
     final lightLabel = tester.widget<Text>(find.text('片库'));
     expect(
       lightLabel.style?.color,
@@ -263,14 +281,46 @@ void main() {
     return drawer.zone;
   }
 
-  testWidgets('首页短剧分支无外层底栏切直播区出现底栏', (tester) async {
+  testWidgets('首页短剧分支也显示底栏切直播区底栏仍在', (tester) async {
     await pumpHome(tester, source: 'hongguo');
-    expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
+    expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
     await switchToLive(tester, drawerKey: 'neon-avatar');
     expect(await currentZone(tester), HomeZone.live);
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 6; i++) {
       expect(find.byKey(ValueKey('moyi-bottom-tab-$i')), findsOneWidget);
     }
+  }, skip: !allSourcesEnabled);
+
+  testWidgets('底部标签多媒体进多媒体屏、切其它 Tab 能离开', (tester) async {
+    await pumpHome(tester, source: 'hongguo');
+    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-5')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    // 未登录网盘显示未登录提示；若环境里已有网盘站则显示屏本体。
+    final shown =
+        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
+        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
+    expect(shown, isTrue);
+    expect(find.byKey(const ValueKey('moyi-bottom-tab-5')), findsOneWidget);
+    // 切直播区离开多媒体，再点回多媒体仍能进。
+    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(await currentZone(tester), HomeZone.live);
+    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-5')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    final shownAgain =
+        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
+        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
+    expect(shownAgain, isTrue);
+    // 点回片库，多媒体屏消失。
+    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-0')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
+    expect(find.byKey(const ValueKey('multimedia-screen')), findsNothing);
   }, skip: !allSourcesEnabled);
 
   testWidgets('首页底栏 Tab 切区与我的页主题行可达选择界面', (tester) async {
@@ -305,10 +355,7 @@ void main() {
     await dragIntoView(
       tester,
       find.text('主题切换'),
-      find.descendant(
-        of: find.byType(Drawer),
-        matching: find.byType(ListView),
-      ),
+      find.descendant(of: find.byType(Drawer), matching: find.byType(ListView)),
     );
     expect(find.text('主题切换'), findsOneWidget);
   }, skip: !allSourcesEnabled);
@@ -389,7 +436,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
-      if (find.byKey(const ValueKey('mine-theme-entry')).evaluate().isNotEmpty) {
+      if (find
+          .byKey(const ValueKey('mine-theme-entry'))
+          .evaluate()
+          .isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(ListView), const Offset(0, -200));

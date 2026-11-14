@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestTgChannelsCarryAll101(t *testing.T) {
-	if len(tgChannels) != 101 {
-		t.Fatalf("want 101 channels, got %d", len(tgChannels))
+func TestTgChannelsCarryAll110(t *testing.T) {
+	if len(tgChannels) != 110 {
+		t.Fatalf("want 110 channels, got %d", len(tgChannels))
 	}
 	seen := map[string]bool{}
 	for _, c := range tgChannels {
@@ -30,8 +30,8 @@ func TestTgChannelsCarryAll101(t *testing.T) {
 	if impl.Name != "🔞tg频道" {
 		t.Fatalf("want impl name 🔞tg频道, got %q", impl.Name)
 	}
-	if len(impl.Categories("tg")) != 101 {
-		t.Fatalf("want 101 categories, got %d", len(impl.Categories("tg")))
+	if len(impl.Categories("tg")) != 110 {
+		t.Fatalf("want 110 categories, got %d", len(impl.Categories("tg")))
 	}
 }
 

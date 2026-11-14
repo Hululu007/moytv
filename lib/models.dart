@@ -793,6 +793,11 @@ class SourceSite {
   /// 配置删除时只需移除该配置名下的条目，内置站不受影响。
   static final Map<String, SourceSite> importedSites = {};
 
+  /// 网盘站源动态注册表，key 为站点 id（`cloud:<网盘>`）。
+  /// 只注册已登录的网盘，由 CloudDriveStations.refresh 维护；
+  /// 与导入配置的注册表分开，删配置不影响网盘站。
+  static final Map<String, SourceSite> cloudDriveSites = {};
+
   /// py 导入站的蜘蛛文件名（应用文档目录 imported_spiders/ 下），key 为站点 id。
   static final Map<String, String> importedPyFiles = {};
   static final Map<String, String> importedJsFiles = {};
@@ -801,12 +806,16 @@ class SourceSite {
   static bool isAvailable(String id) =>
       values.any((site) => site.id == id) ||
       customIds.contains(id) ||
-      importedSites.containsKey(id);
+      importedSites.containsKey(id) ||
+      cloudDriveSites.containsKey(id);
   static bool isKnown(String id) =>
       allValues.any((site) => site.id == id) ||
       customIds.contains(id) ||
-      importedSites.containsKey(id);
+      importedSites.containsKey(id) ||
+      cloudDriveSites.containsKey(id);
   static SourceSite byId(String id) {
+    final cloud = cloudDriveSites[id];
+    if (cloud != null) return cloud;
     final imported = importedSites[id];
     if (imported != null) return imported;
     if (customIds.contains(id)) {
@@ -1431,6 +1440,7 @@ class PlaybackPlan {
     this.routeCount = 1,
     this.local = false,
     this.needsParse = false,
+    this.forceMpv = false,
   });
   final String url;
   final String originalUrl;
@@ -1446,6 +1456,11 @@ class PlaybackPlan {
   final int routeCount;
   final bool local;
   final bool needsParse;
+
+  /// 强制走 mpv（media_kit）播放：光盘类（ISO/VIDEO_TS/BDMV）只有
+  /// mpv 能播，原生/ijk 播不了；引擎在取流时置真，播放器路由时
+  /// 认它（与 decryptionKey 的强制 mpv 语义一致）。复制方法必须透传。
+  final bool forceMpv;
   bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
 
   PlaybackPlan withDanmaku(String sessionValue, String danmakuIdValue) =>
@@ -1464,6 +1479,7 @@ class PlaybackPlan {
         routeCount: routeCount,
         local: local,
         needsParse: needsParse,
+        forceMpv: forceMpv,
       );
 
   PlaybackPlan withUrl(String value) => PlaybackPlan(
@@ -1481,6 +1497,7 @@ class PlaybackPlan {
     routeCount: routeCount,
     local: local,
     needsParse: needsParse,
+    forceMpv: forceMpv,
   );
 
   PlaybackPlan withHeaders(Map<String, String> value) => PlaybackPlan(
@@ -1498,6 +1515,7 @@ class PlaybackPlan {
     routeCount: routeCount,
     local: local,
     needsParse: needsParse,
+    forceMpv: forceMpv,
   );
 
   PlaybackPlan withNeedsParse(bool value) => PlaybackPlan(
@@ -1515,6 +1533,7 @@ class PlaybackPlan {
     routeCount: routeCount,
     local: local,
     needsParse: value,
+    forceMpv: forceMpv,
   );
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',

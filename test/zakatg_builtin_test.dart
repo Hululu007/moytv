@@ -7,10 +7,10 @@ import 'package:moyi/jar_site_config.dart';
 import 'package:moyi/zakatv_builtin.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// TG 频道 jar 内置（81 频道）注册守卫。
+/// TG 频道 jar 内置（100 频道）注册守卫。
 ///
 /// 排除口径：被排除的 2 个频道绝不写进树。本测试不写出那 2 个用户名，
-/// 改用两重占位比对守卫——① ext 频道数精确等于 81；② 频道名/用户名
+/// 改用两重占位比对守卫——① ext 频道数精确等于 100；② 频道名/用户名
 /// 与注册面文件全文均不得命中未成年指向词表（被排除频道的名字正在
 /// 词表命中范围内）。词表与 m3u 打包安全扫描同一张。
 const _flaggedTerms = <String>[
@@ -99,11 +99,11 @@ Map<String, dynamic> _decodeExt(String ext) {
 }
 
 void main() {
-  test('ZakaTg 注册存在：新类 + 81 频道 ext', () {
+  test('ZakaTg 注册存在：新类 + 100 频道 ext', () {
     final site = zakatvBuiltinSites.singleWhere(
       (s) => s.key == 'ZakaTg',
     );
-    expect(site.name, '📡TG频道┃81个');
+    expect(site.name, '📡TG频道┃100个');
     expect(site.className, 'com.github.catvod.spider.ZakaTgAllAmns');
     expect(site.audioOnly, isFalse);
     final ext = _decodeExt(site.ext);
@@ -112,7 +112,7 @@ void main() {
     expect(ext['groupByTitle'], isTrue);
     final channels = ext['channels'];
     expect(channels, isA<List>());
-    expect(channels, hasLength(81));
+    expect(channels, hasLength(100));
     final users = <String>{};
     for (final channel in channels as List) {
       expect(channel, isA<Map>());
@@ -134,7 +134,7 @@ void main() {
     expect(ext['autoDiscover'] ?? false, isFalse);
   });
 
-  test('JSON 配置与 Dart 注册一致：同类同 81 清单', () {
+  test('JSON 配置与 Dart 注册一致：同类同 100 清单', () {
     final text = File('assets/jar_site_configs.json').readAsStringSync();
     final configs = parseJarSiteConfigs(text);
     final matched = matchJarSiteConfig(
@@ -155,7 +155,7 @@ void main() {
       for (final c in dartExt['channels'] as List)
         (c as Map)['user'].toString(),
     ];
-    expect(jsonUsers, hasLength(81));
+    expect(jsonUsers, hasLength(100));
     expect(jsonUsers.toSet(), dartUsers.toSet());
     expect(jsonExt.containsKey('channelsUrl'), isFalse);
   });
@@ -176,13 +176,33 @@ void main() {
     }
   });
 
-  test('ZakaTgMovie 旧 ext 已同步剔除 2 个频道（103→101）', () {
+  test('ZakaTgMovie ext 已剔除非视频频道（101→91）', () {
     final site = zakatvBuiltinSites.singleWhere(
       (s) => s.key == 'ZakaTgMovie',
     );
     final ext = _decodeExt(site.ext);
     final channels = ext['channels'] as List;
-    expect(channels, hasLength(101));
+    expect(channels, hasLength(110));
+    // 2026-11-14 第十一件 A：软件/VPN/代理/交流群/小说/查询/纯写真
+    // 频道已从清单剔除，绝不回潮；名字含未成年指向音译词的也已剔除。
+    const removedUsers = <String>{
+      'AV688Group',
+      'yydsys',
+      'longaozzz1',
+      'xiezhen1',
+      'pianduoduo9',
+      'YSxiaoshuo01',
+      'XQFXS',
+      'FLLAVWM',
+      'gydlpd',
+    };
+    for (final channel in channels) {
+      final map = Map<String, dynamic>.from(channel as Map);
+      final name = map['name']?.toString() ?? '';
+      final user = map['user']?.toString() ?? '';
+      expect(removedUsers.contains(user), isFalse, reason: '已删频道回潮：$user');
+      expect(name.contains('洛丽塔'), isFalse, reason: '频道名含未成年指向词：$name');
+    }
   });
 
   test('合并后 jar 指纹与盘上文件一致', () {

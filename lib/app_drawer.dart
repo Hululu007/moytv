@@ -27,12 +27,11 @@ enum AppDrawerTool {
 }
 
 /// 抽屉头部横向切换的内容板块。
-enum DrawerShelf { video, music, reading, miniApp }
+enum DrawerShelf { video, reading, miniApp }
 
 extension DrawerShelfLabel on DrawerShelf {
   String get label => switch (this) {
     DrawerShelf.video => '影视',
-    DrawerShelf.music => '音乐',
     DrawerShelf.reading => '阅读',
     DrawerShelf.miniApp => '小程序',
   };
@@ -197,7 +196,19 @@ class AppDrawer extends StatefulWidget {
 }
 
 class _AppDrawerState extends State<AppDrawer> {
-  DrawerShelf _shelf = DrawerShelf.video;
+  late DrawerShelf _shelf;
+
+  @override
+  void initState() {
+    super.initState();
+    // 分区键选中态与当前内容区一致：打开抽屉时就选中对的分区。
+    _shelf = _shelfForZone(widget.zone);
+  }
+
+  static DrawerShelf _shelfForZone(HomeZone zone) => switch (zone) {
+    HomeZone.library || HomeZone.live => DrawerShelf.video,
+    HomeZone.audio || HomeZone.novel => DrawerShelf.reading,
+  };
 
   String get _versionText => widget.currentVersion.isEmpty
       ? 'v—'
@@ -209,6 +220,16 @@ class _AppDrawerState extends State<AppDrawer> {
   void _selectShelf(DrawerShelf shelf) {
     if (_shelf == shelf) return;
     setState(() => _shelf = shelf);
+    // 分区键与内容区联动：点选立即切换到底层内容区（回调里有关抽屉），
+    // 不只换抽屉内部的分组列表。
+    switch (shelf) {
+      case DrawerShelf.video:
+        widget.onZoneSelected(HomeZone.library);
+      case DrawerShelf.reading:
+        widget.onZoneSelected(HomeZone.novel);
+      case DrawerShelf.miniApp:
+        widget.onTool(AppDrawerTool.miniApp);
+    }
   }
 
   Widget _row({
@@ -397,21 +418,6 @@ class _AppDrawerState extends State<AppDrawer> {
                 label: '一起看房间',
                 description: '多人同步观影房间',
                 onTap: widget.onWatchRoom,
-              ),
-            ],
-          ),
-        ];
-      case DrawerShelf.music:
-        return [
-          _DrawerSection(
-            title: '音乐',
-            hint: '音乐源来自内容源管理',
-            children: [
-              _row(
-                icon: Icons.library_music_rounded,
-                label: '音乐源',
-                description: '本版未内置音乐板块，导入音频源后在听书区播放',
-                onTap: () => widget.onTool(AppDrawerTool.contentSources),
               ),
             ],
           ),

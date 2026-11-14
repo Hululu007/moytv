@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
+import 'tg_list_postprocess.dart';
 
 class JarBridgeFailure implements Exception {
   JarBridgeFailure(this.message);
@@ -136,13 +138,22 @@ class JarBridge {
     }
   }
 
+  /// 测试缝：非 Android 环境下 jar 桥本会直接抛错；预置 jar 路径后
+  /// callJson 只走平台通道，测试可 mock 通道返回合成数据。
+  @visibleForTesting
+  static void setTestJarPath(String configId, String path) {
+    _jarPaths[configId] = path;
+  }
+
+  @visibleForTesting
+  static void clearTestJarPaths() => _jarPaths.clear();
+
   static Future<void> setJarFingerprint(bool enabled) async {
     if (!supported) return;
     try {
-      await _channel.invokeMethod<void>(
-        'setJarFingerprint',
-        {'enabled': enabled},
-      );
+      await _channel.invokeMethod<void>('setJarFingerprint', {
+        'enabled': enabled,
+      });
     } catch (_) {}
   }
 
@@ -362,7 +373,30 @@ class JarBridge {
     return CatalogPage(items, hasMore: hasMore, page: page, fresh: true);
   }
 
+  /// jar 目录统一入口：TG 两站的列表在壳侧做广告过滤/去重/归拢
+  /// （tgPostProcessPage，类名 gate）；其它站原样返回同一页对象。
   static Future<CatalogPage> catalog(
+    JarSiteSpec spec, {
+    int page = 1,
+    String query = '',
+    String category = '',
+    Map<String, String> filters = const {},
+  }) async {
+    final pageResult = await _catalogRaw(
+      spec,
+      page: page,
+      query: query,
+      category: category,
+      filters: filters,
+    );
+    return tgPostProcessPage(
+      pageResult,
+      className: spec.className,
+      category: category,
+    );
+  }
+
+  static Future<CatalogPage> _catalogRaw(
     JarSiteSpec spec, {
     int page = 1,
     String query = '',
@@ -513,8 +547,9 @@ class JarBridge {
     for (final part in rest.split('&')) {
       final eq = part.indexOf('=');
       if (eq > 0) {
-        map[Uri.decodeComponent(part.substring(0, eq))] =
-            Uri.decodeComponent(part.substring(eq + 1));
+        map[Uri.decodeComponent(part.substring(0, eq))] = Uri.decodeComponent(
+          part.substring(eq + 1),
+        );
       }
     }
     return map.isNotEmpty ? map : {'url': rest};
@@ -541,12 +576,13 @@ class JarBridge {
   ) async {
     final jarPath = await _ensureJar(spec);
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>('jarProxy', {
-        'configId': spec.configId,
-        'jarPath': jarPath,
-        'className': spec.className,
-        'param': param,
-      });
+      final result = await _channel
+          .invokeMapMethod<String, dynamic>('jarProxy', {
+            'configId': spec.configId,
+            'jarPath': jarPath,
+            'className': spec.className,
+            'param': param,
+          });
       final mime = result?['mime'] as String? ?? 'application/octet-stream';
       final body = result?['bodyBase64'] as String? ?? '';
       if (body.isEmpty) {

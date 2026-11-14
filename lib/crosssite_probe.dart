@@ -145,9 +145,8 @@ String? _codeTokenContaining(String text, String core) {
   return null;
 }
 
-/// 跨站探活的一家平台：固定 6 家（AVPlay 截图顺序），每家对应魔蚁
-/// 里同站的站源 id（按优先顺序）；一家在魔蚁里没有对应站源时
-/// [siteIds] 为空，界面显示“未接入”，不探活、不硬凑。
+/// 跨站探活的一家平台：一行对应一个站源（[siteIds] 只有一项时
+/// 取首项；无源平台 [siteIds] 为空，界面显示“未接入”）。
 class CrossSiteProvider {
   const CrossSiteProvider({
     required this.id,
@@ -160,47 +159,41 @@ class CrossSiteProvider {
   final String name;
   final List<String> siteIds;
 
-  /// 懒查：慢站/盾站，点一下才查（MissAV、Jable）。
+  /// 懒查：慢站/盾站与超出自动探活上限的站，点一下才查。
   final bool lazy;
 }
 
-const crossSiteProviders = <CrossSiteProvider>[
-  CrossSiteProvider(id: 'avdb', name: 'AVDB', siteIds: [], lazy: false),
-  CrossSiteProvider(
-    id: 'javmenu',
-    name: 'JavMenu',
-    // py 内置站运行时 id 即注册 key（importedSites 的键，isPySource /
-    // isKnown 都认它），与 BuiltinPySites.javmenuSiteId 交叉锁定。
-    siteIds: ['javmenu'],
-    lazy: false,
-  ),
-  CrossSiteProvider(
-    id: 'av01',
-    name: 'AV01',
-    // jar 内置站运行时 id 形如 jar:zakatv:<key>
-    //（JarSiteSpec.siteIdFor，见 jar_import.dart 内置注册）。
-    siteIds: ['jar:zakatv:zakav01'],
-    lazy: false,
-  ),
-  CrossSiteProvider(id: 'memojav', name: 'MemoJav', siteIds: [], lazy: false),
-  CrossSiteProvider(
-    id: 'missav',
-    name: 'MissAV',
-    siteIds: [
-      'jar:zakatv:ZakaMissav',
-      'jar:zakatv:ZakaMissavOff',
-      'jar:zakatv:ZakaMirror',
-      'jar:zakatv:missavt',
-    ],
-    lazy: true,
-  ),
-  CrossSiteProvider(
-    id: 'jable',
-    name: 'Jable',
-    siteIds: ['jar:zakatv:ZakaJable'],
-    lazy: true,
-  ),
+/// 探活优先序：老牌番号站先探（与旧固定 6 家同一顺序），再按
+/// 🔞名、其余站的顺序探。MissAV 四个镜像 id 都在表里——新模型
+/// 下它们是四个独立站源、各占一行，不再是同一行的回落链。
+const crossSitePrioritySiteIds = <String>[
+  'javmenu',
+  'avdb',
+  'memojav',
+  'jar:zakatv:zakav01',
+  'jar:zakatv:ZakaMissav',
+  'jar:zakatv:ZakaMissavOff',
+  'jar:zakatv:ZakaMirror',
+  'jar:zakatv:missavt',
+  'jar:zakatv:ZakaJable',
 ];
+
+/// 慢站/盾站：永远懒查，不占自动探活名额（旧模型同口径）。
+const crossSiteLazySiteIds = <String>{
+  'jar:zakatv:ZakaMissav',
+  'jar:zakatv:ZakaMissavOff',
+  'jar:zakatv:ZakaMirror',
+  'jar:zakatv:missavt',
+  'jar:zakatv:ZakaJable',
+};
+
+/// 自动探活上限：超出名额的可见站只显示“点击查询”行，点一下才探。
+const crossSiteEagerCap = 24;
+
+/// 尚无源的平台：源没到之前行状态保持“未接入”，绝不伪造已接入。
+/// （AVDB、MemoJav 的 py 源已于 2026-11-14 注册进树，两家已接通，
+/// 不再列在这里；此表留给将来其他无源平台。）
+const crossSiteUnconnectedProviders = <CrossSiteProvider>[];
 
 /// 一行探活计划：[siteId] 为 null 表示该平台在魔蚁里没有对应站源
 /// （显示“未接入”）；站源存在但被用户藏起来的平台不在计划里，
@@ -212,30 +205,94 @@ class CrossSiteRowPlan {
   final String? siteId;
 }
 
+/// 从可见站源表里排出探活计划：只取视频区站源（py、jar、Go 核站
+/// 都在站源表里），去掉网盘站源（`cloud:` 前缀，见
+/// CloudDriveEngine.isCloudSource 的同一约定）与当前正在看的站
+/// （跨站线路只取“其他站点”），再按优先序/🔞名/其余站排序；
+/// 慢站与超出 [eagerCap] 名额的站标懒查；无源平台行（如有）附在末尾。
 List<CrossSiteRowPlan> planCrossSiteRows({
-  required bool Function(String siteId) siteAvailable,
+  required List<SourceSite> sites,
   required bool Function(String siteId) siteVisible,
+  String currentSourceId = '',
+  int eagerCap = crossSiteEagerCap,
 }) {
+  final candidates = <SourceSite>[];
+  for (final site in sites) {
+    if (!site.isVideoSection) continue;
+    if (site.id.startsWith('cloud:')) continue;
+    if (site.id == currentSourceId) continue;
+    if (!siteVisible(site.id)) continue;
+    candidates.add(site);
+  }
+  final priority = <String, int>{
+    for (var i = 0; i < crossSitePrioritySiteIds.length; i++)
+      crossSitePrioritySiteIds[i]: i,
+  };
+  int tier(SourceSite site) {
+    if (priority.containsKey(site.id)) return 0;
+    if (site.name.contains('🔞')) return 1;
+    return 2;
+  }
+
+  final indexed = [
+    for (var i = 0; i < candidates.length; i++) (i, candidates[i]),
+  ];
+  indexed.sort((a, b) {
+    final tierA = tier(a.$2);
+    final tierB = tier(b.$2);
+    if (tierA != tierB) return tierA - tierB;
+    if (tierA == 0) {
+      return priority[a.$2.id]! - priority[b.$2.id]!;
+    }
+    return a.$1 - b.$1;
+  });
+  final ordered = [for (final entry in indexed) entry.$2];
   final plans = <CrossSiteRowPlan>[];
-  for (final provider in crossSiteProviders) {
-    String? chosen;
-    var anyAvailable = false;
-    for (final siteId in provider.siteIds) {
-      if (!siteAvailable(siteId)) continue;
-      anyAvailable = true;
-      if (siteVisible(siteId)) {
-        chosen = siteId;
-        break;
-      }
-    }
-    if (chosen != null) {
-      plans.add(CrossSiteRowPlan(provider: provider, siteId: chosen));
-    } else if (!anyAvailable) {
-      plans.add(CrossSiteRowPlan(provider: provider));
-    }
-    // 站源存在但被藏起：整行省略，不探活。
+  var eagerUsed = 0;
+  for (final site in ordered) {
+    final lazy =
+        crossSiteLazySiteIds.contains(site.id) || eagerUsed >= eagerCap;
+    if (!lazy) eagerUsed++;
+    plans.add(
+      CrossSiteRowPlan(
+        provider: CrossSiteProvider(
+          id: site.id,
+          name: site.name,
+          siteIds: [site.id],
+          lazy: lazy,
+        ),
+        siteId: site.id,
+      ),
+    );
+  }
+  for (final provider in crossSiteUnconnectedProviders) {
+    plans.add(CrossSiteRowPlan(provider: provider));
   }
   return plans;
+}
+
+/// 展示排序：探到线路的行置顶、按探活耗时从快到慢（排第一的即
+/// “推荐”）；其余行保持计划顺序。只推荐不自动播。
+List<CrossSiteRowPlan> sortCrossSitePlansForDisplay(
+  List<CrossSiteRowPlan> plans,
+  Map<String, CrossSiteProbeResult> results,
+) {
+  final found = <CrossSiteRowPlan>[];
+  final rest = <CrossSiteRowPlan>[];
+  for (final plan in plans) {
+    final result = results[plan.provider.id];
+    if (result?.status == CrossSiteProbeStatus.found) {
+      found.add(plan);
+    } else {
+      rest.add(plan);
+    }
+  }
+  found.sort(
+    (a, b) => results[a.provider.id]!.latency.compareTo(
+      results[b.provider.id]!.latency,
+    ),
+  );
+  return [...found, ...rest];
 }
 
 /// 一条可播线路：某版本详情里同一线路名（flag）下的首集。
@@ -285,12 +342,16 @@ class CrossSiteProbeResult {
     required this.siteId,
     required this.status,
     this.versions = const [],
+    this.latency = Duration.zero,
   });
 
   final CrossSiteProvider provider;
   final String siteId;
   final CrossSiteProbeStatus status;
   final List<CrossSiteVersion> versions;
+
+  /// 本次探活耗时（搜索 + 详情）：展示排序里“响应快的在前”的依据。
+  final Duration latency;
 }
 
 /// 详情集按线路名（episode raw 的 flag，jar/py 详情都带）分组，
@@ -310,18 +371,26 @@ List<CrossSiteLine> crossSiteLinesOf(DramaDetail detail) {
 
 /// 跨站探活服务：只走 [AppRepository] 现有接口（searchAcross +
 /// detail），不另写解析器。单站超时 + 总预算双重兜底，任何失败
-/// 都只落到 failed 状态，不抛错到界面。
+/// 都只落到 failed 状态，不抛错到界面；结果带耗时供排序。
 class CrossSiteProbeService {
   CrossSiteProbeService({
     required this.repository,
     this.perSiteTimeout = const Duration(seconds: 20),
-    this.totalBudget = const Duration(seconds: 30),
+    this.eagerBudget = const Duration(seconds: 60),
+    this.concurrency = 4,
     this.maxVersions = 3,
   });
 
   final AppRepository repository;
   final Duration perSiteTimeout;
-  final Duration totalBudget;
+
+  /// 自动探活波次的总预算：预算耗尽时尚未起跑的计划不再起跑，
+  /// 调用方将其改走懒查（“点击查询”）；已起跑的探活跑到单站
+  /// 超时为止，结果照常交付。
+  final Duration eagerBudget;
+
+  /// 探活并发上限：工作池式起跑，避免对全部可见站同时 burst。
+  final int concurrency;
   final int maxVersions;
 
   Future<CrossSiteProbeResult> probeProvider(
@@ -329,41 +398,62 @@ class CrossSiteProbeService {
     String siteId,
     String avId,
   ) async {
+    final stopwatch = Stopwatch()..start();
     try {
-      return await _probe(provider, siteId, avId).timeout(perSiteTimeout);
+      final result = await _probe(
+        provider,
+        siteId,
+        avId,
+      ).timeout(perSiteTimeout);
+      return CrossSiteProbeResult(
+        provider: result.provider,
+        siteId: result.siteId,
+        status: result.status,
+        versions: result.versions,
+        latency: stopwatch.elapsed,
+      );
     } on TimeoutException {
       return CrossSiteProbeResult(
         provider: provider,
         siteId: siteId,
         status: CrossSiteProbeStatus.failed,
+        latency: stopwatch.elapsed,
       );
     } catch (_) {
       return CrossSiteProbeResult(
         provider: provider,
         siteId: siteId,
         status: CrossSiteProbeStatus.failed,
+        latency: stopwatch.elapsed,
       );
     }
   }
 
-  Future<List<CrossSiteProbeResult>> probeAll(
+  /// 流式探活一批计划：工作池按 [concurrency] 起跑，每家探完立刻
+  /// 调 [onResult]（界面逐行刷新、推荐随之浮现）；预算耗尽时尚未
+  /// 起跑的计划直接跳过（不调 [onResult]），调用方改走懒查。
+  /// 无源计划（siteId 为空）不探活。
+  Future<void> probePlans(
     List<CrossSiteRowPlan> plans,
-    String avId,
-  ) {
+    String avId, {
+    required void Function(CrossSiteProbeResult result) onResult,
+  }) async {
     final targets = plans.where((plan) => plan.siteId != null).toList();
-    return Future.wait(
-      targets.map((plan) {
-        final future = probeProvider(plan.provider, plan.siteId!, avId);
-        return future.timeout(
-          totalBudget,
-          onTimeout: () => CrossSiteProbeResult(
-            provider: plan.provider,
-            siteId: plan.siteId!,
-            status: CrossSiteProbeStatus.failed,
-          ),
-        );
-      }),
-    );
+    if (targets.isEmpty) return;
+    final deadline = DateTime.now().add(eagerBudget);
+    var next = 0;
+    Future<void> worker() async {
+      while (true) {
+        if (next >= targets.length) return;
+        if (DateTime.now().isAfter(deadline)) return;
+        final plan = targets[next++];
+        final result = await probeProvider(plan.provider, plan.siteId!, avId);
+        onResult(result);
+      }
+    }
+
+    final workers = concurrency < targets.length ? concurrency : targets.length;
+    await Future.wait([for (var i = 0; i < workers; i++) worker()]);
   }
 
   Future<CrossSiteProbeResult> _probe(

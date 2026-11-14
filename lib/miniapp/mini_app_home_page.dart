@@ -31,6 +31,56 @@ class MiniAppHomePage extends StatefulWidget {
 
 enum MiniAppViewMode { grid, list }
 
+/// 小程序首页内存快照：首次加载后留着，再进页面直接显示，不转圈；
+/// 后台静默刷新只更新快照与列表，不挡界面。进程级静态缓存，不落盘。
+class MiniAppHomeCache {
+  static MiniAppSettings? settings;
+  static List<MiniAppManifest> installed = const [];
+  static List<MiniAppMarketItem> market = const [];
+  static bool marketLoaded = false;
+
+  static bool get isWarm => settings != null;
+
+  static void remember({
+    required MiniAppSettings settings,
+    required List<MiniAppManifest> installed,
+    List<MiniAppMarketItem>? market,
+    bool? marketLoaded,
+  }) {
+    MiniAppHomeCache.settings = settings;
+    MiniAppHomeCache.installed = List.unmodifiable(installed);
+    if (market != null) {
+      MiniAppHomeCache.market = List.unmodifiable(market);
+    }
+    if (marketLoaded != null) {
+      MiniAppHomeCache.marketLoaded = marketLoaded;
+    }
+  }
+
+  @visibleForTesting
+  static void resetForTest() {
+    settings = null;
+    installed = const [];
+    market = const [];
+    marketLoaded = false;
+  }
+
+  @visibleForTesting
+  static void warmForTest({
+    required MiniAppSettings settings,
+    List<MiniAppManifest> installed = const [],
+    List<MiniAppMarketItem> market = const [],
+    bool marketLoaded = false,
+  }) {
+    remember(
+      settings: settings,
+      installed: installed,
+      market: market,
+      marketLoaded: marketLoaded,
+    );
+  }
+}
+
 class _MiniAppHomePageState extends State<MiniAppHomePage> {
   MiniAppSettings? _settings;
   MiniAppRuntime? _runtime;
@@ -45,6 +95,18 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   @override
   void initState() {
     super.initState();
+    if (MiniAppHomeCache.isWarm) {
+      // 热启动：快照同步上屏，第一帧就是内容，不转圈；后台 _load
+      // 静默刷新，只更新列表，不动加载态。
+      final settings = MiniAppHomeCache.settings!;
+      _settings = settings;
+      _runtime = MiniAppRuntime(store: MiniAppStore(), settings: settings);
+      _installed = MiniAppHomeCache.installed;
+      _market = MiniAppHomeCache.market;
+      _marketState = MiniAppHomeCache.marketLoaded
+          ? (_market.isEmpty ? 'empty' : 'ready')
+          : 'idle';
+    }
     _load();
   }
 
@@ -56,14 +118,12 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
 
   Future<void> _load() async {
     final settings = await MiniAppSettings.load();
-    final runtime = MiniAppRuntime(
-      store: MiniAppStore(),
-      settings: settings,
-    );
-    // 内置小程序首次播种（火蚁TV 同款 17 个）：失败不拦页面。
+    final runtime = MiniAppRuntime(store: MiniAppStore(), settings: settings);
+    // 内置小程序首次播种（火蚁TV 同款机制，4 个）：失败不拦页面。
     await MiniAppBuiltin.ensureSeeded(runtime.store);
     final installed = await runtime.store.listInstalled();
     if (!mounted) return;
+    MiniAppHomeCache.remember(settings: settings, installed: installed);
     setState(() {
       _settings = settings;
       _runtime = runtime;
@@ -76,16 +136,24 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     final runtime = _runtime;
     if (runtime == null) return;
     final installed = await runtime.store.listInstalled();
+    final settings = _settings;
+    if (settings != null) {
+      MiniAppHomeCache.remember(settings: settings, installed: installed);
+    }
     if (mounted) setState(() => _installed = installed);
   }
 
   Future<void> _loadMarket() async {
     final settings = _settings;
     if (settings == null) return;
-    setState(() {
-      _marketState = 'loading';
-      _marketError = '';
-    });
+    // 已有市场列表时静默刷新：不翻“加载中”，不挡界面转圈。
+    final silent = _market.isNotEmpty;
+    if (!silent) {
+      setState(() {
+        _marketState = 'loading';
+        _marketError = '';
+      });
+    }
     try {
       final response = await http
           .get(Uri.parse(settings.marketUrl))
@@ -93,16 +161,24 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       if (response.statusCode != 200) {
         throw HttpException('HTTP ${response.statusCode}');
       }
-      final items = parseMiniAppMarketJson(
-        utf8.decode(response.bodyBytes),
+      final items = filterRemovedMarketItems(
+        parseMiniAppMarketJson(utf8.decode(response.bodyBytes)),
       );
       if (!mounted) return;
+      MiniAppHomeCache.remember(
+        settings: settings,
+        installed: _installed,
+        market: items,
+        marketLoaded: true,
+      );
       setState(() {
         _market = items;
         _marketState = items.isEmpty ? 'empty' : 'ready';
       });
     } catch (error) {
       if (!mounted) return;
+      // 静默刷新失败时留着旧列表，不翻错误页。
+      if (silent) return;
       setState(() {
         _market = const [];
         _marketState = 'error';
@@ -114,9 +190,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   Future<void> _openSettings() async {
     await Navigator.push<void>(
       context,
-      MaterialPageRoute<void>(
-        builder: (_) => const MiniAppSettingsScreen(),
-      ),
+      MaterialPageRoute<void>(builder: (_) => const MiniAppSettingsScreen()),
     );
     final settings = await MiniAppSettings.load();
     final runtime = _runtime;
@@ -328,9 +402,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   }
 
   Future<void> _installFromFolder() async {
-    final path = await FilePicker.getDirectoryPath(
-      dialogTitle: '选择小程序文件夹',
-    );
+    final path = await FilePicker.getDirectoryPath(dialogTitle: '选择小程序文件夹');
     if (path == null) return;
     await _runInstall(() async {
       final runtime = _runtime!;
@@ -371,24 +443,22 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     });
   }
 
-  Future<void> _runInstall(
-    Future<MiniAppManifest> Function() install,
-  ) async {
+  Future<void> _runInstall(Future<MiniAppManifest> Function() install) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
       final manifest = await install();
       await _refreshInstalled();
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('已安装「${manifest.name}」')),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('已安装「${manifest.name}」')));
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('安装失败：$error')),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('安装失败：$error')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -407,15 +477,15 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       );
       await _refreshInstalled();
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('已安装「${item.name}」')),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('已安装「${item.name}」')));
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('安装失败：$error')),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('安装失败：$error')));
       }
     } finally {
       if (mounted) setState(() => _installing.remove(item.appId));
@@ -636,11 +706,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     );
   }
 
-  void _onMarketTap(
-    MiniAppMarketItem item,
-    bool installed,
-    bool installing,
-  ) {
+  void _onMarketTap(MiniAppMarketItem item, bool installed, bool installing) {
     if (installed) {
       final manifest = _installedById(item.appId);
       if (manifest != null) _openApp(manifest);
@@ -768,9 +834,7 @@ class _MiniAppTile extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: colors.surface,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: color.withValues(alpha: 0.55),
-                      ),
+                      border: Border.all(color: color.withValues(alpha: 0.55)),
                     ),
                     child: Text(
                       badge!,
@@ -861,10 +925,7 @@ class _MiniAppListRow extends StatelessWidget {
                 subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: colors.onSurfaceVariant,
-                ),
+                style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
               ),
         trailing: trailing,
       ),

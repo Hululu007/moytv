@@ -57,10 +57,15 @@ abstract final class Neon {
     colors: [Color(0xFF1B0F32), Color(0xFF100A1E), Color(0xFF141622)],
   );
 
-  static Color glow(Color color, double alpha) => color.withValues(alpha: alpha);
+  static Color glow(Color color, double alpha) =>
+      color.withValues(alpha: alpha);
 
   static BoxShadow bloom(Color color, {double blur = 22, double spread = 0}) =>
-      BoxShadow(color: glow(color, .45), blurRadius: blur, spreadRadius: spread);
+      BoxShadow(
+        color: glow(color, .45),
+        blurRadius: blur,
+        spreadRadius: spread,
+      );
 
   static const titleStyle = TextStyle(
     color: text,
@@ -100,12 +105,12 @@ class NeonBackdrop extends StatelessWidget {
   /// 参数取点播区那套（.52/.46/.42/.2）；改这里一处，两处一起变，
   /// 不要在各处再写一份硬编码参数。
   const NeonBackdrop.app({super.key, this.child})
-      : intensity = .52,
-        magentaY = .46,
-        tealY = .42,
-        topGlow = .2,
-        rightGlowColor = Neon.teal,
-        rightGlowAlpha = 1;
+    : intensity = .52,
+      magentaY = .46,
+      tealY = .42,
+      topGlow = .2,
+      rightGlowColor = Neon.teal,
+      rightGlowAlpha = 1;
 
   final Widget? child;
 
@@ -249,7 +254,10 @@ class NeonFrame extends StatelessWidget {
       ),
       child: Padding(
         padding: EdgeInsets.all(thickness),
-        child: ClipRRect(borderRadius: BorderRadius.circular(radius - thickness), child: child),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius - thickness),
+          child: child,
+        ),
       ),
     );
   }
@@ -448,7 +456,10 @@ class NeonSectionHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(title, style: Neon.titleStyle.copyWith(color: config.textPrimary)),
+          Text(
+            title,
+            style: Neon.titleStyle.copyWith(color: config.textPrimary),
+          ),
           const Spacer(),
           if (action != null)
             GestureDetector(
@@ -531,10 +542,7 @@ class NeonTopBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 6, 12, 2),
       child: Row(
         children: [
-          if (leading != null) ...[
-            leading!,
-            const SizedBox(width: 10),
-          ],
+          if (leading != null) ...[leading!, const SizedBox(width: 10)],
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -592,9 +600,7 @@ class NeonIconButton extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: highlight
-              ? null
-              : Colors.white.withValues(alpha: .07),
+          color: highlight ? null : Colors.white.withValues(alpha: .07),
           gradient: highlight ? Neon.hotGradient : null,
           border: Border.all(color: Colors.white.withValues(alpha: .10)),
           boxShadow: highlight
@@ -615,7 +621,7 @@ class NeonIconButton extends StatelessWidget {
   }
 }
 
-/// 底部浮动胶囊导航（首页 / 频道 / ＋ / 片单 / 我的）。
+/// 底部浮动胶囊导航（首页 / 频道 / ＋ / 多媒体 / 我的）。
 class NeonBottomBar extends StatelessWidget {
   const NeonBottomBar({
     super.key,
@@ -624,17 +630,17 @@ class NeonBottomBar extends StatelessWidget {
     required this.onCenter,
   });
 
-  /// 0=首页 1=频道 2=片单 3=我的（中间按钮单独处理）
+  /// 0=首页 1=频道 2=多媒体 3=我的（中间按钮单独处理）
   final int index;
   final ValueChanged<int> onSelect;
   final VoidCallback onCenter;
 
   @override
   Widget build(BuildContext context) {
-    const entries = [
+    const entries = <(int, Object, String)>[
       (0, LucideIcons.house, '首页'),
-      (1, LucideIcons.layoutGrid, '频道'),
-      (2, LucideIcons.bookmark, '片单'),
+      (1, '🎞️', '频道'),
+      (2, LucideIcons.hardDrive, '多媒体'),
       (3, LucideIcons.user, '我的'),
     ];
     return Padding(
@@ -666,8 +672,9 @@ class NeonBottomBar extends StatelessWidget {
     );
   }
 
-  Widget _item((int, IconData, String) entry) {
+  Widget _item((int, Object, String) entry) {
     final selected = index == entry.$1;
+    final glyph = entry.$2;
     return Expanded(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -675,11 +682,16 @@ class NeonBottomBar extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              entry.$2,
-              size: 19,
-              color: selected ? Neon.pink : const Color(0xFF8A7AA8),
-            ),
+            // 频道页签用 🎞️ emoji 字符直接显示，其余页签用 Lucide 图标；
+            // emoji 自带彩色，选中态只靠下方文字着色与加粗区分。
+            if (glyph is String)
+              Text(glyph, style: const TextStyle(fontSize: 19, height: 1.0))
+            else
+              Icon(
+                glyph as IconData,
+                size: 19,
+                color: selected ? Neon.pink : const Color(0xFF8A7AA8),
+              ),
             const SizedBox(height: 3),
             Text(
               entry.$3,
@@ -720,7 +732,9 @@ class NeonBottomBar extends StatelessWidget {
               ),
             ],
           ),
-          child: const Icon(LucideIcons.plus, size: 24, color: Colors.white),
+          // 中间按钮：播放三角图标，白色与渐变圆钮的霓虹主题一致；
+          // 点按行为不变，仍是 onCenter（进全屏推荐流）。
+          child: const Icon(LucideIcons.play, size: 24, color: Colors.white),
         ),
       ),
     );
@@ -839,10 +853,7 @@ class NeonCoverSlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: child,
-    );
+    return ClipRRect(borderRadius: BorderRadius.circular(radius), child: child);
   }
 }
 
@@ -938,9 +949,7 @@ class NeonGrain extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: CustomPaint(painter: _GrainPainter(opacity)),
-    );
+    return IgnorePointer(child: CustomPaint(painter: _GrainPainter(opacity)));
   }
 }
 
@@ -955,7 +964,10 @@ class _GrainPainter extends CustomPainter {
     final count = (size.width * size.height / 900).clamp(80, 900).toInt();
     for (var i = 0; i < count; i++) {
       canvas.drawCircle(
-        Offset(random.nextDouble() * size.width, random.nextDouble() * size.height),
+        Offset(
+          random.nextDouble() * size.width,
+          random.nextDouble() * size.height,
+        ),
         random.nextDouble() * .8 + .2,
         paint,
       );

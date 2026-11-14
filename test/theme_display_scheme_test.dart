@@ -5,10 +5,12 @@ import 'package:moyi/app_build.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/content_tier_filter.dart';
 import 'package:moyi/core_bridge.dart';
+import 'package:moyi/feed_playability.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/theme_settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -82,8 +84,7 @@ class _TierTestRepository extends FixtureRepository {
 // 避免测试结束时“仍有定时器待处理”失败（与 adult_channel_test 同法）。
 class _NoPlayRepository extends FixtureRepository {
   @override
-  Future<DramaDetail> detail(Drama drama) async =>
-      throw AppFailure('测试不播');
+  Future<DramaDetail> detail(Drama drama) async => throw AppFailure('测试不播');
 }
 
 class _AdultTierRepository extends FixtureRepository {
@@ -120,8 +121,7 @@ class _AdultTierRepository extends FixtureRepository {
   }
 
   @override
-  Future<DramaDetail> detail(Drama drama) async =>
-      throw AppFailure('测试不播');
+  Future<DramaDetail> detail(Drama drama) async => throw AppFailure('测试不播');
 }
 
 void main() {
@@ -136,15 +136,16 @@ void main() {
     });
 
     test('分类命中：按名与按 id', () {
-      expect(tierCategoryId(ContentTier.manhua, _tierCategories), 'comic_series');
+      expect(
+        tierCategoryId(ContentTier.manhua, _tierCategories),
+        'comic_series',
+      );
       expect(
         tierCategoryId(ContentTier.liveAction, _tierCategories),
         'short_play',
       );
       expect(
-        tierCategoryId(ContentTier.manhua, [
-          const CatalogCategory('xx', '漫剧'),
-        ]),
+        tierCategoryId(ContentTier.manhua, [const CatalogCategory('xx', '漫剧')]),
         'xx',
       );
       expect(
@@ -157,9 +158,7 @@ void main() {
 
     test('命中不到与无分类档返回 null', () {
       expect(
-        tierCategoryId(ContentTier.manhua, [
-          const CatalogCategory('', '全部'),
-        ]),
+        tierCategoryId(ContentTier.manhua, [const CatalogCategory('', '全部')]),
         isNull,
       );
       expect(tierCategoryId(ContentTier.all, _tierCategories), isNull);
@@ -169,7 +168,10 @@ void main() {
     test('显示分类集合：锁档只留命中分类', () {
       final kept = tierCategories(ContentTier.manhua, _tierCategories);
       expect(kept.map((c) => c.id).toList(), ['comic_series']);
-      expect(tierCategories(ContentTier.manhua, [CatalogCategory.all]), isEmpty);
+      expect(
+        tierCategories(ContentTier.manhua, [CatalogCategory.all]),
+        isEmpty,
+      );
       expect(tierCategories(ContentTier.all, _tierCategories), _tierCategories);
       expect(
         tierCategories(ContentTier.adult, _tierCategories),
@@ -185,9 +187,7 @@ void main() {
       addTearDown(store.dispose);
       await tester.pumpWidget(
         MaterialApp(
-          theme: AppThemeConfig.forTheme(
-            AppThemeMode.purpleNeon,
-          ).toThemeData(),
+          theme: AppThemeConfig.forTheme(AppThemeMode.purpleNeon).toThemeData(),
           home: ThemeSettingsScreen(store: store),
         ),
       );
@@ -238,9 +238,7 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
-          theme: AppThemeConfig.forTheme(
-            AppThemeMode.purpleNeon,
-          ).toThemeData(),
+          theme: AppThemeConfig.forTheme(AppThemeMode.purpleNeon).toThemeData(),
           home: ThemeSettingsScreen(store: store),
         ),
       );
@@ -339,6 +337,21 @@ void main() {
             onOpenSaved: ({required bool history}) {},
             contentTier: contentTier,
             tierEmpty: tierEmpty,
+            // 本文件测内容档与可见性：验播放行全部，验播本身由
+            // feed_playability_test 覆盖。
+            playabilityVerifier: FeedPlayabilityVerifier(
+              detailOf: (drama) async => DramaDetail(drama, [
+                Episode({'id': '1', 'title': '第1集', 'currentEpisode': 1}, 1),
+              ]),
+              resolveOf: (drama, episode) async =>
+                  const PlaybackPlan(url: 'https://x.test/play.m3u8'),
+              fetchHead: (url, headers, timeout) async =>
+                  const FeedProbeResponse(
+                    statusCode: 200,
+                    headers: {'content-type': 'application/vnd.apple.mpegurl'},
+                    headBytes: [35, 69, 88, 84, 77, 51, 85],
+                  ),
+            ),
           ),
         ),
       );
@@ -348,7 +361,12 @@ void main() {
     }
 
     Future<void> openFeed(WidgetTester tester) async {
-      await tester.tap(find.byIcon(LucideIcons.plus));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NeonBottomBar),
+          matching: find.byIcon(LucideIcons.play),
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
     }
@@ -467,10 +485,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       // 导航：外层底栏出现。
-      expect(
-        find.byKey(const ValueKey('moyi-bottom-tab-0')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
       // 内容档：回片库后本站无漫剧分类，显示诚实空态。
       await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-0')));
       await tester.pump();

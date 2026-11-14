@@ -43,7 +43,9 @@ ThemeData _previewTheme() {
     appBarTheme: base.appBarTheme.copyWith(
       titleTextStyle: cjk(base.appBarTheme.titleTextStyle),
     ),
-    chipTheme: base.chipTheme.copyWith(labelStyle: cjk(base.chipTheme.labelStyle)),
+    chipTheme: base.chipTheme.copyWith(
+      labelStyle: cjk(base.chipTheme.labelStyle),
+    ),
     filledButtonTheme: FilledButtonThemeData(
       style: base.filledButtonTheme.style?.copyWith(
         textStyle: WidgetStateProperty.resolveWith(
@@ -94,16 +96,19 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// 测试里 JarBridge._specs 默认是空的（应用启动时的内置注册只在
-/// Android 上跑），按内置登记直接注册探活要用的三家站源，否则
-/// 六行全判成“未接入”。只注 id 与登记信息，不走平台通道。
+/// 测试里 JarBridge._specs 与 SourceSite.importedSites 默认是空的
+/// （应用启动时的内置注册只在 Android 上跑），按内置登记直接注册
+/// 探活要用的三家站源，否则选线区一行站源都没有。只注 id 与
+/// 登记信息，不走平台通道；站源登记写法与 jar_import._registerBuiltin
+/// 保持一致（选线区从 store.visibleSources 取候选站）。
 void _registerProbeSpecs() {
   const wanted = {'zakav01', 'ZakaMissav', 'ZakaJable'};
   for (final builtin in zakatvBuiltinSites) {
     if (!wanted.contains(builtin.key)) continue;
+    final siteId = JarSiteSpec.siteIdFor(zakatvJarId, builtin.key);
     JarBridge.register(
       JarSiteSpec(
-        siteId: JarSiteSpec.siteIdFor(zakatvJarId, builtin.key),
+        siteId: siteId,
         configId: zakatvJarId,
         name: builtin.name,
         className: builtin.className,
@@ -112,12 +117,22 @@ void _registerProbeSpecs() {
         ext: builtin.ext,
       ),
     );
+    SourceSite.importedSites[siteId] = SourceSite(
+      siteId,
+      builtin.name,
+      'ZakaTV jar 内置 · ${builtin.className}',
+      section: builtin.section,
+      origin: SourceSite.originImport,
+      importType: 'jar',
+    );
   }
 }
 
 void _unregisterProbeSpecs() {
   for (final key in ['zakav01', 'ZakaMissav', 'ZakaJable']) {
-    JarBridge.unregister(JarSiteSpec.siteIdFor(zakatvJarId, key));
+    final siteId = JarSiteSpec.siteIdFor(zakatvJarId, key);
+    JarBridge.unregister(siteId);
+    SourceSite.importedSites.remove(siteId);
   }
 }
 
@@ -292,9 +307,10 @@ void main() {
   });
 
   // 混合态：AV01 已探出版本与线路；MissAV 懒查未点，显示“点击查询”；
-  // Jable 点过懒查、探过无线标 ×；AVDB/JavMenu/MemoJav 三行“未接入”。
-  // 注：固定 6 家里只有 AV01 一家自动探活，× 行只能来自点过的懒查行，
-  // 故 Jable 点过、MissAV 保持未点，两态同屏。
+  // Jable 点过懒查、探过无线标 ×（AVDB/MemoJav 已注册成站源，
+  // 预览环境未注它俩，故不出现，也不显示“未接入”行）。
+  // 注：预览环境只注册了三家 jar 站，AV01 是唯一自动探活的，× 行只能
+  // 来自点过的懒查行，故 Jable 点过、MissAV 保持未点，两态同屏。
   testWidgets('预览 跨站选线 混合态', (tester) async {
     final repository = _repositoryWithAv01()
       ..searchResults['jar:zakatv:ZakaJable'] = [];
@@ -308,11 +324,13 @@ void main() {
         await tester.tap(find.text('展开'));
         await tester.pump(const Duration(milliseconds: 100));
         await tester.scrollUntilVisible(
-          find.byKey(const ValueKey('crosssite-rowtap-jable')),
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
           200,
         );
         await tester.pump();
-        await tester.tap(find.byKey(const ValueKey('crosssite-rowtap-jable')));
+        await tester.tap(
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
+        );
       },
     );
   });
@@ -344,18 +362,22 @@ void main() {
         await tester.tap(find.text('展开'));
         await tester.pump(const Duration(milliseconds: 100));
         await tester.scrollUntilVisible(
-          find.byKey(const ValueKey('crosssite-rowtap-missav')),
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
           200,
         );
         await tester.pump();
-        await tester.tap(find.byKey(const ValueKey('crosssite-rowtap-missav')));
+        await tester.tap(
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
+        );
         await tester.pump(const Duration(milliseconds: 100));
         await tester.scrollUntilVisible(
-          find.byKey(const ValueKey('crosssite-rowtap-jable')),
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
           200,
         );
         await tester.pump();
-        await tester.tap(find.byKey(const ValueKey('crosssite-rowtap-jable')));
+        await tester.tap(
+          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
+        );
       },
     );
   });

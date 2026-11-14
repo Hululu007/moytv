@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/core_bridge.dart';
+import 'package:moyi/feed_playability.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -49,8 +51,7 @@ class _AdultTestRepository extends FixtureRepository {
   }
 
   @override
-  Future<DramaDetail> detail(Drama drama) async =>
-      throw AppFailure('测试不播');
+  Future<DramaDetail> detail(Drama drama) async => throw AppFailure('测试不播');
 }
 
 void main() {
@@ -118,6 +119,20 @@ void main() {
           filtersActive: false,
           newActive: false,
           onOpenSaved: ({required bool history}) {},
+          // 本文件测可见性过滤与混排：验播放行全部，验播本身由
+          // feed_playability_test 覆盖。
+          playabilityVerifier: FeedPlayabilityVerifier(
+            detailOf: (drama) async => DramaDetail(drama, [
+              Episode({'id': '1', 'title': '第1集', 'currentEpisode': 1}, 1),
+            ]),
+            resolveOf: (drama, episode) async =>
+                const PlaybackPlan(url: 'https://x.test/play.m3u8'),
+            fetchHead: (url, headers, timeout) async => const FeedProbeResponse(
+              statusCode: 200,
+              headers: {'content-type': 'application/vnd.apple.mpegurl'},
+              headBytes: [35, 69, 88, 84, 77, 51, 85],
+            ),
+          ),
         ),
       ),
     );
@@ -126,7 +141,12 @@ void main() {
   }
 
   Future<void> openFeed(WidgetTester tester) async {
-    await tester.tap(find.byIcon(LucideIcons.plus));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(NeonBottomBar),
+        matching: find.byIcon(LucideIcons.play),
+      ),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }
@@ -152,9 +172,7 @@ void main() {
     }
   });
 
-  testWidgets('成人频道只显示可见成人站的内容，藏起来的站不出现', (
-    tester,
-  ) async {
+  testWidgets('成人频道只显示可见成人站的内容，藏起来的站不出现', (tester) async {
     await pumpHome(tester, dramas: [baseDrama], hidden: {'adult-hidden'});
     await openFeed(tester);
     await tester.tap(find.text('成人视频'));

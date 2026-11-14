@@ -161,6 +161,8 @@ class LocalStore extends ChangeNotifier {
     // 自定义源为设备级功能，管理员与普通用户均可使用。
     if (SourceSite.isCustomId(source)) return true;
     if (SourceSite.importedSites.containsKey(source)) return true;
+    // 网盘站源为设备级功能：登录本身就是门禁，管理员与普通用户均可使用。
+    if (SourceSite.cloudDriveSites.containsKey(source)) return true;
     return profile.allows(source);
   }
 
@@ -173,7 +175,10 @@ class LocalStore extends ChangeNotifier {
     final imported = SourceSite.importedSites.values.where(
       (site) => allowsSource(site.id),
     );
-    return [...builtIn, ...custom, ...imported];
+    final cloudDrives = SourceSite.cloudDriveSites.values.where(
+      (site) => allowsSource(site.id),
+    );
+    return [...builtIn, ...custom, ...imported, ...cloudDrives];
   }
 
   /// 当前用户被隐藏、不首页显示的站源 id 集合（含内置与自定义站源）。
@@ -846,6 +851,33 @@ class LocalStore extends ChangeNotifier {
 
   Future<void> setJarFingerprintEnabled(bool value) =>
       _setting(_key('jarFingerprintEnabled'), value);
+
+  /// 局域网网页服务是否开启（默认关闭）。
+  bool get lanWebEnabled => _configurationError == null
+      ? _bool(_key('lanWebEnabled')) ?? false
+      : false;
+
+  Future<void> setLanWebEnabled(bool value) =>
+      _setting(_key('lanWebEnabled'), value);
+
+  /// 局域网网页服务端口（默认 8999，被占时顺延）。
+  int get lanWebPort {
+    if (_configurationError != null) return 8999;
+    final raw = _string(_key('lanWebPort'));
+    final port = int.tryParse(raw ?? '') ?? 8999;
+    return port >= 1024 && port <= 65535 ? port : 8999;
+  }
+
+  Future<void> setLanWebPort(int value) =>
+      _setting(_key('lanWebPort'), '$value');
+
+  /// 网盘浏览是否显示疑似广告视频（默认隐藏，只过滤显示、不删文件）。
+  bool get showSuspectedAdVideos => _configurationError == null
+      ? _bool(_key('showSuspectedAdVideos')) ?? false
+      : false;
+
+  Future<void> setShowSuspectedAdVideos(bool value) =>
+      _setting(_key('showSuspectedAdVideos'), value);
 
   DateTime? get siteCheckLastRun {
     final raw = _string('site_check_last_run');

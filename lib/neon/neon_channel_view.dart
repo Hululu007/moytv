@@ -326,7 +326,14 @@ class NeonChannelView extends StatelessWidget {
     };
     return NeonPoster(
       key: ValueKey('neon-tile-${drama.id}'),
-      cover: DramaCover(drama: drama, repository: repository, radius: 12),
+      cover: DramaCover(
+        drama: drama,
+        repository: repository,
+        radius: 12,
+        // NeonPoster owns the bottom text area; the cover's own episode
+        // label would paint over the title/subtitle.
+        showEpisodeLabel: false,
+      ),
       title: drama.title,
       subtitle: drama.tags.isNotEmpty
           ? drama.tags.take(2).join(' · ')

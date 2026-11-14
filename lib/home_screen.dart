@@ -41,6 +41,9 @@ import 'tv_filter_bar.dart';
 import 'catalog_browser.dart';
 import 'catalog_sort.dart';
 import 'catalog_sort_sheet.dart';
+import 'cloud_drive/cloud_drive_screen.dart';
+import 'cloud_drive/cloud_drive_stations.dart';
+import 'multimedia_screen.dart';
 import 'recommendations_screen.dart';
 import 'rankings_screen.dart';
 import 'detail_screen.dart';
@@ -122,6 +125,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// 底部 Tab 点了“我的”后为真：短剧首页分支据此把短剧首页内层
   /// 页签驱到“我的”页；离开片库区或点其它 Tab 时清掉。
   bool _mineRequested = false;
+
+  /// 底部 Tab 点了“多媒体”后为真：短剧首页分支据此把内层页签驱
+  /// 到多媒体页，通用分支改渲染多媒体屏；离开片库区或点其它
+  /// Tab 时清掉（与 _mineRequested 同一口径）。
+  bool _multimediaRequested = false;
+
+  /// 戏剧首页钉住标记：频道/戏剧首页内切站时为真，换站后仍渲染
+  /// 戏剧首页分支（分组 id 随站源变化，单凭分组判断会跳到通用
+  /// 分支）；离开片库区时清掉，切回片库后按分组重新判断。
+  bool _dramaHomePinned = false;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   String _currentVersion = '';
   final _lastZoneSource = <String, String>{};
@@ -178,8 +191,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   /// 片库区容纳全部视频站源（短剧站与点播站），切站决定显示哪站内容，
   /// 不再按短剧/点播两个区过滤站源。
-  List<SourceSite> get _librarySources =>
-      List.of(widget.store.visibleSources);
+  List<SourceSite> get _librarySources => List.of(widget.store.visibleSources);
 
   List<SourceGroup> get _sourceGroups {
     // 首页只显示「源显示列表」中开启的站源，被隐藏的站源不出现在分组里。
@@ -679,11 +691,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _openWebScrape() {
-    Navigator.of(context).push(
-      appPageRoute(
-        builder: (_) => const WebScrapePage(),
-      ),
-    );
+    Navigator.of(
+      context,
+    ).push(appPageRoute(builder: (_) => const WebScrapePage()));
   }
 
   void _toggleSearch() {
@@ -1055,7 +1065,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _changeSource(SourceSite source, {bool allSources = false}) {
     _debounce?.cancel();
     _search.clear();
+    // 戏剧首页内切站：钉住戏剧首页分支，换站后仍停在原界面、
+    // 内容换成新站的（_group.id 随站源变，不钉住会跳通用分支）。
+    final keepDramaHome =
+        _zone == HomeZone.library && isHongguoDramaGroup(_group.id);
     setState(() {
+      if (keepDramaHome) _dramaHomePinned = true;
       _drillStack.clear();
       _catalogTags = const [];
       _catalogFilters = const [];
@@ -1305,30 +1320,43 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
   }
 
-  int get _bottomTabIndex => switch (_zone) {
-    HomeZone.library => 0,
-    HomeZone.live => 1,
-    HomeZone.audio => 2,
-    HomeZone.novel => 3,
-  };
+  int get _bottomTabIndex {
+    if (_zone == HomeZone.library && _multimediaRequested) return 5;
+    return switch (_zone) {
+      HomeZone.library => 0,
+      HomeZone.live => 1,
+      HomeZone.audio => 2,
+      HomeZone.novel => 3,
+    };
+  }
 
   void _onBottomTab(int tabIndex) {
     final wantMine = tabIndex == 4;
+    final wantMultimedia = tabIndex == 5;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
       2 => HomeZone.audio,
       3 => HomeZone.novel,
       _ => HomeZone.library,
     };
-    if (wantMine == _mineRequested && zone == _zone) return;
-    // 同区点“我的”时 _setZone 会提前返回，必须先 setState 递出请求。
-    setState(() => _mineRequested = wantMine);
+    if (wantMine == _mineRequested &&
+        wantMultimedia == _multimediaRequested &&
+        zone == _zone) {
+      return;
+    }
+    // 同区点“我的”/“多媒体”时 _setZone 会提前返回，必须先 setState
+    // 递出请求。
+    setState(() {
+      _mineRequested = wantMine;
+      _multimediaRequested = wantMultimedia;
+    });
     _setZone(zone);
   }
 
-  /// 底部标签样式的底栏：只在手机端通用分支显示；电视/桌面走
-  /// 各自导航，选片模式下隐藏。短剧首页分支不叠加此栏（其胶囊
-  /// 栏是进“频道”页的唯一入口，不能藏）。
+  /// 底部标签样式的底栏：只在手机端显示；电视/桌面走各自导航，
+  /// 选片模式下隐藏。两个分支都挂在外层 Scaffold 上（戏剧首页
+  /// 分支的胶囊栏随之藏起，内层去向由芯片行保住）；抽屉样式下
+  /// 返回 null，胶囊栏原样。
   Widget? _bottomTabBar({required bool television, required bool desktop}) {
     if (_navStyle != NavStyle.bottomTabs ||
         television ||
@@ -1344,7 +1372,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _resetAutoLoad();
     setState(() {
       _zone = zone;
-      if (zone != HomeZone.library) _mineRequested = false;
+      if (zone != HomeZone.library) {
+        _mineRequested = false;
+        _multimediaRequested = false;
+        _dramaHomePinned = false;
+      }
       _selectionMode = false;
       _selectedDramas.clear();
     });
@@ -1972,8 +2004,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             const SizedBox(width: 8),
           ],
           // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
-          if (!AppLayout.isTelevision(context) &&
-              _zone == HomeZone.live)
+          if (!AppLayout.isTelevision(context) && _zone == HomeZone.live)
             GlassIconButton(
               key: const ValueKey('open-settings'),
               icon: LucideIcons.settings,
@@ -1999,15 +2030,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           final desktop =
               Theme.of(context).platform != TargetPlatform.iOS &&
               constraints.maxWidth >= 840;
+          // 底部标签栏：两个分支共用同一份（戏剧首页分支挂外层
+          // Scaffold，与通用分支同一结构，点按可命中；挂内层
+          // Scaffold 时嵌套结构下点按会被 body 盖住）。
+          final bottomTabBar = _bottomTabBar(
+            television: television,
+            desktop: desktop,
+          );
           if (!television &&
               !desktop &&
               !_selectionMode &&
               _zone == HomeZone.library) {
-            if (isHongguoDramaGroup(_group.id)) {
+            if (isHongguoDramaGroup(_group.id) || _dramaHomePinned) {
               return Scaffold(
                 key: _scaffoldKey,
                 drawer: _drawer(),
                 extendBody: glass,
+                bottomNavigationBar: bottomTabBar,
                 body: SafeArea(
                   bottom: !glass,
                   child: HongguoDramaHome(
@@ -2018,9 +2057,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onOpenFeed: _openFullscreenFeed,
                     onPickSource: () => unawaited(_pickSource()),
                     sourceLabel: '${_group.name} (${_group.sources.length})',
-                    currentSourceLabel: _allSources
-                        ? '全部站源'
-                        : _source.name,
+                    currentSourceLabel: _allSources ? '全部站源' : _source.name,
                     feedEnabled: _visible.isNotEmpty,
                     categories: _displayCategories,
                     selectedCategory: _displayCategory,
@@ -2044,9 +2081,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onOpenSaved: _openSaved,
                     onSettingsPressed: _openZoneSettings,
                     onOpenFeatured: _openFeaturedDrama,
-                    requestedTab: _mineRequested
+                    requestedTab: _multimediaRequested
+                        ? HongguoDramaHome.multimediaTabIndex
+                        : _mineRequested
                         ? HongguoDramaHome.mineTabIndex
                         : null,
+                    hideCapsuleBar: bottomTabBar != null,
+                    driveSites: _cloudDriveSites,
+                    onOpenCloudLogin: _openCloudLogin,
                   ),
                 ),
               );
@@ -2056,10 +2098,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             key: _scaffoldKey,
             drawer: _drawer(),
             extendBody: glass && !desktop,
-            bottomNavigationBar: _bottomTabBar(
-              television: television,
-              desktop: desktop,
-            ),
+            bottomNavigationBar: bottomTabBar,
             appBar: glass
                 ? _glassAppBar()
                 : AppBar(
@@ -2173,9 +2212,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           IconButton(
                             key: const ValueKey('web-scrape'),
                             tooltip: '网页爬取',
-                            icon: const Icon(
-                              Icons.travel_explore_rounded,
-                            ),
+                            icon: const Icon(Icons.travel_explore_rounded),
                             onPressed: _openWebScrape,
                           ),
                         ],
@@ -2356,6 +2393,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     },
   );
 
+  /// 显示中的网盘站（已登录的网盘在源显示列表里可见的才算），
+  /// 供多媒体屏聚合浏览。
+  List<SourceSite> get _cloudDriveSites => CloudDriveStations.stations
+      .where((site) => widget.store.siteVisible(site.id))
+      .toList();
+
+  /// 打开网盘登录中心（与设置里是同一个屏）；回来后刷新，
+  /// 刚登录的网盘立即出现在多媒体屏里。
+  Future<void> _openCloudLogin() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CloudDriveScreen(store: widget.store),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   Widget _tabBody({required bool television, required bool desktop}) {
     if (_zone == HomeZone.live) {
       return LiveScreen(
@@ -2376,6 +2430,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return ContentZoneScreen(
         section: ContentSection.novel,
         binding: _contentBinding,
+      );
+    }
+    // 多媒体：与短剧首页内层页签是同一个屏；网盘数据不依赖
+    // 片库站源，放在“暂无站源”空态判断之前。
+    if (_multimediaRequested) {
+      return MultimediaScreen(
+        repository: widget.repository,
+        store: widget.store,
+        driveSites: _cloudDriveSites,
+        onOpenDrama: _openDrama,
+        onOpenCloudLogin: _openCloudLogin,
       );
     }
     if (_librarySources.isEmpty) {

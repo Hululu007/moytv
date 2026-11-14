@@ -202,7 +202,8 @@ class BuiltinPySites {
   );
 
   static const chinaxselecla08SiteId = 'chinaxselecla08';
-  static const chinaxselecla08AssetPath = 'assets/py_spiders/chinaxselecla08.py';
+  static const chinaxselecla08AssetPath =
+      'assets/py_spiders/chinaxselecla08.py';
   static const chinaxselecla08FileId = 'builtin_chinaxselecla08';
 
   static const chinaxselecla08Site = SourceSite(
@@ -564,6 +565,32 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const avdbSiteId = 'avdb';
+  static const avdbAssetPath = 'assets/py_spiders/avdb.py';
+  static const avdbFileId = 'builtin_avdb';
+
+  static const avdbSite = SourceSite(
+    avdbSiteId,
+    '🔞AVDB',
+    '内置 py · avdb',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const memojavSiteId = 'memojav';
+  static const memojavAssetPath = 'assets/py_spiders/memojav.py';
+  static const memojavFileId = 'builtin_memojav';
+
+  static const memojavSite = SourceSite(
+    memojavSiteId,
+    '🔞MemoJav',
+    '内置 py · memojav',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   static Future<bool> register() async {
     try {
       final bytes = await rootBundle.load(hmavAssetPath);
@@ -616,6 +643,8 @@ class BuiltinPySites {
       await _registerJinguoJg();
       await _registerDuoduo();
       await _registerJavmenu();
+      await _registerAvdb();
+      await _registerMemojav();
       return true;
     } catch (_) {
       return false;
@@ -1165,6 +1194,32 @@ class BuiltinPySites {
       );
       SourceSite.importedSites[javmenuSiteId] = javmenuSite;
       SourceSite.importedPyFiles[javmenuSiteId] = fileName;
+    } catch (_) {}
+  }
+
+  static Future<void> _registerAvdb() async {
+    try {
+      final bytes = await rootBundle.load(avdbAssetPath);
+      final fileName = await ImportFileStore.save(
+        avdbFileId,
+        'py',
+        bytes.buffer.asUint8List(),
+      );
+      SourceSite.importedSites[avdbSiteId] = avdbSite;
+      SourceSite.importedPyFiles[avdbSiteId] = fileName;
+    } catch (_) {}
+  }
+
+  static Future<void> _registerMemojav() async {
+    try {
+      final bytes = await rootBundle.load(memojavAssetPath);
+      final fileName = await ImportFileStore.save(
+        memojavFileId,
+        'py',
+        bytes.buffer.asUint8List(),
+      );
+      SourceSite.importedSites[memojavSiteId] = memojavSite;
+      SourceSite.importedPyFiles[memojavSiteId] = fileName;
     } catch (_) {}
   }
 }

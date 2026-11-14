@@ -10,6 +10,7 @@ void main() {
     required List<HomeZone> zones,
     required List<AppDrawerTool> tools,
     required VoidCallback onWatchRoom,
+    HomeZone zone = HomeZone.library,
   }) async {
     tester.view.physicalSize = const Size(800, 2400);
     tester.view.devicePixelRatio = 1.0;
@@ -19,7 +20,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AppDrawer(
-            zone: HomeZone.library,
+            zone: zone,
             currentVersion: '1.0.1',
             onZoneSelected: zones.add,
             onWatchRoom: onWatchRoom,
@@ -84,10 +85,7 @@ void main() {
     for (final label in ['片库', '直播', '一起看房间', '站点区', '软件更新']) {
       expect(find.text(label), findsOneWidget);
     }
-    await tester.tap(find.text('音乐'));
-    await tester.pumpAndSettle();
-    expect(find.text('音乐源'), findsOneWidget);
-    expect(find.text('听书'), findsNothing);
+    expect(find.text('音乐'), findsNothing);
     await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
     expect(find.text('阅读模块'), findsOneWidget);
@@ -142,11 +140,6 @@ void main() {
     expect(find.text('影视模块'), findsOneWidget);
     expect(find.text('听书'), findsNothing);
 
-    await tester.tap(find.text('音乐'));
-    await tester.pumpAndSettle();
-    expect(find.text('音乐源'), findsOneWidget);
-    expect(find.text('听书'), findsNothing);
-
     await tester.tap(find.text('阅读'));
     await tester.pumpAndSettle();
     expect(find.text('阅读模块'), findsOneWidget);
@@ -162,6 +155,57 @@ void main() {
     await tester.ensureVisible(find.text('小程序面板'));
     await tester.tap(find.text('小程序面板'));
     expect(tools.last, AppDrawerTool.miniApp);
+  });
+
+  testWidgets('shelf chips are three with no music chip', (tester) async {
+    await pumpDrawer(tester, zones: [], tools: [], onWatchRoom: () {});
+    expect(find.text('影视'), findsOneWidget);
+    expect(find.text('阅读'), findsOneWidget);
+    expect(find.text('小程序'), findsOneWidget);
+    expect(find.text('音乐'), findsNothing);
+    expect(find.text('音乐源'), findsNothing);
+  });
+
+  testWidgets('shelf chip taps switch the content zone', (tester) async {
+    final zones = <HomeZone>[];
+    final tools = <AppDrawerTool>[];
+    await pumpDrawer(tester, zones: zones, tools: tools, onWatchRoom: () {});
+    await tester.tap(find.text('阅读'));
+    await tester.pumpAndSettle();
+    expect(zones, [HomeZone.novel]);
+    expect(find.text('阅读模块'), findsOneWidget);
+    await tester.tap(find.text('影视'));
+    await tester.pumpAndSettle();
+    expect(zones, [HomeZone.novel, HomeZone.library]);
+    expect(find.text('影视模块'), findsOneWidget);
+    await tester.ensureVisible(find.text('小程序'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('小程序'));
+    await tester.pumpAndSettle();
+    expect(tools, [AppDrawerTool.miniApp]);
+    expect(find.text('小程序模块'), findsOneWidget);
+  });
+
+  testWidgets('shelf chip taps do nothing when already selected', (
+    tester,
+  ) async {
+    final zones = <HomeZone>[];
+    await pumpDrawer(tester, zones: zones, tools: [], onWatchRoom: () {});
+    await tester.tap(find.text('影视'));
+    await tester.pumpAndSettle();
+    expect(zones, isEmpty);
+  });
+
+  testWidgets('initial shelf follows the current zone', (tester) async {
+    await pumpDrawer(
+      tester,
+      zones: [],
+      tools: [],
+      onWatchRoom: () {},
+      zone: HomeZone.novel,
+    );
+    expect(find.text('阅读模块'), findsOneWidget);
+    expect(find.text('影视模块'), findsNothing);
   });
 
   testWidgets('drawer has no midnight tile after the merge', (tester) async {

@@ -184,7 +184,7 @@ class _DetailScreenState extends State<DetailScreen> {
   Future<void> _loadTmdb(Drama drama) async {
     final config = await TmdbConfig.load();
     if (!mounted) return;
-    if (!config.configured) return;
+    // 不再以“填了 key”设门：没 key 时刮削链直接走不要 key 的公开源。
     setState(() => _tmdbConfig = config);
     try {
       final meta = await TmdbService.instance.fetchMetadata(
@@ -431,6 +431,7 @@ class _DetailScreenState extends State<DetailScreen> {
       repository: widget.repository,
       store: widget.store,
       avId: avId,
+      currentSourceId: drama.source,
       onPlayLine: _playCrossSite,
     );
   }

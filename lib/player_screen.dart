@@ -24,6 +24,7 @@ import 'atmosphere_background.dart';
 import 'tv_theme.dart';
 import 'core_bridge.dart';
 import 'custom_headers.dart';
+import 'lan_web/stream_gateway.dart';
 import 'jar_bridge.dart';
 import 'jar_youtube_takeover.dart';
 import 'danmaku_controller.dart';
@@ -36,6 +37,7 @@ import 'models.dart';
 import 'nonvideo_content.dart';
 import 'playback_loader.dart';
 import 'playback_parse.dart';
+import 'playback_redirect.dart';
 import 'playback_foreground.dart';
 import 'playback_preloader.dart';
 import 'playback_queue.dart';
@@ -329,6 +331,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       Platform.isAndroid &&
       (widget.store.player == 'tvbox') &&
       (_plan?.decryptionKey.isEmpty ?? true) &&
+      (_plan?.forceMpv != true) &&
       _backendManager?.current != PlaybackBackend.main;
   PlayerCore get _effectiveCore => effectivePlayerCore(stored: _core);
   bool get _useExoCore =>
@@ -1700,7 +1703,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _audioMode = true;
         }
       }
-      final planNonVideo = parseNonVideoUrl(plan.url);
+      final planNonVideo = parseNonVideoUrl(plan.url, headers: plan.headers);
       if (planNonVideo != null) {
         if (plan.session.isNotEmpty) {
           await widget.repository.release(plan.session);
@@ -1712,6 +1715,26 @@ class _PlayerScreenState extends State<PlayerScreen>
           _plan = null;
         });
         return;
+      }
+      // 302 预解析（非视频分流之后、网关改写之前）：会跳转的地址先
+      // 跟到最终地址，三条播放路径共用解析后的 plan，跳转行为一致；
+      // 解析失败时返回原地址，行为与原来一致（见 playback_redirect）。
+      if (shouldPreResolveRedirects(plan)) {
+        final resolved = await resolvePlaybackRedirects(
+          plan.url,
+          plan.headers,
+        );
+        plan = plan.withUrl(resolved.url).withHeaders(resolved.headers);
+      }
+      // 流媒体网关（局域网服务开启时才改写，关闭时播放链路原样）：
+      // http(s) 直链改走本机网关，补 CORS/Referer/UA、m3u8 重写、
+      // Range 透传；解密计划与非视频协议不改写（见 shouldGatewayRewrite）。
+      // 位置在音频模式判定与非视频分流之后，避免改写后的网关地址
+      // 影响扩展名判定；三条播放路径（原生/ijk/media_kit）共用此 plan。
+      if (LanGatewayState.active && shouldGatewayRewrite(plan)) {
+        plan = plan.withUrl(
+          buildGatewayUrl(LanGatewayState.loopbackBase, plan.url, plan.headers),
+        );
       }
       await _serialize(() async {
         if (_closed || ticket != _generation) {
@@ -1726,8 +1749,11 @@ class _PlayerScreenState extends State<PlayerScreen>
           _backendManager = null;
         }
         final useNativeForPlan =
-            (_useTvbox || _useExoCore) && plan.decryptionKey.isEmpty;
-        final useIjkForPlan = _useIjkCore && plan.decryptionKey.isEmpty;
+            (_useTvbox || _useExoCore) &&
+            plan.decryptionKey.isEmpty &&
+            !plan.forceMpv;
+        final useIjkForPlan =
+            _useIjkCore && plan.decryptionKey.isEmpty && !plan.forceMpv;
         _backendManager ??= PlaybackBackendManager(
           initial: useNativeForPlan
               ? PlaybackBackend.tvbox
@@ -2180,7 +2206,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _loadTmdb(Drama drama) async {
     final config = await TmdbConfig.load();
     if (!mounted || _closed) return;
-    if (!config.configured) return;
+    // 不再以“填了 key”设门：没 key 时刮削链直接走不要 key 的公开源。
     setState(() => _tmdbConfig = config);
     try {
       final meta = await TmdbService.instance.fetchMetadata(

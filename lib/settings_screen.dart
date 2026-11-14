@@ -13,6 +13,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'core_bridge.dart';
 import 'app_update.dart';
+import 'cloud_drive/cloud_drive_screen.dart';
+import 'lan_web/lan_settings_screen.dart';
 import 'app_update_screen.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
@@ -403,6 +405,14 @@ class _SettingsScreenState extends State<SettingsScreen>
           detail: '为被拦截的站点完成浏览器验证',
           onTap: () => openClearanceFlow(context, widget.repository),
         ),
+        _SettingsItem(
+          keyName: 'lan-web-entry',
+          icon: Icons.wifi_outlined,
+          lucide: LucideIcons.wifi,
+          title: '局域网服务',
+          detail: '局域网浏览器看片 · 流媒体网关',
+          onTap: () => _push(LanWebSettingsScreen(store: store)),
+        ),
       ]),
       _SettingsGroup('源与规则', [
         if (widget.repository.supportsSourceManagement)
@@ -416,6 +426,14 @@ class _SettingsScreenState extends State<SettingsScreen>
               SourcesScreen(repository: widget.repository, store: store),
             ),
           ),
+        _SettingsItem(
+          keyName: 'cloud-drive-entry',
+          icon: Icons.cloud_outlined,
+          lucide: LucideIcons.cloud,
+          title: '网盘登录',
+          detail: '115 · 夸克 · 阿里云盘 · 百度网盘',
+          onTap: () => _push(CloudDriveScreen(store: store)),
+        ),
         _SettingsItem(
           keyName: 'content-sources-entry',
           icon: Icons.layers_outlined,

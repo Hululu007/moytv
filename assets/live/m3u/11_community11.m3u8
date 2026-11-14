@@ -1,7 +1,4 @@
 #EXTM3U
-#EXTINF:0 tvg-rec="0",Первый канал UHD
-#EXTGRP:новости
-http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/19241/index.m3u8
 #EXTINF:0 tvg-rec="0",Россия 1 UHD
 #EXTGRP:новости
 http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/19242/index.m3u8
@@ -4004,9 +4001,6 @@ http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/20104/index.m3u8
 #EXTINF:0 tvg-rec="0",ViP Sport 4
 #EXTGRP:спорт
 http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/20105/index.m3u8
-#EXTINF:0 tvg-rec="0",ViP Sport 5
-#EXTGRP:спорт
-http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/20106/index.m3u8
 #EXTINF:0 tvg-rec="0",ViP Sport 6
 #EXTGRP:спорт
 http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/20107/index.m3u8
@@ -8009,6 +8003,3 @@ http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/5060/index.m3u8
 #EXTINF:0 tvg-rec="3",ОНТ BY
 #EXTGRP:беларускія
 http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/5061/index.m3u8
-#EXTINF:0 tvg-rec="3",Союзный
-#EXTGRP:беларускія
-http://5hjadiez.russtv.net/iptv/EMNSBD5Y59KY2Z/5062/index.m3u8

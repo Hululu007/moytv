@@ -5,13 +5,17 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:crypto/crypto.dart';
 
 import 'models.dart';
 import 'jar_bridge.dart';
+import 'tg_catalog_cache.dart';
+import 'tg_list_postprocess.dart';
 import 'jar_haijiao_takeover.dart';
 import 'jar_youtube_takeover.dart';
 import 'danmaku_models.dart';
@@ -28,6 +32,8 @@ import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
 import 'cover_decoder.dart';
+import 'cloud_drive/cloud_credential_store.dart';
+import 'cloud_drive/cloud_drive_engine.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
 import 'resource_settings.dart';
@@ -139,10 +145,10 @@ abstract class AppRepository {
   Future<Map<String, dynamic>> hongguoAccountFilter({
     required String content,
     String cursor = '',
-  }) async =>
-      throw AppFailure('当前环境不支持红果筛选');
+  }) async => throw AppFailure('当前环境不支持红果筛选');
   Future<Map<String, dynamic>> hongguoAccountStatus() async =>
       throw AppFailure('当前环境不支持红果账号');
+
   /// 导出 Go 核当前账号会话给 Dart 持久化（跨重启恢复用）。
   /// 返回 {loggedIn, accountCookie, deviceId, installId, accountId,
   /// userName, expiresAtMs, cookieSource}；expiresAtMs 为 0 表示
@@ -396,9 +402,7 @@ abstract class AppRepository {
 /// 或 bcat 开头的书分类；视频分类（short_play/comic_series/ai_series
 /// 等）不在此列。bcat 后缀无法在 Dart 侧核对书名，保守按书分类处理。
 bool _isHongguoBookCategory(String category) =>
-    category == 'novel' ||
-    category == 'audio' ||
-    category.startsWith('bcat');
+    category == 'novel' || category == 'audio' || category.startsWith('bcat');
 
 /// 红果服务端多维筛选（landpage/v）纯逻辑：筛选项拼请求体、游标续页。
 /// 只借对照仓 DiscoveryFilters.kt 的字段名，不抄常量与设备值。
@@ -487,18 +491,17 @@ class HongguoDiscoverySelection {
   /// genre 为漫剧/AI 剧类型时走对应场景，否则默认场景。
   String get reqScene {
     final genre = _values['genre'];
-    return genre == 'comic_series' || genre == 'ai_series'
-        ? genre!
-        : 'default';
+    return genre == 'comic_series' || genre == 'ai_series' ? genre! : 'default';
   }
 
   /// 会话指纹：筛选条件排好序拼起来，换筛选项即换会话。
   String get fingerprint {
-    final parts = _values.entries
-        .where((entry) => entry.value.isNotEmpty)
-        .map((entry) => '${entry.key}=${entry.value}')
-        .toList()
-      ..sort();
+    final parts =
+        _values.entries
+            .where((entry) => entry.value.isNotEmpty)
+            .map((entry) => '${entry.key}=${entry.value}')
+            .toList()
+          ..sort();
     return parts.join(',');
   }
 }
@@ -542,9 +545,7 @@ class HongguoDiscoveryFilterPage {
   /// 展示名 → 服务端选项 id（按服务端键分），供旧 4 组中文值翻译。
   final Map<String, Map<String, String>> nameToId;
 
-  factory HongguoDiscoveryFilterPage.fromBridgeJson(
-    Map<String, dynamic> json,
-  ) {
+  factory HongguoDiscoveryFilterPage.fromBridgeJson(Map<String, dynamic> json) {
     final items = <Drama>[];
     for (final row in json['items'] as List? ?? const []) {
       if (row is! Map) continue;
@@ -553,10 +554,7 @@ class HongguoDiscoveryFilterPage {
       if (seriesId.isEmpty) continue;
       final badge = item['badge']?.toString() ?? '';
       final episodeCount =
-          int.tryParse(
-            RegExp(r'(\d+)').firstMatch(badge)?.group(1) ?? '',
-          ) ??
-          0;
+          int.tryParse(RegExp(r'(\d+)').firstMatch(badge)?.group(1) ?? '') ?? 0;
       final tags = (item['tags']?.toString() ?? '')
           .split(' · ')
           .map((tag) => tag.trim())
@@ -581,8 +579,7 @@ class HongguoDiscoveryFilterPage {
       final group = Map<String, dynamic>.from(row);
       final type = group['type']?.toString() ?? '';
       if (!hongguoDiscoveryLabels.containsKey(type)) continue;
-      final label =
-          group['label']?.toString() ?? hongguoDiscoveryLabels[type]!;
+      final label = group['label']?.toString() ?? hongguoDiscoveryLabels[type]!;
       final legacyKey = hongguoDiscoveryServerKeyToLegacy[type];
       final options = <CatalogFilterOption>[];
       final index = <String, String>{};
@@ -656,10 +653,7 @@ HongguoDiscoverySelection hongguoNormalizeFilters(
 /// 服务端筛选会话：只放内存，不落盘。
 /// 指纹 = 分类 + 归一前的筛选条件；换筛选项/换分类即新会话，游标作废。
 class HongguoDiscoverySession {
-  HongguoDiscoverySession({
-    required this.fingerprint,
-    required this.selection,
-  });
+  HongguoDiscoverySession({required this.fingerprint, required this.selection});
 
   final String fingerprint;
   final HongguoDiscoverySelection selection;
@@ -676,8 +670,13 @@ class HongguoDiscoverySession {
 
 class NativeRepository extends AppRepository {
   static final _coverDecoder = CoverDecoder();
-  NativeRepository({this.background = false});
+  NativeRepository({this.background = false, TgCatalogCache? tgCatalogCache})
+    : _tgCatalogCache = tgCatalogCache ?? TgCatalogCache();
   final bool background;
+
+  /// TG 两站目录 1 小时缓存（只放内存）：二次进入直接显示缓存，
+  /// 搜索/详情/翻页/强制刷新不走缓存。测试可注入假时钟缓存。
+  final TgCatalogCache _tgCatalogCache;
 
   /// 红果服务端筛选会话（只放内存，不落盘）：展示名→服务端选项 id 的
   /// 索引跨会话复用，游标只跟当前筛选会话走。
@@ -1024,6 +1023,20 @@ class NativeRepository extends AppRepository {
 
   LocalStore? access;
 
+  /// 网盘引擎（懒建：第一次打开网盘站时才建，平时零开销）。
+  Future<CloudDriveEngine>? _cloudEngineFuture;
+  Future<CloudDriveEngine> _cloudDriveEngine() =>
+      _cloudEngineFuture ??= _createCloudDriveEngine();
+
+  Future<CloudDriveEngine> _createCloudDriveEngine() async {
+    final preferences = await SharedPreferences.getInstance();
+    return CloudDriveEngine(
+      credentialStore: CloudCredentialStore(preferences),
+      httpClient: http.Client(),
+      showSuspectedAds: () => access?.showSuspectedAdVideos ?? false,
+    );
+  }
+
   int runningCoreBuild = 0;
   final _readOwner = DateTime.now().microsecondsSinceEpoch.toString();
   int _readSequence = 0;
@@ -1169,9 +1182,7 @@ class NativeRepository extends AppRepository {
       // 同一筛选会话续页：有游标就接着拉；服务端已无更多时回空页，
       // 不重拉首页（否则已拼好的列表会被首页冲掉）。
       if (session.hasMore && session.nextCursor != null) {
-        final body = session.selection.requestBody(
-          cursor: session.nextCursor,
-        );
+        final body = session.selection.requestBody(cursor: session.nextCursor);
         final result = await hongguoAccountFilter(
           content: jsonEncode(body),
           cursor: jsonEncode(session.nextCursor!.toJson()),
@@ -1232,9 +1243,7 @@ class NativeRepository extends AppRepository {
     );
   }
 
-  void _learnHongguoFilterIndex(
-    Map<String, Map<String, String>> learned,
-  ) {
+  void _learnHongguoFilterIndex(Map<String, Map<String, String>> learned) {
     for (final entry in learned.entries) {
       _hongguoFilterNameIndex
           .putIfAbsent(entry.key, () => {})
@@ -2070,6 +2079,15 @@ class NativeRepository extends AppRepository {
     bool force = false,
     Map<String, String> filters = const {},
   }) async {
+    if (CloudDriveEngine.isCloudSource(source)) {
+      final engine = await _cloudDriveEngine();
+      return engine.catalog(
+        source: source,
+        page: page,
+        query: query,
+        category: category,
+      );
+    }
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(source);
     if (haijiaoGo != null) {
       _authorize(source);
@@ -2083,6 +2101,20 @@ class NativeRepository extends AppRepository {
       );
     }
     if (JarBridge.isJarSource(source)) {
+      // TG 两站 1 小时目录缓存：只缓存第 1 页普通浏览；搜索、筛选、
+      // 翻页一律现拉。手动强制刷新跳过读取、但照常回写——否则刷新
+      // 后 1 小时内再进站会看到刷新前的旧内容。
+      final jarSpec = JarBridge.specFor(source);
+      final storable =
+          page == 1 &&
+          query.isEmpty &&
+          filters.isEmpty &&
+          jarSpec != null &&
+          tgPostProcessAppliesToClass(jarSpec.className);
+      if (storable && !force) {
+        final cached = _tgCatalogCache.lookup(source, category);
+        if (cached != null) return cached;
+      }
       final pageResult = await _jarCall(
         source,
         (spec) => JarBridge.catalog(
@@ -2093,18 +2125,25 @@ class NativeRepository extends AppRepository {
           filters: filters,
         ),
       );
-      if (category.isEmpty) return pageResult;
-      final groups = await _jarCategoryFilterGroups(source, category);
-      if (groups.isEmpty) return pageResult;
-      return CatalogPage(
-        pageResult.items,
-        hasMore: pageResult.hasMore,
-        warning: pageResult.warning,
-        page: pageResult.page,
-        fresh: pageResult.fresh,
-        tags: pageResult.tags,
-        filters: groups,
-      );
+      final CatalogPage result;
+      if (category.isEmpty) {
+        result = pageResult;
+      } else {
+        final groups = await _jarCategoryFilterGroups(source, category);
+        result = groups.isEmpty
+            ? pageResult
+            : CatalogPage(
+                pageResult.items,
+                hasMore: pageResult.hasMore,
+                warning: pageResult.warning,
+                page: pageResult.page,
+                fresh: pageResult.fresh,
+                tags: pageResult.tags,
+                filters: groups,
+              );
+      }
+      if (storable) _tgCatalogCache.store(source, category, result);
+      return result;
     }
     if (isJsSource(source)) {
       if (query.isNotEmpty) {
@@ -2336,6 +2375,19 @@ class NativeRepository extends AppRepository {
 
   @override
   Future<DramaDetail> detail(Drama drama) async {
+    if (CloudDriveEngine.isCloudSource(drama.source)) {
+      final engine = await _cloudDriveEngine();
+      return engine.detail(drama);
+    }
+    // ZakaTgMovie 壳侧归拢组（shelltg| id）：jar 侧没有标题归拢，
+    // 详情由壳侧合成（会话缓存 → 站内搜索回捞），不进 jar 详情。
+    if (tgIsShellGroupId(drama.id) &&
+        JarBridge.specFor(drama.source)?.className == tgMovieAmnsClass) {
+      return tgSynthesizeMovieGroupDetail(
+        drama: drama,
+        search: (query) => catalog(drama.source, query: query),
+      );
+    }
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(drama.source);
     if (haijiaoGo != null) {
       try {
@@ -2481,6 +2533,10 @@ class NativeRepository extends AppRepository {
         local: false,
         needsParse: false,
       );
+    }
+    if (CloudDriveEngine.isCloudSource(drama.source)) {
+      final engine = await _cloudDriveEngine();
+      return engine.resolve(drama, episode);
     }
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(drama.source);
     if (haijiaoGo != null) {

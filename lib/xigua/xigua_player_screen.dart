@@ -1549,7 +1549,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         }
       }
       final plan = prepared;
-      final planNonVideo = parseNonVideoUrl(plan.url);
+      final planNonVideo = parseNonVideoUrl(plan.url, headers: plan.headers);
       if (planNonVideo != null) {
         if (plan.session.isNotEmpty) {
           await widget.repository.release(plan.session);

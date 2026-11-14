@@ -661,5 +661,29 @@ void main() {
     test('JavMenu 站进点播区（统一视频区）', () {
       expect(isVodZoneSource(BuiltinPySites.javmenuSite), isTrue);
     });
+    test('AVDB 站注册值：视频分区、内置来源、py 类型、🔞 名', () {
+      final site = BuiltinPySites.avdbSite;
+      expect(site.id, 'avdb');
+      expect(site.name, '🔞AVDB');
+      expect(site.section, SourceSite.sectionVideo);
+      expect(site.origin, SourceSite.originBuiltin);
+      expect(site.importType, 'py');
+      expect(BuiltinPySites.avdbAssetPath, 'assets/py_spiders/avdb.py');
+    });
+    test('AVDB 站进点播区（统一视频区）', () {
+      expect(isVodZoneSource(BuiltinPySites.avdbSite), isTrue);
+    });
+    test('MemoJav 站注册值：视频分区、内置来源、py 类型、🔞 名', () {
+      final site = BuiltinPySites.memojavSite;
+      expect(site.id, 'memojav');
+      expect(site.name, '🔞MemoJav');
+      expect(site.section, SourceSite.sectionVideo);
+      expect(site.origin, SourceSite.originBuiltin);
+      expect(site.importType, 'py');
+      expect(BuiltinPySites.memojavAssetPath, 'assets/py_spiders/memojav.py');
+    });
+    test('MemoJav 站进点播区（统一视频区）', () {
+      expect(isVodZoneSource(BuiltinPySites.memojavSite), isTrue);
+    });
   });
 }

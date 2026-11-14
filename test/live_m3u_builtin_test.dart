@@ -8,8 +8,10 @@ import 'package:moyi/live_sources.dart';
 
 /// 打包规格：资产文件名、源 id、manifest kept 条数、默认分组、期望分组集合。
 /// 条数抄自 ~/workspace/tg_forward_read/m3u_clean/manifest.json（kept 列），
-/// 合计 127432；12_wuma 与 18_mingxing 的打包副本各删 1 行孤地址
-/// （地址哈希含 loli 子串），EXTINF 条数不受影响。
+/// 再减 2026-11-14 死链清理的 37 条（实测 404 样本 13 条、vip6.ddyunbo.com
+/// 整域 13 条、双 scheme 畸形地址 11 条），合计 127395。12_wuma 与
+/// 18_mingxing 的打包副本各删 1 行孤地址（地址哈希含 loli 子串），
+/// EXTINF 条数不受影响。
 const _spec = <(
   String file,
   String id,
@@ -36,18 +38,18 @@ const _spec = <(
   (
     '11_community11.m3u8',
     'm3u_community11',
-    2671,
+    2668,
     '社区合集 11',
     ['社区合集 11'],
   ),
   ('12_wuma.m3u', 'm3u_wuma', 23236, '無碼專區', ['無碼專區']),
   ('13_wanghong.m3u', 'm3u_wanghong', 3826, '網紅頭條', ['網紅頭條']),
-  ('14_xingba.m3u', 'm3u_xingba', 613, '杏吧原創', ['杏吧原創']),
-  ('15_chengtou.m3u', 'm3u_chengtou', 2824, '成人頭條', ['成人頭條']),
+  ('14_xingba.m3u', 'm3u_xingba', 611, '杏吧原創', ['杏吧原創']),
+  ('15_chengtou.m3u', 'm3u_chengtou', 2823, '成人頭條', ['成人頭條']),
   ('16_zhifu.m3u', 'm3u_zhifu', 2822, '制服絲襪', ['制服絲襪']),
   ('17_qunjiao.m3u', 'm3u_qunjiao', 1844, '群交淫亂', ['群交淫亂']),
-  ('18_mingxing.m3u', 'm3u_mingxing', 2809, '明星換臉', ['明星換臉']),
-  ('19_zipai.m3u', 'm3u_zipai', 22508, '自拍偷拍', ['自拍偷拍']),
+  ('18_mingxing.m3u', 'm3u_mingxing', 2807, '明星換臉', ['明星換臉']),
+  ('19_zipai.m3u', 'm3u_zipai', 22479, '自拍偷拍', ['自拍偷拍']),
   ('20_avxiongdi.m3u', 'm3u_avxiongdi', 576, 'AV兄弟无码', ['AV兄弟无码']),
   ('21_guochanse.m3u', 'm3u_guochanse', 11, '国产色情', ['国产色情']),
   ('22_riben2.m3u', 'm3u_riben2', 3373, '日本有码', ['日本有码']),
@@ -146,7 +148,7 @@ void main() {
     }
   });
 
-  test('每文件 EXTINF 条数与 manifest 一致，合计 127432', () {
+  test('每文件 EXTINF 条数与 manifest 一致，合计 127395', () {
     var total = 0;
     for (final row in _spec) {
       final text = _readAsset(row.$1);
@@ -157,7 +159,7 @@ void main() {
       expect(count, row.$3, reason: row.$1);
       total += count;
     }
-    expect(total, 127432);
+    expect(total, 127395);
   });
 
   test('安全扫描：打包数据全文 0 命中', () {

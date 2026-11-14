@@ -98,10 +98,12 @@ class DramaCover extends StatelessWidget {
     required this.drama,
     required this.repository,
     this.radius = 14,
+    this.showEpisodeLabel = true,
   });
   final Drama drama;
   final AppRepository repository;
   final double radius;
+  final bool showEpisodeLabel;
   static const imagesDisabled = bool.fromEnvironment('DISABLE_REMOTE_IMAGES');
 
   @override
@@ -151,7 +153,7 @@ class DramaCover extends StatelessWidget {
             ),
           ),
         ),
-        if (drama.episodes > 0)
+        if (showEpisodeLabel && drama.episodes > 0)
           Positioned(
             left: 9,
             bottom: 9,

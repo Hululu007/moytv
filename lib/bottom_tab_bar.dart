@@ -4,7 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'app_theme_config.dart';
 import 'liquid_glass.dart';
 
-/// 底部 Tab 导航栏（5 个 Tab：片库/直播/听书/阅读/我的）。
+/// 底部 Tab 导航栏（6 个 Tab：片库/直播/听书/阅读/我的/多媒体）。
 ///
 /// 只借 LwLive 底部栏的结构（图标 + 文字 + 选中着色 + 小圆点指示），
 /// 配色一律取当前主题的 AppThemeConfig，图标用树内已有的 Lucide 图标。
@@ -17,12 +17,12 @@ class MoyiBottomTabBar extends StatelessWidget {
     required this.onSelect,
   });
 
-  /// 当前选中下标：0 片库、1 直播、2 听书、3 阅读、4 我的。
+  /// 当前选中下标：0 片库、1 直播、2 听书、3 阅读、4 我的、5 多媒体。
   final int index;
 
   final ValueChanged<int> onSelect;
 
-  static const _labels = ['片库', '直播', '听书', '阅读', '我的'];
+  static const _labels = ['片库', '直播', '听书', '阅读', '我的', '多媒体'];
 
   static const _icons = [
     LucideIcons.clapperboard,
@@ -30,6 +30,7 @@ class MoyiBottomTabBar extends StatelessWidget {
     LucideIcons.headphones,
     LucideIcons.bookOpen,
     LucideIcons.user,
+    LucideIcons.hardDrive,
   ];
 
   @override
