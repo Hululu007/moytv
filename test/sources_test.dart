@@ -166,6 +166,7 @@ void main() {
       await tester.tap(find.text('内置短剧'));
       await tester.pumpAndSettle();
       final update = find.byKey(const ValueKey('update-hongguo'));
+      await _dragIntoView(tester, update);
       await tester.tap(update);
       await tester.pump();
       await tester.tap(update);
@@ -180,6 +181,7 @@ void main() {
         }),
       );
       await tester.pump();
+      await _dragIntoView(tester, find.text('停止').first);
       await tester.tap(find.text('停止').first);
       await tester.pumpAndSettle();
       expect(repository.operations, ['hongguo:update', 'hongguo:cancel']);
@@ -272,8 +274,13 @@ void main() {
         expect(find.byTooltip('复制诊断信息'), findsOneWidget);
 
         if (operation == 'check') {
+          await _dragIntoView(
+            tester,
+            find.byKey(const ValueKey('check-hongguo')),
+          );
           await tester.tap(find.byKey(const ValueKey('check-hongguo')));
         } else {
+          await _dragIntoView(tester, find.byTooltip('红果更多操作'));
           await tester.tap(find.byTooltip('红果更多操作'));
           await tester.pumpAndSettle();
           await tester.tap(find.text('仅检测目录'));

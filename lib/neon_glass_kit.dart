@@ -144,12 +144,16 @@ class NeonIconTile extends StatelessWidget {
     this.size = 34,
     this.iconSize = 18,
     this.radius = 10,
+    this.child,
   });
 
   final IconData icon;
   final double size;
   final double iconSize;
   final double radius;
+
+  /// 非空时以该件替代默认 Icon（如插件类型图标）。
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -162,7 +166,10 @@ class NeonIconTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         boxShadow: [neonGlow(config, blur: 10)],
       ),
-      child: Icon(icon, size: iconSize, color: config.selectedText),
+      child: Center(
+        child:
+            child ?? Icon(icon, size: iconSize, color: config.selectedText),
+      ),
     );
   }
 }
@@ -178,6 +185,7 @@ class NeonRow extends StatelessWidget {
     this.trailing,
     this.onTap,
     this.showChevron = true,
+    this.leading,
   });
 
   final IconData icon;
@@ -186,6 +194,9 @@ class NeonRow extends StatelessWidget {
   final Widget? trailing;
   final VoidCallback? onTap;
   final bool showChevron;
+
+  /// 非空时以该件替代默认图标块（如插件类型图标）。
+  final Widget? leading;
 
   @override
   Widget build(BuildContext context) {
@@ -199,7 +210,7 @@ class NeonRow extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
           child: Row(
             children: [
-              NeonIconTile(icon: icon),
+              leading ?? NeonIconTile(icon: icon),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

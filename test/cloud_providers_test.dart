@@ -575,10 +575,13 @@ void main() {
   });
 
   group('注册表', () {
-    test('四家齐全', () {
+    test('五家齐全', () {
       final providers = createCloudDriveProviders();
-      expect(providers.map((p) => p.id), containsAll(['pan115', 'quark', 'aliyun', 'baidu']));
-      expect(cloudDriveDisplayNames.length, 4);
+      expect(
+        providers.map((p) => p.id),
+        containsAll(['pan115', 'quark', 'aliyun', 'baidu', 'yun139']),
+      );
+      expect(cloudDriveDisplayNames.length, 5);
     });
   });
 }

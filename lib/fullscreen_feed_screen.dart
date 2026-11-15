@@ -510,7 +510,7 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
     if (segment < 0) segment = 0;
     final titles = <int, String>{
       for (final episode in detail?.episodes ?? const <Episode>[])
-        episode.number: episode.title,
+        episode.number: displayEpisodeTitle(episode.title, episode.number),
     };
     final status = drama.releaseStatus;
     final statusLabel = status == 'finished' || status == 'completed'
@@ -1196,12 +1196,9 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
     final isCurrent = index == _index;
     final detail = _details[_keyFor(drama)];
     final episodeCount = detail?.episodes.length ?? drama.episodes;
-    final episodeTitle = detail != null && _episode < detail.episodes.length
-        ? detail.episodes[_episode].title
+    final episodeLine = detail != null && _episode < detail.episodes.length
+        ? displayEpisodeLine(detail.episodes[_episode].title, _episode + 1)
         : '第${_episode + 1}集';
-    final episodeLine = episodeTitle == '第${_episode + 1}集'
-        ? '第${_episode + 1}集'
-        : '第${_episode + 1}集 | $episodeTitle';
     return Stack(
       fit: StackFit.expand,
       children: [

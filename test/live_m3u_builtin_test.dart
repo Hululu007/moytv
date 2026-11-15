@@ -85,6 +85,21 @@ const _bannedWords = [
 String _readAsset(String file) =>
     File('assets/live/m3u/$file').readAsStringSync();
 
+/// EXTINF 行里名字从第一个不在引号内的逗号后开始（属性里引用的逗号
+/// 不算分隔符）；名字本身含逗号时须保留全名，不能截到最后一个逗号。
+int _nameCommaIndex(String line) {
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (ch == '"') {
+      inQuotes = !inQuotes;
+    } else if (ch == ',' && !inQuotes) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /// 独立于解析器的规格级重算：按 m3u 格式把（分组，标题）映射到地址列，
 /// 返回（频道数，地址总数）。与 LiveParser 的输出交叉核对：同名同组
 /// 的条目合并为多线路频道是既有语义，地址一条不丢才是硬指标。
@@ -94,7 +109,8 @@ String _readAsset(String file) =>
   var pendingGroup = '';
   for (final raw in text.replaceAll('\r\n', '\n').split('\n')) {
     if (raw.startsWith('#EXTINF:')) {
-      final name = raw.substring(raw.lastIndexOf(',') + 1).trim();
+      final comma = _nameCommaIndex(raw);
+      final name = (comma < 0 ? '' : raw.substring(comma + 1)).trim();
       final title = name.isEmpty ? '未命名频道' : name;
       final lower = title.toLowerCase();
       if (lower.startsWith('更新时间') ||

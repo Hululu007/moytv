@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
@@ -50,20 +51,96 @@ class PyBridge {
   PyBridge._();
 
   static const _channel = MethodChannel('moyi/pybridge');
+
+  /// 状态探测超时：callRaw 的 70 秒超时只包住 'call' 调用，包不住
+  /// 前面的 ensureReady→status 探测；探测卡住时整个 py 调用永久挂起。
+  /// 现探测本身 10 秒封顶，超时按“不可用”回。
+  static const probeTimeout = Duration(seconds: 10);
+
+  /// 校验调用超时：原先 validate 的通道调用不挂超时。
+  static const validateTimeout = Duration(seconds: 30);
+
+  /// “不可用”结果短缓存：原先只有可用结果进缓存，不可用时每次调用
+  /// 都重新探测——全局搜索扇出几十个 py 站就是几十次重复探测。
+  /// 不可用结果缓存 5 秒，force 可绕过。
+  static const negativeStatusTtl = Duration(seconds: 5);
+
   static PyRuntimeStatus? _statusCache;
+  static DateTime? _statusCachedAt;
+  static Future<PyRuntimeStatus>? _statusInflight;
+  static Future<PyRuntimeStatus> Function()? _testProbe;
+  static Duration? _testTimeout;
+  static DateTime Function()? _testClock;
+
+  static Duration get _effectiveProbeTimeout =>
+      _testTimeout ?? probeTimeout;
+  static Duration get _effectiveValidateTimeout =>
+      _testTimeout ?? validateTimeout;
+  static DateTime _now() => _testClock?.call() ?? DateTime.now();
+
+  /// 测试缝：覆盖状态探测实现（传 null 恢复真实探测）。
+  @visibleForTesting
+  static void setTestProbe(Future<PyRuntimeStatus> Function()? probe) {
+    _testProbe = probe;
+  }
+
+  /// 测试缝：覆盖探测/校验超时（传 null 恢复默认）。
+  @visibleForTesting
+  static void setTestTimeout(Duration? timeout) => _testTimeout = timeout;
+
+  /// 测试缝：覆盖时钟（传 null 恢复真实时钟），供失败缓存 TTL 测试。
+  @visibleForTesting
+  static void setTestClock(DateTime Function()? clock) => _testClock = clock;
+
+  /// 测试缝：清状态缓存与在途探测，供测试隔离。
+  @visibleForTesting
+  static void clearTestStatus() {
+    _statusCache = null;
+    _statusCachedAt = null;
+    _statusInflight = null;
+  }
 
   static Future<PyRuntimeStatus> status({bool force = false}) async {
-    if (!force && _statusCache != null) return _statusCache!;
-    final status = await _probe();
-    if (status.available) {
-      _statusCache = status;
-    } else {
-      _statusCache = null;
+    if (!force && _statusCache != null && _statusCachedAt != null) {
+      final cached = _statusCache!;
+      final fresh =
+          cached.available ||
+          _now().difference(_statusCachedAt!) < negativeStatusTtl;
+      if (fresh) return cached;
     }
-    return status;
+    // 在途去重：并发的 status() 只发一次探测，后到的等同一单。
+    // force 跳过缓存读，但同样复用在途探测（探测结果本就是现取的）。
+    final inflight = _statusInflight;
+    if (inflight != null) return inflight;
+    final future = _probeBounded();
+    _statusInflight = future;
+    try {
+      final result = await future;
+      _statusCache = result;
+      _statusCachedAt = _now();
+      return result;
+    } finally {
+      if (identical(_statusInflight, future)) _statusInflight = null;
+    }
+  }
+
+  static Future<PyRuntimeStatus> _probeBounded() async {
+    try {
+      return await _probe().timeout(
+        _effectiveProbeTimeout,
+        onTimeout: () => const PyRuntimeStatus(
+          available: false,
+          detail: '桥状态探测超时',
+        ),
+      );
+    } catch (error) {
+      return PyRuntimeStatus(available: false, detail: error.toString());
+    }
   }
 
   static Future<PyRuntimeStatus> _probe() async {
+    final override = _testProbe;
+    if (override != null) return override();
     if (!Platform.isAndroid && !Platform.isIOS) {
       return const PyRuntimeStatus(
         available: false,
@@ -101,12 +178,14 @@ class PyBridge {
     final status = await PyBridge.status();
     if (!status.available) return null;
     try {
-      final raw = await _channel.invokeMethod<String>('validate', {
-        'source': source,
-      });
+      final raw = await _channel
+          .invokeMethod<String>('validate', {'source': source})
+          .timeout(_effectiveValidateTimeout);
       return PyValidation.fromJson(
         Map<String, dynamic>.from(jsonDecode(raw ?? '{}') as Map),
       );
+    } on TimeoutException {
+      throw AppFailure('蜘蛛校验超时，请重试');
     } on PlatformException catch (error) {
       throw AppFailure('蜘蛛校验失败：${error.message ?? error.code}');
     }

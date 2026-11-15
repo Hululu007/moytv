@@ -66,8 +66,8 @@ class LocalSnapshot {
     'activeProfile',
     'displayMode',
     'appThemeMode',
-    // 每套主题绑定的显示方案（导航样式 + 内容档），必须列入受管字段，
-    // 否则保存导航样式会被 commit 判为「无效的本地配置字段」。
+    // 每套主题绑定的显示方案（导航样式固定值 + 内容档），必须列入受管字段，
+    // 否则保存显示方案会被 commit 判为「无效的本地配置字段」。
     'themeScheme_purpleNeon',
     'themeScheme_lightClean',
     'themeScheme_goldVip',
@@ -76,6 +76,10 @@ class LocalSnapshot {
     'themeScheme_minimalCard',
     'themeScheme_retroFilm',
     'themeScheme_tvBigScreen',
+    'themeScheme_leftCategories',
+    'themeScheme_cyanCyberNeon',
+    'themeScheme_redBlackNeon',
+    'themeScheme_pinkPurpleNeon',
     // 旧主题系统的键：不再被读取，只为校验旧快照保留，
     // migrateLegacyThemeSettings 会删掉它们。
     'themeMode',

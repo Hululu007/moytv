@@ -182,7 +182,7 @@ void main() {
     );
     final ext = _decodeExt(site.ext);
     final channels = ext['channels'] as List;
-    expect(channels, hasLength(110));
+    expect(channels, hasLength(125));
     // 2026-11-14 第十一件 A：软件/VPN/代理/交流群/小说/查询/纯写真
     // 频道已从清单剔除，绝不回潮；名字含未成年指向音译词的也已剔除。
     const removedUsers = <String>{

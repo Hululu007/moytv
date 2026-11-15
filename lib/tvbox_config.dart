@@ -10,6 +10,7 @@ import 'jar_bridge.dart';
 import 'live_sources.dart';
 import 'models.dart';
 import 'playback_parse.dart';
+import 'source_compat.dart';
 
 class TvBoxSiteRecord {
   const TvBoxSiteRecord({
@@ -73,19 +74,35 @@ class TvBoxLiveRecord {
     required this.id,
     required this.name,
     required this.url,
+    this.epg = '',
+    this.group = '',
   });
 
   final String id;
   final String name;
   final String url;
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'url': url};
+  /// 节目单地址（配置 lives 条目的 epg 字段），空表示未提供。
+  final String epg;
+
+  /// 直播分组（配置 lives 条目的 group 字段），空表示未提供。
+  final String group;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'url': url,
+    if (epg.isNotEmpty) 'epg': epg,
+    if (group.isNotEmpty) 'group': group,
+  };
 
   factory TvBoxLiveRecord.fromJson(Map<String, dynamic> json) =>
       TvBoxLiveRecord(
         id: json['id'] as String? ?? '',
         name: json['name'] as String? ?? '',
         url: json['url'] as String? ?? '',
+        epg: json['epg'] as String? ?? '',
+        group: json['group'] as String? ?? '',
       );
 }
 
@@ -108,11 +125,16 @@ class TvBoxConfigRecord {
   final List<String> parseIds;
   final String updatedAt;
 
+  bool get hasVideo => sites.isNotEmpty;
+  bool get hasLive => lives.isNotEmpty;
+  bool get isDualSided => hasVideo && hasLive;
+
   int get jarSiteCount => sites.where((site) => site.kind == 'jar').length;
   int get apiSiteCount => sites.where((site) => site.kind == 'api').length;
   int get pySiteCount => sites.where((site) => site.kind == 'py').length;
+  int get jsSiteCount => sites.where((site) => site.kind == 'js').length;
   String get summaryLine =>
-      '站点 ${sites.length}（接口 $apiSiteCount · jar $jarSiteCount · py $pySiteCount）· 直播 ${lives.length} · 解析 ${parseIds.length}';
+      '站点 ${sites.length}（接口 $apiSiteCount · jar $jarSiteCount · py $pySiteCount · JS $jsSiteCount）· 直播 ${lives.length} · 解析 ${parseIds.length}';
 
   Map<String, dynamic> toJson() => {
     'configId': configId,
@@ -191,6 +213,22 @@ class TvBoxConfigStore {
         } else if (site.remoteUrl.isNotEmpty) {
           SourceSite.importedPyRemoteUrls[site.coreId] = site.remoteUrl;
         }
+      } else if (site.kind == 'js') {
+        SourceSite.importedSites[site.coreId] = SourceSite(
+          site.coreId,
+          site.name,
+          'JS 蜘蛛 · 来自配置「${record.name}」',
+          section: SourceSite.sectionVideo,
+          origin: SourceSite.originConfig,
+          configId: record.configId,
+          configName: record.name,
+          importType: 'js',
+        );
+        if (site.fileName.isNotEmpty) {
+          SourceSite.importedJsFiles[site.coreId] = site.fileName;
+        } else if (site.remoteUrl.isNotEmpty) {
+          SourceSite.importedJsRemoteUrls[site.coreId] = site.remoteUrl;
+        }
       } else if (site.kind == 'jar') {
         JarBridge.register(
           JarSiteSpec(
@@ -233,7 +271,8 @@ class TvBoxConfigStore {
           description: '来自配置「${record.name}」',
           protocol: LiveProtocol.list,
           endpoints: [live.url],
-          group: live.name,
+          epg: live.epg,
+          group: live.group.isNotEmpty ? live.group : live.name,
           builtin: false,
         ),
       );
@@ -268,13 +307,14 @@ class TvBoxImportReport {
   int apiSites = 0;
   int jarSites = 0;
   int pySites = 0;
+  int jsSites = 0;
   int t4Sites = 0;
   int lives = 0;
   int parses = 0;
   final List<String> notes = [];
 
   String get summary =>
-      '站点 ${apiSites + jarSites + pySites + t4Sites} 个（接口 $apiSites · jar $jarSites · py $pySites · T4 $t4Sites）、直播 $lives 个、解析 $parses 个';
+      '站点 ${apiSites + jarSites + pySites + jsSites + t4Sites} 个（接口 $apiSites · jar $jarSites · py $pySites · T4 $t4Sites · JS $jsSites）、直播 $lives 个、解析 $parses 个';
 }
 
 class TvBoxConfigParser {
@@ -286,9 +326,17 @@ class TvBoxConfigParser {
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
       throw const FormatException('配置不是 JSON 对象');
     } on FormatException {
+      // base64 包裹的配置：解出来是合法配置对象才认。
+      final decoded = tryDecodeBase64Config(trimmed);
+      if (decoded != null) {
+        final parsed = jsonDecode(decoded);
+        if (parsed is Map) return Map<String, dynamic>.from(parsed);
+      }
       final repaired = _repair(trimmed);
-      final decoded = jsonDecode(repaired);
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      final repairedDecoded = jsonDecode(repaired);
+      if (repairedDecoded is Map) {
+        return Map<String, dynamic>.from(repairedDecoded);
+      }
       throw const FormatException('配置不是合法的 TVBox JSON');
     }
   }
@@ -385,20 +433,11 @@ class _SpiderRef {
   final String md5;
 }
 
-_SpiderRef _parseSpiderRef(String raw) {
-  final parts = raw.split(';').map((part) => part.trim()).toList();
-  var url = '';
-  var md5 = '';
-  final md5Pattern = RegExp(r'^[0-9a-fA-F]{32}$');
-  for (final part in parts) {
-    if (part.isEmpty) continue;
-    if (md5Pattern.hasMatch(part)) {
-      md5 = part.toLowerCase();
-    } else if (url.isEmpty) {
-      url = part;
-    }
-  }
-  return _SpiderRef(url, md5);
+/// spider/jar 引用：字符串 "url;md5"、对象 {url, md5}、数组 [url, md5]
+/// 三种形态都认（见 source_compat.dart）。
+_SpiderRef _parseSpiderRefValue(Object? raw) {
+  final ref = parseSpiderRefValue(raw);
+  return _SpiderRef(ref.url, ref.md5);
 }
 
 class TvBoxImporter {
@@ -406,7 +445,44 @@ class TvBoxImporter {
 
   final AppRepository repository;
 
-  static Future<String> fetchText(String url) async {
+  /// 配置文本上限 16MB、通用下载上限 128MB：原先读正文既无超时
+  /// 也无上限（只有等响应头的 30 秒超时），慢速滴漏的响应会让导入
+  /// 界面一直转圈、超大响应直接撑爆内存。
+  static const maxConfigTextBytes = 16 << 20;
+  static const maxFetchBytes = 128 << 20;
+  static const bodyTimeout = Duration(seconds: 60);
+
+  static Future<String> fetchText(
+    String url, {
+    Duration bodyTimeout = TvBoxImporter.bodyTimeout,
+  }) async {
+    final bytes = await _fetchBytes(
+      url,
+      maxBytes: maxConfigTextBytes,
+      bodyTimeout: bodyTimeout,
+      failureLabel: '拉取配置失败',
+    );
+    return utf8.decode(bytes);
+  }
+
+  static Future<List<int>> fetchBytes(
+    String url, {
+    Duration bodyTimeout = TvBoxImporter.bodyTimeout,
+  }) async {
+    return _fetchBytes(
+      url,
+      maxBytes: maxFetchBytes,
+      bodyTimeout: bodyTimeout,
+      failureLabel: '拉取失败',
+    );
+  }
+
+  static Future<List<int>> _fetchBytes(
+    String url, {
+    required int maxBytes,
+    required Duration bodyTimeout,
+    required String failureLabel,
+  }) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 20);
     try {
@@ -416,34 +492,34 @@ class TvBoxImporter {
         const Duration(seconds: 30),
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw FormatException('拉取配置失败：HTTP ${response.statusCode}');
+        throw FormatException('$failureLabel：HTTP ${response.statusCode}');
       }
-      return await utf8.decoder.bind(response).join();
+      final bytes = await _collect(
+        response,
+        maxBytes: maxBytes,
+        failureLabel: failureLabel,
+      ).timeout(bodyTimeout, onTimeout: () {
+        throw FormatException('$failureLabel：读取超时');
+      });
+      return bytes;
     } finally {
       client.close();
     }
   }
 
-  static Future<List<int>> fetchBytes(String url) async {
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 20);
-    try {
-      final request = await client.getUrl(Uri.parse(url));
-      request.headers.set(HttpHeaders.userAgentHeader, 'okhttp/4.12.0');
-      final response = await request.close().timeout(
-        const Duration(seconds: 30),
-      );
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw FormatException('拉取失败：HTTP ${response.statusCode}');
+  static Future<List<int>> _collect(
+    HttpClientResponse response, {
+    required int maxBytes,
+    required String failureLabel,
+  }) async {
+    final bytes = <int>[];
+    await for (final chunk in response) {
+      bytes.addAll(chunk);
+      if (bytes.length > maxBytes) {
+        throw FormatException('$failureLabel：内容过大');
       }
-      final bytes = <int>[];
-      await for (final chunk in response) {
-        bytes.addAll(chunk);
-      }
-      return bytes;
-    } finally {
-      client.close();
     }
+    return bytes;
   }
 
   Future<TvBoxImportReport> importFromUrl(
@@ -478,7 +554,7 @@ class TvBoxImporter {
         ? displayName
         : _configName(raw, sourceUrl);
     final report = TvBoxImportReport(configId, name);
-    final configSpider = _parseSpiderRef(raw['spider']?.toString() ?? '');
+    final configSpider = _parseSpiderRefValue(raw['spider']);
 
     final sites = <TvBoxSiteRecord>[];
     for (final row in raw['sites'] as List? ?? const []) {
@@ -500,12 +576,17 @@ class TvBoxImporter {
 
     final lives = <TvBoxLiveRecord>[];
     var liveIndex = 0;
-    for (final row in raw['lives'] as List? ?? const []) {
+    final liveRows = raw['lives'] ?? raw['live'];
+    final liveList = liveRows is List
+        ? liveRows
+        : (liveRows is Map ? [liveRows] : const []);
+    for (final row in liveList) {
       if (row is! Map) continue;
       final entry = Map<String, dynamic>.from(row);
       liveIndex++;
-      final liveName = entry['name']?.toString() ?? '直播 $liveIndex';
-      final liveUrl = entry['url']?.toString() ?? '';
+      final live = parseLiveEntry(entry, liveIndex);
+      final liveName = live.name;
+      final liveUrl = live.url;
       final type = entry['type'];
       if (liveUrl.isEmpty || !liveUrl.startsWith('http')) {
         report.notes.add('直播「$liveName」缺少可用地址，已跳过');
@@ -520,6 +601,8 @@ class TvBoxImporter {
           id: 'live:$configId:$liveIndex',
           name: liveName,
           url: liveUrl,
+          epg: live.epg,
+          group: live.group,
         ),
       );
       report.lives++;
@@ -571,6 +654,9 @@ class TvBoxImporter {
     await _syncCustomSources();
     if (report.pySites > 0) {
       report.notes.add('py 站已懒加载注册：首次打开该站时再下载校验');
+    }
+    if (report.jsSites > 0) {
+      report.notes.add('JS 站已懒加载注册：首次打开该站时再下载校验');
     }
     return report;
   }
@@ -624,9 +710,11 @@ class TvBoxImporter {
       return null;
     }
     final ext = await _resolveExt(entry['ext'], report, name);
-    if (api.startsWith('csp_')) {
+    final shape = classifySiteApi(api: api, typeValue: entry['type']);
+    if (shape.kind == SiteApiKind.jarCsp ||
+        shape.kind == SiteApiKind.jarClass) {
       final siteSpider = entry['jar'] != null
-          ? _parseSpiderRef(entry['jar'].toString())
+          ? _parseSpiderRefValue(entry['jar'])
           : configSpider;
       if (siteSpider.url.isEmpty) {
         report.notes.add('「$name」是 jar 站但配置未提供 spider jar 地址，已跳过');
@@ -642,14 +730,16 @@ class TvBoxImporter {
         key: key,
         name: name,
         kind: 'jar',
-        className: JarSiteSpec.classNameForApi(api),
+        // csp_ 形态拼类名前缀；全类名形态 api 本身就是类名，不可再拼。
+        className: shape.kind == SiteApiKind.jarClass
+            ? api
+            : JarSiteSpec.classNameForApi(api),
         jarUrl: siteSpider.url,
         jarMd5: siteSpider.md5,
         ext: ext,
       );
     }
-    if (entry['type']?.toString() == '4' &&
-        (api.startsWith('http://') || api.startsWith('https://'))) {
+    if (shape.kind == SiteApiKind.t4) {
       final created = await repository.addCustomSource(
         name: name,
         base: api,
@@ -666,8 +756,7 @@ class TvBoxImporter {
         ext: ext,
       );
     }
-    final apiPath = api.split('?').first.split('#').first;
-    if (apiPath.toLowerCase().endsWith('.py')) {
+    if (shape.kind == SiteApiKind.remotePy) {
       return _importRemotePy(
         key: key,
         name: name,
@@ -677,7 +766,17 @@ class TvBoxImporter {
         report: report,
       );
     }
-    if (api.startsWith('http://') || api.startsWith('https://')) {
+    if (shape.kind == SiteApiKind.remoteJs) {
+      return _importRemoteJs(
+        key: key,
+        name: name,
+        api: api,
+        ext: ext,
+        configId: configId,
+        report: report,
+      );
+    }
+    if (shape.kind == SiteApiKind.httpApi) {
       final rule = _xbpqRuleOf(ext);
       final created = await repository.addCustomSource(
         name: name,
@@ -700,7 +799,7 @@ class TvBoxImporter {
         ext: ext,
       );
     }
-    report.notes.add('「$name」的 api 类型不支持（$api），已跳过');
+    report.notes.add('「$name」的 ${shape.reason}，已跳过');
     return null;
   }
 
@@ -722,6 +821,30 @@ class TvBoxImporter {
       key: key,
       name: name,
       kind: 'py',
+      coreId: id,
+      remoteUrl: api,
+      ext: ext,
+    );
+  }
+
+  Future<TvBoxSiteRecord?> _importRemoteJs({
+    required String key,
+    required String name,
+    required String api,
+    required String ext,
+    required String configId,
+    required TvBoxImportReport report,
+  }) async {
+    var slug = key.isNotEmpty ? key : name;
+    slug = slug.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    if (slug.isEmpty) slug = 'js';
+    final id = 'js:tvbox:$configId:$slug';
+    report.jsSites++;
+    return TvBoxSiteRecord(
+      siteId: id,
+      key: key,
+      name: name,
+      kind: 'js',
       coreId: id,
       remoteUrl: api,
       ext: ext,
@@ -754,8 +877,8 @@ class TvBoxImporter {
       final decoded = jsonDecode(ext);
       if (decoded is Map) {
         final map = Map<String, dynamic>.from(decoded);
-        const ruleKeys = ['主页url', '首页url', '分类url', '数组', '搜索url', '线路数组'];
-        final hits = ruleKeys.where(map.containsKey).length;
+        // 与 Go 核 customSourceRuleKeys 对齐（命中 2 个即认）。
+        final hits = xbpqRuleKeys.where(map.containsKey).length;
         if (hits >= 2) return jsonEncode(map);
       }
     } catch (_) {}
@@ -779,7 +902,10 @@ class TvBoxImporter {
     String configName,
     TvBoxImportReport report,
   ) async {
-    final rows = raw['parses'] as List? ?? const [];
+    final parseRows = raw['parses'] ?? raw['parse'];
+    final rows = parseRows is List
+        ? parseRows
+        : (parseRows is Map ? [parseRows] : const []);
     if (rows.isEmpty) return const [];
     final existing = await ParseInterfaceStore.load();
     final kept = existing
@@ -791,12 +917,18 @@ class TvBoxImporter {
       if (row is! Map) continue;
       final entry = Map<String, dynamic>.from(row);
       index++;
-      final parseName = entry['name']?.toString() ?? '解析 $index';
-      final parseUrl = entry['url']?.toString() ?? '';
-      final type = entry['type'];
+      final shape = parseEntryShape(entry, index);
+      final parseName = shape.name;
+      final parseUrl = shape.url;
       if (parseUrl.isEmpty) continue;
-      if (type != null && type.toString() != '0') {
-        report.notes.add('解析「$parseName」是 JSON 型接口，与现有前缀模板不兼容，已跳过');
+      if (shape.typeValue == 2 || shape.typeValue == 3) {
+        report.notes.add(
+          '解析「$parseName」是 type ${shape.typeValue}（并发多 JSON / 聚合），现有管线不支持，已跳过',
+        );
+        continue;
+      }
+      if (shape.typeValue != 0 && shape.typeValue != 1) {
+        report.notes.add('解析「$parseName」类型 ${shape.typeValue} 不支持，已跳过');
         continue;
       }
       added.add(
@@ -805,6 +937,8 @@ class TvBoxImporter {
           name: parseName,
           url: parseUrl,
           source: configName,
+          jsonApi: shape.isJson,
+          headers: shape.headers,
         ),
       );
       report.parses++;
@@ -821,6 +955,16 @@ class TvBoxImporter {
       if (site.kind == 'py') {
         SourceSite.importedSites.remove(site.coreId);
         SourceSite.importedPyFiles.remove(site.coreId);
+        SourceSite.importedPyRemoteUrls.remove(site.coreId);
+        if (site.fileName.isNotEmpty) {
+          try {
+            await ImportFileStore.delete(site.fileName);
+          } catch (_) {}
+        }
+      } else if (site.kind == 'js') {
+        SourceSite.importedSites.remove(site.coreId);
+        SourceSite.importedJsFiles.remove(site.coreId);
+        SourceSite.importedJsRemoteUrls.remove(site.coreId);
         if (site.fileName.isNotEmpty) {
           try {
             await ImportFileStore.delete(site.fileName);

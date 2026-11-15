@@ -184,14 +184,82 @@ void main() {
       expect(tgDedupeItems(items), hasLength(1));
     });
 
-    test('different cover or empty cover keeps both', () {
+    test('same video different covers keeps one card', () {
       final items = [
         _drama('u|1', '同名帖', cover: 'https://x/1.jpg'),
         _drama('u|2', '同名帖', cover: 'https://x/2.jpg'),
         _drama('u|3', '同名帖'),
         _drama('u|4', '同名帖'),
       ];
-      expect(tgDedupeItems(items), hasLength(4));
+      final kept = tgDedupeItems(items);
+      expect(kept.map((d) => d.id), ['u|1']);
+    });
+
+    test('forwarded copies with different tags and covers dedupe', () {
+      final items = [
+        _drama('u|1', '【频道A】甜蜜暴击 第1集 1080P', cover: 'https://x/1.jpg'),
+        _drama('u|2', '甜蜜暴击 第1集 @channelB', cover: 'https://x/2.jpg'),
+      ];
+      expect(tgDedupeItems(items).map((d) => d.id), ['u|1']);
+    });
+
+    test('coverless first is replaced by covered duplicate', () {
+      final items = [
+        _drama('u|1', '甜蜜暴击 第1集'),
+        _drama('u|2', '甜蜜暴击 第1集', cover: 'https://x/2.jpg'),
+      ];
+      final kept = tgDedupeItems(items);
+      expect(kept.map((d) => d.id), ['u|2']);
+    });
+
+    test('different episodes are not deduped', () {
+      final items = [
+        _drama('u|1', '甜蜜暴击 第1集', cover: 'https://x/1.jpg'),
+        _drama('u|2', '甜蜜暴击 第2集', cover: 'https://x/2.jpg'),
+      ];
+      expect(tgDedupeItems(items), hasLength(2));
+    });
+
+    test('different videos are not deduped', () {
+      final items = [
+        _drama('u|1', '甜蜜暴击 第1集', cover: 'https://x/1.jpg'),
+        _drama('u|2', '另一部片 第1集', cover: 'https://x/1.jpg'),
+      ];
+      expect(tgDedupeItems(items), hasLength(2));
+    });
+
+    test('empty normalized key is never deduped', () {
+      final items = [
+        _drama('u|1', '【频道A】'),
+        _drama('u|2', '【频道B】'),
+      ];
+      expect(tgDedupeItems(items), hasLength(2));
+    });
+
+    test('pipeline: duplicate episode collapses, episodes group', () {
+      final items = [
+        _drama(
+          'u|1',
+          '甜蜜暴击 第1集',
+          source: 'jar:zakatv:ZakaTgMovie',
+          cover: 'https://x/1.jpg',
+        ),
+        _drama(
+          'u|2',
+          '【转发】甜蜜暴击 第1集',
+          source: 'jar:zakatv:ZakaTgMovie',
+          cover: 'https://x/9.jpg',
+        ),
+        _drama('u|3', '甜蜜暴击 第2集', source: 'jar:zakatv:ZakaTgMovie'),
+      ];
+      final page = tgPostProcessPage(
+        _page(items),
+        className: tgMovieAmnsClass,
+        category: '',
+      );
+      expect(page.items, hasLength(1));
+      expect(page.items.first.episodes, 2);
+      expect(page.items.first.cover, 'https://x/1.jpg');
     });
   });
 

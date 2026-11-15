@@ -45,12 +45,11 @@ func t4Call(ctx context.Context, d *Downloader, apiURL string, params map[string
 	if err != nil {
 		return nil, err
 	}
-	body = strings.TrimSpace(body)
-	if body == "" || !strings.HasPrefix(body, "{") {
-		return nil, errors.New("T4 服务未返回 JSON")
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+	payload, err := httpAggDecodeBody(body)
+	if err != nil {
+		if errors.Is(err, errHTTPAggNotJSON) {
+			return nil, errors.New("T4 服务未返回 JSON")
+		}
 		return nil, errors.New("T4 服务响应无法解析")
 	}
 	return payload, nil
@@ -95,43 +94,11 @@ func t4Int(value any) int {
 }
 
 func t4Items(payload map[string]any) []map[string]any {
-	raw, ok := payload["list"].([]any)
-	if !ok {
-		return nil
-	}
-	items := make([]map[string]any, 0, len(raw))
-	for _, row := range raw {
-		if item, ok := row.(map[string]any); ok {
-			items = append(items, item)
-		}
-	}
-	return items
+	return httpAggItems(payload)
 }
 
 func t4Drama(source string, item map[string]any) Drama {
-	id := t4String(item["vod_id"])
-	title := t4String(item["vod_name"])
-	if title == "" {
-		title = t4String(item["name"])
-	}
-	if id == "" || title == "" {
-		return Drama{}
-	}
-	cover := t4String(item["vod_pic"])
-	if cover == "" {
-		cover = t4String(item["vod_pic_slide"])
-	}
-	return Drama{
-		ID:          providerDramaID(source, id),
-		Source:      source,
-		SourceID:    id,
-		Title:       title,
-		Intro:       truncate(t4String(item["vod_content"]), 2000),
-		Cover:       cover,
-		Category:    t4String(item["type_name"]),
-		ChannelName: duanjuSourceName(source),
-		Remark:      t4String(item["vod_remarks"]),
-	}
+	return httpAggDrama(source, item)
 }
 
 func t4Dramas(source string, payload map[string]any) []Drama {
@@ -159,19 +126,10 @@ func t4Categories(ctx context.Context, d *Downloader, source string) ([]nativeCa
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := payload["class"].([]any)
-	categories := make([]nativeCategory, 0, len(raw))
-	for _, row := range raw {
-		entry, ok := row.(map[string]any)
-		if !ok {
-			continue
-		}
-		id := t4String(entry["type_id"])
-		name := t4String(entry["type_name"])
-		if id == "" || name == "" || id == "interests" {
-			continue
-		}
-		categories = append(categories, nativeCategory{ID: id, Name: name})
+	classes := httpAggClasses(payload)
+	categories := make([]nativeCategory, 0, len(classes))
+	for _, entry := range classes {
+		categories = append(categories, nativeCategory{ID: entry.id, Name: entry.name})
 	}
 	return categories, nil
 }
@@ -200,11 +158,7 @@ func t4CatalogPage(ctx context.Context, d *Downloader, source string, page int, 
 		return nil, false, err
 	}
 	items := t4Dramas(source, payload)
-	pagecount := t4Int(payload["pagecount"])
-	if pagecount > 0 {
-		return items, page < pagecount, nil
-	}
-	return items, len(items) >= 30, nil
+	return items, httpAggHasMore(payload, page, len(items)), nil
 }
 
 func t4Search(ctx context.Context, d *Downloader, source, query string) ([]Drama, error) {
@@ -230,34 +184,7 @@ type t4Route struct {
 }
 
 func t4ParseRoutes(item map[string]any) []t4Route {
-	flags := strings.Split(t4String(item["vod_play_from"]), "$$$")
-	groups := strings.Split(t4String(item["vod_play_url"]), "$$$")
-	routes := make([]t4Route, 0, len(groups))
-	for index, group := range groups {
-		route := t4Route{}
-		if index < len(flags) {
-			route.flag = strings.TrimSpace(flags[index])
-		}
-		for _, entry := range strings.Split(group, "#") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			name, playID := entry, ""
-			if cut := strings.LastIndex(entry, "$"); cut >= 0 {
-				name = strings.TrimSpace(entry[:cut])
-				playID = strings.TrimSpace(entry[cut+1:])
-			}
-			if playID == "" {
-				continue
-			}
-			route.episodes = append(route.episodes, t4Episode{title: name, playID: playID})
-		}
-		if len(route.episodes) > 0 {
-			routes = append(routes, route)
-		}
-	}
-	return routes
+	return httpAggRoutes(item)
 }
 
 func t4PlayToken(flag, playID string) string {
@@ -320,32 +247,18 @@ func (d *Downloader) t4PlayOnce(ctx context.Context, apiURL, flag, playID string
 	if err != nil {
 		return providerMedia{}, err
 	}
-	address := t4String(payload["url"])
-	if address == "" {
+	played := httpAggPlay(payload)
+	if !played.hasURL {
 		return providerMedia{}, errors.New("T4 未返回播放地址")
 	}
-	var headers map[string]string
-	if raw := t4String(payload["header"]); raw != "" {
-		_ = json.Unmarshal([]byte(raw), &headers)
-	}
+	headers := played.headers
 	referer := firstNonEmpty(headers["Referer"], headers["referer"])
 	userAgent := firstNonEmpty(headers["User-Agent"], headers["user-agent"])
 	cookie := firstNonEmpty(headers["Cookie"], headers["cookie"])
 	origin := firstNonEmpty(headers["Origin"], headers["origin"])
-	media := providerMedia{URL: address, Referer: referer}
+	media := providerMedia{URL: played.url, Referer: referer, NeedsParse: played.needsParse}
 	if userAgent != "" || referer != "" || cookie != "" || origin != "" {
 		media.credentials = &providerMediaCredentials{userAgent: userAgent, referer: referer, cookie: cookie, origin: origin}
-	}
-	parse := t4Int(payload["parse"])
-	playURL := t4String(payload["playUrl"])
-	if playURL == "" {
-		playURL = t4String(payload["playurl"])
-	}
-	switch {
-	case parse == 1 && playURL != "":
-		media.URL = playURL + address
-	case parse == 1:
-		media.NeedsParse = true
 	}
 	return media, nil
 }

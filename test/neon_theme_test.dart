@@ -41,6 +41,12 @@ void main() {
       expect(neonStyleActive, isFalse);
       appThemeNotifier.value = AppThemeMode.purpleNeon;
       expect(neonStyleActive, isTrue);
+      appThemeNotifier.value = AppThemeMode.cyanCyberNeon;
+      expect(neonStyleActive, isTrue);
+      appThemeNotifier.value = AppThemeMode.redBlackNeon;
+      expect(neonStyleActive, isTrue);
+      appThemeNotifier.value = AppThemeMode.pinkPurpleNeon;
+      expect(neonStyleActive, isTrue);
       appThemeNotifier.value = AppThemeMode.goldVip;
       expect(neonStyleActive, isFalse);
       appThemeNotifier.value = AppThemeMode.purpleNeon;

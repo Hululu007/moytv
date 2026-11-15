@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'content_models.dart';
+import 'source_fanout.dart';
 
 /// 全局搜索里一个阅读站的一组结果（听书 / 阅读两区共用）。
 class GlobalSearchBookGroup {
@@ -50,6 +51,11 @@ List<GlobalSearchBookTarget> globalSearchBookTargets({
 /// 单站搜索预算：单个源超时只回空组，不拖垮整轮搜索。
 const globalSearchPerSiteTimeout = Duration(seconds: 30);
 
+/// 并行搜索并发上限：原先 Future.wait 一次打出去全部 28 个目标站，
+/// 同时挤占 py 桥与网络；现与 Go 核聚合搜索同款 6 路有界并发，
+/// 返回顺序仍与目标站表一致。
+const globalSearchConcurrency = 6;
+
 /// 对一批阅读目标站并行搜索（执行层，可单测）：单站超时 / 报错 /
 /// 无结果只回空组，不拖垮整次搜索；只有出结果的站才进返回列表，
 /// 顺序与目标站表一致（展示层再按区排序）。
@@ -57,11 +63,13 @@ Future<List<GlobalSearchBookGroup>> searchReadingTargets(
   String query,
   List<GlobalSearchBookTarget> targets, {
   Duration perSiteTimeout = globalSearchPerSiteTimeout,
+  int concurrency = globalSearchConcurrency,
 }) async {
   final trimmed = query.trim();
   if (trimmed.isEmpty || targets.isEmpty) return const [];
-  final results = await Future.wait(
-    targets.map((target) async {
+  final results = await fanoutOrdered(
+    targets,
+    (target) async {
       try {
         final page = await target.source
             .search(trimmed, 1)
@@ -75,7 +83,8 @@ Future<List<GlobalSearchBookGroup>> searchReadingTargets(
       } catch (_) {
         return null;
       }
-    }),
+    },
+    concurrency: concurrency,
   );
   return [for (final result in results) ?result];
 }

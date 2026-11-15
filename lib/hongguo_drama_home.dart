@@ -963,6 +963,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final neonTab = _tab >= 3;
     // 内容档锁定的分类不存在：除“我的”页外，所有内容页签都显示诚实空态。
     // 档位空态只拦站源内容页签：我的页与多媒体页（用户自己的
@@ -981,7 +982,9 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             magentaY: _tab == _neonHomeTab ? .40 : .26,
             tealY: _tab == _neonHomeTab ? .40 : .30,
             topGlow: _tab == _neonHomeTab ? .26 : .58,
-            rightGlowColor: _tab == _neonHomeTab ? Neon.teal : Neon.blue,
+            rightGlowColor: _tab == _neonHomeTab
+                ? config.secondaryColor
+                : config.primaryColor,
             rightGlowAlpha: _tab == _neonHomeTab ? 1 : .62,
             child: SafeArea(
               bottom: false,
@@ -996,7 +999,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             _ => _feed(context),
           };
     return Scaffold(
-      backgroundColor: _tab == 0 ? Colors.black : (neonTab ? Neon.bg : null),
+      backgroundColor: _tab == 0 ? Colors.black : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
       body: hideCapsuleBar && _tab != 0
           ? Column(
@@ -1401,7 +1404,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     final episodeCount = detail?.episodes.length ?? drama.episodes;
     final synopsis = detail?.drama.description ?? drama.description;
     final episodeLine = detail != null && _episode < detail.episodes.length
-        ? '第${_episode + 1}集 | ${detail.episodes[_episode].title}'
+        ? displayEpisodeLine(detail.episodes[_episode].title, _episode + 1)
         : null;
     final isComic =
         _channel == 'comic' ||
@@ -1494,7 +1497,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              drama.heat.isNotEmpty ? '热度 ${drama.heat}' : '播放 ${drama.views}',
+              drama.heat.isNotEmpty ? heatDisplayText(drama.heat) : '播放 ${drama.views}',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
@@ -1619,7 +1622,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             leading: const Icon(Icons.palette_outlined),
             title: const Text('主题切换'),
             subtitle: Text(
-              '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 8 套主题',
+              '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 12 套主题',
             ),
             trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(

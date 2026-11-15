@@ -11,6 +11,7 @@ import 'import_file_store.dart';
 import 'imported_site_record.dart';
 import 'local_store.dart';
 import 'py_bridge.dart';
+import 'subscription_entries.dart';
 import 'tvbox_config.dart';
 import 'zoo_builtin_seed.dart';
 
@@ -270,16 +271,36 @@ class _ContentSourceScreenState extends State<ContentSourceScreen> {
             for (final config in _configs)
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  title: Text(config.name),
-                  subtitle: Text(config.summaryLine),
-                  trailing: IconButton(
-                    tooltip: '删除配置',
-                    onPressed: _busy
-                        ? null
-                        : () => unawaited(_removeConfig(config)),
-                    icon: const Icon(Icons.delete_outline_rounded),
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListTile(
+                      title: Text(config.name),
+                      subtitle: Text(config.summaryLine),
+                      trailing: IconButton(
+                        tooltip: '删除配置',
+                        onPressed: _busy
+                            ? null
+                            : () => unawaited(_removeConfig(config)),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                      ),
+                    ),
+                    // 订阅双入口：双边订阅出“影视/直播”两个入口，单边只出一个。
+                    SubscriptionEntryButtons(
+                      entries: subscriptionEntriesForConfig(config),
+                      onEnterVideo: (siteId) => enterSubscriptionVideo(
+                        context,
+                        widget.store,
+                        siteId,
+                      ),
+                      onEnterLive: (sourceId) => enterSubscriptionLive(
+                        context,
+                        widget.store,
+                        sourceId,
+                      ),
+                    ),
+                  ],
                 ),
               ),
           const Divider(height: 32),

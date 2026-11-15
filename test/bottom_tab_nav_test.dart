@@ -8,7 +8,6 @@ import 'package:moyi/bottom_tab_bar.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/local_store.dart';
-import 'package:moyi/settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -54,19 +53,26 @@ void main() {
     expect(find.byIcon(LucideIcons.film), findsNothing);
   });
 
-  testWidgets('显示方案默认全部抽屉加全部内容', (tester) async {
+  testWidgets('显示方案默认：紫蓝霓虹底部标签、其余抽屉，全部内容', (tester) async {
     final store = await _makeStore();
     for (final mode in AppThemeMode.values) {
-      expect(store.displayScheme(mode), const ThemeDisplayScheme.defaults());
+      expect(
+        store.displayScheme(mode),
+        mode == AppThemeMode.purpleNeon
+            ? const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs)
+            : const ThemeDisplayScheme.defaults(),
+      );
     }
   });
 
-  testWidgets('显示方案按主题分别存取', (tester) async {
+  // 导航样式是主题固定值（紫蓝霓虹固定底部标签）：写抽屉也读回
+  // 底部标签；内容档仍按主题分别存取。
+  testWidgets('显示方案按主题分别存取（导航固定值覆盖写值）', (tester) async {
     final store = await _makeStore();
     await store.setDisplayScheme(
       AppThemeMode.purpleNeon,
       const ThemeDisplayScheme(
-        navStyle: NavStyle.bottomTabs,
+        navStyle: NavStyle.drawer,
         contentTier: ContentTier.manhua,
       ),
     );
@@ -85,10 +91,11 @@ void main() {
 
   testWidgets('显示方案解析容忍旧值与非法值', (tester) async {
     final store = await _makeStore({
-      'themeScheme_purpleNeon': 'bottomTabs',
+      'themeScheme_purpleNeon': 'drawer',
       'themeScheme_lightClean': 'bogus:xx',
       'themeScheme_goldVip': 'bottomTabs:adult',
     });
+    // 旧值里的导航段一律作废、读回固定值；内容档照旧解析。
     expect(
       store.displayScheme(AppThemeMode.purpleNeon),
       const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
@@ -100,7 +107,7 @@ void main() {
     expect(
       store.displayScheme(AppThemeMode.goldVip),
       const ThemeDisplayScheme(
-        navStyle: NavStyle.bottomTabs,
+        navStyle: NavStyle.drawer,
         contentTier: ContentTier.adult,
       ),
     );
@@ -183,35 +190,11 @@ void main() {
     );
   });
 
-  testWidgets('设置导航样式项弹窗切换写回当前主题方案', (tester) async {
-    final store = await _makeStore();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: AppThemeConfig.forTheme(AppThemeMode.purpleNeon).toThemeData(),
-        home: SettingsScreen(repository: FixtureRepository(), store: store),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('导航样式'), findsOneWidget);
-    expect(find.text('当前：抽屉 · 随当前主题'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('nav-style-entry')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('底部标签'), findsOneWidget);
-    await tester.tap(find.text('底部标签'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(
-      store.displayScheme(AppThemeMode.purpleNeon).navStyle,
-      NavStyle.bottomTabs,
-    );
-    expect(find.text('当前：底部标签 · 随当前主题'), findsOneWidget);
-  });
+  // 设置里的导航样式项已随主题绑定收掉（见 theme_scheme_binding_test
+  // 的缺席断言），原弹窗切换测试删除。
 
   Future<LocalStore> pumpHome(
     WidgetTester tester, {
-    NavStyle navStyle = NavStyle.bottomTabs,
     String source = 'huangdou',
   }) async {
     SharedPreferences.setMockInitialValues({
@@ -220,10 +203,6 @@ void main() {
     });
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
-    await store.setDisplayScheme(
-      AppThemeMode.purpleNeon,
-      ThemeDisplayScheme(navStyle: navStyle),
-    );
     await tester.pumpWidget(
       MaterialApp(
         navigatorObservers: [homeRouteObserver],
@@ -250,6 +229,26 @@ void main() {
     await tester.tap(live);
     await tester.pump();
     // 等抽屉关闭动画（250ms）跑完再点底栏，否则点落在关闭中的遮罩上。
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  /// 在抽屉里点一行/一枚顶 Tab：先开抽屉（短剧分支用 neon-avatar，
+  /// 通用分支用 open-app-drawer），点后等关闭动画跑完。
+  Future<void> tapDrawerLabel(
+    WidgetTester tester,
+    String label, {
+    String drawerKey = 'open-app-drawer',
+  }) async {
+    await tester.tap(find.byKey(ValueKey(drawerKey)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    final item = find.descendant(
+      of: find.byType(Drawer),
+      matching: find.text(label),
+    );
+    expect(item, findsOneWidget);
+    await tester.tap(item);
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
 
@@ -281,74 +280,42 @@ void main() {
     return drawer.zone;
   }
 
-  testWidgets('首页短剧分支也显示底栏切直播区底栏仍在', (tester) async {
-    await pumpHome(tester, source: 'hongguo');
-    expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
-    await switchToLive(tester, drawerKey: 'neon-avatar');
-    expect(await currentZone(tester), HomeZone.live);
-    for (var i = 0; i < 6; i++) {
-      expect(find.byKey(ValueKey('moyi-bottom-tab-$i')), findsOneWidget);
-    }
-  }, skip: !allSourcesEnabled);
+  // 导航只随主题变、固定抽屉：首页不再挂底部标签栏，
+  // 原“短剧分支显示底栏”测试删除。
 
-  testWidgets('底部标签多媒体进多媒体屏、切其它 Tab 能离开', (tester) async {
-    await pumpHome(tester, source: 'hongguo');
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-5')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+  testWidgets('抽屉多媒体进多媒体屏、切其它区能离开、点影视能回', (tester) async {
+    // 通用分支（黄豆源）：抽屉入口在各区常在，往返全走抽屉。
+    await pumpHome(tester);
+    await tapDrawerLabel(tester, '多媒体');
     // 未登录网盘显示未登录提示；若环境里已有网盘站则显示屏本体。
     final shown =
         find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
         find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
     expect(shown, isTrue);
-    expect(find.byKey(const ValueKey('moyi-bottom-tab-5')), findsOneWidget);
     // 切直播区离开多媒体，再点回多媒体仍能进。
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-1')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    await tapDrawerLabel(tester, '直播');
     expect(await currentZone(tester), HomeZone.live);
     expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-5')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    await tapDrawerLabel(tester, '多媒体');
     final shownAgain =
         find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
         find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
     expect(shownAgain, isTrue);
-    // 点回片库，多媒体屏消失。
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-0')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    // 点回影视，多媒体屏消失（抽屉 Tab 回片库清请求）。
+    await tapDrawerLabel(tester, '影视');
     expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
     expect(find.byKey(const ValueKey('multimedia-screen')), findsNothing);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('首页底栏 Tab 切区与我的页主题行可达选择界面', (tester) async {
+  testWidgets('抽屉切区：直播→阅读', (tester) async {
     await pumpHome(tester, source: 'hongguo');
     await switchToLive(tester, drawerKey: 'neon-avatar');
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-3')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tapDrawerLabel(tester, '阅读');
     expect(await currentZone(tester), HomeZone.novel);
-    await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-4')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await dragIntoView(
-      tester,
-      find.byKey(const ValueKey('mine-theme-entry')),
-      find.byType(ListView),
-    );
-    expect(find.byKey(const ValueKey('mine-theme-entry')), findsOneWidget);
-    expect(find.text('最近观看'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('mine-theme-entry')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('app-theme-lightClean')), findsOneWidget);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('抽屉入口在底部标签样式下保留', (tester) async {
+  testWidgets('抽屉里主题切换可达', (tester) async {
     await pumpHome(tester);
-    await switchToLive(tester);
     await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));

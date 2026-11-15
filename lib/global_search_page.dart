@@ -123,18 +123,21 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
     try {
       await NovelSourceStore.applyToRegistry();
       final videoIds = widget.store.visibleSources.map((s) => s.id).toList();
-      final videoPage = await widget.repository.searchAcross(videoIds, query);
-      final videoGroups = groupGlobalVideoResults(
-        videoPage.items,
-        widget.store.sources,
-      );
       // 阅读侧：注册表全量收录，并行搜、单站超时隔离（见
       // global_search_service.dart）；视频侧仍走 searchAcross。
+      // 两腿并发跑：原先视频搜完才搜阅读，总耗时是两腿之和。
       final bookTargets = globalSearchBookTargets(
         audioSources: ContentRegistry.sourcesFor(ContentSection.audio),
         novelSources: ContentRegistry.sourcesFor(ContentSection.novel),
       );
-      final bookGroups = await searchReadingTargets(query, bookTargets);
+      final videoFuture = widget.repository.searchAcross(videoIds, query);
+      final bookFuture = searchReadingTargets(query, bookTargets);
+      final videoPage = await videoFuture;
+      final bookGroups = await bookFuture;
+      final videoGroups = groupGlobalVideoResults(
+        videoPage.items,
+        widget.store.sources,
+      );
       if (!mounted || generation != _searchGeneration) return;
       bookGroups.sort((a, b) {
         final rank = globalSearchSectionRank(

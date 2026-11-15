@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -206,12 +207,57 @@ class CachedCoverImage extends StatefulWidget {
 }
 
 class _CachedCoverImageState extends State<CachedCoverImage> {
+  // 已解析的封面文件路径（会话级）：切区/切页签会整棵销毁瓦片子树，
+  // 重挂时每个瓦片重跑 cover() 异步往返、期间只显示占位图，就是
+  // 首页深滚返回时整屏海报闪烁的根因。路径解析结果与瓦片 State
+  // 无关，记在这里让重挂首帧就能出图，不再重拉、不再闪占位图。
+  // 键与 didUpdateWidget 的换图条件一致（站源 + id + 封面地址），
+  // 封面地址变了就按新键重拉，不会拿旧图顶替。
+  static final Map<String, String> _resolvedPaths = <String, String>{};
+  static const _resolvedPathsMax = 512;
+
   late Future<String> _file;
+
+  /// 命中 _resolvedPaths 时首帧直接用的路径：FutureBuilder 的
+  /// initialData，让第一帧就不走占位图分支。
+  String? _initialPath;
   int _coverRevision = 0;
   bool _coverFailed = false;
   bool _retryOnFailure = false;
   bool _retryQueued = false;
   String? _failedPath;
+
+  static String _cacheKey(Drama drama) =>
+      '${drama.source}\u0000${drama.id}\u0000${drama.cover}';
+
+  /// 取封面路径：命中缓存直接给已完成的 Future（不调 cover()）；
+  /// 未命中才调 cover()，成功后记入缓存。cover() 可能同步抛错，
+  /// 在这里兜成带错的 Future，不把异常抛回调用方。
+  Future<String> _requestCover(Drama drama, {bool force = false}) {
+    final key = _cacheKey(drama);
+    final cached = _resolvedPaths[key];
+    if (!force && cached != null) {
+      _initialPath = cached;
+      return Future<String>.value(cached);
+    }
+    _initialPath = null;
+    Future<String> next;
+    try {
+      next = widget.repository.cover(drama, force: force);
+    } catch (e) {
+      next = Future<String>.error(e);
+    }
+    unawaited(
+      next.then((path) {
+        _resolvedPaths.remove(key);
+        _resolvedPaths[key] = path;
+        while (_resolvedPaths.length > _resolvedPathsMax) {
+          _resolvedPaths.remove(_resolvedPaths.keys.first);
+        }
+      }, onError: (_) {}),
+    );
+    return next;
+  }
 
   @override
   void initState() {
@@ -220,7 +266,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       widget.drama.id,
     );
     widget.repository.catalogUpdates.addListener(_metadataChanged);
-    _file = widget.repository.cover(widget.drama);
+    _file = _requestCover(widget.drama);
   }
 
   @override
@@ -239,7 +285,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       _coverRevision = widget.repository.catalogUpdates.coverRevision(
         widget.drama.id,
       );
-      _file = widget.repository.cover(widget.drama);
+      _file = _requestCover(widget.drama);
     }
   }
 
@@ -272,28 +318,45 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
   }
 
   Future<void> _retry(String? path) async {
-    if (path != null) {
-      await ResizeImage.resizeIfNeeded(
-        440,
-        null,
-        FileImage(File(path)),
-      ).evict();
+    try {
+      if (path != null) {
+        await ResizeImage.resizeIfNeeded(
+          440,
+          null,
+          FileImage(File(path)),
+        ).evict();
+      }
+    } catch (_) {
+      // 缓存清理失败不影响重试本身，继续走封面重取。
     }
-    if (mounted) {
-      setState(() {
-        _coverFailed = _retryOnFailure = false;
-        _failedPath = null;
-        _file = widget.repository.cover(
-          widget.repository.catalogUpdates.current(widget.drama),
-          force: true,
-        );
-      });
-    }
+    if (!mounted) return;
+    // _requestCover 已把 cover() 的同步抛错兜成带错的 Future：
+    // 绝不能把异常抛回点按手势（会冲断同次手势里卡片自身的
+    // onTap），失败时让 FutureBuilder 继续显示失败态。
+    final next = _requestCover(
+      widget.repository.catalogUpdates.current(widget.drama),
+      force: true,
+    );
+    // FutureBuilder 要到下一帧重建时才订阅这个 Future：先挂一个空
+    // 错误处理，避免错误在订阅前送达被当成未处理异常上报；
+    // FutureBuilder 自己的订阅不受影响，失败态照常显示。
+    unawaited(next.then((_) {}, onError: (_) {}));
+    if (!mounted) return;
+    setState(() {
+      _coverFailed = _retryOnFailure = false;
+      _failedPath = null;
+      _file = next;
+    });
   }
 
   Widget _failed(String? path) {
     _coverFailed = true;
     _failedPath = path;
+    // 解码失败的路径已是死路径：从会话缓存里清掉，否则重挂又拿
+    // 同一条死路径首帧出失败态，刷不掉。
+    if (path != null) {
+      _resolvedPaths.removeWhere((_, value) => value == path);
+    }
     if (_retryOnFailure) _queueRetry();
     return Center(
       child: IconButton(
@@ -310,8 +373,12 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
   @override
   Widget build(BuildContext context) => FutureBuilder<String>(
     future: _file,
+    // 命中会话缓存时 initialData 就是已解析路径：首帧直接走出图
+    // 分支，不闪占位图；未命中时为 null，走原来的等待分支。
+    initialData: _initialPath,
     builder: (context, snapshot) {
-      if (snapshot.connectionState != ConnectionState.done) {
+      if (snapshot.connectionState != ConnectionState.done &&
+          !snapshot.hasData) {
         return widget.placeholder;
       }
       if (snapshot.hasError || !snapshot.hasData) {
@@ -321,6 +388,8 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
         File(snapshot.data!),
         fit: BoxFit.cover,
         cacheWidth: 440,
+        // 换图时旧图留到新图到来，不闪白。
+        gaplessPlayback: true,
         excludeFromSemantics: true,
         errorBuilder: (_, error, stack) => _failed(snapshot.data),
       );

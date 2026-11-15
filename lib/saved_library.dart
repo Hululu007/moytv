@@ -9,6 +9,7 @@ import 'ios_dialogs.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
+import 'source_badge.dart';
 import 'widgets.dart';
 
 class SavedLibrary extends StatefulWidget {
@@ -75,7 +76,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
     final badge = state == null
         ? null
         : '${state.label}${state.hasUpdates ? ' · ${state.updateLabel}' : ''}';
-    return DramaTile(
+    final tile = DramaTile(
       key: ValueKey('saved-${drama.id}'),
       drama: drama,
       repository: widget.repository,
@@ -91,6 +92,19 @@ class _SavedLibraryState extends State<SavedLibrary> {
       subtitle: watched == null
           ? SourceSite.byId(drama.source).name
           : '第 ${watched.episode} 集 · ${formatPosition(watched.position)}',
+    );
+    // 源徽标叠在卡片右上角、“更多”按钮下方；IgnorePointer 让点按
+    // 原样落到卡片上，点卡进详情的行为不变。
+    if (SourceBadge.displayNameFor(drama.source) == null) return tile;
+    return Stack(
+      children: [
+        tile,
+        Positioned(
+          top: SourceBadge.topOffset,
+          right: SourceBadge.rightOffset,
+          child: IgnorePointer(child: SourceBadge(sourceId: drama.source)),
+        ),
+      ],
     );
   }
 

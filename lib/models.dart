@@ -802,6 +802,7 @@ class SourceSite {
   static final Map<String, String> importedPyFiles = {};
   static final Map<String, String> importedJsFiles = {};
   static final Map<String, String> importedPyRemoteUrls = {};
+  static final Map<String, String> importedJsRemoteUrls = {};
   static bool isCustomId(String id) => id.startsWith('custom:');
   static bool isAvailable(String id) =>
       values.any((site) => site.id == id) ||
@@ -1249,6 +1250,44 @@ class Episode {
   final bool vip;
   final bool? vertical;
 }
+
+/// 集标题是否像链接：源数据有时把播放地址塞进标题字段，直接显示会把
+/// 直链暴露在界面上。标题里含链接 scheme 或以流媒体后缀结尾时只用集数标签。
+bool episodeTitleLooksLikeUrl(String title) {
+  final text = title.trim().toLowerCase();
+  return text.contains('://') ||
+      text.endsWith('.m3u8') ||
+      text.endsWith('.mp4');
+}
+
+/// 显示用集标题：链接型标题回“第N集”，干净标题原样回。
+String displayEpisodeTitle(String title, int number) =>
+    episodeTitleLooksLikeUrl(title) ? '第$number集' : title;
+
+/// 显示用集数行：干净标题拼“第N集 | 标题”，链接型、空、与标签相同的
+/// 标题只显示集数标签，绝不把链接拼进显示文本。
+String displayEpisodeLine(String? title, int number) {
+  final label = '第$number集';
+  final text = (title ?? '').trim();
+  if (text.isEmpty || text == label || episodeTitleLooksLikeUrl(text)) {
+    return label;
+  }
+  return '$label | $text';
+}
+
+/// heat 值是否像文件大小：jar 侧 heat 取 vod_remarks，TG 站把文件
+/// 大小（如 1.4MB）塞进该字段，标“热度”会拿文件大小冒充热度。
+bool heatLooksLikeFileSize(String heat) {
+  final value = heat.trim();
+  return RegExp(
+    r'^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$',
+    caseSensitive: false,
+  ).hasMatch(value);
+}
+
+/// 显示用 heat 文案：文件大小形状的值标“大小”，其余标“热度”。
+String heatDisplayText(String heat) =>
+    heatLooksLikeFileSize(heat) ? '大小 $heat' : '热度 $heat';
 
 class DetailTag {
   const DetailTag({required this.id, required this.name});

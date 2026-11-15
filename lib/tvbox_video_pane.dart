@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'exo_subtitle.dart';
 import 'models.dart';
 import 'playback_preferences.dart';
 import 'tvbox_player_bridge.dart';
@@ -83,6 +84,11 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
   bool _dragging = false;
   double _dragValue = 0;
   bool _buffering = false;
+  final _subtitleBuffer = ExoSubtitleBuffer();
+  List<String> _subtitleLines = const [];
+  // 字幕偏移：树里没有现成的字幕偏移设置项，不虚构；0 即按 CueGroup
+  // 时间轴自动对齐，偏移逻辑在 ExoSubtitleBuffer 里，入口待拍板。
+  static const _subtitleOffsetMs = 0;
 
   @override
   void didUpdateWidget(TvboxVideoPane oldWidget) {
@@ -122,6 +128,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
       controller.positionStream.listen((position) {
         if (!mounted) return;
         widget.handle.position = position;
+        _updateSubtitleLines();
         if (!_dragging) setState(() {});
       }),
       controller.durationStream.listen((duration) {
@@ -148,6 +155,11 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
         if (!mounted) return;
         widget.onError(message);
       }),
+      controller.cueGroupStream.listen((group) {
+        if (!mounted) return;
+        _subtitleBuffer.push(group);
+        if (_updateSubtitleLines()) setState(() {});
+      }),
     ]);
     final plan = widget.plan;
     if (plan != null) {
@@ -167,6 +179,8 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     final controller = _controller;
     if (controller == null) return;
     widget.handle.completed = false;
+    _subtitleBuffer.clear();
+    _subtitleLines = const [];
     await controller.open(
       url: plan.url,
       headers: plan.headers,
@@ -177,6 +191,29 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     if (!_openedAutoplay) {
       await controller.pause();
     }
+  }
+
+  /// 按当前位置刷新应显示的字幕行；行内容变化时返回 true。
+  /// 位置 tick 与 cue 到达两路都走这里，偏移只影响取组不影响 tick。
+  bool _updateSubtitleLines() {
+    final lines = layoutExoSubtitleLines(
+      _subtitleBuffer.activeCuesAt(
+        widget.handle.position.inMilliseconds,
+        offsetMs: _subtitleOffsetMs,
+      ),
+    );
+    if (lines.length == _subtitleLines.length) {
+      var same = true;
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i] != _subtitleLines[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return false;
+    }
+    _subtitleLines = lines;
+    return true;
   }
 
   String _formatTime(Duration value) {
@@ -211,6 +248,11 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
             viewType: widget.viewType,
             onPlatformViewCreated: _onViewCreated,
           ),
+        ),
+        // Exo 字幕只画这一层：原生 SubtitleView 已在 Kotlin 侧隐藏。
+        // 放控制条之下，底边距盖过控制条，字幕不被控制条遮住。
+        Positioned.fill(
+          child: ExoSubtitleOverlay(lines: _subtitleLines),
         ),
         if (_buffering)
           const Center(

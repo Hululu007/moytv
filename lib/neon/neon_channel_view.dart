@@ -216,6 +216,8 @@ class NeonChannelView extends StatelessWidget {
       groups.add(items.sublist(i, (i + 3).clamp(0, items.length)));
     }
     return CustomScrollView(
+      // 与霓虹首页同理：切走返回后滚动偏移保留，不回到顶部。
+      key: const PageStorageKey<String>('neon-channel-scroll'),
       controller: scrollController,
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
@@ -227,7 +229,7 @@ class NeonChannelView extends StatelessWidget {
             itemCount: groups.length,
             itemBuilder: (context, index) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _group(groups[index], index),
+              child: _group(groups[index], index, config),
             ),
           ),
         ),
@@ -279,14 +281,16 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _group(List<Drama> group, int groupIndex) {
+  Widget _group(List<Drama> group, int groupIndex, AppThemeConfig config) {
     if (group.length == 1) {
       return SizedBox(
         height: 240,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: _tile(group.first, groupIndex, 0, tall: true)),
+            Expanded(
+              child: _tile(group.first, groupIndex, 0, config, tall: true),
+            ),
             const SizedBox(width: 10),
             const Expanded(child: SizedBox.shrink()),
           ],
@@ -299,7 +303,9 @@ class NeonChannelView extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: _tile(group.first, groupIndex, 0, tall: true)),
+          Expanded(
+            child: _tile(group.first, groupIndex, 0, config, tall: true),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -307,7 +313,13 @@ class NeonChannelView extends StatelessWidget {
                 for (var i = 0; i < rest.length; i++) ...[
                   if (i > 0) const SizedBox(height: 10),
                   Expanded(
-                    child: _tile(rest[i], groupIndex, i + 1, tall: false),
+                    child: _tile(
+                      rest[i],
+                      groupIndex,
+                      i + 1,
+                      config,
+                      tall: false,
+                    ),
                   ),
                 ],
               ],
@@ -318,7 +330,13 @@ class NeonChannelView extends StatelessWidget {
     );
   }
 
-  Widget _tile(Drama drama, int groupIndex, int slot, {required bool tall}) {
+  Widget _tile(
+    Drama drama,
+    int groupIndex,
+    int slot,
+    AppThemeConfig config, {
+    required bool tall,
+  }) {
     final badge = switch ((groupIndex + slot) % 4) {
       0 => 'HD',
       1 => 'NEW',
@@ -339,9 +357,10 @@ class NeonChannelView extends StatelessWidget {
           ? drama.tags.take(2).join(' · ')
           : (drama.episodes > 0 ? '${drama.episodes} 集' : null),
       badge: badge,
-      badgeColor: badge == 'NEW' ? Neon.pink : Neon.cyan,
+      badgeColor: badge == 'NEW' ? config.accentColor : config.secondaryColor,
       radius: 12,
       titleSize: tall ? 12 : 10.5,
+      tiltAngle: (groupIndex + slot).isEven ? 0.1 : -0.1,
       onTap: () => onOpen(drama),
     );
   }

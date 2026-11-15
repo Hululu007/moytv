@@ -5,13 +5,13 @@ import 'package:moyi/app_theme_config.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('8 套主题配置', () {
+  group('12 套主题配置', () {
     test('名字与关键配色与用户文件一致', () {
       final expected = {
         AppThemeMode.purpleNeon: (
           '紫蓝霓虹',
-          const Color(0xFFE847A2),
-          const Color(0xFF7B42E0),
+          const Color(0xFFE040FB),
+          const Color(0xFF00BCD4),
           const Color(0xFF14102A),
         ),
         AppThemeMode.lightClean: (
@@ -56,6 +56,30 @@ void main() {
           const Color(0xFF7B66FF),
           const Color(0xFF0A0E27),
         ),
+        AppThemeMode.leftCategories: (
+          '左侧分类',
+          const Color(0xFF22D3EE),
+          const Color(0xFFE847A2),
+          const Color(0xFF120E2B),
+        ),
+        AppThemeMode.cyanCyberNeon: (
+          '青绿赛博',
+          const Color(0xFF1DE9B6),
+          const Color(0xFF00E676),
+          const Color(0xFF001A1A),
+        ),
+        AppThemeMode.redBlackNeon: (
+          '红黑霓虹',
+          const Color(0xFFFF1744),
+          const Color(0xFFFF5252),
+          const Color(0xFF1A0000),
+        ),
+        AppThemeMode.pinkPurpleNeon: (
+          '粉紫霓虹',
+          const Color(0xFFFF4081),
+          const Color(0xFFE040FB),
+          const Color(0xFF1A0033),
+        ),
       };
       for (final entry in expected.entries) {
         final config = AppThemeConfig.forTheme(entry.key);
@@ -76,6 +100,10 @@ void main() {
         AppThemeMode.minimalCard: CategoryNavStyle.miniIconSidebar,
         AppThemeMode.retroFilm: CategoryNavStyle.foldFilterSidebar,
         AppThemeMode.tvBigScreen: CategoryNavStyle.tvWideSidebar,
+        AppThemeMode.leftCategories: CategoryNavStyle.leftCategorySidebar,
+        AppThemeMode.cyanCyberNeon: CategoryNavStyle.cyberSidebar,
+        AppThemeMode.redBlackNeon: CategoryNavStyle.darkSidebar,
+        AppThemeMode.pinkPurpleNeon: CategoryNavStyle.colorBlockSidebar,
       };
       for (final entry in expected.entries) {
         expect(
@@ -95,11 +123,24 @@ void main() {
       expect(AppThemeConfig.forTheme(AppThemeMode.minimalCard).isDark, isFalse);
       expect(AppThemeConfig.forTheme(AppThemeMode.retroFilm).isDark, isTrue);
       expect(AppThemeConfig.forTheme(AppThemeMode.tvBigScreen).isDark, isTrue);
+      expect(
+        AppThemeConfig.forTheme(AppThemeMode.leftCategories).isDark,
+        isTrue,
+      );
+      expect(
+        AppThemeConfig.forTheme(AppThemeMode.cyanCyberNeon).isDark,
+        isTrue,
+      );
+      expect(AppThemeConfig.forTheme(AppThemeMode.redBlackNeon).isDark, isTrue);
+      expect(
+        AppThemeConfig.forTheme(AppThemeMode.pinkPurpleNeon).isDark,
+        isTrue,
+      );
     });
   });
 
   group('存储值', () {
-    test('8 套主题存储值往返', () {
+    test('12 套主题存储值往返', () {
       for (final mode in AppThemeMode.values) {
         expect(
           AppThemeMode.fromStorageValue(mode.storageValue),

@@ -21,6 +21,7 @@ import 'jar_youtube_takeover.dart';
 import 'danmaku_models.dart';
 import 'hongguo_comment.dart';
 import 'import_file_store.dart';
+import 'js_lazy_fetch.dart';
 import 'py_bridge.dart';
 import 'py_lazy_fetch.dart';
 import 'py_contract.dart';
@@ -37,6 +38,7 @@ import 'cloud_drive/cloud_drive_engine.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
 import 'resource_settings.dart';
+import 'source_fanout.dart';
 
 typedef _NativeRequest = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _DartRequest = Pointer<Utf8> Function(Pointer<Utf8>);
@@ -668,11 +670,44 @@ class HongguoDiscoverySession {
   }
 }
 
+/// 混合搜索里失败站源的展示名：jar 站取注册名，导入站取导入名，
+/// 内置站取站表名，都没有时回 id 本身（不回落到红果那种默认站）。
+String searchAcrossSourceLabel(String source) {
+  final spec = JarBridge.specFor(source);
+  if (spec != null && spec.name.isNotEmpty) return spec.name;
+  final imported = SourceSite.importedSites[source];
+  if (imported != null && imported.name.isNotEmpty) return imported.name;
+  for (final site in SourceSite.allValues) {
+    if (site.id == source) return site.name;
+  }
+  return source;
+}
+
+/// 混合搜索失败提示：与 Go 核 nativeSearchFailureText 同口径——
+/// 一家失败点名，两家以上点第一家加总数；无失败返回空串。
+String searchAcrossFailureWarning(List<String> failedSources) {
+  if (failedSources.isEmpty) return '';
+  final labels = [
+    for (final source in failedSources) searchAcrossSourceLabel(source),
+  ]..sort();
+  if (labels.length == 1) return '${labels.single} 未返回结果';
+  return '${labels.first} 等 ${labels.length} 个站源未返回结果';
+}
+
 class NativeRepository extends AppRepository {
   static final _coverDecoder = CoverDecoder();
-  NativeRepository({this.background = false, TgCatalogCache? tgCatalogCache})
-    : _tgCatalogCache = tgCatalogCache ?? TgCatalogCache();
+  NativeRepository({
+    this.background = false,
+    TgCatalogCache? tgCatalogCache,
+    Duration? searchPerSiteTimeout,
+  }) : _tgCatalogCache = tgCatalogCache ?? TgCatalogCache(),
+       _searchPerSiteTimeout =
+           searchPerSiteTimeout ?? const Duration(seconds: 30);
   final bool background;
+
+  /// 混合搜索里 jar/py/js 单站预算（默认 30 秒，与阅读搜索同口径）：
+  /// 构造参数只供测试注入短超时，生产调用一律默认。
+  final Duration _searchPerSiteTimeout;
 
   /// TG 两站目录 1 小时缓存（只放内存）：二次进入直接显示缓存，
   /// 搜索/详情/翻页/强制刷新不走缓存。测试可注入假时钟缓存。
@@ -690,15 +725,35 @@ class NativeRepository extends AppRepository {
 
   Future<String> _jsSpiderScript(String source) async {
     final fileName = SourceSite.importedJsFiles[source];
-    if (fileName == null || fileName.isEmpty) {
+    if (fileName != null && fileName.isNotEmpty) {
+      final scriptPath = await ImportFileStore.pathOf(fileName);
+      final scriptFile = File(scriptPath);
+      if (await scriptFile.exists()) {
+        return scriptFile.readAsString();
+      }
+    }
+    // 远程 JS 站（TVBox 配置 api 指向 .js 文件）：首次打开时懒加载，
+    // 与 py 站的 PyLazyFetch 同款机制。
+    final saved = await JsLazyFetch.savedFileName(source);
+    if (saved != null && saved.isNotEmpty) {
+      final savedPath = await ImportFileStore.pathOf(saved);
+      if (await File(savedPath).exists()) {
+        SourceSite.importedJsFiles[source] = saved;
+        return File(savedPath).readAsString();
+      }
+    }
+    final remoteUrl = SourceSite.importedJsRemoteUrls[source];
+    if (remoteUrl == null || remoteUrl.isEmpty) {
       throw AppFailure('导入记录缺少 JS 蜘蛛文件，请在导入中心删除该站后重新导入');
     }
-    final scriptPath = await ImportFileStore.pathOf(fileName);
-    final scriptFile = File(scriptPath);
-    if (!await scriptFile.exists()) {
-      throw AppFailure('JS 蜘蛛文件已丢失，请在导入中心删除该站后重新导入');
+    try {
+      final savedName = await JsLazyFetch.fetchAndSave(source, remoteUrl);
+      final scriptPath = await ImportFileStore.pathOf(savedName);
+      final script = await File(scriptPath).readAsString();
+      return script;
+    } catch (error) {
+      throw AppFailure(error.toString());
     }
-    return scriptFile.readAsString();
   }
 
   Future<Map<String, dynamic>> _jsCall(
@@ -2244,39 +2299,61 @@ class NativeRepository extends AppRepository {
         }),
       );
     }
-    final items = <Drama>[];
-    if (rest.isNotEmpty) {
-      final corePage = CatalogPage.fromJson(
-        await _call({
-          'action': 'searchAcross',
-          'sources': rest,
-          'query': query,
-        }),
-      );
-      items.addAll(corePage.items);
-    }
-    for (final source in jarSources) {
+    // 混合搜索：Go 核腿与 jar/py/js 腿并发跑，jar/py/js 腿内部 6 路
+    // 有界并发、每站 30 秒预算。原先三腿串行、每站无预算：站一多，
+    // 慢站耗时直接加总，整轮搜索能拖上几分钟；且单站异常被吞后
+    // 整轮静默回空。现每腿失败只记名不抛错，失败站名挂 warning。
+    final failures = <String>[];
+    Future<List<Drama>> restLeg() async {
+      if (rest.isEmpty) return const [];
       try {
-        final page = await _jarCall(
-          source,
-          (spec) => JarBridge.catalog(spec, query: query),
+        final corePage = CatalogPage.fromJson(
+          await _call({
+            'action': 'searchAcross',
+            'sources': rest,
+            'query': query,
+          }),
         );
-        items.addAll(page.items);
-      } catch (_) {}
+        return corePage.items;
+      } catch (_) {
+        failures.addAll(rest);
+        return const [];
+      }
     }
-    for (final target in pyTargets) {
+
+    final legs = <({String source, Future<CatalogPage> Function() run})>[
+      for (final source in jarSources)
+        (
+          source: source,
+          run: () => _jarCall(
+            source,
+            (spec) => JarBridge.catalog(spec, query: query),
+          ),
+        ),
+      for (final target in pyTargets)
+        (source: target, run: () => catalog(target, query: query)),
+      for (final target in jsTargets)
+        (source: target, run: () => catalog(target, query: query)),
+    ];
+    final restFuture = restLeg();
+    final legsFuture = fanoutOrdered(legs, (leg) async {
       try {
-        final page = await catalog(target, query: query);
-        items.addAll(page.items);
-      } catch (_) {}
+        final page = await leg.run().timeout(_searchPerSiteTimeout);
+        return page.items;
+      } catch (_) {
+        failures.add(leg.source);
+        return const <Drama>[];
+      }
+    }, concurrency: 6);
+    final items = <Drama>[...await restFuture];
+    for (final pageItems in await legsFuture) {
+      items.addAll(pageItems);
     }
-    for (final target in jsTargets) {
-      try {
-        final page = await catalog(target, query: query);
-        items.addAll(page.items);
-      } catch (_) {}
-    }
-    return CatalogPage(items, fresh: true);
+    return CatalogPage(
+      items,
+      fresh: true,
+      warning: searchAcrossFailureWarning(failures),
+    );
   }
 
   @override
@@ -2504,6 +2581,7 @@ class NativeRepository extends AppRepository {
           'adBlock': adBlock,
           if (force) 'force': true,
           'parseApis': [for (final api in parseApis) api.url],
+          'parseApiHeaders': [for (final api in parseApis) api.headers],
           'sequence': ++_playbackSequence,
         }),
       );
@@ -2600,6 +2678,7 @@ class NativeRepository extends AppRepository {
         'route': route,
         'adBlock': adBlock,
         'parseApis': [for (final api in parseApis) api.url],
+        'parseApiHeaders': [for (final api in parseApis) api.headers],
         'sequence': ++_playbackSequence,
       }),
     );
@@ -2616,6 +2695,7 @@ class NativeRepository extends AppRepository {
         'url': plan.url,
         'headers': plan.headers,
         'parseApis': [for (final api in apis) api.url],
+        'parseApiHeaders': [for (final api in apis) api.headers],
         'adBlock': true,
         'sequence': ++_playbackSequence,
       }),
@@ -2854,6 +2934,7 @@ class NativeRepository extends AppRepository {
         'adBlock': adBlock,
         'force': true,
         'parseApis': [for (final api in parseApis) api.url],
+        'parseApiHeaders': [for (final api in parseApis) api.headers],
         'sequence': ++_playbackSequence,
       }),
     );

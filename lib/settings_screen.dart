@@ -25,6 +25,8 @@ import 'jar_bridge.dart';
 import 'py_bridge.dart';
 import 'import_center_screen.dart';
 import 'parse_settings_screen.dart';
+import 'xigua/playback_settings_screen.dart';
+import 'plugin_market_screen.dart';
 import 'liquid_glass.dart';
 import 'neon_glass_kit.dart';
 import 'app_theme_config.dart';
@@ -37,7 +39,6 @@ import 'content_source_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'lan_screen.dart';
-import 'miniapp/mini_app_home_page.dart';
 import 'viewing_experience_screen.dart';
 import 'torrent/torrent_home_screen.dart';
 import 'proxy_kernel_screen.dart';
@@ -68,12 +69,20 @@ class SettingsScreen extends StatefulWidget {
     required this.repository,
     required this.store,
     this.embedded = false,
+    this.onHideAdult,
   });
   final AppRepository repository;
   final LocalStore store;
 
   /// 作为底部导航「设置」tab 嵌入时不自带 Scaffold/AppBar。
   final bool embedded;
+
+  /// 未成年保护一键动作（隐藏成人站并切回短剧站）：由首页注入，
+  /// 非空时通用设置里显示「未成年保护」开关行。原片库设置页上的
+  /// 同款开关随片库设置页废弃并入此处，行为与原来一致（一次性动作，
+  /// 开关本身不保持开启态）。
+  final VoidCallback? onHideAdult;
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -183,45 +192,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     }
   }
 
-  /// 导航样式：改的是当前主题绑定的显示方案，切主题后随新主题的方案走。
-  Future<void> _chooseNavStyle() async {
-    final store = widget.store;
-    final current = store.displayScheme(store.appTheme).navStyle;
-    final selection = await showDialog<NavStyle>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('导航样式'),
-        children: [
-          RadioGroup<NavStyle>(
-            groupValue: current,
-            onChanged: (value) => Navigator.pop(context, value),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final style in NavStyle.values)
-                  RadioListTile<NavStyle>(
-                    value: style,
-                    autofocus: style == current,
-                    title: Text(style.label),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-    if (selection != null && mounted) {
-      final scheme = store.displayScheme(store.appTheme);
-      await saveUserChange(
-        context,
-        () => store.setDisplayScheme(
-          store.appTheme,
-          scheme.copyWith(navStyle: selection),
-        ),
-      );
-    }
-  }
-
   void _openSavedDrama(Drama drama, {bool resume = false}) {
     if (vodOpenAction(
           isVodZone: isVodZoneSource(SourceSite.byId(drama.source)),
@@ -298,12 +268,22 @@ class _SettingsScreenState extends State<SettingsScreen>
   );
 
   /// 设置分组：分类口径对齐参考实现的设置页体系
-  /// （播放 / 外观界面 / 网络 / 缓存存储 / 源与规则 / 小程序 / 媒体库 / 设备 / 关于）。
+  /// （播放 / 外观界面 / 网络 / 缓存存储 / 源与规则 / 媒体库 / 设备 / 关于）。
   List<_SettingsGroup> _settingGroups() {
     final store = widget.store;
     final admin = store.profile.admin;
     return [
       _SettingsGroup('播放与画面', [
+        // 原片库设置页五项并入通用设置（2026-11-14）：播放设置与未成年
+        // 保护新增于此；播放器选择、解析接口、内容源管理原已在本页。
+        _SettingsItem(
+          keyName: 'playback-settings-entry',
+          icon: Icons.play_circle_rounded,
+          lucide: LucideIcons.play,
+          title: '播放设置',
+          detail: '倍速、弹幕、自动连播与画质偏好',
+          onTap: () => _push(PlaybackSettingsScreen(store: store)),
+        ),
         _SettingsItem(
           keyName: 'player-entry',
           icon: Icons.play_circle_outline_rounded,
@@ -339,6 +319,19 @@ class _SettingsScreenState extends State<SettingsScreen>
                 : '未开启 · 点此打开系统授权页',
             onTap: _requestCapsulePermission,
           ),
+        // 未成年保护：一次性动作（与原片库设置页一致），开关本身不保持
+        // 开启态；点行或拨开关都触发隐藏成人站并切回短剧站，随后退回首页。
+        if (widget.onHideAdult != null)
+          _SettingsItem(
+            keyName: 'minor-protection-entry',
+            icon: Icons.shield_outlined,
+            lucide: LucideIcons.shield,
+            title: '未成年保护',
+            detail: '开启后隐藏成人站并切回短剧站',
+            onTap: _hideAdultOnce,
+            switchValue: false,
+            onSwitchChanged: (_) => _hideAdultOnce(),
+          ),
       ]),
       _SettingsGroup('外观与界面', [
         _SettingsItem(
@@ -347,7 +340,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           lucide: LucideIcons.palette,
           title: '外观主题',
           detail:
-              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 8 套主题',
+              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 12 套主题',
           onTap: () => _push(
             ThemeSettingsScreen(
               store: store,
@@ -355,15 +348,6 @@ class _SettingsScreenState extends State<SettingsScreen>
               sourceId: store.source,
             ),
           ),
-        ),
-        _SettingsItem(
-          keyName: 'nav-style-entry',
-          icon: Icons.view_day_outlined,
-          lucide: LucideIcons.panelBottom,
-          title: '导航样式',
-          detail:
-              '当前：${store.displayScheme(store.appTheme).navStyle.label} · 随当前主题',
-          onTap: _chooseNavStyle,
         ),
         _SettingsItem(
           keyName: 'display-mode-entry',
@@ -445,6 +429,16 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
         ),
         _SettingsItem(
+          keyName: 'plugin-market-entry',
+          icon: Icons.extension_outlined,
+          lucide: LucideIcons.puzzle,
+          title: '插件市场',
+          detail: '安装 / 卸载 jar 与 py 插件 · 远程插件索引',
+          onTap: () => _push(
+            PluginMarketScreen(repository: widget.repository, store: store),
+          ),
+        ),
+        _SettingsItem(
           keyName: 'site-check-entry',
           icon: Icons.fact_check_outlined,
           lucide: LucideIcons.listChecks,
@@ -502,16 +496,6 @@ class _SettingsScreenState extends State<SettingsScreen>
           onTap: () => _push(
             TorrentHomePage(repository: widget.repository, store: widget.store),
           ),
-        ),
-      ]),
-      _SettingsGroup('小程序', [
-        _SettingsItem(
-          keyName: 'miniapp-entry',
-          icon: Icons.widgets_outlined,
-          lucide: LucideIcons.layoutGrid,
-          title: '小程序',
-          detail: '已安装、市场与小程序设置',
-          onTap: () => _push(const MiniAppHomePage()),
         ),
       ]),
       _SettingsGroup('媒体库', [
@@ -609,6 +593,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                         icon: item.icon,
                         title: item.title,
                         detail: item.detail.isEmpty ? null : item.detail,
+                        trailing: _itemTrailing(item),
+                        showChevron: item.onSwitchChanged == null,
                         onTap: item.onTap,
                       ),
                   ],
@@ -623,6 +609,23 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   Future<void> _push(Widget page) =>
       Navigator.push(context, appPageRoute<void>(builder: (_) => page));
+
+  /// 未成年保护一次性动作：与原片库设置页上的开关行为一致。
+  void _hideAdultOnce() {
+    final hide = widget.onHideAdult;
+    if (hide == null) return;
+    hide();
+    if (mounted) Navigator.pop(context);
+  }
+
+  Widget? _itemTrailing(_SettingsItem item) {
+    final onChanged = item.onSwitchChanged;
+    if (onChanged == null) return null;
+    return Switch.adaptive(
+      value: item.switchValue ?? false,
+      onChanged: onChanged,
+    );
+  }
   Widget _glassIcon(IconData icon) =>
       NeonIconTile(icon: icon, size: 30, iconSize: 18, radius: 8);
 
@@ -683,6 +686,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         title: title,
         detail: detail,
         trailing: trailing,
+        showChevron: trailing == null,
         onTap: onTap,
       );
     }
@@ -731,6 +735,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                   icon: item.lucide,
                   title: item.title,
                   detail: item.detail.isEmpty ? null : item.detail,
+                  trailing: _itemTrailing(item),
                   onTap: item.onTap,
                 ),
             ]),
@@ -922,6 +927,8 @@ class _SettingsItem {
     required this.title,
     required this.onTap,
     this.detail = '',
+    this.switchValue,
+    this.onSwitchChanged,
   });
 
   final String keyName;
@@ -930,6 +937,10 @@ class _SettingsItem {
   final String title;
   final String detail;
   final VoidCallback onTap;
+
+  /// 非空时该行右侧显示开关（未成年保护一次性动作行）。
+  final bool? switchValue;
+  final ValueChanged<bool>? onSwitchChanged;
 }
 
 /// 过盾、指纹与请求头：把原先散在设置平铺列表里的三项收进一个页面。

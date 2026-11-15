@@ -14,6 +14,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'adult_scrape_service.dart';
 import 'cloud_drive/cloud_filename.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
@@ -87,11 +88,30 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
   var _generation = 0;
   var _tmdbConfig = const TmdbConfig();
 
-  MultimediaMetadataFetcher get _fetcher =>
-      widget.metadataFetcher ??
-      (({required String title, String? year, String? typeHint}) => TmdbService
-          .instance
-          .fetchMetadata(title: title, year: year, typeHint: typeHint));
+  MultimediaMetadataFetcher get _fetcher {
+    final fallback =
+        widget.metadataFetcher ??
+        (({required String title, String? year, String? typeHint}) =>
+            TmdbService.instance.fetchMetadata(
+              title: title,
+              year: year,
+              typeHint: typeHint,
+            ));
+    // 成人刮削优先：刮削标题里带番号先走大站链，刮到直接转
+    // TMDB 元数据；刮不到/无番号落回原取数。无番号时新链零请求，
+    // 普通影片的原刮削不受影响。
+    return ({required String title, String? year, String? typeHint}) async {
+      final enriched = await AdultScrapeService(
+        repository: widget.repository,
+      ).enrichFileName(
+        title,
+        candidateSites: widget.store.visibleSources,
+        siteVisible: widget.store.siteVisible,
+      );
+      if (enriched != null) return adultDramaToTmdbMetadata(enriched);
+      return fallback(title: title, year: year, typeHint: typeHint);
+    };
+  }
 
   @override
   void initState() {

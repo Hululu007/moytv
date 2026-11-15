@@ -1390,15 +1390,9 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   Widget _infoArea() {
     final detail = _detail;
     final episodes = detail?.episodes ?? const <Episode>[];
-    final episodeTitle =
-        detail != null && _episode < episodes.length
-            ? episodes[_episode].title
-            : null;
-    final episodeLine = episodeTitle == null
-        ? '第${_episode + 1}集'
-        : episodeTitle == '第${_episode + 1}集'
-        ? episodeTitle
-        : '第${_episode + 1}集 | $episodeTitle';
+    final episodeLine = detail != null && _episode < episodes.length
+        ? displayEpisodeLine(episodes[_episode].title, _episode + 1)
+        : '第${_episode + 1}集';
     final synopsis = detail?.drama.description ?? widget.drama.description;
     final status = _releaseStatusLabel();
     return Container(

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'collapsible_section_help.dart';
 import 'core_bridge.dart';
 import 'crack_config.dart';
 
@@ -184,10 +185,14 @@ class _CrackConfigSectionState extends State<CrackConfigSection> {
         const Divider(height: 32),
         Text('过盾与 VIP 配置', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
-        const Text(
-          '导入 JSON 配置文件，让各站过盾与 VIP 配置由壳应用：过盾项按域名作用于抓取层，'
-          'VIP 项只在本站已有令牌口子时生效。导入整单校验，不合格整单拒收；'
-          '密钥只存本机，不写入日志；导出文件含密钥，请妥善保管。',
+        const CollapsibleSectionHelp(
+          key: ValueKey('crack-config-help'),
+          toggleKey: ValueKey('crack-config-help-toggle'),
+          brief: '导入 JSON 配置过盾与 VIP',
+          fullText:
+              '导入 JSON 配置文件，让各站过盾与 VIP 配置由壳应用：过盾项按域名作用于抓取层，'
+              'VIP 项只在本站已有令牌口子时生效。导入整单校验，不合格整单拒收；'
+              '密钥只存本机，不写入日志；导出文件含密钥，请妥善保管。',
         ),
         const SizedBox(height: 12),
         Wrap(

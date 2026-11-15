@@ -281,18 +281,20 @@ func isCustomMaccmsSource(source string) bool {
 // 明确的「该源类型与站点不符」错误而非静默失败。
 
 const (
-	customSourceTypeWeb  = "web"
-	customSourceTypeJSON = "json"
-	customSourceTypeT4   = "t4"
+	customSourceTypeWeb   = "web"
+	customSourceTypeJSON  = "json"
+	customSourceTypeT4    = "t4"
+	customSourceTypeDrpys = "drpys"
 )
 
 func customSourceAllowsQuery(kind string) bool {
-	return normalizeCustomSourceType(kind) == customSourceTypeT4
+	normalized := normalizeCustomSourceType(kind)
+	return normalized == customSourceTypeT4 || normalized == customSourceTypeDrpys
 }
 
 func normalizeCustomSourceType(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case customSourceTypeWeb, customSourceTypeJSON, customSourceTypeT4, "auto", "":
+	case customSourceTypeWeb, customSourceTypeJSON, customSourceTypeT4, customSourceTypeDrpys, "auto", "":
 		return strings.ToLower(strings.TrimSpace(kind))
 	default:
 		return ""
@@ -765,6 +767,21 @@ func customSourceDrafts(content string) ([]customSourceDraft, []string) {
 				return drafts, notes
 			}
 		}
+		// data 信封：{"data": {"sites": [...]}}，往里再看一层容器。
+		if inner, ok := typed["data"].(map[string]any); ok {
+			for _, key := range []string{"sites", "source", "sources", "list", "whitelist", "items"} {
+				if rows, found := inner[key].([]any); found && len(rows) > 0 {
+					drafts := customSourceMapDrafts(rows, &notes)
+					return drafts, notes
+				}
+			}
+			if draft, note := customSourceDraftFromEntry(inner); draft != nil {
+				if note != "" {
+					notes = append(notes, note)
+				}
+				return []customSourceDraft{*draft}, notes
+			}
+		}
 		if rule := customSourceRuleFromMap(typed); rule != "" {
 			return []customSourceDraft{{Rule: rule, Base: customSourceMapBase(typed)}}, notes
 		}
@@ -882,10 +899,49 @@ func customSourceDraftFromEntry(entry map[string]any) (*customSourceDraft, strin
 		}
 		return nil, label + "：爬虫(jar)规则无法在核心内执行，已跳过"
 	}
+	// 脚本型 api：.js/.py 蜘蛛文件与 csp_ 类名在核心自定义源里无法执行，
+	// 注册成 maccms 源只会得到一个打不开的坏站，明确跳过并指明去处。
+	// .php 不在此列：api.php 是 MacCMS 采集端点，与 PHP 蜘蛛文件无法区分。
+	if note := customSourceScriptSkipNote(entry, base); note != "" {
+		return nil, note
+	}
 	if base == "" {
 		return nil, ""
 	}
 	return &customSourceDraft{Name: name, Base: base, Kind: kind}, ""
+}
+
+// customSourceScriptSkipNote 判断条目最终落库的地址是否为脚本型
+// （.js/.py 蜘蛛文件或 csp_ 类名），是则返回跳过原因，否则返回空。
+// 判的是生效地址 base（url/base/api 按优先级取到的那一个），避免
+// api 字段与真实地址不一致时误杀。
+func customSourceScriptSkipNote(entry map[string]any, base string) string {
+	candidate := strings.TrimSpace(base)
+	if candidate == "" {
+		candidate = strings.TrimSpace(firstStringField(entry, "api"))
+	}
+	if candidate == "" {
+		return ""
+	}
+	label := firstStringField(entry, "name", "名称", "站点名称", "title", "key", "cn")
+	if label == "" {
+		label = "未命名条目"
+	}
+	if strings.HasPrefix(candidate, "csp_") {
+		return label + "：爬虫(jar)规则无法在核心内执行，已跳过"
+	}
+	path := candidate
+	if cut := strings.IndexAny(path, "?#"); cut >= 0 {
+		path = path[:cut]
+	}
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".js") {
+		return label + "：JS 蜘蛛文件需经导入中心用 JS 引擎导入，核心自定义源无法执行，已跳过"
+	}
+	if strings.HasSuffix(lower, ".py") {
+		return label + "：py 蜘蛛文件需经导入中心用 Python 引擎导入，核心自定义源无法执行，已跳过"
+	}
+	return ""
 }
 
 // customSourceMapBase 从条目里取站点根地址（含 maccms api 地址收敛）。

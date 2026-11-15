@@ -92,6 +92,18 @@ class StandaloneJarSite {
       );
 }
 
+/// 一个已导入 jar 插件注册的全部站点（同一 jarId 一组）。
+class ImportedJarGroup {
+  const ImportedJarGroup({required this.jarId, required this.sites});
+
+  final String jarId;
+  final List<StandaloneJarSite> sites;
+
+  String get displayName =>
+      sites.isEmpty ? jarId : sites.first.effectiveBase;
+  int get siteCount => sites.length;
+}
+
 class JarImport {
   static const _prefsKey = 'standalone_jar_sites';
   static const _learnedPrefsKey = 'learned_jar_configs';
@@ -258,6 +270,74 @@ class JarImport {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// 卸载内置 jar 插件：撤掉全部内置站点的登记（含 audioOnly 的纯音频
+  /// 配置），下次 registerBuiltinZakatv 可重新注册。jar 文件本身是
+  /// APK 内 asset，不删除；JarBridge 侧的缓存拷贝由 ensureJar 复用。
+  static void unregisterBuiltinZakatv() {
+    for (final siteId in _builtinSites.keys.toList()) {
+      JarBridge.unregister(siteId);
+      SourceSite.importedSites.remove(siteId);
+    }
+    _builtinSites.clear();
+    _builtinRegistered = false;
+  }
+
+  /// 已导入 jar 按 jarId 分组（插件管理界面用）。
+  static List<ImportedJarGroup> importedJarGroups() {
+    final groups = <String, List<StandaloneJarSite>>{};
+    for (final site in _sites.values) {
+      (groups[site.jarId] ??= []).add(site);
+    }
+    return [
+      for (final entry in groups.entries)
+        ImportedJarGroup(jarId: entry.key, sites: entry.value),
+    ];
+  }
+
+  /// 按 jar 文件 md5 找已安装的导入组（批量安装跳过同款用）。
+  /// 同一 jar 文件的全部站点共享同一 md5，取组内首条即可。
+  static ImportedJarGroup? groupForJarMd5(String md5) {
+    for (final group in importedJarGroups()) {
+      if (group.sites.isNotEmpty && group.sites.first.jarMd5 == md5) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  /// 卸载一个已导入的 jar 插件：撤掉它注册的全部站点、删持久记录、
+  /// 删 imported_jars 下的 jar 文件副本。
+  static Future<void> removeImportedJar(String jarId) async {
+    final victims = [
+      for (final site in _sites.values)
+        if (site.jarId == jarId) site,
+    ];
+    if (victims.isEmpty) return;
+    final bases = <String>{};
+    String? jarPath;
+    for (final site in victims) {
+      _sites.remove(site.siteId);
+      JarBridge.unregister(site.siteId);
+      SourceSite.importedSites.remove(site.siteId);
+      bases.add(site.effectiveBase);
+      jarPath ??= site.jarUrl;
+    }
+    for (final base in bases) {
+      _renumberBase(base);
+    }
+    await _persist();
+    // 只删 imported_jars 目录下的副本，绝不碰其它路径。
+    final path = jarPath;
+    if (path != null && path.contains('imported_jars')) {
+      final file = File(path);
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
     }
   }
 

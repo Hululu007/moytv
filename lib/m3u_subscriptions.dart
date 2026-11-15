@@ -169,7 +169,20 @@ class M3uFileStore {
     final dir = await directory();
     final safeId = id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     final fileName = '$safeId.m3u';
-    await File('${dir.path}/$fileName').writeAsBytes(bytes, flush: true);
+    // 先写临时文件再改名：原先直接覆盖目标文件，写一半被中断会
+    // 留下截断的副本，后续刷新读到残文件直接报解析失败。
+    final temp = File(
+      '${dir.path}/.$fileName.tmp${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      await temp.writeAsBytes(bytes, flush: true);
+      await temp.rename('${dir.path}/$fileName');
+    } catch (_) {
+      try {
+        if (await temp.exists()) await temp.delete();
+      } catch (_) {}
+      rethrow;
+    }
     return fileName;
   }
 
@@ -196,7 +209,7 @@ class M3uSubscriptionService {
   static String newId() =>
       DateTime.now().microsecondsSinceEpoch.toRadixString(36);
 
-  static Future<String> fetchText(String url) async {
+  static Future<String> fetchText(String url, {String? resourceKey}) async {
     final trimmed = url.trim();
     final uri = Uri.tryParse(trimmed);
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
@@ -204,7 +217,7 @@ class M3uSubscriptionService {
     }
     final http = LiveHttp();
     try {
-      return await http.get(trimmed);
+      return await http.get(trimmed, proxyResourceKey: resourceKey);
     } catch (error) {
       throw AppFailure('拉取订阅失败：$error');
     } finally {

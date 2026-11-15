@@ -221,3 +221,45 @@ Map<String, String> mergeLiveHeaders(
   if (extra.isEmpty) return base;
   return {...base, ...extra};
 }
+
+/// 换台列表行第二行的真实信息：优先源数据自带的 subtitle（平台源的
+/// 房间/主播名），收藏混排时落到频道所属分组，多线路频道落到线路数，
+/// 都没有就返回空（只显示频道名）。绝不编节目单：没有真实 EPG 数据时
+/// 不显示任何节目名。
+String liveChannelRowCaption(
+  LiveChannel channel, {
+  bool inFavourites = false,
+}) {
+  if (channel.subtitle.isNotEmpty) return channel.subtitle;
+  if (inFavourites && channel.group.isNotEmpty) return channel.group;
+  if (channel.urls.length > 1) return '${channel.urls.length} 条线路';
+  return '';
+}
+
+/// 分组/换台的位置记忆：每个直播源上次看的分组、每个分组的频道列表
+/// 滚动位置。只记内存态（LiveRepository 持有，随应用进程走），
+/// 切分组、切源回来都不丢位置；滚动位置只记非负值。
+class LiveGroupMemory {
+  final Map<String, String> _lastGroupBySource = {};
+  final Map<String, double> _offsets = {};
+
+  String lastGroupFor(String sourceId) => _lastGroupBySource[sourceId] ?? '';
+
+  void rememberGroup(String sourceId, String groupId) {
+    if (sourceId.isEmpty || groupId.isEmpty) return;
+    _lastGroupBySource[sourceId] = groupId;
+  }
+
+  double offsetFor(String sourceId, String groupId) =>
+      _offsets['$sourceId\u0000$groupId'] ?? 0;
+
+  void rememberOffset(String sourceId, String groupId, double offset) {
+    if (sourceId.isEmpty || groupId.isEmpty) return;
+    _offsets['$sourceId\u0000$groupId'] = offset < 0 ? 0 : offset;
+  }
+
+  void clear() {
+    _lastGroupBySource.clear();
+    _offsets.clear();
+  }
+}

@@ -73,6 +73,41 @@
                 <data android:mimeType="application/java-archive"/>
                 <data android:mimeType="application/x-java-archive"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="content" android:host="*" android:mimeType="text/x-python"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/x-python"/>
+                <data android:scheme="content" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.py"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.py"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.PY"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/java-archive"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/x-java-archive"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.jar"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.jar"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.JAR"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/zip"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/x-zip-compressed"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.zip"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.zip"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.ZIP"/>
+                <data android:scheme="file" android:host="*" android:mimeType="text/x-python"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/x-python"/>
+                <data android:scheme="file" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.py"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.py"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.PY"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/java-archive"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/x-java-archive"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.jar"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.jar"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.JAR"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/zip"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/x-zip-compressed"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.zip"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.zip"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.ZIP"/>
+            </intent-filter>
         </activity>
         <provider
             android:name="androidx.core.content.FileProvider"

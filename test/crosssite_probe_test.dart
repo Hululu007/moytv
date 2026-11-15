@@ -677,10 +677,36 @@ void main() {
       }
     }
 
+    /// 点紧凑入口打开底部弹窗：行内容只在弹窗里，行断言前先开弹窗。
+    Future<void> openSheet(WidgetTester tester) async {
+      await tester.tap(find.byKey(const ValueKey('crosssite-entry')));
+      await tester.pump(const Duration(milliseconds: 400));
+      await settle(tester);
+    }
+
+    /// 在弹窗内拖到目标行可点：弹窗内容可滚动，靠下的行在折叠处之下
+    /// 时直接点按会落空（hitTestable 为空），须先拖动滚动区。
+    Future<void> dragSheetTo(WidgetTester tester, Finder target) async {
+      final scrollable = find.descendant(
+        of: find.byKey(const ValueKey('crosssite-sheet')),
+        matching: find.byType(SingleChildScrollView),
+      );
+      for (
+        var i = 0;
+        i < 10 && target.hitTestable().evaluate().isEmpty;
+        i++
+      ) {
+        await tester.drag(scrollable, const Offset(0, -200));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
     testWidgets('shows station rows, lazy rows wait for tap', (tester) async {
       await pumpSection(tester);
       await settle(tester);
-      expect(find.text('跨站选线路'), findsOneWidget);
+      await openSheet(tester);
+      // 标题在入口行与弹窗头各出现一次。
+      expect(find.text('跨站选线路'), findsWidgets);
       expect(find.text('HMN-927'), findsWidgets);
       expect(find.text('JavMenu'), findsOneWidget);
       expect(find.text('AV01'), findsOneWidget);
@@ -705,9 +731,12 @@ void main() {
     testWidgets('tapping lazy row probes that provider only', (tester) async {
       await pumpSection(tester);
       await settle(tester);
-      await tester.tap(
-        find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
+      await openSheet(tester);
+      final rowTap = find.byKey(
+        const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable'),
       );
+      await dragSheetTo(tester, rowTap);
+      await tester.tap(rowTap);
       await settle(tester);
       expect(find.text('点击查询'), findsOneWidget);
       expect(
@@ -728,9 +757,11 @@ void main() {
         },
       );
       await settle(tester);
+      await openSheet(tester);
       await tester.tap(
         find.byKey(const ValueKey('crosssite-line-jar:zakatv:zakav01-0-1')),
       );
+      await tester.pump();
       expect(played, isNotNull);
       expect(playedIndex, 1);
       expect(played!.episodes[playedIndex].raw['flag'], '线路2');
@@ -740,6 +771,7 @@ void main() {
       repository.searchFailures = {'jar:zakatv:zakav01'};
       await pumpSection(tester);
       await settle(tester);
+      await openSheet(tester);
       expect(find.text('× 查询失败，点按重试'), findsOneWidget);
       repository.searchFailures = {};
       await tester.tap(
@@ -754,6 +786,7 @@ void main() {
       repository.searchResults = {'jar:zakatv:zakav01': []};
       await pumpSection(tester);
       await settle(tester);
+      await openSheet(tester);
       // 两家自动探活的（AV01 与 JavMenu）都探空，各标一个 ×。
       expect(find.text('× 无此片'), findsNWidgets(2));
     });
@@ -762,6 +795,7 @@ void main() {
       repository.searchResults = {'jar:zakatv:zakav01': []};
       await pumpSection(tester);
       await settle(tester);
+      await openSheet(tester);
       expect(find.text('× 无此片'), findsNWidgets(2));
       repository.searchResults = {
         'jar:zakatv:zakav01': [
@@ -790,6 +824,7 @@ void main() {
       };
       await pumpSection(tester);
       await settle(tester);
+      await openSheet(tester);
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('crosssite-recommended')),
@@ -814,6 +849,7 @@ void main() {
     testWidgets('current source is excluded', (tester) async {
       await pumpSection(tester, currentSourceId: 'jar:zakatv:zakav01');
       await settle(tester);
+      await openSheet(tester);
       expect(find.text('AV01'), findsNothing);
       expect(find.text('JavMenu'), findsOneWidget);
     });
@@ -824,6 +860,7 @@ void main() {
       ];
       await pumpSection(tester);
       await settle(tester);
+      await openSheet(tester);
       expect(
         repository.searchCalls.any((call) => call.startsWith('javmenu:')),
         isTrue,
@@ -847,6 +884,7 @@ void main() {
       final hiddenStore = LocalStore(await SharedPreferences.getInstance());
       await pumpSection(tester, storeOverride: hiddenStore);
       await settle(tester);
+      await openSheet(tester);
       expect(find.text('AV01'), findsNothing);
       expect(find.text('Jable'), findsOneWidget);
     });
@@ -904,6 +942,17 @@ void main() {
         ),
       );
       await settle(tester);
+      // 选线区在选集网格与推荐区之下：sliver 懒构建，须拖动页面让它
+      // 建出来再断言（scrollUntilVisible 在详情页有多个 Scrollable
+      // 时会因 .single 炸掉，这里显式拖主滚动视图）。
+      final section = find.byKey(const ValueKey('crosssite-section'));
+      for (var i = 0; i < 10 && section.evaluate().isEmpty; i++) {
+        await tester.drag(
+          find.byType(CustomScrollView).first,
+          const Offset(0, -500),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(find.byKey(const ValueKey('crosssite-section')), findsOneWidget);
       expect(find.text('跨站选线路'), findsOneWidget);
     });

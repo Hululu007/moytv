@@ -72,6 +72,29 @@ class _FakeSource implements ContentSource {
 
 ContentBook _book(String id, String title) => ContentBook(id: id, title: title);
 
+/// 记在途数的假源：search 时先报到、延迟 30ms、再报离开，恒回一条结果。
+class _CountingSource extends _FakeSource {
+  _CountingSource({
+    required super.id,
+    required this.onEnter,
+    required this.onExit,
+  }) : super(name: id, section: ContentSection.audio);
+
+  final void Function() onEnter;
+  final void Function() onExit;
+
+  @override
+  Future<ContentPage> search(String keyword, int page) async {
+    onEnter();
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      return ContentPage(items: [_book(id, '神瞳·$id')]);
+    } finally {
+      onExit();
+    }
+  }
+}
+
 void main() {
   test('收齐两区：听书 9 个 + 阅读 19 个，id 唯一，成人源也在列', () {
     addTearDown(() => ContentRegistry.setNovelImports([]));
@@ -266,5 +289,51 @@ void main() {
     ];
     expect(await searchReadingTargets('   ', targets), isEmpty);
     expect(await searchReadingTargets('神瞳', const []), isEmpty);
+  });
+
+  test('有界并发：12 个目标站同时在途不超过 6 个，且顺序与目标表一致', () async {
+    var inflight = 0;
+    var peak = 0;
+    final targets = [
+      for (var i = 0; i < 12; i++)
+        GlobalSearchBookTarget(
+          source: _CountingSource(
+            id: 's$i',
+            onEnter: () {
+              inflight++;
+              if (inflight > peak) peak = inflight;
+            },
+            onExit: () => inflight--,
+          ),
+          section: ContentSection.audio,
+        ),
+    ];
+    final groups = await searchReadingTargets('神瞳', targets);
+    expect(peak, 6);
+    expect(
+      groups.map((g) => g.source.id),
+      [for (var i = 0; i < 12; i++) 's$i'],
+    );
+  });
+
+  test('concurrency 参数可覆盖上限', () async {
+    var inflight = 0;
+    var peak = 0;
+    final targets = [
+      for (var i = 0; i < 4; i++)
+        GlobalSearchBookTarget(
+          source: _CountingSource(
+            id: 's$i',
+            onEnter: () {
+              inflight++;
+              if (inflight > peak) peak = inflight;
+            },
+            onExit: () => inflight--,
+          ),
+          section: ContentSection.audio,
+        ),
+    ];
+    await searchReadingTargets('神瞳', targets, concurrency: 2);
+    expect(peak, 2);
   });
 }

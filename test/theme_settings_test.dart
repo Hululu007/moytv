@@ -55,7 +55,7 @@ void main() {
     store.dispose();
   });
 
-  testWidgets('主题设置页列出 8 套主题，点选即时存盘', (tester) async {
+  testWidgets('主题设置页列出 12 套主题，点选即时存盘', (tester) async {
     final store = await localStore();
     await tester.pumpWidget(
       MaterialApp(home: ThemeSettingsScreen(store: store)),

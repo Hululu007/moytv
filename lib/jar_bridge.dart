@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -93,13 +94,78 @@ class JarClassInfo {
   );
 }
 
+/// jar 站点 homeContent 会话缓存：只放内存，带 TTL。
+///
+/// 原先 _homeCache 是无失效期的静态表，分类/筛选一旦抓回就用到
+/// 进程结束；站源换分类、改筛选后界面一直显示旧内容，直到重启。
+/// 现默认 10 分钟过期，到期后下一次打开重新拉；ext 变更、注销、
+/// jar 失效时仍立即清对应条目（与原来一致）。
+class JarHomeCache {
+  JarHomeCache({
+    this.ttl = const Duration(minutes: 10),
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
+
+  final Duration ttl;
+  final DateTime Function() _now;
+  final _entries = <String, _JarHomeEntry>{};
+
+  Map<String, dynamic>? lookup(String siteId) {
+    final entry = _entries[siteId];
+    if (entry == null) return null;
+    if (_now().difference(entry.storedAt) >= ttl) {
+      _entries.remove(siteId);
+      return null;
+    }
+    return entry.result;
+  }
+
+  void store(String siteId, Map<String, dynamic> result) {
+    _entries[siteId] = _JarHomeEntry(result: result, storedAt: _now());
+  }
+
+  void remove(String siteId) => _entries.remove(siteId);
+
+  void removeForConfig(String configId) => _entries.removeWhere(
+    (siteId, _) => siteId.startsWith('jar:$configId:'),
+  );
+
+  void clear() => _entries.clear();
+}
+
+class _JarHomeEntry {
+  const _JarHomeEntry({required this.result, required this.storedAt});
+
+  final Map<String, dynamic> result;
+  final DateTime storedAt;
+}
+
 class JarBridge {
   static const _channel = MethodChannel('moyi/jarbridge');
+
+  /// 平台通道调用超时：与 py 桥 / Go 核 _call 的 70 秒一致。
+  /// 原先 jar 桥所有通道调用都不挂超时，原生蜘蛛卡住时界面永久转圈。
+  static const jarCallTimeout = Duration(seconds: 70);
+
+  /// 封面下载单文件上限：原先无上限 pipe 落盘，异常大响应会撑满磁盘。
+  static const maxCoverBytes = 8 << 20;
+
   static final Map<String, JarSiteSpec> _specs = {};
   static final Map<String, String> _jarPaths = {};
-  static final Map<String, Map<String, dynamic>> _homeCache = {};
+  static final Map<String, Future<String>> _jarPathInflight = {};
+  static final Map<String, Future<Map<String, dynamic>>> _homeInflight = {};
+  static JarHomeCache _homeCache = JarHomeCache();
 
-  static bool get supported => Platform.isAndroid;
+  static Duration? _testTimeout;
+  static bool? _testSupported;
+
+  static Duration get _effectiveTimeout => _testTimeout ?? jarCallTimeout;
+
+  /// 封面下载总预算（测试缝覆盖超时后同样生效，供测试用短超时）。
+  static Duration get _effectiveCoverTimeout =>
+      _testTimeout ?? const Duration(seconds: 30);
+
+  static bool get supported => _testSupported ?? Platform.isAndroid;
 
   static List<JarSiteSpec> get specs => List.unmodifiable(_specs.values);
 
@@ -148,6 +214,22 @@ class JarBridge {
   @visibleForTesting
   static void clearTestJarPaths() => _jarPaths.clear();
 
+  /// 测试缝：覆盖通道调用超时（传 null 恢复默认 70 秒）。
+  @visibleForTesting
+  static void setTestTimeout(Duration? timeout) => _testTimeout = timeout;
+
+  /// 测试缝：覆盖 supported 判定（传 null 恢复按平台判定），供
+  /// ensureJarPath 去重测试在非 Android 测试宿主上走通道调用。
+  @visibleForTesting
+  static void setTestSupported(bool? value) => _testSupported = value;
+
+  /// 测试缝：替换 home 缓存实例（可注入假时钟），供 TTL 测试。
+  @visibleForTesting
+  static void setTestHomeCache(JarHomeCache cache) => _homeCache = cache;
+
+  @visibleForTesting
+  static void resetTestHomeCache() => _homeCache = JarHomeCache();
+
   static Future<void> setJarFingerprint(bool enabled) async {
     if (!supported) return;
     try {
@@ -176,20 +258,49 @@ class JarBridge {
   }) async {
     final cached = _jarPaths[configId];
     if (cached != null) return cached;
+    // 在途去重：原先“查表为空→发通道调用”不是原子的，并发打开同配置
+    // 的两个站会触发两次 jar 下载；现同配置只发一次，后到的等同一单。
+    final inflight = _jarPathInflight[configId];
+    if (inflight != null) return inflight;
+    final future = _ensureJarPathUncached(
+      configId: configId,
+      url: url,
+      md5: md5,
+    );
+    _jarPathInflight[configId] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_jarPathInflight[configId], future)) {
+        _jarPathInflight.remove(configId);
+      }
+    }
+  }
+
+  static Future<String> _ensureJarPathUncached({
+    required String configId,
+    required String url,
+    String md5 = '',
+  }) async {
     if (!supported) {
       throw JarBridgeFailure('jar 桥仅支持 Android，当前平台无法下载与加载远程 jar');
     }
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>(
-        'ensureJar',
-        {'configId': configId, 'url': url, 'md5': md5},
-      );
+      final result = await _channel
+          .invokeMapMethod<String, dynamic>('ensureJar', {
+            'configId': configId,
+            'url': url,
+            'md5': md5,
+          })
+          .timeout(_effectiveTimeout);
       final jarPath = result?['path'] as String? ?? '';
       if (jarPath.isEmpty) {
         throw JarBridgeFailure('jar 下载失败：桥未返回本地路径');
       }
       _jarPaths[configId] = jarPath;
       return jarPath;
+    } on TimeoutException {
+      throw JarBridgeFailure('jar 下载超时，请重试');
     } on PlatformException catch (error) {
       throw JarBridgeFailure(error.message ?? 'jar 桥调用失败');
     } on MissingPluginException {
@@ -208,14 +319,15 @@ class JarBridge {
       throw JarBridgeFailure('jar 桥仅支持 Android，当前平台无法枚举 jar 内的 Spider 类');
     }
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>(
-        'enumerate',
-        {'jarPath': jarPath},
-      );
+      final result = await _channel
+          .invokeMapMethod<String, dynamic>('enumerate', {'jarPath': jarPath})
+          .timeout(_effectiveTimeout);
       return [
         for (final row in result?['classes'] as List? ?? const [])
           if (row is Map) JarClassInfo.fromJson(Map<String, dynamic>.from(row)),
       ];
+    } on TimeoutException {
+      throw JarBridgeFailure('jar 枚举超时，请重试');
     } on PlatformException catch (error) {
       throw JarBridgeFailure(error.message ?? 'jar 枚举失败');
     } on MissingPluginException {
@@ -225,7 +337,8 @@ class JarBridge {
 
   static void invalidateJar(String configId) {
     _jarPaths.remove(configId);
-    _homeCache.removeWhere((siteId, _) => siteId.startsWith('jar:$configId:'));
+    _jarPathInflight.remove(configId);
+    _homeCache.removeForConfig(configId);
   }
 
   static Future<Map<String, dynamic>> callJson(
@@ -251,15 +364,17 @@ class JarBridge {
     Map<String, dynamic> args,
   ) async {
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>('call', {
-        'siteId': spec.siteId,
-        'configId': spec.configId,
-        'jarPath': jarPath,
-        'className': spec.className,
-        'ext': spec.ext,
-        'method': method,
-        'args': args,
-      });
+      final result = await _channel
+          .invokeMapMethod<String, dynamic>('call', {
+            'siteId': spec.siteId,
+            'configId': spec.configId,
+            'jarPath': jarPath,
+            'className': spec.className,
+            'ext': spec.ext,
+            'method': method,
+            'args': args,
+          })
+          .timeout(_effectiveTimeout);
       final text = result?['text'] as String? ?? '';
       if (text.trim().isEmpty) return const {};
       try {
@@ -268,6 +383,8 @@ class JarBridge {
       } catch (_) {
         throw JarBridgeFailure('jar 站点「${spec.name}」的 $method 返回了无法解析的内容');
       }
+    } on TimeoutException {
+      throw JarBridgeFailure('jar 站点「${spec.name}」的 $method 执行超时，请重试');
     } on PlatformException catch (error) {
       throw JarBridgeFailure(error.message ?? 'jar 桥调用失败');
     } on MissingPluginException {
@@ -313,11 +430,25 @@ class JarBridge {
   }) async {
     // 实时口径：force 时不读会话内 home 缓存，现抓并覆盖缓存。
     if (!force) {
-      final cached = _homeCache[spec.siteId];
+      final cached = _homeCache.lookup(spec.siteId);
       if (cached != null) return cached;
+      final inflight = _homeInflight[spec.siteId];
+      if (inflight != null) return inflight;
     }
+    final future = _fetchHome(spec);
+    _homeInflight[spec.siteId] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_homeInflight[spec.siteId], future)) {
+        _homeInflight.remove(spec.siteId);
+      }
+    }
+  }
+
+  static Future<Map<String, dynamic>> _fetchHome(JarSiteSpec spec) async {
     final result = await callJson(spec, 'homeContent', {'filter': true});
-    if (result.isNotEmpty) _homeCache[spec.siteId] = result;
+    if (result.isNotEmpty) _homeCache.store(spec.siteId, result);
     return result;
   }
 
@@ -582,7 +713,8 @@ class JarBridge {
             'jarPath': jarPath,
             'className': spec.className,
             'param': param,
-          });
+          })
+          .timeout(_effectiveTimeout);
       final mime = result?['mime'] as String? ?? 'application/octet-stream';
       final body = result?['bodyBase64'] as String? ?? '';
       if (body.isEmpty) {
@@ -594,6 +726,8 @@ class JarBridge {
         'mime': mime,
         'bodyBase64': body,
       };
+    } on TimeoutException {
+      throw JarBridgeFailure('jar 站点「${spec.name}」的本地代理超时，请重试');
     } on PlatformException catch (error) {
       throw JarBridgeFailure(error.message ?? 'jar 本地代理调用失败');
     } on MissingPluginException {
@@ -614,21 +748,56 @@ class JarBridge {
       path.join(cacheDir.path, '${_fnv1a(url)}${_extensionOf(url)}'),
     );
     if (await file.exists() && await file.length() > 0) return file.path;
-    final client = HttpClient();
+    // 原先无任何超时、无大小上限：卡住的封面请求永久挂起，异常大
+    // 响应直接 pipe 落盘。现全程共用一个 30 秒截止期（测试缝可覆盖），
+    // 正文先收进内存验上限再一次性落盘，失败不留残文件。
+    final deadline = DateTime.now().add(_effectiveCoverTimeout);
+    Duration remaining() {
+      final left = deadline.difference(DateTime.now());
+      return left.isNegative ? Duration.zero : left;
+    }
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
-      final request = await client.getUrl(Uri.parse(url));
+      final request = await client.getUrl(Uri.parse(url)).timeout(remaining());
       request.headers.set(HttpHeaders.userAgentHeader, 'okhttp/4.12.0');
-      final response = await request.close();
+      final response = await request.close().timeout(remaining());
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw JarBridgeFailure('封面下载失败：HTTP ${response.statusCode}');
       }
-      final sink = file.openWrite();
-      await response.pipe(sink);
-      await sink.close();
+      final bytes = await _collectCapped(
+        response,
+        maxCoverBytes,
+      ).timeout(remaining());
+      await file.writeAsBytes(bytes, flush: true);
       return file.path;
+    } on JarBridgeFailure {
+      rethrow;
+    } on TimeoutException {
+      throw JarBridgeFailure('封面下载超时');
+    } on SocketException {
+      throw JarBridgeFailure('封面下载失败：无法连接');
+    } on HttpException {
+      throw JarBridgeFailure('封面下载失败：请求异常');
     } finally {
       client.close();
     }
+  }
+
+  /// 收正文并验上限，超限抛 JarBridgeFailure；供封面下载使用。
+  static Future<List<int>> _collectCapped(
+    HttpClientResponse response,
+    int maxBytes,
+  ) async {
+    final bytes = <int>[];
+    await for (final chunk in response) {
+      bytes.addAll(chunk);
+      if (bytes.length > maxBytes) {
+        throw JarBridgeFailure('封面下载失败：文件过大');
+      }
+    }
+    return bytes;
   }
 
   static String _extensionOf(String url) {

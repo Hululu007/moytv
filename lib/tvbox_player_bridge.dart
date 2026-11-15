@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'exo_subtitle.dart';
+
 class TvboxPlayerController {
   TvboxPlayerController._(this._channel);
 
@@ -16,6 +18,7 @@ class TvboxPlayerController {
   final _bufferingController = StreamController<bool>.broadcast();
   final _completedController = StreamController<void>.broadcast();
   final _errorController = StreamController<String>.broadcast();
+  final _cueGroupController = StreamController<ExoSubtitleGroup>.broadcast();
   bool _released = false;
 
   Stream<Duration> get positionStream => _positionController.stream;
@@ -24,6 +27,7 @@ class TvboxPlayerController {
   Stream<bool> get bufferingStream => _bufferingController.stream;
   Stream<void> get completedStream => _completedController.stream;
   Stream<String> get errorStream => _errorController.stream;
+  Stream<ExoSubtitleGroup> get cueGroupStream => _cueGroupController.stream;
 
   static TvboxPlayerController attach(
     int viewId, {
@@ -53,6 +57,9 @@ class TvboxPlayerController {
         _completedController.add(null);
       case 'onError':
         _errorController.add(call.arguments as String? ?? '播放失败');
+      case 'onCues':
+        final group = ExoSubtitleGroup.fromChannelMap(call.arguments);
+        if (group != null) _cueGroupController.add(group);
     }
   }
 
@@ -115,5 +122,6 @@ class TvboxPlayerController {
     await _bufferingController.close();
     await _completedController.close();
     await _errorController.close();
+    await _cueGroupController.close();
   }
 }

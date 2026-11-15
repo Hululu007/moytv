@@ -137,7 +137,7 @@ void main() {
     expect(size.width, closeTo(110, 1));
   });
 
-  test('8 种样式演示宽度在 72–140 之间', () {
+  test('9 种样式演示宽度在 72–140 之间', () {
     for (final style in CategoryNavStyle.values) {
       final width = CategorySidebar.demoWidthFor(style);
       expect(width, greaterThanOrEqualTo(72));

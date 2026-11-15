@@ -6,7 +6,7 @@ import (
 )
 
 func TestResolveViaParseAPIsAllFail(t *testing.T) {
-	if _, _, err := resolveViaParseAPIs(context.Background(), "https://example.test/play", "", []string{"https://127.0.0.1:1/?url="}); err == nil {
+	if _, _, err := resolveViaParseAPIs(context.Background(), "https://example.test/play", "", []string{"https://127.0.0.1:1/?url="}, nil); err == nil {
 		t.Fatal("unreachable parse API should fail")
 	}
 }

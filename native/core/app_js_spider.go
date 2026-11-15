@@ -2,6 +2,8 @@ package core
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,33 +46,61 @@ func jsValueString(v goja.Value) string {
 	return v.String()
 }
 
-func (c *jsSpiderCtx) request(call goja.FunctionCall) goja.Value {
-	urlStr := ""
-	method := "GET"
-	body := ""
-	headers := map[string]string{}
+// jsFetchRequest 是 request/req/fetch 三个取数入口的公共参数形态。
+type jsFetchRequest struct {
+	url     string
+	method  string
+	body    string
+	headers map[string]string
+	buffer  bool
+}
+
+func jsFetchBufferFlag(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case int64:
+		return v != 0
+	case string:
+		return strings.TrimSpace(v) != "" && strings.TrimSpace(v) != "0" && strings.ToLower(strings.TrimSpace(v)) != "false"
+	default:
+		return false
+	}
+}
+
+func jsFetchParseArgs(call goja.FunctionCall) jsFetchRequest {
+	req := jsFetchRequest{method: "GET", headers: map[string]string{}}
 	if len(call.Arguments) > 0 {
-		first := call.Arguments[0]
-		if first.ExportType() != nil {
-			if exported := first.Export(); exported != nil {
-				switch val := exported.(type) {
-				case string:
-					urlStr = val
-				case map[string]interface{}:
-					if u, ok := val["url"].(string); ok {
-						urlStr = u
+		if exported := call.Arguments[0].Export(); exported != nil {
+			switch val := exported.(type) {
+			case string:
+				req.url = val
+			case map[string]interface{}:
+				if u, ok := val["url"].(string); ok {
+					req.url = u
+				}
+				if m, ok := val["method"].(string); ok && m != "" {
+					req.method = strings.ToUpper(m)
+				}
+				if b, ok := val["body"].(string); ok {
+					req.body = b
+				}
+				if d, ok := val["data"]; ok && req.body == "" {
+					req.body, req.method = jsFetchEncodeData(d, req.method, val)
+					jsFetchEnsureContentType(&req, val)
+				}
+				if h, ok := val["headers"].(map[string]interface{}); ok {
+					for k, hv := range h {
+						req.headers[k] = fmt.Sprint(hv)
 					}
-					if m, ok := val["method"].(string); ok && m != "" {
-						method = strings.ToUpper(m)
-					}
-					if b, ok := val["body"].(string); ok {
-						body = b
-					}
-					if h, ok := val["headers"].(map[string]interface{}); ok {
-						for k, hv := range h {
-							headers[k] = fmt.Sprint(hv)
-						}
-					}
+				}
+				if buf, ok := val["buffer"]; ok {
+					req.buffer = jsFetchBufferFlag(buf)
+				}
+				if params, ok := val["params"].(map[string]interface{}); ok && req.url != "" {
+					req.url = jsFetchAppendParams(req.url, params)
 				}
 			}
 		}
@@ -78,40 +108,212 @@ func (c *jsSpiderCtx) request(call goja.FunctionCall) goja.Value {
 	if len(call.Arguments) > 1 {
 		if exported := call.Arguments[1].Export(); exported != nil {
 			if h, ok := exported.(map[string]interface{}); ok {
-				for k, hv := range h {
-					headers[k] = fmt.Sprint(hv)
+				if jsFetchIsOptionsMap(h) {
+					jsFetchApplyOptions(&req, h)
+				} else {
+					for k, hv := range h {
+						req.headers[k] = fmt.Sprint(hv)
+					}
 				}
 			} else if s, ok := exported.(string); ok && s != "" {
-				body = s
+				req.body = s
 			}
 		}
 	}
-	if urlStr == "" {
-		return c.rt.ToValue("")
+	if req.method == "" {
+		req.method = "GET"
 	}
+	return req
+}
+
+// jsFetchIsOptionsMap 区分第二参数的两种形态：纯 headers 映射（旧契约，
+// 键全是请求头）与 options 对象（含 data/method/headers/buffer 等键）。
+func jsFetchIsOptionsMap(h map[string]interface{}) bool {
+	for _, key := range []string{"data", "method", "headers", "buffer", "body", "params", "url"} {
+		if _, ok := h[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// jsFetchApplyOptions 把 options 对象里的字段分别落到请求上：嵌套 headers
+// 展开、data 编码成请求体、method/buffer/body 生效；options 自身的键不
+// 当成请求头。
+func jsFetchApplyOptions(req *jsFetchRequest, h map[string]interface{}) {
+	if nested, ok := h["headers"].(map[string]interface{}); ok {
+		for k, hv := range nested {
+			req.headers[k] = fmt.Sprint(hv)
+		}
+	}
+	if m, ok := h["method"].(string); ok && m != "" {
+		req.method = strings.ToUpper(m)
+	}
+	if buf, ok := h["buffer"]; ok {
+		req.buffer = jsFetchBufferFlag(buf)
+	}
+	if b, ok := h["body"].(string); ok && b != "" {
+		req.body = b
+	}
+	if d, ok := h["data"]; ok && req.body == "" {
+		req.body, req.method = jsFetchEncodeData(d, req.method, h)
+		jsFetchEnsureContentType(req, h)
+	}
+	if params, ok := h["params"].(map[string]interface{}); ok && req.url != "" {
+		req.url = jsFetchAppendParams(req.url, params)
+	}
+}
+
+// jsFetchEnsureContentType：data 编码出的请求体若无显式 Content-Type，
+// 按编码形态补一个（表单体补 form，JSON 体补 json），服务端才能解析。
+func jsFetchEnsureContentType(req *jsFetchRequest, options map[string]interface{}) {
+	for k := range req.headers {
+		if strings.EqualFold(k, "Content-Type") {
+			return
+		}
+	}
+	contentType := "application/x-www-form-urlencoded"
+	if h, ok := options["headers"].(map[string]interface{}); ok {
+		for k, hv := range h {
+			if strings.EqualFold(k, "Content-Type") && strings.Contains(strings.ToLower(fmt.Sprint(hv)), "application/json") {
+				contentType = "application/json"
+			}
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(req.body), "{") {
+		contentType = "application/json"
+	}
+	req.headers["Content-Type"] = contentType
+}
+
+// 声明 application/json 时编成 JSON。data 出现且方法仍是 GET 时改 POST。
+func jsFetchEncodeData(data interface{}, method string, options map[string]interface{}) (string, string) {
+	if method == "" || method == "GET" {
+		method = "POST"
+	}
+	contentType := ""
+	if h, ok := options["headers"].(map[string]interface{}); ok {
+		for k, hv := range h {
+			if strings.EqualFold(k, "Content-Type") {
+				contentType = fmt.Sprint(hv)
+			}
+		}
+	}
+	if m, ok := data.(map[string]interface{}); ok {
+		if strings.Contains(strings.ToLower(contentType), "application/json") {
+			if body, err := json.Marshal(m); err == nil {
+				return string(body), method
+			}
+		}
+		parts := []string{}
+		for k, v := range m {
+			parts = append(parts, fmt.Sprintf("%s=%s", jsFetchFormEscape(k), jsFetchFormEscape(fmt.Sprint(v))))
+		}
+		return strings.Join(parts, "&"), method
+	}
+	return fmt.Sprint(data), method
+}
+
+func jsFetchFormEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "%", "%25"), "&", "%26"), "=", "%3D")
+}
+
+func jsFetchAppendParams(rawURL string, params map[string]interface{}) string {
+	if len(params) == 0 {
+		return rawURL
+	}
+	sep := "?"
+	if strings.Contains(rawURL, "?") {
+		sep = "&"
+	}
+	parts := []string{}
+	for k, v := range params {
+		parts = append(parts, fmt.Sprintf("%s=%s", jsFetchFormEscape(k), jsFetchFormEscape(fmt.Sprint(v))))
+	}
+	return rawURL + sep + strings.Join(parts, "&")
+}
+
+func (c *jsSpiderCtx) jsDoFetch(req jsFetchRequest) (int, map[string]string, []byte, error) {
 	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
+	if req.body != "" {
+		reader = strings.NewReader(req.body)
 	}
-	req, err := http.NewRequest(method, urlStr, reader)
+	httpReq, err := http.NewRequest(req.method, req.url, reader)
 	if err != nil {
-		return c.rt.ToValue("")
+		return 0, nil, nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
-	req.Header.Set("Accept", "*/*")
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
+	httpReq.Header.Set("Accept", "*/*")
+	for k, v := range req.headers {
+		httpReq.Header.Set(k, v)
 	}
-	resp, err := c.client.Do(req)
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return c.rt.ToValue("")
+		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
+		return 0, nil, nil, err
+	}
+	headers := map[string]string{}
+	for k, values := range resp.Header {
+		if len(values) > 0 {
+			headers[k] = values[0]
+		}
+	}
+	return resp.StatusCode, headers, data, nil
+}
+
+func (c *jsSpiderCtx) jsResponseObject(status int, headers map[string]string, body []byte, base64Mode bool) goja.Value {
+	rt := c.rt
+	content := string(body)
+	if base64Mode {
+		content = base64.StdEncoding.EncodeToString(body)
+	}
+	obj := rt.NewObject()
+	_ = obj.Set("content", content)
+	_ = obj.Set("status", status)
+	_ = obj.Set("statusCode", status)
+	_ = obj.Set("ok", status >= 200 && status < 300)
+	_ = obj.Set("headers", rt.ToValue(headers))
+	_ = obj.Set("text", func(goja.FunctionCall) goja.Value { return rt.ToValue(content) })
+	_ = obj.Set("json", func(goja.FunctionCall) goja.Value {
+		var decoded interface{}
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			return goja.Undefined()
+		}
+		return rt.ToValue(decoded)
+	})
+	_ = obj.Set("toString", func(goja.FunctionCall) goja.Value { return rt.ToValue(content) })
+	return obj
+}
+
+func (c *jsSpiderCtx) request(call goja.FunctionCall) goja.Value {
+	req := jsFetchParseArgs(call)
+	if req.url == "" {
+		return c.rt.ToValue("")
+	}
+	_, _, data, err := c.jsDoFetch(req)
+	if err != nil {
 		return c.rt.ToValue("")
 	}
 	return c.rt.ToValue(string(data))
+}
+
+// jsReq 是 CatVod cat 形态的 req/fetch：返回带 content 的响应对象，
+// 与 spider/catLib/http.js 的同步 http 契约一致（options.buffer 非 0
+// 时 content 为 base64，与样本里 req(url, {buffer: 2}).content 用法一致）。
+func (c *jsSpiderCtx) jsReq(call goja.FunctionCall) goja.Value {
+	req := jsFetchParseArgs(call)
+	if req.url == "" {
+		return c.jsResponseObject(0, map[string]string{}, nil, false)
+	}
+	status, headers, data, err := c.jsDoFetch(req)
+	if err != nil {
+		return c.jsResponseObject(0, map[string]string{}, nil, false)
+	}
+	return c.jsResponseObject(status, headers, data, req.buffer)
 }
 
 func jsHTMLText(n *html.Node) string {
@@ -410,6 +612,36 @@ func (c *jsSpiderCtx) runtime() *goja.Runtime {
 	}
 	rt.Set("request", guard(c.request))
 	rt.Set("get", guard(c.request))
+	rt.Set("req", guard(c.jsReq))
+	rt.Set("fetch", guard(c.jsReq))
+	rt.Set("btoa", guard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return c.rt.ToValue("")
+		}
+		return c.rt.ToValue(base64.StdEncoding.EncodeToString([]byte(jsValueString(call.Arguments[0]))))
+	}))
+	rt.Set("atob", guard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return c.rt.ToValue("")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(jsValueString(call.Arguments[0]))
+		if err != nil {
+			decoded, err = base64.RawStdEncoding.DecodeString(jsValueString(call.Arguments[0]))
+		}
+		if err != nil {
+			return c.rt.ToValue("")
+		}
+		return c.rt.ToValue(string(decoded))
+	}))
+	rt.Set("Buffer", jsBufferObject(rt))
+	// Node/CommonJS 形态：module.exports 与 exports 预定义，ESM 的
+	// export default 由 jsStripModuleSyntax 转成 module.exports 赋值。
+	moduleObj := rt.NewObject()
+	exportsObj := rt.NewObject()
+	_ = moduleObj.Set("exports", exportsObj)
+	rt.Set("module", moduleObj)
+	rt.Set("exports", exportsObj)
+	rt.Set("global", rt.GlobalObject())
 	rt.Set("post", guard(func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) > 0 {
 			if exported := call.Arguments[0].Export(); exported != nil {
@@ -438,6 +670,90 @@ func (c *jsSpiderCtx) runtime() *goja.Runtime {
 	rt.Set("log", guard(func(call goja.FunctionCall) goja.Value { return goja.Undefined() }))
 	rt.Set("print", guard(func(call goja.FunctionCall) goja.Value { return goja.Undefined() }))
 	return rt
+}
+
+// jsBufferObject 提供 Node Buffer 的最小子集：Buffer.from(input, encoding)
+// 与 buf.toString(encoding)/buf.length，覆盖蜘蛛里常见的 base64/hex 编解码。
+// 其它 Buffer API（alloc/concat/compare 等）不在此列，调用会报未定义。
+func jsBufferObject(rt *goja.Runtime) goja.Value {
+	decodeInput := func(value goja.Value, encoding string) []byte {
+		if exported := value.Export(); exported != nil {
+			if list, ok := exported.([]interface{}); ok {
+				out := make([]byte, 0, len(list))
+				for _, item := range list {
+					switch num := item.(type) {
+					case int64:
+						out = append(out, byte(num))
+					case float64:
+						out = append(out, byte(num))
+					}
+				}
+				return out
+			}
+		}
+		text := jsValueString(value)
+		switch strings.ToLower(strings.TrimSpace(encoding)) {
+		case "base64":
+			if decoded, err := base64.StdEncoding.DecodeString(text); err == nil {
+				return decoded
+			}
+			decoded, _ := base64.RawStdEncoding.DecodeString(text)
+			return decoded
+		case "base64url":
+			decoded, _ := base64.RawURLEncoding.DecodeString(text)
+			return decoded
+		case "hex":
+			decoded, _ := hex.DecodeString(text)
+			return decoded
+		default:
+			return []byte(text)
+		}
+	}
+	encodeBytes := func(data []byte, encoding string) string {
+		switch strings.ToLower(strings.TrimSpace(encoding)) {
+		case "base64":
+			return base64.StdEncoding.EncodeToString(data)
+		case "base64url":
+			return base64.RawURLEncoding.EncodeToString(data)
+		case "hex":
+			return hex.EncodeToString(data)
+		default:
+			return string(data)
+		}
+	}
+	bufferObj := rt.NewObject()
+	_ = bufferObj.Set("from", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Undefined()
+		}
+		encoding := ""
+		if len(call.Arguments) > 1 {
+			encoding = jsValueString(call.Arguments[1])
+		}
+		data := decodeInput(call.Arguments[0], encoding)
+		inst := rt.NewObject()
+		_ = inst.Set("__moyiBuffer", true)
+		_ = inst.Set("length", len(data))
+		_ = inst.Set("toString", func(inner goja.FunctionCall) goja.Value {
+			enc := ""
+			if len(inner.Arguments) > 0 {
+				enc = jsValueString(inner.Arguments[0])
+			}
+			return rt.ToValue(encodeBytes(data, enc))
+		})
+		return inst
+	})
+	_ = bufferObj.Set("isBuffer", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue(false)
+		}
+		obj := call.Arguments[0].ToObject(rt)
+		if obj == nil {
+			return rt.ToValue(false)
+		}
+		return rt.ToValue(obj.Get("__moyiBuffer") != nil && !goja.IsUndefined(obj.Get("__moyiBuffer")))
+	})
+	return bufferObj
 }
 
 func jsExportValue(rt *goja.Runtime, v goja.Value) (interface{}, error) {
@@ -473,6 +789,16 @@ func jsFindFunction(rt *goja.Runtime, name string) (goja.Callable, bool) {
 			return fn, true
 		}
 	}
+	// Node/CommonJS 形态：module.exports 与 exports（export default 已转成
+	// module.exports 赋值，见 jsStripModuleSyntax）。
+	for _, holder := range jsModuleExportHolders(rt) {
+		if holder == nil {
+			continue
+		}
+		if fn, ok := goja.AssertFunction(holder.Get(name)); ok {
+			return fn, true
+		}
+	}
 	spiderCtor := rt.Get("Spider")
 	if spiderCtor != nil && !goja.IsUndefined(spiderCtor) && !goja.IsNull(spiderCtor) {
 		if ctor, ok := goja.AssertConstructor(spiderCtor); ok {
@@ -490,6 +816,27 @@ func jsFindFunction(rt *goja.Runtime, name string) (goja.Callable, bool) {
 	return nil, false
 }
 
+func jsModuleExportHolders(rt *goja.Runtime) []*goja.Object {
+	holders := []*goja.Object{}
+	module := rt.Get("module")
+	if module != nil && !goja.IsUndefined(module) && !goja.IsNull(module) {
+		if moduleObj := module.ToObject(rt); moduleObj != nil {
+			if exported := moduleObj.Get("exports"); exported != nil && !goja.IsUndefined(exported) && !goja.IsNull(exported) {
+				if obj := exported.ToObject(rt); obj != nil {
+					holders = append(holders, obj)
+				}
+			}
+		}
+	}
+	exports := rt.Get("exports")
+	if exports != nil && !goja.IsUndefined(exports) && !goja.IsNull(exports) {
+		if obj := exports.ToObject(rt); obj != nil {
+			holders = append(holders, obj)
+		}
+	}
+	return holders
+}
+
 var jsOperationFunctions = map[string]string{
 	"home":     "homeContent",
 	"category": "categoryContent",
@@ -505,9 +852,15 @@ func jsSpiderRun(script, operation, tid string, page int, query, vodID, flag, pl
 	}
 	ctx := &jsSpiderCtx{client: jsSpiderHTTPClient()}
 	rt := ctx.runtime()
+	originalScript := script
+	script = jsStripModuleSyntax(script).script
 	if _, err := rt.RunString(script); err != nil {
+		if _, isDrpy := jsDescribeDrpyRule(originalScript); isDrpy {
+			return nil, jsDrpyRuleError(originalScript, err)
+		}
 		return nil, err
 	}
+	resolvedName := fnName
 	fn, found := jsFindFunction(rt, fnName)
 	if !found {
 		altNames := map[string][]string{
@@ -520,22 +873,42 @@ func jsSpiderRun(script, operation, tid string, page int, query, vodID, flag, pl
 		for _, alt := range altNames[fnName] {
 			if altFn, ok := jsFindFunction(rt, alt); ok {
 				fn = altFn
+				resolvedName = alt
 				found = true
 				break
 			}
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("JS spider does not provide %s", fnName)
+		if _, isDrpy := jsDescribeDrpyRule(originalScript); isDrpy {
+			return nil, jsDrpyRuleError(originalScript, nil)
+		}
+		err := fmt.Errorf("JS spider does not provide %s", fnName)
+		if shape := jsClassifyScript(originalScript); shape == jsShapeCat || shape == jsShapeModule {
+			err = fmt.Errorf("JS spider does not provide %s (script shape: %s)", fnName, shape)
+		}
+		return nil, err
 	}
 	var args []goja.Value
 	switch operation {
 	case "home":
-		args = []goja.Value{}
+		// cat 形态 home(filter)/homeVod(params) 取一个参数；TVBox
+		// homeContent 无参。按实际命中的函数名分流，多余参数 JS 会忽略。
+		if resolvedName == "home" || resolvedName == "homeVod" {
+			args = []goja.Value{rt.ToValue(true)}
+		} else {
+			args = []goja.Value{}
+		}
 	case "category":
 		args = []goja.Value{rt.ToValue(tid), rt.ToValue(page), rt.ToValue(false), rt.ToValue(map[string]interface{}{})}
 	case "detail":
-		args = []goja.Value{rt.ToValue([]string{vodID})}
+		// cat 形态 detail(vod_url) 取单个字符串；TVBox detailContent
+		// 取 id 数组。按实际命中的函数名分流（样本：猫测试.js）。
+		if resolvedName == "detail" {
+			args = []goja.Value{rt.ToValue(vodID)}
+		} else {
+			args = []goja.Value{rt.ToValue([]string{vodID})}
+		}
 	case "search":
 		args = []goja.Value{rt.ToValue(query), rt.ToValue(false), rt.ToValue(page)}
 	case "player":

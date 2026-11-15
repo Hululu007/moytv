@@ -1,4 +1,4 @@
-/// 网盘引擎：把四家网盘的客户端结果归一成魔蚁的目录/详情/播放模型。
+/// 网盘引擎：把五家网盘的客户端结果归一成魔蚁的目录/详情/播放模型。
 ///
 /// 网盘作为一个“站”进站点列表（id `cloud:<网盘>`），文件夹作分类下钻，
 /// 视频文件作卡片，走现有的浏览与播放链路，不做文件管理器式素列表。
@@ -347,7 +347,7 @@ class CloudDriveEngine {
   }
 
   /// 文件列表 → 目录页：文件夹卡在前、视频卡在后；封面三级兜底；
-  /// 疑似广告视频默认隐藏并计数。
+  /// 非视频文件（推广 html/chm 等）不进列表；疑似广告视频默认隐藏并计数。
   CatalogPage _toCatalogPage({
     required String providerId,
     required List<CloudDriveFile> files,
@@ -423,9 +423,11 @@ class CloudDriveEngine {
         ),
       );
     }
-    // 疑似广告过滤先行：被藏的成员不参与分组。
+    // 推广文件（html/chm/url/txt 等）不进列表（文件夹已在上面单列）；
+    // 其余文件一律成卡；疑似广告过滤只对真视频文件生效。
     final visible = <CloudDriveFile>[];
     for (final file in rest) {
+      if (!isListableDriveFile(file)) continue;
       if (isSuspectedAdVideo(file) && !_showSuspectedAds()) {
         hiddenAds++;
         continue;

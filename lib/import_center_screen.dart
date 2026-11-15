@@ -12,6 +12,7 @@ import 'jar_bridge_handoff.dart';
 import 'jar_import.dart';
 import 'local_store.dart';
 import 'neon_glass_kit.dart';
+import 'subscription_entries.dart';
 import 'tvbox_config.dart';
 import 'widgets.dart';
 
@@ -439,30 +440,44 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
     return NeonGlassCard(
       key: ValueKey('tvbox-${record.configId}'),
       margin: const EdgeInsets.only(bottom: 12),
-      child: NeonRow(
-        icon: Icons.settings_input_component_outlined,
-        title: record.name,
-        detail:
-            '${record.summaryLine}'
-            '${record.url.isEmpty ? '' : '\n${record.url}'}',
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (record.url.isNotEmpty)
-              IconButton(
-                tooltip: '刷新',
-                onPressed: _busy
-                    ? null
-                    : () => unawaited(_refreshConfig(record)),
-                icon: const Icon(Icons.refresh_rounded),
-              ),
-            IconButton(
-              tooltip: '删除整份配置',
-              onPressed: _busy ? null : () => unawaited(_removeConfig(record)),
-              icon: Icon(Icons.delete_outline, color: colors.error),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          NeonRow(
+            icon: Icons.settings_input_component_outlined,
+            title: record.name,
+            detail:
+                '${record.summaryLine}'
+                '${record.url.isEmpty ? '' : '\n${record.url}'}',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (record.url.isNotEmpty)
+                  IconButton(
+                    tooltip: '刷新',
+                    onPressed: _busy
+                        ? null
+                        : () => unawaited(_refreshConfig(record)),
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                IconButton(
+                  tooltip: '删除整份配置',
+                  onPressed: _busy ? null : () => unawaited(_removeConfig(record)),
+                  icon: Icon(Icons.delete_outline, color: colors.error),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          // 订阅双入口：双边订阅出“影视/直播”两个入口，单边只出一个。
+          SubscriptionEntryButtons(
+            entries: subscriptionEntriesForConfig(record),
+            onEnterVideo: (siteId) =>
+                enterSubscriptionVideo(context, widget.store, siteId),
+            onEnterLive: (sourceId) =>
+                enterSubscriptionLive(context, widget.store, sourceId),
+          ),
+        ],
       ),
     );
   }

@@ -34,6 +34,9 @@ func (d *Downloader) fetchDuanjuCategories(ctx context.Context, source string) (
 		if isT4CustomSource(source) {
 			return t4Categories(ctx, d, source)
 		}
+		if isDrpysCustomSource(source) {
+			return drpysCategories(ctx, d, source)
+		}
 		return d.fetchMaccmsCustomCategories(ctx, source)
 	}
 	return nil, errors.New("该站源暂未提供分类")
@@ -62,6 +65,9 @@ func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, 
 		if isCustomMaccmsSource(source) {
 			if isT4CustomSource(source) {
 				return t4CatalogPage(ctx, d, source, page, category)
+			}
+			if isDrpysCustomSource(source) {
+				return drpysCatalogPage(ctx, d, source, page, category)
 			}
 			return d.fetchMaccmsCatalogPage(ctx, source, page, category)
 		}
@@ -93,6 +99,9 @@ func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID str
 			if isT4CustomSource(source) {
 				return t4Detail(ctx, d, source, sourceID)
 			}
+			if isDrpysCustomSource(source) {
+				return drpysDetail(ctx, d, source, sourceID)
+			}
 			return d.fetchMaccmsDetail(ctx, source, sourceID)
 		}
 	}
@@ -123,6 +132,9 @@ func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]
 			if isT4CustomSource(source) {
 				return t4Search(ctx, d, source, query)
 			}
+			if isDrpysCustomSource(source) {
+				return drpysSearch(ctx, d, source, query)
+			}
 			return d.searchMaccms(ctx, source, query)
 		}
 	}
@@ -150,6 +162,9 @@ func (d *Downloader) resolveDuanjuMedia(ctx context.Context, task Task) (provide
 	}
 	if isT4CustomSource(source) {
 		return d.t4ResolveMedia(ctx, source, task)
+	}
+	if isDrpysCustomSource(source) {
+		return d.drpysResolveMedia(ctx, source, task)
 	}
 	base := d.duanjuBaseURL(source)
 	if base == "" {

@@ -3,10 +3,8 @@ import 'package:flutter/material.dart';
 import 'app_page_route.dart';
 
 import 'app_drawer.dart';
-import 'content_source_screen.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
-import 'parse_settings_screen.dart';
 import 'player_picker.dart';
 import 'settings_screen.dart';
 import 'xigua/playback_settings_screen.dart';
@@ -17,16 +15,16 @@ class ZoneSettingsScreen extends StatelessWidget {
     required this.repository,
     required this.store,
     required this.zone,
-    this.onHideAdult,
   });
 
   final AppRepository repository;
   final LocalStore store;
   final HomeZone zone;
-  final VoidCallback? onHideAdult;
 
+  // 片库设置页已废弃（2026-11-14）：片库区直接进通用设置，不再打开本页；
+  // library 分支仅为 switch 穷举保留，实际不可达。
   String get title => switch (zone) {
-    HomeZone.library => '片库设置',
+    HomeZone.library => '通用设置',
     HomeZone.live => '直播设置',
     HomeZone.audio => '听书设置',
     HomeZone.novel => '阅读设置',
@@ -75,7 +73,7 @@ class ZoneSettingsScreen extends StatelessWidget {
       case HomeZone.novel:
         break;
     }
-    if (zone == HomeZone.library || zone == HomeZone.live) {
+    if (zone == HomeZone.live) {
       entries.add(
         _entry(
           icon: Icons.play_circle_rounded,
@@ -90,47 +88,6 @@ class ZoneSettingsScreen extends StatelessWidget {
           label: '播放器选择',
           subtitle: '切换播放器后端',
           onTap: () => _push(context, PlayerPickerScreen(store: store)),
-        ),
-      );
-    }
-    if (zone == HomeZone.library) {
-      entries.add(
-        _entry(
-          icon: Icons.link_rounded,
-          label: '解析接口',
-          subtitle: '播放解析接口列表与默认选中',
-          onTap: () => _push(context, const ParseSettingsScreen()),
-        ),
-      );
-    }
-    if (zone == HomeZone.library) {
-      entries.add(
-        _entry(
-          icon: Icons.dns_rounded,
-          label: '内容源管理',
-          subtitle: 'TVBox 远程配置与 py 互斥切换',
-          onTap: () => _push(
-            context,
-            ContentSourceScreen(repository: repository, store: store),
-          ),
-        ),
-      );
-    }
-    // 片库是合并后的唯一视频区，未成年保护开关跟到片库设置里，
-    // 语义与火蚁TV午夜区设置里的一致：一次性切回短剧站。
-    if (zone == HomeZone.library && onHideAdult != null) {
-      entries.add(
-        SwitchListTile(
-          secondary: const Icon(Icons.shield_rounded),
-          title: const Text('未成年保护'),
-          subtitle: const Text('开启后隐藏成人站并切回短剧站'),
-          value: false,
-          onChanged: (value) {
-            if (value) {
-              onHideAdult!();
-              Navigator.pop(context);
-            }
-          },
         ),
       );
     }

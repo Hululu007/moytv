@@ -78,6 +78,7 @@ class PyContentSource extends ContentSource {
   final String filterKey;
 
   String? _path;
+  Future<String>? _pathFuture;
 
   @override
   String get note => importedFileName.isNotEmpty ? '导入 py 蜘蛛' : '';
@@ -85,6 +86,22 @@ class PyContentSource extends ContentSource {
   Future<String> _spiderPath() async {
     final cached = _path;
     if (cached != null) return cached;
+    final pending = _pathFuture;
+    if (pending != null) return pending;
+    // 在途去重：并发的分类/目录/搜索调用只落盘一次；原先每次调用都
+    // 各自 rootBundle.load + save，同名文件并发写会互相覆盖。
+    // 失败时清掉 memo（凭 identical 认领），下次调用重新尝试，
+    // 不把一次失败永久钉死。
+    final future = _pathFuture = _loadSpiderPath();
+    try {
+      return await future;
+    } catch (_) {
+      if (identical(_pathFuture, future)) _pathFuture = null;
+      rethrow;
+    }
+  }
+
+  Future<String> _loadSpiderPath() async {
     if (importedFileName.isNotEmpty) {
       final path = await ImportFileStore.pathOf(importedFileName);
       _path = path;

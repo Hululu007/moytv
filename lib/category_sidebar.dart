@@ -24,7 +24,7 @@ class CategorySidebarFilter {
   final String value;
 }
 
-/// 动态分类侧边栏：按当前主题绑定的样式自动切换 8 种形态。
+/// 动态分类侧边栏：按当前主题绑定的样式自动切换 9 种形态。
 ///
 /// 宽度取演示代码的 72–140 逻辑宽，并收敛到屏宽的 36% 以内，
 /// 竖屏手机上不挤占右侧内容区。
@@ -54,6 +54,7 @@ class CategorySidebar extends StatelessWidget {
     CategoryNavStyle.goldSidebar => 120,
     CategoryNavStyle.cyberSidebar => 110,
     CategoryNavStyle.tvWideSidebar => 140,
+    CategoryNavStyle.leftCategorySidebar => 110,
   };
 
   /// 实际宽度：演示宽与屏宽 36% 取小。
@@ -141,6 +142,16 @@ class CategorySidebar extends StatelessWidget {
         );
       case CategoryNavStyle.tvWideSidebar:
         return _TvWideSidebar(
+          config: config,
+          items: items,
+          selectedIndex: effectiveIndex,
+          width: width,
+          onTap: onTap,
+        );
+      // 左侧分类主题的分类纵栏由 LeftCategoryLayout 自带；此处是
+      // 频道页/主题预览里的通用侧边栏，沿用暗黑形态即可。
+      case CategoryNavStyle.leftCategorySidebar:
+        return _DarkSidebar(
           config: config,
           items: items,
           selectedIndex: effectiveIndex,

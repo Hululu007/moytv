@@ -146,6 +146,7 @@ type nativeInput struct {
 	URL              string                  `json:"url"`
 	Headers          map[string]string       `json:"headers"`
 	ParseAPIs        []string                `json:"parseApis"`
+	ParseAPIHeaders  []map[string]string     `json:"parseApiHeaders"`
 	Session          string                  `json:"session"`
 	Sequence         int64                   `json:"sequence"`
 	Force            bool                    `json:"force"`
@@ -1160,7 +1161,7 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		if len(input.ParseAPIs) == 0 {
 			return nativeParseFallbackPlan(pageURL, referer), nil
 		}
-		real, parsedHeaders, err := resolveViaParseAPIs(ctx, pageURL, referer, input.ParseAPIs)
+		real, parsedHeaders, err := resolveViaParseAPIs(ctx, pageURL, referer, input.ParseAPIs, input.ParseAPIHeaders)
 		if err != nil {
 			return nativeParseFallbackPlan(pageURL, referer), nil
 		}

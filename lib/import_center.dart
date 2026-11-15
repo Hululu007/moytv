@@ -10,6 +10,7 @@ import 'legado_gbk.dart';
 import 'local_store.dart';
 import 'py_bridge.dart';
 import 'py_spider_validator.dart';
+import 'source_compat.dart';
 
 class ImportCandidate {
   const ImportCandidate({
@@ -273,6 +274,16 @@ class ImportEngine {
         reason: problem,
       );
     }
+    // drpy 声明式规则（rule 对象 + 一级/二级规则串）不是蜘蛛函数，
+    // JS 引擎跑不了：直接拒绝并指明去处，不让它注册成打不开的站。
+    if (classifyJsSource(source) == JsSourceShape.drpyRule) {
+      return ImportOutcome(
+        fileName: candidate.name,
+        status: ImportOutcomeStatus.failed,
+        reason:
+            '该文件是 drpy 声明式规则（rule 对象 + 一级/二级规则串），JS 引擎无法直接运行，请改走 drpy-node 小程序或 drpyS 服务',
+      );
+    }
     final id = _uniqueId('js', candidate.baseName, records, hash);
     final fileName = await ImportFileStore.save(id, 'js', candidate.bytes);
     records.add(
@@ -355,7 +366,12 @@ class ImportEngine {
       );
     }
     if (parsed is Map<String, dynamic> &&
-        (parsed.containsKey('sites') || parsed.containsKey('spider'))) {
+        (parsed.containsKey('sites') ||
+            parsed.containsKey('spider') ||
+            parsed.containsKey('lives') ||
+            parsed.containsKey('live') ||
+            parsed.containsKey('parses') ||
+            parsed.containsKey('parse'))) {
       final summary = await JarBridgeHandoff.importTvBoxConfig(
         repository: repository,
         name: candidate.baseName,

@@ -51,7 +51,7 @@ extension CloudCoverSourceLabel on CloudCoverSource {
   }
 }
 
-/// 网盘文件/文件夹的统一模型（四家网盘的列表结果都先归一到这里）。
+/// 网盘文件/文件夹的统一模型（五家网盘的列表结果都先归一到这里）。
 class CloudDriveFile {
   const CloudDriveFile({
     required this.id,
@@ -178,6 +178,21 @@ String? parseStrmContent(String content) {
     return null;
   }
   return null;
+}
+
+/// 推广/说明类文件扩展名：网盘里常见的“点击进入”“地址发布页”都
+/// 是这类文件，不进列表。只排除这张表：视频/音频/图片/字幕/光盘
+/// 元数据/无扩展名文件一律保留成卡，各自按 kind 走播放或详情——
+/// 白名单（只留视频）会误杀图片浏览、字幕详情与 IFO 卡。
+const _promoExtensions = <String>{
+  'html', 'htm', 'shtml', 'mht', 'mhtml', 'chm', 'url', 'txt', 'lnk',
+};
+
+/// 网盘列表是否列出该文件：推广类扩展名不列，其余一律列出。
+/// 不看 kind：网盘提示与扩展名不一致时以扩展名为准，kind 只决定
+/// 成卡后的播放/详情走法。
+bool isListableDriveFile(CloudDriveFile file) {
+  return !_promoExtensions.contains(fileExtension(file.name));
 }
 
 /// 按扩展名识别类型；扩展名不在表里的一律 [CloudFileKind.other]。

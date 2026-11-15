@@ -35,7 +35,11 @@ class MainActivity : FlutterActivity() {
     private var quickJSBridge: QuickJSBridge? = null
     private var quickJSChannel: MethodChannel? = null
     private var pyImportChannel: MethodChannel? = null
+    private var pluginShareChannel: MethodChannel? = null
     private val pendingPyFiles = mutableListOf<Map<String, Any?>>()
+    private val pendingPluginShareFiles = mutableListOf<Map<String, Any?>>()
+    // 插件分享读流上限：与 Flutter 侧外部导入的 32MB 上限一致。
+    private val maxPluginShareBytes = 32L * 1024 * 1024
     private val pendingJarFiles = mutableListOf<Map<String, Any?>>()
     private var televisionMode = false
 
@@ -206,12 +210,33 @@ class MainActivity : FlutterActivity() {
         val name = displayNameFor(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: ""
         val mime = incoming.type ?: runCatching { contentResolver.getType(uri) }.getOrNull()
         val lowerName = name.lowercase()
-        val looksPy = lowerName.endsWith(".py") ||
+        val looksZip = lowerName.endsWith(".zip") ||
+            mime == "application/zip" || mime == "application/x-zip-compressed"
+        val looksPy = !looksZip && (lowerName.endsWith(".py") ||
             (!lowerName.endsWith(".jar") &&
-                (mime == "text/x-python" || mime == "application/x-python"))
-        val looksJar = !looksPy && (lowerName.endsWith(".jar") ||
+                (mime == "text/x-python" || mime == "application/x-python")))
+        val looksJar = !looksZip && !looksPy && (lowerName.endsWith(".jar") ||
             mime == "application/java-archive" || mime == "application/x-java-archive")
-        if (!looksPy && !looksJar) return
+        if (!looksPy && !looksJar && !looksZip) return
+        if (action == Intent.ACTION_VIEW) {
+            // 打开方式进插件分享通道：Flutter 侧按 URI 读流后走插件安装；
+            // 不再同时进旧的 py/jar 暂存队列，避免一次打开装两次。
+            // SEND（分享到）仍走旧的暂存队列，行为不变。
+            val fallbackName = if (looksZip) "import.zip"
+                else if (looksJar) "import.jar" else "import.py"
+            val uriString = uri.toString()
+            if (pendingPluginShareFiles.none { it["uri"] == uriString }) {
+                pendingPluginShareFiles.add(
+                    mapOf(
+                        "uri" to uriString,
+                        "name" to if (name.isNotEmpty()) name else fallbackName,
+                    ),
+                )
+            }
+            return
+        }
+        // zip 只走打开方式的插件分享通道，SEND 来的 zip 不进旧队列。
+        if (looksZip) return
         val staged = runCatching {
             val dir = java.io.File(cacheDir, if (looksJar) "jarimport" else "pyimport").apply { if (!exists()) mkdirs() }
             val suffix = if (looksJar) "jar" else "py"
@@ -228,6 +253,46 @@ class MainActivity : FlutterActivity() {
             "kind" to if (looksJar) "jar" else "py"
         )
         if (looksJar) pendingJarFiles.add(entry) else pendingPyFiles.add(entry)
+    }
+
+    // 插件分享读流：Flutter 侧只认 URI + 字节流，不假设文件路径。
+    // 超过 32MB 拒读（与旧的外部导入上限一致），流打不开报 unreadable。
+    private fun readPluginShareBytes(uriString: String, result: MethodChannel.Result) {
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+        if (uri == null) {
+            result.error("invalid_uri", "文件 URI 无效", null)
+            return
+        }
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > maxPluginShareBytes) {
+                        throw java.io.IOException("too_large")
+                    }
+                    output.write(buffer, 0, read)
+                }
+                output.toByteArray()
+            }
+            if (bytes == null) {
+                result.error("unreadable", "无法打开文件流", null)
+                return
+            }
+            result.success(bytes)
+        } catch (e: java.io.IOException) {
+            if (e.message == "too_large") {
+                result.error("file_too_large", "文件过大（超过 32MB）", null)
+            } else {
+                result.error("unreadable", "读取文件流失败：${e.message}", null)
+            }
+        } catch (e: Exception) {
+            result.error("unreadable", "读取文件流失败：${e.message}", null)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -354,6 +419,29 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        pluginShareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "moyi/plugin_share")
+            .also { channel ->
+                channel.setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        "takePending" -> {
+                            val pending = pendingPluginShareFiles.toList()
+                            pendingPluginShareFiles.clear()
+                            result.success(pending)
+                        }
+                        "readBytes" -> {
+                            val uriString = call.argument<String>("uri")
+                            if (uriString.isNullOrEmpty()) {
+                                result.error("invalid_uri", "缺少文件 URI", null)
+                            } else {
+                                readPluginShareBytes(uriString, result)
+                            }
+                        }
+                        else -> result.notImplemented()
+                    }
+                }
+            }
+        // 冷启动的初始 intent 在这里接（configureFlutterEngine 在 onCreate 内跑）；
+        // 热启动走 onNewIntent，两路都进 stageIncomingIntent，不丢。
         stageIncomingIntent(intent)
     }
 
@@ -431,6 +519,8 @@ class MainActivity : FlutterActivity() {
         deviceChannel = null
         pyImportChannel?.setMethodCallHandler(null)
         pyImportChannel = null
+        pluginShareChannel?.setMethodCallHandler(null)
+        pluginShareChannel = null
         pyChannel?.setMethodCallHandler(null)
         pyChannel = null
         pyBridge?.shutdown()

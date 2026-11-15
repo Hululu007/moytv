@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
+import 'collapsible_section_help.dart';
 import 'core_bridge.dart';
 import 'import_center_screen.dart';
 import 'import_center_section.dart';
@@ -394,15 +395,23 @@ class _CustomSourcesScreenState extends State<CustomSourcesScreen> {
                 children: [
                   const Padding(
                     padding: EdgeInsets.only(bottom: 16),
-                    child: Text(
-                      '自定义源读取网站地址并判断是否符合 MacCMS 规范；符合后套用通用规则自动完成列表展示、搜索与播放。录入 XBPQ 爬虫规则的站点按规则字段逐项截取。',
+                    child: CollapsibleSectionHelp(
+                      key: ValueKey('custom-source-help'),
+                      toggleKey: ValueKey('custom-source-help-toggle'),
+                      brief: 'MacCMS 规范站点自动成站',
+                      fullText:
+                          '自定义源读取网站地址并判断是否符合 MacCMS 规范；符合后套用通用规则自动完成列表展示、搜索与播放。录入 XBPQ 爬虫规则的站点按规则字段逐项截取。',
                     ),
                   ),
                   if (sources.isEmpty)
                     const Padding(
                       padding: EdgeInsets.only(bottom: 16),
-                      child: Text(
-                        '还没有自定义源。点击「新增」填入 MacCMS 站点地址或粘贴 XBPQ 爬虫规则；也可以「导入文件」批量添加，「导出 JSON」备份迁移。',
+                      child: CollapsibleSectionHelp(
+                        key: ValueKey('custom-source-empty-help'),
+                        toggleKey: ValueKey('custom-source-empty-help-toggle'),
+                        brief: '还没有自定义源，点新增添加',
+                        fullText:
+                            '还没有自定义源。点击「新增」填入 MacCMS 站点地址或粘贴 XBPQ 爬虫规则；也可以「导入文件」批量添加，「导出 JSON」备份迁移。',
                       ),
                     ),
                   for (final source in sources) _sourceCard(source),
@@ -601,7 +610,7 @@ class _CustomSourceEditorState extends State<_CustomSourceEditor> {
                 decoration: const InputDecoration(
                   labelText: '源类型',
                   helperText:
-                      '自动：先探测再兜底；网页源走 HTML 抓取；JSON 源直连接口；T4 源走 TVBox type:4 聚合接口。',
+                      '自动：先探测再兜底；网页源走 HTML 抓取；JSON 源直连接口；T4 源走 TVBox type:4 聚合接口；drpyS 源走 drpy PHP 服务的 /api 接口。',
                 ),
                 items: const [
                   DropdownMenuItem(value: '', child: Text('自动（默认）')),
@@ -610,6 +619,10 @@ class _CustomSourceEditorState extends State<_CustomSourceEditor> {
                   DropdownMenuItem(
                     value: 't4',
                     child: Text('T4 源（TVBox type:4 聚合）'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'drpys',
+                    child: Text('drpyS 源（drpy PHP 服务）'),
                   ),
                 ],
                 onChanged: _busy

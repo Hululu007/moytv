@@ -196,9 +196,9 @@ void main() {
       return store;
     }
 
-    testWidgets('新装 8 张卡默认全部内容', (tester) async {
+    testWidgets('新装 12 张卡默认全部内容', (tester) async {
       await pumpThemeScreen(tester);
-      expect(find.text('显示内容：全部内容'), findsNWidgets(8));
+      expect(find.text('显示内容：全部内容'), findsNWidgets(12));
     });
 
     testWidgets('点档行改档不切主题', (tester) async {
@@ -468,7 +468,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
     }
 
-    testWidgets('切主题后导航与内容档一起变', (tester) async {
+    testWidgets('切主题后导航固定抽屉、内容档一起变', (tester) async {
       final store = await pumpHome(tester);
       expect(find.text('暂无漫剧'), findsNothing);
       // 先切到直播区：空态门住后短剧首页没有抽屉入口。
@@ -484,14 +484,22 @@ void main() {
       await store.setAppTheme(AppThemeMode.goldVip);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      // 导航：外层底栏出现。
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
+      // 导航：固定抽屉，存值里的底部标签作废，底栏始终不出现。
+      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
       // 内容档：回片库后本站无漫剧分类，显示诚实空态。
-      await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-0')));
+      await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      final library = find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text('片库'),
+      );
+      expect(library, findsOneWidget);
+      await tester.tap(library);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('暂无漫剧'), findsOneWidget);
-      // 切回默认主题：两件一起复原。
+      // 切回默认主题：内容档复原，导航仍是抽屉。
       await store.setAppTheme(AppThemeMode.purpleNeon);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));

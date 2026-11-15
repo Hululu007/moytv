@@ -282,16 +282,23 @@ func (engine *nativeEngine) nativeSearchAcross(ctx context.Context, input native
 }
 
 // nativeSearchFailureText 把各站源的失败原因合并成一句提示。
+// failures 以站源 id 为键、展示名可能与 id 不同（如 maoguo/猫果），
+// 故先把（展示名，原因）配对再排序；原先拿展示名反查 failures 表，
+// 对 id 与名不同的站源查不到原因，单站失败时提示里原因为空。
 func nativeSearchFailureText(failures map[string]string) string {
-	names := make([]string, 0, len(failures))
-	for source := range failures {
-		names = append(names, duanjuSourceLabel(source))
+	type failure struct {
+		label  string
+		reason string
 	}
-	sort.Strings(names)
-	if len(names) == 1 {
-		return fmt.Sprintf("%s：%s", names[0], failures[names[0]])
+	list := make([]failure, 0, len(failures))
+	for source, reason := range failures {
+		list = append(list, failure{label: duanjuSourceLabel(source), reason: reason})
 	}
-	return fmt.Sprintf("%s 等 %d 个站源未返回结果", names[0], len(names))
+	sort.Slice(list, func(i, j int) bool { return list[i].label < list[j].label })
+	if len(list) == 1 {
+		return fmt.Sprintf("%s：%s", list[0].label, list[0].reason)
+	}
+	return fmt.Sprintf("%s 等 %d 个站源未返回结果", list[0].label, len(list))
 }
 
 // nativeSearchYear 从上线日期里取出年份，取不到返回空串。

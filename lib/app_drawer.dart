@@ -178,6 +178,8 @@ class AppDrawer extends StatefulWidget {
     required this.onTool,
     required this.onMinorProtectionChanged,
     this.appTheme = AppThemeMode.purpleNeon,
+    this.onMultimediaRequested,
+    this.multimediaActive = false,
   });
 
   final HomeZone zone;
@@ -186,6 +188,15 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback onWatchRoom;
   final ValueChanged<AppDrawerTool> onTool;
   final ValueChanged<bool> onMinorProtectionChanged;
+
+  /// 点“多媒体”Tab 时的回调：多媒体不是 HomeZone，只是片库区内的
+  /// 请求态，父级在回调里关抽屉并递出请求（与 onZoneSelected /
+  /// onTool 把关抽屉放回调里的口径一致）。
+  final VoidCallback? onMultimediaRequested;
+
+  /// 当前是否在多媒体区：为真时“多媒体”Tab 高亮，三个分区 Tab
+  /// 一律不选中（互斥，避免双高亮）。
+  final bool multimediaActive;
 
   /// 当前全局主题：只用于主题切换行的“当前：X”显示，
   /// 调用方（首页）从 LocalStore 传入真实值。
@@ -218,7 +229,9 @@ class _AppDrawerState extends State<AppDrawer> {
       widget.zone == HomeZone.library || widget.zone == HomeZone.live;
 
   void _selectShelf(DrawerShelf shelf) {
-    if (_shelf == shelf) return;
+    // 多媒体区时 _shelf 仍是 video：此时点“影视”必须发回调，
+    // 否则首页清不掉多媒体请求、回不到片库目录。
+    if (_shelf == shelf && !widget.multimediaActive) return;
     setState(() => _shelf = shelf);
     // 分区键与内容区联动：点选立即切换到底层内容区（回调里有关抽屉），
     // 不只换抽屉内部的分组列表。
@@ -230,6 +243,12 @@ class _AppDrawerState extends State<AppDrawer> {
       case DrawerShelf.miniApp:
         widget.onTool(AppDrawerTool.miniApp);
     }
+  }
+
+  void _requestMultimedia() {
+    // 已在多媒体区时不发回调，与 _selectShelf 已选即返回的口径一致。
+    if (widget.multimediaActive) return;
+    widget.onMultimediaRequested?.call();
   }
 
   Widget _row({
@@ -290,6 +309,9 @@ class _AppDrawerState extends State<AppDrawer> {
                 padding: const EdgeInsets.only(right: 8),
                 child: _shelfChip(shelf),
               ),
+            // 多媒体不是内容分区（没有对应的分组列表），不进 DrawerShelf；
+            // 单独一枚胶囊，选中样式与分区 Tab 同一枚 NeonCapsule。
+            _multimediaChip(),
           ],
         ),
       ),
@@ -299,8 +321,17 @@ class _AppDrawerState extends State<AppDrawer> {
   Widget _shelfChip(DrawerShelf shelf) {
     return NeonCapsule(
       label: shelf.label,
-      selected: _shelf == shelf,
+      // 在多媒体区时分区 Tab 一律不选中，只高亮“多媒体”。
+      selected: _shelf == shelf && !widget.multimediaActive,
       onTap: () => _selectShelf(shelf),
+    );
+  }
+
+  Widget _multimediaChip() {
+    return NeonCapsule(
+      label: '多媒体',
+      selected: widget.multimediaActive,
+      onTap: _requestMultimedia,
     );
   }
 
@@ -437,7 +468,7 @@ class _AppDrawerState extends State<AppDrawer> {
               _row(
                 icon: Icons.auto_stories_rounded,
                 label: '漫画区',
-                description: '打开阅读区 · sourceType=2 的源即漫画源',
+                description: '打开阅读区 · 漫画源',
                 selected: widget.zone == HomeZone.novel,
                 onTap: () => widget.onZoneSelected(HomeZone.novel),
               ),
@@ -532,7 +563,7 @@ class _AppDrawerState extends State<AppDrawer> {
           AppDrawerTool.themeSettings,
           Icons.palette_outlined,
           '主题切换',
-          '当前：${AppThemeConfig.forTheme(widget.appTheme).themeName} · 8 套主题',
+          '当前：${AppThemeConfig.forTheme(widget.appTheme).themeName} · 12 套主题',
         ),
         _row(
           icon: Icons.settings_outlined,

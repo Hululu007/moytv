@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'core_bridge.dart';
 import 'legado_gbk.dart';
 import 'proxy_kernel_service.dart';
+import 'socks5_proxy.dart';
 
 const contentUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -60,20 +61,96 @@ String decodeContentBytes(List<int> bytes, {String? contentType}) {
 }
 
 class ContentHttp {
-  ContentHttp() {
+  ContentHttp({
+    this._proxyResourceKey,
+    Socks5ProxyRouter? proxyRouter,
+    Socks5ForwarderPool? forwarderPool,
+  }) : _proxyRouter = proxyRouter ?? Socks5ProxyRouter.instance,
+       _forwarderPool = forwarderPool ?? Socks5ForwarderPool.instance {
     _client.findProxy = ProxyKernelTraffic.findProxy;
   }
 
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10);
 
-  void close() => _client.close(force: true);
+  /// 构造时绑定的默认资源键（单资源调用方用）；每次请求也可用
+  /// [proxyResourceKey] 具名参数覆盖。无分配时走默认客户端（代理内核
+  /// 全局链路），行为与以前一致。
+  final String? _proxyResourceKey;
+  final Socks5ProxyRouter _proxyRouter;
+  final Socks5ForwarderPool _forwarderPool;
+  final Map<String, HttpClient> _routedClients = {};
+  int _routedGeneration = -1;
+
+  void _syncRoutedClients() {
+    if (_proxyRouter.generation == _routedGeneration) return;
+    for (final client in _routedClients.values) {
+      client.close(force: true);
+    }
+    _routedClients.clear();
+    _routedGeneration = _proxyRouter.generation;
+  }
+
+  /// 按资源键选客户端：fallback 用默认客户端（内核链路），direct 用
+  /// 专用直连客户端，via 用该 SOCKS5 代理的转发器端口客户端。
+  /// 路由快照 generation 变化时丢弃已缓存的按代理客户端，避免复用
+  /// 改过/删掉的代理配置；等转发器起好的间隙里快照变了就按新快照
+  /// 重算，最多重试 3 次，仍不一致时回默认客户端，绝不卡死。
+  Future<HttpClient> _clientFor(String? callKey) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      _syncRoutedClients();
+      final route = _proxyRouter.resolve(callKey ?? _proxyResourceKey);
+      switch (route.kind) {
+        case Socks5RouteKind.fallback:
+          return _client;
+        case Socks5RouteKind.direct:
+          return _routedClients.putIfAbsent(
+            route.clientKey,
+            () => HttpClient()
+              ..connectionTimeout = const Duration(seconds: 10)
+              ..findProxy = (_) => 'DIRECT',
+          );
+        case Socks5RouteKind.via:
+          final cached = _routedClients[route.clientKey];
+          if (cached != null) return cached;
+          final port = await _forwarderPool.ensurePort(route.entry!);
+          if (_proxyRouter.generation != _routedGeneration) continue;
+          final built = buildForwardedHttpClient(
+            port,
+            connectionTimeout: const Duration(seconds: 10),
+          );
+          final existing = _routedClients[route.clientKey];
+          if (existing != null) {
+            built.close(force: true);
+            return existing;
+          }
+          _routedClients[route.clientKey] = built;
+          return built;
+      }
+    }
+    return _client;
+  }
+
+  void close() {
+    _client.close(force: true);
+    for (final client in _routedClients.values) {
+      client.close(force: true);
+    }
+    _routedClients.clear();
+  }
 
   Future<String> get(
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
-  }) => _send(url, method: 'GET', headers: headers, timeout: timeout);
+    String? proxyResourceKey,
+  }) async => _send(
+    await _clientFor(proxyResourceKey),
+    url,
+    method: 'GET',
+    headers: headers,
+    timeout: timeout,
+  );
 
   /// GET 并返回原始响应（状态码/响应头/字节），非 200 不抛错。
   /// 与 [get] 同一条代理/超时/大小上限链路，仅错误语义不同。
@@ -81,13 +158,15 @@ class ContentHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
+    String? proxyResourceKey,
   }) async {
+    final client = await _clientFor(proxyResourceKey);
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
     }
     try {
-      final request = await _client.getUrl(uri).timeout(timeout);
+      final request = await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
       request.headers.set(
         HttpHeaders.userAgentHeader,
@@ -120,6 +199,8 @@ class ContentHttp {
       throw AppFailure('内容源连接超时');
     } on HandshakeException {
       throw AppFailure('内容源证书校验失败');
+    } on Socks5Failure catch (error) {
+      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接内容源');
     }
@@ -130,7 +211,9 @@ class ContentHttp {
     Map<String, String> form, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
-  }) => _send(
+    String? proxyResourceKey,
+  }) async => _send(
+    await _clientFor(proxyResourceKey),
     url,
     method: 'POST',
     body: form.entries
@@ -148,13 +231,15 @@ class ContentHttp {
     Map<String, dynamic> json, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
+    String? proxyResourceKey,
   }) async {
+    final client = await _clientFor(proxyResourceKey);
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
     }
     try {
-      final request = await _client.postUrl(uri).timeout(timeout);
+      final request = await client.postUrl(uri).timeout(timeout);
       request.followRedirects = true;
       request.headers.set(
         HttpHeaders.userAgentHeader,
@@ -190,6 +275,8 @@ class ContentHttp {
       rethrow;
     } on TimeoutException {
       throw AppFailure('内容源连接超时');
+    } on Socks5Failure catch (error) {
+      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接内容源');
     }
@@ -199,13 +286,15 @@ class ContentHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 90),
+    String? proxyResourceKey,
   }) async {
+    final client = await _clientFor(proxyResourceKey);
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
     }
     try {
-      final request = await _client.getUrl(uri).timeout(timeout);
+      final request = await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
       request.headers.set(HttpHeaders.userAgentHeader, contentUserAgent);
       headers.forEach((key, value) {
@@ -228,6 +317,8 @@ class ContentHttp {
       rethrow;
     } on TimeoutException {
       throw AppFailure('内容源连接超时');
+    } on Socks5Failure catch (error) {
+      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接内容源');
     }
@@ -241,15 +332,17 @@ class ContentHttp {
     Map<String, String> headers = const {},
     String charset = 'utf-8',
     Duration timeout = contentTimeout,
+    String? proxyResourceKey,
   }) async {
+    final client = await _clientFor(proxyResourceKey);
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
     }
     try {
       final request = method == 'POST'
-          ? await _client.postUrl(uri).timeout(timeout)
-          : await _client.getUrl(uri).timeout(timeout);
+          ? await client.postUrl(uri).timeout(timeout)
+          : await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
       request.headers.set(
         HttpHeaders.userAgentHeader,
@@ -284,12 +377,15 @@ class ContentHttp {
       throw AppFailure('内容源连接超时');
     } on HandshakeException {
       throw AppFailure('内容源证书校验失败');
+    } on Socks5Failure catch (error) {
+      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接内容源');
     }
   }
 
   Future<String> _send(
+    HttpClient client,
     String url, {
     required String method,
     String body = '',
@@ -302,8 +398,8 @@ class ContentHttp {
     }
     try {
       final request = method == 'POST'
-          ? await _client.postUrl(uri).timeout(timeout)
-          : await _client.getUrl(uri).timeout(timeout);
+          ? await client.postUrl(uri).timeout(timeout)
+          : await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
       request.headers.set(
         HttpHeaders.userAgentHeader,
@@ -343,6 +439,8 @@ class ContentHttp {
       throw AppFailure('内容源连接超时');
     } on HandshakeException {
       throw AppFailure('内容源证书校验失败');
+    } on Socks5Failure catch (error) {
+      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接内容源');
     }

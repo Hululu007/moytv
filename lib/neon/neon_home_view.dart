@@ -126,15 +126,19 @@ class _NeonHomeViewState extends State<NeonHomeView> {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final width = MediaQuery.sizeOf(context).width;
     final featured = _featured;
     final gridItems = widget.items.where((item) => !item.isFolder).toList();
 
     return RefreshIndicator.adaptive(
       onRefresh: widget.onRefresh ?? () async {},
-      color: Neon.purple,
-      backgroundColor: Neon.surface,
+      color: config.primaryColor,
+      backgroundColor: config.surfaceColor,
       child: CustomScrollView(
+        // 切页签时整棵子树销毁重建：没传 controller 时靠 PageStorageKey
+        // 记住滚动偏移，返回首页不再回到顶部（海报闪烁修法同一批）。
+        key: const PageStorageKey<String>('neon-home-scroll'),
         controller: widget.scrollController,
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
@@ -154,8 +158,20 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                         height: 38,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          gradient: Neon.hotGradient,
-                          boxShadow: [Neon.bloom(Neon.pink, blur: 16)],
+                          gradient:
+                              config.selectedGradient ??
+                              LinearGradient(
+                                colors: [
+                                  config.primaryColor,
+                                  config.secondaryColor,
+                                ],
+                              ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: config.accentColor.withValues(alpha: .45),
+                              blurRadius: 16,
+                            ),
+                          ],
                         ),
                         child: const Icon(
                           LucideIcons.user,
@@ -218,13 +234,18 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                         drama: drama,
                         repository: widget.repository,
                         radius: 14,
+                        // NeonPoster 画标题/副标题，封面不再画集数标，防重影。
+                        showEpisodeLabel: false,
                       ),
                       title: drama.title,
                       subtitle: _subtitleOf(drama),
                       badge: index % 3 == 0 ? 'HD' : null,
-                      badgeColor: index % 3 == 0 ? Neon.cyan : Neon.pink,
+                      badgeColor: index % 3 == 0
+                          ? config.secondaryColor
+                          : config.accentColor,
                       radius: 14,
                       titleSize: 10.5,
+                      tiltAngle: index.isEven ? 0.1 : -0.1,
                       onTap: () => widget.onOpen(drama),
                       onLongPress: () => widget.onLongPress(drama),
                     ),
@@ -280,6 +301,9 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                       radius: 12,
                       titleSize: 10,
                       showTitle: false,
+                      // showTitle 为 false 时 NeonPoster 不画文字，封面集数标
+                      // 是唯一文字，保留默认 showEpisodeLabel:true，不重影。
+                      tiltAngle: index.isEven ? 0.1 : -0.1,
                       onTap: () => widget.onOpen(drama),
                       onLongPress: () => widget.onLongPress(drama),
                     );
@@ -303,6 +327,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
   }
 
   Widget _heroCard(Drama drama, bool active) {
+    final config = AppThemeConfig.of(context);
     final width = MediaQuery.sizeOf(context).width;
     final tags = <String>[
       if (drama.category.trim().isNotEmpty) drama.category,
@@ -324,7 +349,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(24),
-                boxShadow: [neonDropShadow()],
+                boxShadow: [neonDropShadow(config.primaryColor)],
               ),
               child: NeonFrame(
                 radius: 24,
@@ -364,10 +389,10 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                           Container(
                             padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1A0F2E).withValues(alpha: .82),
+                              color: config.surfaceColor.withValues(alpha: .82),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: Colors.white.withValues(alpha: .08),
+                                color: config.dividerColor,
                               ),
                             ),
                             child: Column(
@@ -394,9 +419,9 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                                         _tagDot(
                                           tags[i],
                                           [
-                                            Neon.pink,
-                                            Neon.cyan,
-                                            Neon.purple,
+                                            config.accentColor,
+                                            config.secondaryColor,
+                                            config.primaryColor,
                                           ][i % 3],
                                         ),
                                       ],
@@ -445,13 +470,17 @@ class _NeonHomeViewState extends State<NeonHomeView> {
         const SizedBox(width: 3),
         Text(
           label,
-          style: const TextStyle(fontSize: 9.5, color: Color(0xFFD3C6EA)),
+          style: TextStyle(
+            fontSize: 9.5,
+            color: AppThemeConfig.of(context).textSecondary,
+          ),
         ),
       ],
     );
   }
 
   Widget _dots(int count) {
+    final config = AppThemeConfig.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 6, bottom: 2),
       child: Row(
@@ -464,13 +493,19 @@ class _NeonHomeViewState extends State<NeonHomeView> {
               width: i == _page ? 16 : 5,
               height: 4,
               decoration: BoxDecoration(
-                gradient: i == _page ? Neon.hotGradient : null,
-                color: i == _page ? null : Colors.white.withValues(alpha: .22),
+                gradient: i == _page
+                    ? LinearGradient(
+                        colors: [config.primaryColor, config.secondaryColor],
+                      )
+                    : null,
+                color: i == _page
+                    ? null
+                    : config.textSecondary.withValues(alpha: .35),
                 borderRadius: BorderRadius.circular(2),
                 boxShadow: i == _page
                     ? [
                         BoxShadow(
-                          color: Neon.pink.withValues(alpha: .6),
+                          color: config.accentColor.withValues(alpha: .6),
                           blurRadius: 8,
                         ),
                       ]
@@ -483,6 +518,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
   }
 
   Widget _footer() {
+    final config = AppThemeConfig.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
       child: Center(
@@ -503,13 +539,16 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: Neon.purple.withValues(alpha: .45),
+                      color: config.primaryColor.withValues(alpha: .45),
                     ),
-                    color: Neon.surfaceHigh.withValues(alpha: .8),
+                    color: config.surfaceColor.withValues(alpha: .8),
                   ),
-                  child: const Text(
+                  child: Text(
                     '加载更多',
-                    style: TextStyle(fontSize: 11.5, color: Neon.textDim),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: config.textSecondary,
+                    ),
                   ),
                 ),
               )

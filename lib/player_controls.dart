@@ -58,6 +58,7 @@ class PlayerControls extends StatefulWidget {
     this.core,
     this.onCoreTap,
     this.showTopBarBackButton = true,
+    this.onControlsVisibilityChanged,
   });
 
   final Player player;
@@ -107,6 +108,10 @@ class PlayerControls extends StatefulWidget {
   /// 顶栏只留同尺寸占位，避免两个箭头重叠（两者行为相同）。
   final bool showTopBarBackButton;
 
+  /// 控制层显隐变化时通知宿主（字幕抬升用）。值取 _controlsVisible
+  /// （面板打开时也算可见），回调走帧后回调，不在构建中触发。
+  final ValueChanged<bool>? onControlsVisibilityChanged;
+
   @override
   State<PlayerControls> createState() => _PlayerControlsState();
 }
@@ -119,8 +124,29 @@ class _PlayerControlsState extends State<PlayerControls> {
   bool _suppressAutoPlaybackStart = false;
   bool _lastPlaying = false;
   bool _pausedBeforeResume = false;
+  bool? _lastNotifiedVisible;
+  bool _visibilityNotifyPending = false;
 
   bool get _controlsVisible => _visible || widget.panelOpen;
+
+  /// 把当前显隐值在帧后通知宿主。didUpdateWidget 里直接改 _visible 时
+  /// 正处在父构建中，同步回调会触发别的 widget setState，必须帧后发；
+  /// 值没变时不重复通知。
+  void _scheduleVisibilityNotify() {
+    if (widget.onControlsVisibilityChanged == null ||
+        _visibilityNotifyPending) {
+      return;
+    }
+    _visibilityNotifyPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _visibilityNotifyPending = false;
+      if (!mounted) return;
+      final visible = _controlsVisible;
+      if (_lastNotifiedVisible == visible) return;
+      _lastNotifiedVisible = visible;
+      widget.onControlsVisibilityChanged!(visible);
+    });
+  }
 
   @override
   void initState() {
@@ -167,6 +193,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     );
     widget.interactions.addListener(_interactionChanged);
     _scheduleHide();
+    _scheduleVisibilityNotify();
   }
 
   @override
@@ -200,6 +227,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         _visible = true;
       }
       _scheduleHide();
+      _scheduleVisibilityNotify();
     }
   }
 
@@ -208,6 +236,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     if (widget.interactions.boosting) {
       _hideTimer?.cancel();
       setState(() => _visible = false);
+      _scheduleVisibilityNotify();
     } else if (widget.interactions.feedback.isNotEmpty &&
         widget.interactions.feedbackRevealsControls) {
       _show();
@@ -232,6 +261,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           !widget.interactions.boosting &&
           !_progressDragging) {
         setState(() => _visible = false);
+        _scheduleVisibilityNotify();
       }
     });
   }
@@ -240,11 +270,13 @@ class _PlayerControlsState extends State<PlayerControls> {
     if (!mounted) return;
     if (!_visible) setState(() => _visible = true);
     _scheduleHide();
+    _scheduleVisibilityNotify();
   }
 
   void _hide() {
     _hideTimer?.cancel();
     if (_visible) setState(() => _visible = false);
+    _scheduleVisibilityNotify();
   }
 
   void _tap() {
@@ -252,6 +284,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     widget.onFocusSurface();
     setState(() => _visible = !_visible);
     _scheduleHide();
+    _scheduleVisibilityNotify();
   }
 
   void _doubleTap() {
@@ -450,7 +483,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       PlaybackOrientationMode.auto => Icons.screen_rotation_alt_rounded,
     };
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: .36),
@@ -483,7 +516,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     required VoidCallback? onPressed,
     required IconData icon,
   }) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 6),
     child: DecoratedBox(
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: .36),

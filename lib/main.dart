@@ -23,9 +23,9 @@ import 'home_screen.dart';
 import 'hongguo_account.dart';
 import 'hongguo_account_store.dart';
 import 'jar_bridge.dart';
-import 'builtin_py_sites.dart';
-import 'jar_import.dart';
 import 'local_store.dart';
+import 'plugin_manager.dart';
+import 'plugin_share_intent.dart';
 import 'profiles_screen.dart';
 import 'cloud_drive/cloud_credential_store.dart';
 import 'cloud_drive/cloud_drive_stations.dart';
@@ -35,6 +35,7 @@ import 'lan_controller.dart';
 import 'player_picker.dart';
 import 'proxy_kernel_service.dart';
 import 'signature_check.dart';
+import 'socks5_proxy.dart';
 import 'video_enhancement_assets.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -160,8 +161,10 @@ class _AppBootstrapState extends State<AppBootstrap>
       unawaited(_restoreHongguoAccount(preferences));
       unawaited(AppUpdateChecker.maybeCheckSilently());
       unawaited(ProxyKernelService.maybeAutostart());
-      await JarImport.registerBuiltinZakatv();
-      await BuiltinPySites.register();
+      unawaited(Socks5ProxyService.maybeLoadRouter());
+      // 插件化首次启动：装好全部未被用户卸载的内置插件
+      //（整个内置 jar 一个插件 + 44 个 py 插件），行为与以前一致。
+      await PluginManager.ensureBuiltinPlugins(preferences);
       if (mounted) {
         setState(() {
           store = LocalStore(preferences);
@@ -235,6 +238,11 @@ class _AppBootstrapState extends State<AppBootstrap>
         if (createdStore.lanWebEnabled) {
           unawaited(lanWeb.start(createdStore.lanWebPort));
         }
+        PluginShareIntent.start(
+          store: createdStore,
+          repository: repository,
+          navigatorKey: navigator,
+        );
       }
       final created = store;
       if (created != null) {
@@ -295,7 +303,7 @@ class MoyiApp extends StatelessWidget {
   );
 
   Widget _application() {
-    // 当前全局主题（8 套之一）：配色与亮暗全由主题自身决定；
+    // 当前全局主题（12 套之一）：配色与亮暗全由主题自身决定；
     // 同步给全局通知器，抽屉、内容区等深层组件据此决定是否走霓虹视觉。
     final config = AppThemeConfig.forTheme(
       store?.appTheme ?? AppThemeMode.purpleNeon,

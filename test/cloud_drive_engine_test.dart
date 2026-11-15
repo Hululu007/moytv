@@ -801,4 +801,91 @@ void main() {
       expect(plain.withUrl('https://x/2.mp4').forceMpv, isFalse);
     });
   });
+
+  group('非视频文件过滤（广告推广文件不进列表）', () {
+    test('isListableDriveFile 单元', () {
+      expect(
+        isListableDriveFile(file('a', '点击进入.html')),
+        isFalse,
+      );
+      expect(
+        isListableDriveFile(file('a', '地址发布页.chm')),
+        isFalse,
+      );
+      expect(isListableDriveFile(file('a', '推广.url')), isFalse);
+      expect(isListableDriveFile(file('a', '说明.txt')), isFalse);
+      // 大写扩展名同样排除。
+      expect(isListableDriveFile(file('a', '点击进入.HTML')), isFalse);
+      expect(isListableDriveFile(file('a', '正片.mp4')), isTrue);
+      expect(isListableDriveFile(file('a', '直播.strm')), isTrue);
+      expect(isListableDriveFile(file('a', '光盘.iso')), isTrue);
+      // 黑名单只看扩展名、不看 kind：网盘提示为 other 的视频也保留。
+      expect(
+        isListableDriveFile(
+          file('a', '正片.mp4', kind: CloudFileKind.other),
+        ),
+        isTrue,
+      );
+      // 图片/字幕/光盘元数据不误杀：各自按 kind 走播放或详情。
+      expect(isListableDriveFile(file('a', '海报.jpg')), isTrue);
+      expect(isListableDriveFile(file('a', '字幕.srt')), isTrue);
+      expect(isListableDriveFile(file('a', 'VIDEO_TS.IFO')), isTrue);
+      expect(isListableDriveFile(file('a', '无扩展名')), isTrue);
+    });
+
+    test('含广告文件的文件夹：推广文件不进列表、媒体文件都在', () async {
+      fake.folders['0'] = [
+        folder('f1', '剧集'),
+        file('v1', '正片.mp4'),
+        file('v2', '直播.strm'),
+        file('v3', '光盘.iso'),
+        file('v4', '无扩展名'),
+        file('p1', '海报.jpg'),
+        file('s1', '字幕.srt'),
+        file('a1', '点击进入.html'),
+        file('a2', '地址发布页.chm'),
+        file('a3', '推广.url'),
+        file('a4', '说明.txt'),
+      ];
+      final page = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+      );
+      final titles = page.items.map((d) => d.title).toList();
+      expect(titles, containsAll(['全部', '剧集', '正片.mp4', '直播.strm', '光盘.iso', '无扩展名', '海报.jpg', '字幕.srt']));
+      expect(
+        titles,
+        isNot(contains('点击进入.html')),
+      );
+      expect(titles, isNot(contains('地址发布页.chm')));
+      expect(titles, isNot(contains('推广.url')));
+      expect(titles, isNot(contains('说明.txt')));
+    });
+
+    test('疑似广告评分只对真视频生效', () async {
+      fake.folders['0'] = [
+        file(
+          'ad1',
+          '最新地址 www.x.com.mp4',
+          sizeBytes: 20 * 1024 * 1024,
+          durationSeconds: 30,
+        ),
+        file('a1', '最新地址 www.x.com.html'),
+      ];
+      final page = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+      );
+      // 真视频广告被藏并计数；html 推广文件直接不进列表，不占计数。
+      expect(page.warning, contains('已隐藏 1 个疑似广告视频'));
+      expect(
+        page.items.map((d) => d.title),
+        isNot(contains('最新地址 www.x.com.html')),
+      );
+    });
+  });
 }

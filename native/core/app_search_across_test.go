@@ -78,3 +78,22 @@ func TestNativeSearchSourceRejectsUnsupportedSource(t *testing.T) {
 		t.Fatal("未知站源不应判定为支持在线搜索")
 	}
 }
+
+func TestNativeSearchFailureTextKeepsReasonForRenamedSource(t *testing.T) {
+	// maoguo 的展示名是“猫果”，与 id 不同：原因必须跟展示名配对，
+	// 不能拿展示名反查 id 键的表（原 bug 会丢原因，只剩“猫果：”）。
+	text := nativeSearchFailureText(map[string]string{sourceMaoguo: "搜索超时"})
+	if text != "猫果：搜索超时" {
+		t.Fatalf("单站失败提示应带原因，实际 %q", text)
+	}
+}
+
+func TestNativeSearchFailureTextMultiSourceCounts(t *testing.T) {
+	text := nativeSearchFailureText(map[string]string{
+		sourceMaoguo:  "搜索超时",
+		sourceGuanguo: "站源错误",
+	})
+	if text != "猫果 等 2 个站源未返回结果" {
+		t.Fatalf("多站失败提示应点首名加总数，实际 %q", text)
+	}
+}

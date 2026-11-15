@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/app_build.dart';
-import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/feed_playability.dart';
 import 'package:moyi/home_screen.dart';
@@ -228,7 +227,6 @@ void main() {
   group('首页 wiring（需 ALL_SOURCES）', () {
     Future<LocalStore> pumpHome(
       WidgetTester tester, {
-      NavStyle navStyle = NavStyle.bottomTabs,
       String source = 'hongguo',
       AppRepository? repository,
     }) async {
@@ -238,10 +236,6 @@ void main() {
       });
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
-      await store.setDisplayScheme(
-        AppThemeMode.purpleNeon,
-        ThemeDisplayScheme(navStyle: navStyle),
-      );
       await tester.pumpWidget(
         MaterialApp(
           navigatorObservers: [homeRouteObserver],
@@ -254,6 +248,26 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       return store;
+    }
+
+    /// 抽屉里切区：短剧分支用 neon-avatar 开抽屉，通用分支用
+    /// open-app-drawer；点行后等关闭动画跑完。
+    Future<void> switchZoneViaDrawer(
+      WidgetTester tester,
+      String label, {
+      String drawerKey = 'neon-avatar',
+    }) async {
+      await tester.tap(find.byKey(ValueKey(drawerKey)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final row = find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text(label),
+      );
+      expect(row, findsOneWidget);
+      await tester.tap(row);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
     }
 
     /// 在站源弹窗里选“全部站源”：先搜索过滤（弹窗滚到当前站后
@@ -275,43 +289,11 @@ void main() {
       expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
     }
 
-    testWidgets('底部标签样式下戏剧首页分支也显示底栏', (tester) async {
-      await pumpHome(tester);
-      expect(find.byType(HongguoDramaHome), findsOneWidget);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
-      expect(find.byType(NeonBottomBar), findsNothing);
-      expect(find.byKey(const ValueKey('drama-nav-channel')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(NeonChannelView), findsOneWidget);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
-    }, skip: !allSourcesEnabled);
-
-    testWidgets('导航样式即时切换不用重启', (tester) async {
-      final store = await pumpHome(tester, navStyle: NavStyle.drawer);
-      expect(find.byType(NeonBottomBar), findsOneWidget);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
-      await store.setDisplayScheme(
-        AppThemeMode.purpleNeon,
-        const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsOneWidget);
-      expect(find.byType(NeonBottomBar), findsNothing);
-      await store.setDisplayScheme(
-        AppThemeMode.purpleNeon,
-        const ThemeDisplayScheme(navStyle: NavStyle.drawer),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(NeonBottomBar), findsOneWidget);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
-    }, skip: !allSourcesEnabled);
+    // 导航只随主题变、固定抽屉：底部标签栏不再挂出，原“底栏
+    // 显示/即时切换”两个测试删除（固定映射见 theme_scheme_binding_test）。
 
     testWidgets('频道内切站后仍停在频道视图', (tester) async {
-      await pumpHome(tester, navStyle: NavStyle.drawer);
+      await pumpHome(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
       await tester.tap(
         find.descendant(
@@ -335,7 +317,12 @@ void main() {
     testWidgets('切到直播区再回片库后钉住解除', (tester) async {
       await pumpHome(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NeonBottomBar),
+          matching: find.text('频道'),
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       await tester.tap(find.byKey(const ValueKey('neon-filter-all')));
@@ -344,13 +331,13 @@ void main() {
       await pickAllSources(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
       expect(find.text('全部站源'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-1')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await switchZoneViaDrawer(tester, '直播');
       expect(find.byType(HongguoDramaHome), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('moyi-bottom-tab-0')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await switchZoneViaDrawer(
+        tester,
+        '片库',
+        drawerKey: 'open-app-drawer',
+      );
       // 钉住已解除：非红果分组回通用分支。
       expect(find.byType(HongguoDramaHome), findsNothing);
     }, skip: !allSourcesEnabled);
@@ -361,7 +348,12 @@ void main() {
       final target = store.visibleSources.firstWhere(
         (site) => site.id != 'hongguo',
       );
-      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NeonBottomBar),
+          matching: find.text('频道'),
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(NeonChannelView), findsOneWidget);

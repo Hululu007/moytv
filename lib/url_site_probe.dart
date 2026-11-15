@@ -6,6 +6,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'content_http.dart';
 import 'core_bridge.dart';
 import 'nexhub_scraper/scraper/verification_detector.dart';
+import 'socks5_proxy.dart';
 
 /// 探站失败：面向用户的中文原因。调用方直接展示 [message]，不编造结构。
 class ProbeFailure implements Exception {
@@ -73,7 +74,8 @@ class UrlSiteProbe {
   UrlSiteProbe({ProbeFetch? fetchHtml}) : _fetchHtml = fetchHtml;
 
   final ProbeFetch? _fetchHtml;
-  final ContentHttp _http = ContentHttp();
+  final ContentHttp _http =
+      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
 
   static const _fetchTimeout = Duration(seconds: 15);
 

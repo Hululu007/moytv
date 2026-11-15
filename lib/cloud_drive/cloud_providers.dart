@@ -1,9 +1,10 @@
-/// 四家网盘的扫码登录 + 文件列表 + 直链客户端。
+/// 五家网盘的登录 + 文件列表 + 直链客户端。
 ///
 /// 协议来源：115/夸克/百度三家的 QR 流程与接口地址是从 TVBox_Web
 /// 的 index.js 混淆包里抽出的协议事实（本文件按协议自己实现，不抄
 /// 它的代码）；阿里云盘在 TVBox_Web 里没有扫码登录，按公开的阿里云盘
-/// OpenAPI 协议实现。2026-11-14 已实测四家的二维码参数接口均可匿名
+/// OpenAPI 协议实现；移动云盘（139 云盘）走手机号 + 短信验证码登录，
+/// 实现在 cloud_provider_139.dart 里（同源头的 new139 协议）。2026-11-14 已实测四家的二维码参数接口均可匿名
 /// 调通（见 ~/workspace/moyi_tvboxweb_port/DESIGN.md）；轮询、登录、
 /// 列表、直链四步需真账号，均未实测，列为手机待验。
 ///
@@ -18,6 +19,7 @@ import 'package:http/http.dart' as http;
 
 import 'cloud_credential_store.dart';
 import 'cloud_drive_types.dart';
+import 'cloud_provider_139.dart';
 
 /// 网盘侧的错误（面向用户的中文消息，由引擎转成 AppFailure）。
 class CloudDriveException implements Exception {
@@ -115,10 +117,10 @@ class CloudDirectLink {
 
 /// 网盘客户端的统一接口。
 abstract class CloudDriveProvider {
-  /// 网盘 id：pan115 / quark / aliyun / baidu。
+  /// 网盘 id：pan115 / quark / aliyun / baidu / yun139。
   String get id;
 
-  /// 显示名：115网盘 / 夸克网盘 / 阿里云盘 / 百度网盘。
+  /// 显示名：115网盘 / 夸克网盘 / 阿里云盘 / 百度网盘 / 移动云盘。
   String get displayName;
 
   /// 扫码用的 App 名（提示文案用）。
@@ -1605,13 +1607,14 @@ class AliyunProvider implements CloudDriveProvider {
 // 注册表
 // ---------------------------------------------------------------------------
 
-/// 四家网盘客户端（每次调用新建实例；阿里实例带分页 marker 缓存，
-/// 引擎内只建一次、复用到底）。
+/// 五家网盘客户端（每次调用新建实例；阿里实例带分页 marker 缓存，
+/// 移动云盘实例带短信通道记忆与分页游标缓存，引擎内只建一次、复用到底）。
 List<CloudDriveProvider> createCloudDriveProviders() => [
   Pan115Provider(),
   QuarkProvider(),
   AliyunProvider(),
   BaiduProvider(),
+  Yun139Provider(),
 ];
 
 /// 网盘 id → 显示名（界面与站点注册共用）。
@@ -1620,4 +1623,5 @@ const cloudDriveDisplayNames = <String, String>{
   'quark': '夸克网盘',
   'aliyun': '阿里云盘',
   'baidu': '百度网盘',
+  'yun139': '移动云盘',
 };

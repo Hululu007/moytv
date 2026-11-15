@@ -3,14 +3,23 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'live_sources.dart';
 import 'proxy_kernel.dart';
 import 'proxy_kernel_service.dart';
+import 'socks5_proxy.dart';
+import 'socks5_proxy_picker.dart';
 
 class ProxyKernelScreen extends StatefulWidget {
-  const ProxyKernelScreen({super.key, this.service, this.repository});
+  const ProxyKernelScreen({
+    super.key,
+    this.service,
+    this.repository,
+    this.socks5Service,
+  });
 
   final ProxyKernelService? service;
   final AppRepository? repository;
+  final Socks5ProxyService? socks5Service;
 
   @override
   State<ProxyKernelScreen> createState() => _ProxyKernelScreenState();
@@ -19,6 +28,8 @@ class ProxyKernelScreen extends StatefulWidget {
 class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
   late final ProxyKernelService _service =
       widget.service ?? ProxyKernelService();
+  late final Socks5ProxyService _socks5Service =
+      widget.socks5Service ?? Socks5ProxyService();
   final _subscriptionController = TextEditingController();
   ProxyKernelState? _state;
   List<ProxyKernelNode> _nodes = const [];
@@ -28,11 +39,15 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
   bool _busy = false;
   String? _error;
   String _progress = '';
+  List<Socks5ProxyEntry> _socks5Proxies = const [];
+  bool _socks5Busy = false;
+  String _socks5Progress = '';
 
   @override
   void initState() {
     super.initState();
     _reload();
+    _loadSocks5();
   }
 
   @override
@@ -202,6 +217,124 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
       );
     }
   });
+
+  Future<void> _loadSocks5() async {
+    try {
+      final proxies = await _socks5Service.loadProxies();
+      if (mounted) setState(() => _socks5Proxies = proxies);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    }
+  }
+
+  Future<void> _runSocks5(Future<void> Function() action) async {
+    setState(() {
+      _socks5Busy = true;
+      _error = null;
+    });
+    try {
+      await action();
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _socks5Busy = false;
+          _socks5Progress = '';
+        });
+      }
+    }
+  }
+
+  Future<void> _testSocks5(Socks5ProxyEntry entry) => _runSocks5(() async {
+    setState(() => _socks5Progress = '正在测 ${entry.name}…');
+    await _socks5Service.testOne(entry);
+    await _loadSocks5();
+  });
+
+  Future<void> _identifySocks5() => _runSocks5(() async {
+    final proxies = await _socks5Service.identifyAll(
+      onProgress: (entry, index, total) {
+        if (!mounted) return;
+        setState(
+          () => _socks5Progress =
+              '正在识别 ${index + 1}/$total：${entry.name} '
+              '${entry.lastAvailable == true ? '可用' : '不可用'}',
+        );
+      },
+    );
+    if (mounted) setState(() => _socks5Proxies = proxies);
+  });
+
+  Future<void> _toggleSocks5(Socks5ProxyEntry entry, bool enabled) =>
+      _runSocks5(() async {
+        await _socks5Service.setProxyEnabled(entry.id, enabled);
+        await _loadSocks5();
+      });
+
+  Future<void> _editSocks5([Socks5ProxyEntry? entry]) async {
+    final saved = await showDialog<Socks5ProxyEntry>(
+      context: context,
+      builder: (context) => _Socks5ProxyEditDialog(entry: entry),
+    );
+    if (saved == null || !mounted) return;
+    await _runSocks5(() async {
+      if (entry == null) {
+        await _socks5Service.addProxy(
+          name: saved.name,
+          host: saved.host,
+          port: saved.port,
+          username: saved.username,
+          password: saved.password,
+          enabled: saved.enabled,
+        );
+      } else {
+        await _socks5Service.updateProxy(
+          saved.copyWith(
+            id: entry.id,
+            lastLatencyMs: entry.lastLatencyMs,
+            lastAvailable: entry.lastAvailable,
+            lastCheckedAtMs: entry.lastCheckedAtMs,
+          ),
+        );
+      }
+      await _loadSocks5();
+    });
+  }
+
+  Future<void> _deleteSocks5(Socks5ProxyEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除该代理？'),
+        content: Text('将删除「${entry.name}」（${entry.displayAddress}），'
+            '用到它的资源分配会一起清除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runSocks5(() async {
+      await _socks5Service.removeProxy(entry.id);
+      await _loadSocks5();
+    });
+  }
+
+  String _socks5Status(Socks5ProxyEntry entry) {
+    final available = entry.lastAvailable;
+    if (available == null) return '未测试';
+    if (!available) return '不可用';
+    final latency = entry.lastLatencyMs;
+    return latency == null ? '可用' : '可用 · $latency ms';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -391,6 +524,102 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
                 ),
             ],
           ],
+          const Divider(height: 32),
+          Text('SOCKS5 代理', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text(
+            '手动添加的 SOCKS5 代理，经本机转发器连接，不依赖上面的代理内核。'
+            '测速发真实请求计时；一键识别逐个测全部代理并标可用/不可用。',
+          ),
+          const SizedBox(height: 8),
+          if (_socks5Busy) const LinearProgressIndicator(),
+          if (_socks5Progress.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_socks5Progress),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _socks5Busy ? null : () => _editSocks5(),
+                icon: const Icon(Icons.add_outlined),
+                label: const Text('新增代理'),
+              ),
+              FilledButton.icon(
+                onPressed: _socks5Busy || _socks5Proxies.isEmpty
+                    ? null
+                    : _identifySocks5,
+                icon: const Icon(Icons.radar_outlined),
+                label: const Text('一键识别'),
+              ),
+            ],
+          ),
+          if (_socks5Proxies.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Text('还没有 SOCKS5 代理，点“新增代理”添加。'),
+            )
+          else
+            for (final proxy in _socks5Proxies)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(proxy.name),
+                subtitle: Text(
+                  '${proxy.displayAddress} · ${_socks5Status(proxy)}'
+                  '${proxy.enabled ? '' : ' · 已停用'}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      onPressed: _socks5Busy ? null : () => _testSocks5(proxy),
+                      child: const Text('测速'),
+                    ),
+                    IconButton(
+                      tooltip: '编辑',
+                      onPressed: _socks5Busy ? null : () => _editSocks5(proxy),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    IconButton(
+                      tooltip: '删除',
+                      onPressed: _socks5Busy
+                          ? null
+                          : () => _deleteSocks5(proxy),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                    Switch.adaptive(
+                      value: proxy.enabled,
+                      onChanged: _socks5Busy
+                          ? null
+                          : (value) => _toggleSocks5(proxy, value),
+                    ),
+                  ],
+                ),
+              ),
+          const Divider(height: 32),
+          Text('各资源代理', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text(
+            '每个资源单独选代理或直连；跟随默认则走上面的代理内核链路。'
+            '影视站源的取流走 Go 核全局代理（在“网络与资源”里设置），'
+            '这里只管直播与抓取链路。',
+          ),
+          Socks5ResourceProxyPicker(
+            resourceKey: socks5ScrapeResourceKey,
+            label: '网页抓取与探站',
+            service: _socks5Service,
+          ),
+          for (final source in LiveSource.allValues)
+            Socks5ResourceProxyPicker(
+              key: ValueKey('socks5-live-${source.id}'),
+              resourceKey: socks5LiveResourceKey(source.id),
+              label: '直播 · ${source.name}',
+              service: _socks5Service,
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 16),
@@ -401,6 +630,164 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// 新增/编辑 SOCKS5 代理的对话框。密码框默认遮掩显示，可点眼睛切换；
+/// 保存时只做校验，落盘由调用方经 Socks5ProxyService 完成。
+class _Socks5ProxyEditDialog extends StatefulWidget {
+  const _Socks5ProxyEditDialog({this.entry});
+
+  final Socks5ProxyEntry? entry;
+
+  @override
+  State<_Socks5ProxyEditDialog> createState() =>
+      _Socks5ProxyEditDialogState();
+}
+
+class _Socks5ProxyEditDialogState extends State<_Socks5ProxyEditDialog> {
+  late final _nameController = TextEditingController(
+    text: widget.entry?.name ?? '',
+  );
+  late final _hostController = TextEditingController(
+    text: widget.entry?.host ?? '',
+  );
+  late final _portController = TextEditingController(
+    text: widget.entry == null ? '' : '${widget.entry!.port}',
+  );
+  late final _usernameController = TextEditingController(
+    text: widget.entry?.username ?? '',
+  );
+  late final _passwordController = TextEditingController(
+    text: widget.entry?.password ?? '',
+  );
+  late bool _enabled = widget.entry?.enabled ?? true;
+  bool _showPassword = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _hostController.dispose();
+    _portController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final host = _hostController.text.trim();
+    final port = int.tryParse(_portController.text.trim()) ?? 0;
+    final error = validateSocks5ProxyEntry(
+      host: host,
+      port: port,
+      username: _usernameController.text,
+      password: _passwordController.text,
+    );
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    final name = _nameController.text.trim();
+    Navigator.of(context).pop(
+      Socks5ProxyEntry(
+        id: widget.entry?.id ?? '',
+        name: name.isEmpty ? '$host:$port' : name,
+        host: host,
+        port: port,
+        username: _usernameController.text,
+        password: _passwordController.text,
+        enabled: _enabled,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.entry == null ? '新增 SOCKS5 代理' : '编辑代理'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: '名称（可空，默认用地址）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _hostController,
+              decoration: const InputDecoration(
+                labelText: '代理地址',
+                hintText: '127.0.0.1 或域名',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.url,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _portController,
+              decoration: const InputDecoration(
+                labelText: '端口',
+                hintText: '1080',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _usernameController,
+              decoration: const InputDecoration(
+                labelText: '用户名（无认证可空）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              obscureText: !_showPassword,
+              enableSuggestions: false,
+              autocorrect: false,
+              decoration: InputDecoration(
+                labelText: '密码（无认证可空）',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: _showPassword ? '隐藏密码' : '显示密码',
+                  onPressed: () =>
+                      setState(() => _showPassword = !_showPassword),
+                  icon: Icon(
+                    _showPassword
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
+                ),
+              ),
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              value: _enabled,
+              title: const Text('启用'),
+              onChanged: (value) => setState(() => _enabled = value),
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('保存')),
+      ],
     );
   }
 }

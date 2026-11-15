@@ -141,6 +141,21 @@ var tgChannels = []htmlCat{
 	{ID: "rmskgq", Name: "热门4K高清电影大全"},
 	{ID: "Japanfc22", Name: "欧美剧情中文网/AV字幕精选"},
 	{ID: "SJAV66", Name: "太古体育冠名/三级电影精品复古世家/TG/电子/真人/捕鱼"},
+	{ID: "mkg004", Name: "门槛哥甄选 抖音推特快手网红集中地"},
+	{ID: "penchougoubl", Name: "喷水‖高潮‖抽搐 ‖stripchat直播录播"},
+	{ID: "chengseyouxuan", Name: "橙涩优选 福利姬 ‖ ST站"},
+	{ID: "shutiaowudao", Name: "薯条舞蹈综合交流（抖音风、韩舞、裸舞、舞团、各类裸舞一站式整合）"},
+	{ID: "Stripchat57", Name: "🔴 Stripchat | ST放映厅"},
+	{ID: "duolaxiazi1", Name: "哆乐盒子｜直播｜ST｜大秀"},
+	{ID: "flj42", Name: "福利姬全套合集（重生）"},
+	{ID: "laochijialubo", Name: "#stripchat/回放/直播/录播"},
+	{ID: "fjl15", Name: "进击的福利姬"},
+	{ID: "se55524", Name: "少妇|反差|母狗"},
+	{ID: "douyin36868", Name: "抖音网红反差直播"},
+	{ID: "mygroupgdfxj", Name: "福利姬反差露出"},
+	{ID: "kbjsvipcut", Name: "|韩国女主播||Korean Bj||KBJ||露逼||SVIP|"},
+	{ID: "frdhth", Name: "国产骚货母狗"},
+	{ID: "ZH_00000046", Name: "141🔹C🔹打 🍌時間 / HandJob Moment"},
 }
 
 func tgChannelName(user string) string {

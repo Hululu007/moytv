@@ -14,6 +14,7 @@
 library;
 
 import '../../content_http.dart';
+import '../../socks5_proxy.dart';
 import '../utils/html_utils.dart';
 import 'verification_detector.dart';
 
@@ -73,7 +74,8 @@ class WebScrapeService {
   ) => WebScrapeService._(fetchHtml: fetchHtml);
 
   final Future<ContentResponse> Function(String url)? _fetchHtml;
-  final ContentHttp _http = ContentHttp();
+  final ContentHttp _http =
+      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
 
   /// 抓取 [url] 并按 [mode] 抽取内容。
   ///

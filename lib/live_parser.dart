@@ -96,10 +96,20 @@ class LiveParser {
     return (value.substring(0, at), value.substring(at + separator.length));
   }
 
+  /// 取 #EXTINF 行逗号后的频道名：分隔逗号是第一个不在引号内的逗号。
+  /// 原先取最后一个逗号，频道名本身含逗号（如“CCTV-1, 高清”）会被
+  /// 截成后半段；属性值里的逗号在引号内，不会被误认作分隔符。
   static String _afterComma(String line) {
-    final at = line.lastIndexOf(',');
-    if (at < 0) return '';
-    return line.substring(at + 1).trim();
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      final ch = line[i];
+      if (ch == '"') {
+        inQuotes = !inQuotes;
+      } else if (ch == ',' && !inQuotes) {
+        return line.substring(i + 1).trim();
+      }
+    }
+    return '';
   }
 
   static LiveParseResult _parseText(
@@ -238,12 +248,15 @@ class LiveParser {
       final raw =
           row['channel'] ?? row['channels'] ?? row['list'] ?? row['items'];
       if (raw is! List) continue;
-      if (groups.any(
-        (entry) => entry.name == _pick(row, const ['group', 'name']),
-      )) {
-        continue;
-      }
-      final group = _GroupBuilder(_pick(row, const ['group', 'name', 'title']));
+      // 同名分组出现两次时合并进同一个分组：原先整段跳过，后一段的
+      // 频道全部丢失（合并订阅里常见）。空分组由 _finalize 统一丢弃，
+      // 故新建分组可直接入列。
+      final groupName = _pick(row, const ['group', 'name', 'title']);
+      final existing = groups
+          .where((entry) => entry.name == groupName)
+          .firstOrNull;
+      final group = existing ?? _GroupBuilder(groupName);
+      if (existing == null) groups.add(group);
       for (final child in raw) {
         if (child is! Map) continue;
         final name = _pick(child, const ['name', 'tvg-name', 'title']);
@@ -279,9 +292,8 @@ class LiveParser {
         channel.tvgId = _pick(child, const ['tvg-id', 'tvgId']);
         channel.number = _pick(child, const ['number', 'tvg-chno']);
       }
-      if (!group.isEmpty) groups.add(group);
     }
-    if (groups.isEmpty) return null;
+    if (groups.every((group) => group.isEmpty)) return null;
     return LiveParseResult(
       groups: _finalize(groups, source),
       format: LiveFormat.json,

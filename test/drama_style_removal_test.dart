@@ -39,6 +39,8 @@ void main() {
     );
     await tester.pump();
     expect(find.text('短剧区风格'), findsNothing);
-    expect(find.text('播放设置'), findsOneWidget);
+    // 片库设置已废弃：播放设置并入通用设置，这里不再出现。
+    expect(find.text('播放设置'), findsNothing);
+    expect(find.text('片库设置'), findsNothing);
   });
 }

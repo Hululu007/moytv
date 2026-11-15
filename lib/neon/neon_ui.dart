@@ -96,7 +96,7 @@ class NeonBackdrop extends StatelessWidget {
     this.magentaY = .40,
     this.tealY = .40,
     this.topGlow = .26,
-    this.rightGlowColor = Neon.teal,
+    this.rightGlowColor,
     this.rightGlowAlpha = 1,
   });
 
@@ -109,7 +109,7 @@ class NeonBackdrop extends StatelessWidget {
       magentaY = .46,
       tealY = .42,
       topGlow = .2,
-      rightGlowColor = Neon.teal,
+      rightGlowColor = null,
       rightGlowAlpha = 1;
 
   final Widget? child;
@@ -126,12 +126,14 @@ class NeonBackdrop extends StatelessWidget {
   /// 顶部蓝紫光的浓度。
   final double topGlow;
 
-  /// 右侧光晕颜色/浓度（首页是青色，频道页是弱蓝紫）。
-  final Color rightGlowColor;
+  /// 右侧光晕颜色/浓度（首页是青色，频道页是弱蓝紫）。不传时取当前
+  /// 主题 secondaryColor，随主题变。
+  final Color? rightGlowColor;
   final double rightGlowAlpha;
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final size = MediaQuery.sizeOf(context);
     final w = size.width;
     final h = size.height;
@@ -139,8 +141,11 @@ class NeonBackdrop extends StatelessWidget {
     final tealSize = w * 1.60;
     final blueSize = w * 1.10;
     final purpleSize = w * .85;
+    final backgroundGradient = config.backgroundGradient;
     return DecoratedBox(
-      decoration: const BoxDecoration(gradient: Neon.pageGradient),
+      decoration: backgroundGradient != null
+          ? BoxDecoration(gradient: backgroundGradient)
+          : BoxDecoration(color: config.backgroundColor),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -148,7 +153,7 @@ class NeonBackdrop extends StatelessWidget {
             left: -w * .875,
             top: h * magentaY - magentaSize / 2,
             child: _Halo(
-              color: Neon.magenta,
+              color: config.accentColor,
               size: magentaSize,
               alpha: 1 * intensity,
             ),
@@ -157,7 +162,7 @@ class NeonBackdrop extends StatelessWidget {
             right: -w * .80,
             top: h * tealY - tealSize / 2,
             child: _Halo(
-              color: rightGlowColor,
+              color: rightGlowColor ?? config.secondaryColor,
               size: tealSize,
               alpha: rightGlowAlpha * intensity,
             ),
@@ -166,7 +171,7 @@ class NeonBackdrop extends StatelessWidget {
             left: w * .05,
             top: -h * .26,
             child: _Halo(
-              color: Neon.blue,
+              color: config.secondaryColor,
               size: blueSize,
               alpha: topGlow * intensity,
             ),
@@ -175,7 +180,7 @@ class NeonBackdrop extends StatelessWidget {
             left: w * .34,
             top: -h * .32,
             child: _Halo(
-              color: Neon.purple,
+              color: config.primaryColor,
               size: purpleSize,
               alpha: .24 * intensity,
             ),
@@ -217,13 +222,14 @@ class _Halo extends StatelessWidget {
 }
 
 /// 渐变发光描边容器。内层保持纯色/图片，外层用渐变描边 + 外发光。
+/// 不传 gradient 时描边取当前主题主色→辅色渐变，发光取当前主题主色。
 class NeonFrame extends StatelessWidget {
   const NeonFrame({
     super.key,
     required this.child,
     this.radius = 20,
     this.thickness = 1.4,
-    this.gradient = Neon.edgeGradient,
+    this.gradient,
     this.glow = true,
     this.color,
   });
@@ -231,21 +237,26 @@ class NeonFrame extends StatelessWidget {
   final Widget child;
   final double radius;
   final double thickness;
-  final Gradient gradient;
+  final Gradient? gradient;
   final bool glow;
   final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final br = BorderRadius.circular(radius);
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: br,
-        gradient: gradient,
+        gradient:
+            gradient ??
+            LinearGradient(
+              colors: [config.primaryColor, config.secondaryColor],
+            ),
         boxShadow: glow
             ? [
                 BoxShadow(
-                  color: (color ?? Neon.purple).withValues(alpha: .35),
+                  color: (color ?? config.primaryColor).withValues(alpha: .35),
                   blurRadius: 18,
                   spreadRadius: -2,
                 ),
@@ -280,18 +291,20 @@ class NeonGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
+    final border = borderColor ?? config.primaryColor;
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: Neon.surfaceGlass.withValues(alpha: .78),
+        color: config.surfaceColor.withValues(alpha: .78),
         borderRadius: BorderRadius.circular(radius),
         border: Border.all(
-          color: (borderColor ?? Neon.purple).withValues(alpha: .35),
+          color: border.withValues(alpha: .35),
           width: 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: (borderColor ?? Neon.purple).withValues(alpha: .14),
+            color: border.withValues(alpha: .14),
             blurRadius: 24,
             spreadRadius: -6,
           ),
@@ -321,6 +334,7 @@ class NeonPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final radius = BorderRadius.circular(dense ? 9 : 18);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -332,18 +346,20 @@ class NeonPill extends StatelessWidget {
           vertical: dense ? 4 : 7,
         ),
         decoration: BoxDecoration(
-          gradient: selected ? Neon.cyanGradient : null,
-          color: selected ? null : Neon.surfaceHigh.withValues(alpha: .85),
+          gradient: selected
+              ? LinearGradient(
+                  colors: [config.primaryColor, config.secondaryColor],
+                )
+              : null,
+          color: selected ? null : config.surfaceColor.withValues(alpha: .85),
           borderRadius: radius,
           border: Border.all(
-            color: selected
-                ? Colors.transparent
-                : Colors.white.withValues(alpha: .10),
+            color: selected ? Colors.transparent : config.dividerColor,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: Neon.cyan.withValues(alpha: .40),
+                    color: config.primaryColor.withValues(alpha: .40),
                     blurRadius: 16,
                     spreadRadius: -3,
                   ),
@@ -360,7 +376,7 @@ class NeonPill extends StatelessWidget {
                 fontSize: dense ? 10.5 : 12,
                 height: 1.0,
                 fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                color: selected ? const Color(0xFF04141C) : Neon.textDim,
+                color: selected ? config.selectedText : config.textSecondary,
               ),
             ),
           ],
@@ -387,6 +403,7 @@ class NeonActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -394,11 +411,15 @@ class NeonActionButton extends StatelessWidget {
         height: height,
         padding: const EdgeInsets.symmetric(horizontal: 22),
         decoration: BoxDecoration(
-          gradient: Neon.hotGradient,
+          gradient:
+              config.selectedGradient ??
+              LinearGradient(
+                colors: [config.primaryColor, config.secondaryColor],
+              ),
           borderRadius: BorderRadius.circular(height / 2),
           boxShadow: [
             BoxShadow(
-              color: Neon.pink.withValues(alpha: .45),
+              color: config.accentColor.withValues(alpha: .45),
               blurRadius: 20,
               spreadRadius: -2,
             ),
@@ -450,9 +471,11 @@ class NeonSectionHeader extends StatelessWidget {
             width: 3,
             height: 15,
             decoration: BoxDecoration(
-              gradient: Neon.edgeGradient,
+              gradient: LinearGradient(
+                colors: [config.primaryColor, config.secondaryColor],
+              ),
               borderRadius: BorderRadius.circular(2),
-              boxShadow: [Neon.bloom(Neon.purple, blur: 10)],
+              boxShadow: [Neon.bloom(config.primaryColor, blur: 10)],
             ),
           ),
           const SizedBox(width: 8),
@@ -592,6 +615,7 @@ class NeonIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     final button = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -600,20 +624,29 @@ class NeonIconButton extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: highlight ? null : Colors.white.withValues(alpha: .07),
-          gradient: highlight ? Neon.hotGradient : null,
-          border: Border.all(color: Colors.white.withValues(alpha: .10)),
+          color: highlight ? null : config.unselectedBg,
+          gradient: highlight
+              ? config.selectedGradient ??
+                    LinearGradient(
+                      colors: [config.primaryColor, config.secondaryColor],
+                    )
+              : null,
+          border: Border.all(color: config.dividerColor),
           boxShadow: highlight
               ? [
                   BoxShadow(
-                    color: Neon.pink.withValues(alpha: .40),
+                    color: config.accentColor.withValues(alpha: .40),
                     blurRadius: 16,
                     spreadRadius: -3,
                   ),
                 ]
               : null,
         ),
-        child: Icon(icon, size: size * .48, color: Colors.white),
+        child: Icon(
+          icon,
+          size: size * .48,
+          color: highlight ? Colors.white : config.textPrimary,
+        ),
       ),
     );
     if (tooltip == null) return button;
@@ -643,17 +676,18 @@ class NeonBottomBar extends StatelessWidget {
       (2, LucideIcons.hardDrive, '多媒体'),
       (3, LucideIcons.user, '我的'),
     ];
+    final config = AppThemeConfig.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
       child: Container(
         height: 62,
         decoration: BoxDecoration(
-          color: const Color(0xFF1D1632).withValues(alpha: .94),
+          color: config.surfaceColor.withValues(alpha: .94),
           borderRadius: BorderRadius.circular(31),
-          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+          border: Border.all(color: config.dividerColor),
           boxShadow: [
             BoxShadow(
-              color: Neon.purple.withValues(alpha: .22),
+              color: config.primaryColor.withValues(alpha: .22),
               blurRadius: 26,
               spreadRadius: -6,
             ),
@@ -661,18 +695,18 @@ class NeonBottomBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            _item(entries[0]),
-            _item(entries[1]),
-            Expanded(child: _center()),
-            _item(entries[2]),
-            _item(entries[3]),
+            _item(entries[0], config),
+            _item(entries[1], config),
+            Expanded(child: _center(config)),
+            _item(entries[2], config),
+            _item(entries[3], config),
           ],
         ),
       ),
     );
   }
 
-  Widget _item((int, Object, String) entry) {
+  Widget _item((int, Object, String) entry, AppThemeConfig config) {
     final selected = index == entry.$1;
     final glyph = entry.$2;
     return Expanded(
@@ -690,7 +724,7 @@ class NeonBottomBar extends StatelessWidget {
               Icon(
                 glyph as IconData,
                 size: 19,
-                color: selected ? Neon.pink : const Color(0xFF8A7AA8),
+                color: selected ? config.primaryColor : config.textSecondary,
               ),
             const SizedBox(height: 3),
             Text(
@@ -699,7 +733,7 @@ class NeonBottomBar extends StatelessWidget {
                 fontSize: 9.5,
                 height: 1.0,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? Neon.pink : const Color(0xFF8A7AA8),
+                color: selected ? config.primaryColor : config.textSecondary,
               ),
             ),
           ],
@@ -708,7 +742,7 @@ class NeonBottomBar extends StatelessWidget {
     );
   }
 
-  Widget _center() {
+  Widget _center(AppThemeConfig config) {
     return Center(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -718,15 +752,19 @@ class NeonBottomBar extends StatelessWidget {
           height: 48,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: Neon.hotGradient,
+            gradient:
+                config.selectedGradient ??
+                LinearGradient(
+                  colors: [config.primaryColor, config.secondaryColor],
+                ),
             boxShadow: [
               BoxShadow(
-                color: Neon.pink.withValues(alpha: .55),
+                color: config.accentColor.withValues(alpha: .55),
                 blurRadius: 20,
                 spreadRadius: -2,
               ),
               BoxShadow(
-                color: Neon.purple.withValues(alpha: .45),
+                color: config.primaryColor.withValues(alpha: .45),
                 blurRadius: 28,
                 spreadRadius: -6,
               ),
@@ -742,6 +780,16 @@ class NeonBottomBar extends StatelessWidget {
 }
 
 /// 图片圆角卡片壳：封面 + 底部渐变字幕条 + 角标。
+/// 霓虹海报卡：真实封面 + 底部标题/副标题，点卡回调（进详情，不直接播）。
+///
+/// 发光边框与轻微倾斜合自用户发的 neonCard（原文 150–196 行）：边框
+/// 1.5 宽取当前主题 cardBorderColor，发光取当前主题 glowColor（50%
+/// 透明度）+ glowBlur，倾斜由调用方按序号交替传 ±0.1（与 NeonBoxHome
+/// 的 index.isEven ? 0.1 : -0.1 同口径），透视复用既有 NeonTilt。
+/// 标题/副标题阴影取当前主题 titleShadows/subtitleShadows；非霓虹
+/// 主题发光半径为 0、无阴影，边框退为主题分隔色。
+/// 防重影：标题区由本组件画，传入的 DramaCover 必须 showEpisodeLabel:
+/// false（调用方逐个核对），否则“共 N 集”与副标题叠在同一角。
 class NeonPoster extends StatelessWidget {
   const NeonPoster({
     super.key,
@@ -755,6 +803,7 @@ class NeonPoster extends StatelessWidget {
     this.onLongPress,
     this.showTitle = true,
     this.titleSize = 11.5,
+    this.tiltAngle = 0,
   });
 
   final Widget cover;
@@ -768,79 +817,99 @@ class NeonPoster extends StatelessWidget {
   final bool showTitle;
   final double titleSize;
 
+  /// Y 轴轻微倾斜角（弧度），0 为不倾斜；调用方按序号交替传 ±0.1。
+  final double tiltAngle;
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final config = AppThemeConfig.of(context);
+    final poster = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       onLongPress: onLongPress,
-      child: NeonFrame(
-        radius: radius,
-        thickness: 1.2,
-        glow: false,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            cover,
-            if (badge != null)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: NeonBadge(label: badge!, color: badgeColor),
-              ),
-            if (showTitle)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(8, 18, 8, 8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: .82),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          border: Border.all(color: config.cardBorderColor, width: 1.5),
+          boxShadow: config.glowBlur > 0
+              ? [
+                  BoxShadow(
+                    color: config.glowColor.withValues(alpha: 0.5),
+                    blurRadius: config.glowBlur,
+                  ),
+                ]
+              : null,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius - 1.5),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              cover,
+              if (badge != null)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: NeonBadge(label: badge!, color: badgeColor),
+                ),
+              if (showTitle)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(8, 18, 8, 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: .82),
+                        ],
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: titleSize,
+                            height: 1.1,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                            shadows: config.titleShadows,
+                          ),
+                        ),
+                        if (subtitle != null && subtitle!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 9,
+                              height: 1.1,
+                              color: config.textSecondary,
+                              shadows: config.subtitleShadows,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: titleSize,
-                          height: 1.1,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                      if (subtitle != null && subtitle!.trim().isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 9,
-                            height: 1.1,
-                            color: Color(0xFFC9B9E6),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
+    if (tiltAngle == 0) return poster;
+    return NeonTilt(angle: tiltAngle, child: poster);
   }
 }
 
@@ -857,27 +926,28 @@ class NeonCoverSlot extends StatelessWidget {
   }
 }
 
-/// 一条从底部升起的柔光，用于页面顶部/卡片下方提亮。
+/// 一条从底部升起的柔光，用于页面顶部/卡片下方提亮。不传颜色时取当前主题主色。
 class NeonGlowLine extends StatelessWidget {
-  const NeonGlowLine({super.key, this.color = Neon.purple, this.height = 1.2});
+  const NeonGlowLine({super.key, this.color, this.height = 1.2});
 
-  final Color color;
+  final Color? color;
   final double height;
 
   @override
   Widget build(BuildContext context) {
+    final glow = color ?? AppThemeConfig.of(context).primaryColor;
     return Container(
       height: height,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            color.withValues(alpha: 0),
-            color.withValues(alpha: .75),
-            color.withValues(alpha: 0),
+            glow.withValues(alpha: 0),
+            glow.withValues(alpha: .75),
+            glow.withValues(alpha: 0),
           ],
         ),
         boxShadow: [
-          BoxShadow(color: color.withValues(alpha: .35), blurRadius: 12),
+          BoxShadow(color: glow.withValues(alpha: .35), blurRadius: 12),
         ],
       ),
     );
@@ -893,11 +963,12 @@ class NeonMeter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     return Container(
       width: width,
       height: 3,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: .12),
+        color: config.dividerColor,
         borderRadius: BorderRadius.circular(2),
       ),
       child: FractionallySizedBox(
@@ -905,7 +976,9 @@ class NeonMeter extends StatelessWidget {
         widthFactor: value.clamp(0, 1),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            gradient: Neon.edgeGradient,
+            gradient: LinearGradient(
+              colors: [config.primaryColor, config.secondaryColor],
+            ),
             borderRadius: BorderRadius.circular(2),
           ),
         ),
@@ -979,9 +1052,10 @@ class _GrainPainter extends CustomPainter {
       oldDelegate.opacity != opacity;
 }
 
-/// 参考图里卡片下方的柔光投影（用于轮播中心卡）。
-BoxShadow neonDropShadow() => BoxShadow(
-  color: Neon.purple.withValues(alpha: .38),
+/// 参考图里卡片下方的柔光投影（用于轮播中心卡）。不传颜色时取霓虹参考紫；
+/// 调用方应传当前主题主色，随主题变。
+BoxShadow neonDropShadow([Color? color]) => BoxShadow(
+  color: (color ?? Neon.purple).withValues(alpha: .38),
   blurRadius: 28,
   spreadRadius: -4,
   offset: const Offset(0, 10),

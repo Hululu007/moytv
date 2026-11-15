@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
+import 'adult_scrape_service.dart';
 import 'app_layout.dart';
 import 'atmosphere_background.dart';
+import 'catalog_browser.dart';
 import 'crosssite_probe.dart';
 import 'crosssite_probe_section.dart';
 import 'ios_dialogs.dart';
@@ -114,6 +116,9 @@ class _DetailScreenState extends State<DetailScreen> {
   ViewingExperienceSettings _viewing = const ViewingExperienceSettings();
   TmdbConfig _tmdbConfig = const TmdbConfig();
   TmdbMetadata? _tmdb;
+
+  /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
+  List<Drama> _recommended = const [];
   Widget? get _sourceDiagnostics => widget.repository.supportsSourceManagement
       ? SourceDiagnosticsButton(
           repository: widget.repository,
@@ -206,11 +211,60 @@ class _DetailScreenState extends State<DetailScreen> {
     return _dramaWithCover(drama, poster);
   }
 
+  /// 推荐视频：取本站同分类第一页，同分类优先、凑不满 6 个时用本站
+  /// 首页补齐，排除当前这部；取不到数据时该区隐藏。代次守卫：换片后
+  /// 旧请求结果不再写回。
+  Future<void> _loadRecommended(Drama drama, int generation) async {
+    var picked = <Drama>[];
+    try {
+      var categoryId = '';
+      try {
+        final menus = await widget.repository.categories(drama.source);
+        final want = categoryName(drama.category);
+        for (final menu in menus) {
+          if (menu.id.isNotEmpty && categoryName(menu.name) == want) {
+            categoryId = menu.id;
+            break;
+          }
+        }
+      } catch (_) {
+        // 分类表拿不到就按全部取，不让推荐区空着。
+      }
+      final seen = <String>{drama.id};
+      final first = await widget.repository.catalog(
+        drama.source,
+        category: categoryId,
+        page: 1,
+      );
+      picked = [
+        for (final item in first.items)
+          if (seen.add(item.id)) item,
+      ];
+      if (picked.length < 6 && categoryId.isNotEmpty) {
+        final fallback = await widget.repository.catalog(drama.source, page: 1);
+        for (final item in fallback.items) {
+          if (picked.length >= 6) break;
+          if (seen.add(item.id)) picked.add(item);
+        }
+      }
+      picked = picked.take(6).toList();
+    } catch (_) {
+      picked = const [];
+    }
+    if (!mounted ||
+        generation != _generation ||
+        _profileEpoch != widget.store.profileEpoch) {
+      return;
+    }
+    setState(() => _recommended = picked);
+  }
+
   Future<void> _load() async {
     final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = null;
+      _recommended = const [];
     });
     try {
       final detail = await widget.repository.detail(widget.drama);
@@ -235,6 +289,7 @@ class _DetailScreenState extends State<DetailScreen> {
       widget.repository.catalogUpdates.publish(merged, retryCover: true);
       unawaited(_supplement(merged, generation));
       unawaited(_loadTmdb(merged));
+      unawaited(_loadRecommended(merged, generation));
       await saveUserChange(context, () => widget.store.refreshDrama(merged));
       if (mounted &&
           generation == _generation &&
@@ -280,7 +335,15 @@ class _DetailScreenState extends State<DetailScreen> {
 
   Future<void> _supplement(Drama drama, int generation) async {
     try {
-      final fresh = await widget.repository.supplementMetadata(drama);
+      // 成人内容先走大站刮削链（MissAV 打头、AVDB 殿后），刮不到
+      // 再落回现有原链；非成人内容新链零请求直接返回 null。
+      final adult = AdultScrapeService(repository: widget.repository);
+      var fresh = await adult.enrich(
+        drama,
+        candidateSites: widget.store.visibleSources,
+        siteVisible: widget.store.siteVisible,
+      );
+      fresh ??= await widget.repository.supplementMetadata(drama);
       if (!mounted ||
           generation != _generation ||
           fresh == null ||
@@ -466,18 +529,12 @@ class _DetailScreenState extends State<DetailScreen> {
     if (nonVideoKindOfEpisode(episodes[index]) != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(height: 560, child: _embeddedPlayer()),
-          _embeddedBar(episodes),
-        ],
+        children: [SizedBox(height: 560, child: _embeddedPlayer())],
       );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        AspectRatio(aspectRatio: 16 / 9, child: _embeddedPlayer()),
-        _embeddedBar(episodes),
-      ],
+      children: [AspectRatio(aspectRatio: 16 / 9, child: _embeddedPlayer())],
     );
   }
 
@@ -505,47 +562,6 @@ class _DetailScreenState extends State<DetailScreen> {
       },
       playerFactory: widget.playerFactory,
       videoBuilder: widget.videoBuilder,
-    );
-  }
-
-  Widget _embeddedBar(List<Episode> episodes) {
-    final index = _embeddedIndex;
-    final number = index != null && index >= 0 && index < episodes.length
-        ? episodes[index].number
-        : null;
-    final nonVideoKind = index != null && index >= 0 && index < episodes.length
-        ? nonVideoKindOfEpisode(episodes[index])
-        : null;
-    final label = nonVideoKind == null
-        ? '正在播放'
-        : nonVideoKind == NonVideoKind.novel
-        ? '正在阅读'
-        : '正在浏览图片';
-    return Container(
-      color: Colors.black,
-      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              number == null ? label : '$label · 第 $number 集',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-          TextButton(
-            key: const ValueKey('toggle-embedded-fullscreen'),
-            onPressed: _toggleEmbeddedFullscreen,
-            child: Text(_embeddedFullscreen ? '退出全屏' : '全屏'),
-          ),
-          TextButton(
-            key: const ValueKey('close-embedded-player'),
-            onPressed: _closeEmbedded,
-            child: const Text('关闭'),
-          ),
-        ],
-      ),
     );
   }
 
@@ -742,14 +758,14 @@ class _DetailScreenState extends State<DetailScreen> {
         },
         child: Scaffold(
           appBar: AppBar(
+            // 内嵌播放器打开时只留播放器左上角的常驻返回钮（关播放器
+            // 回海报），顶栏不重复画返回箭头；关闭后恢复顶栏返回。
+            automaticallyImplyLeading: _embeddedIndex == null,
             toolbarHeight: television ? 64 : null,
             title: Text(drama.title, overflow: TextOverflow.ellipsis),
             actions: [
-              IconButton(
-                tooltip: '推送到一起看',
-                onPressed: allowed ? () => unawaited(_pushToWatchRoom()) : null,
-                icon: const Icon(Icons.meeting_room_rounded),
-              ),
+              // 顶栏不放“推送到一起看”门图标：详情页已有粉色“加入房间
+              // 一起看”主入口，同一视野只留一个。
               RefreshAction(
                 loading: _loading,
                 tooltip: '更新剧集信息',
@@ -826,119 +842,168 @@ class _DetailScreenState extends State<DetailScreen> {
                         .take(episodePageSize)
                         .toList();
                     final previews = episodePreviewData(
-                      titles: [for (final episode in episodes) episode.title],
+                      titles: [
+                        for (final episode in episodes)
+                          displayEpisodeTitle(episode.title, episode.number),
+                      ],
                       tmdbEpisodes: _tmdb?.episodes ?? const [],
                       config: _tmdbConfig,
                       tmdbPosterUrl: _tmdb?.posterUrl(_tmdbConfig) ?? '',
                       dramaCover: drama.cover,
                     );
                     final showEpisodes = _episodesExpanded;
-                    return CustomScrollView(
-                      controller: _detailScroll,
-                      slivers: [
-                        if (_embeddedArea(episodes) != null)
-                          SliverToBoxAdapter(child: _embeddedArea(episodes)!)
-                        else
-                          SliverToBoxAdapter(
-                            child: _hero(
-                              drama,
-                              // 海报点按只认“有可播的集”：重载/刷新中的
-                              // 瞬时加载态不许卡死海报播放入口（与已删
-                              // 底部钮的行为一致，_play 自带空详情守卫）。
-                              ready: allowed && episodes.isNotEmpty,
-                              resumeIndex: resumeIndex,
-                            ),
-                          ),
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-                            child: _overview(drama),
+                    // 内嵌播放器固定在滚动视图之上：以前它是滚动视图
+                    // 里的第一个 sliver，上下滑时跟着内容滑走。现在把
+                    // 它移出滚动视图、放固定头区（与宽屏/TV 双栏布局
+                    // 同款，那边播放器本就在 Column 头区不随滚动走）；
+                    // 滚动只动下面的 CustomScrollView，播放器 widget
+                    // 与其 GlobalKey 不受滚动影响、不重建、不重播。
+                    // 未开播时海报仍是滚动视图第一项，照常随内容滑走。
+                    final embedded = _embeddedArea(episodes);
+                    return Column(
+                      children: [
+                        ?embedded,
+                        Expanded(
+                          // 键要稳：开播/关播时头区出现或消失，滚动区
+                          // 靠键在 Column 子项里对上号，滚动位置不丢。
+                          key: const ValueKey('detail-scroll-area'),
+                          child: CustomScrollView(
+                            controller: _detailScroll,
+                            slivers: [
+                              if (embedded == null)
+                                SliverToBoxAdapter(
+                                  child: _hero(
+                                    drama,
+                                    // 海报点按只认“有可播的集”：重载/刷新中的
+                                    // 瞬时加载态不许卡死海报播放入口（与已删
+                                    // 底部钮的行为一致，_play 自带空详情守卫）。
+                                    ready: allowed && episodes.isNotEmpty,
+                                    resumeIndex: resumeIndex,
+                                  ),
+                                ),
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    20,
+                                    12,
+                                    20,
+                                    8,
+                                  ),
+                                  child: _overview(drama),
+                                ),
+                              ),
+                              if (_loading ||
+                                  _error != null ||
+                                  episodes.isEmpty)
+                                SliverFillRemaining(
+                                  hasScrollBody: false,
+                                  child: _episodeStatus(),
+                                )
+                              else ...[
+                                SliverToBoxAdapter(
+                                  child: _seriesSelector(drama),
+                                ),
+                                SliverToBoxAdapter(child: _lineSelector()),
+                                SliverToBoxAdapter(
+                                  child: _episodeSummary(
+                                    episodes,
+                                    currentNumber: watched?.episode,
+                                    expanded: showEpisodes,
+                                  ),
+                                ),
+                                if (showEpisodes) ...[
+                                  SliverToBoxAdapter(
+                                    child: EpisodeRangeBar(
+                                      key: _episodeAnchor,
+                                      episodes: episodes,
+                                      page: _episodePage,
+                                      title: '分组',
+                                      currentNumber: watched?.episode,
+                                      onLocate: _locateEpisode,
+                                    ),
+                                  ),
+                                  SliverPadding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      4,
+                                      20,
+                                      24,
+                                    ),
+                                    sliver: SliverGrid(
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                            crossAxisCount:
+                                                episodePreviewColumns(
+                                                  constraints.maxWidth,
+                                                ),
+                                            mainAxisExtent: _episodeCardExtent(
+                                              context,
+                                              constraints.maxWidth,
+                                            ),
+                                            crossAxisSpacing: 8,
+                                            mainAxisSpacing: 10,
+                                          ),
+                                      delegate: SliverChildBuilderDelegate((
+                                        context,
+                                        index,
+                                      ) {
+                                        final episode = visible[index];
+                                        // 卡片建出来（进入可见/预取范围）才请求取帧：
+                                        // 服务内部去重，只补新增的；内嵌播时不取。
+                                        if (_embeddedIndex == null) {
+                                          _frameService.prefetch(drama, [
+                                            episode,
+                                          ]);
+                                        }
+                                        final preview = previews[start + index];
+                                        final frameKey =
+                                            EpisodeFrameCache.frameKey(
+                                              source: drama.source,
+                                              dramaId: drama.id,
+                                              episodeNumber: episode.number,
+                                            );
+                                        final framePath =
+                                            _frameKeys.contains(frameKey)
+                                            ? EpisodeFrameCache.instance
+                                                  .pathForKey(frameKey)
+                                            : null;
+                                        return EpisodePreviewCard(
+                                          key: ValueKey(
+                                            'episode-${episode.number}',
+                                          ),
+                                          episode: episode,
+                                          tmdb: preview.tmdb,
+                                          stillUrl: preview.stillUrl,
+                                          posterUrl: preview.posterUrl,
+                                          current:
+                                              episode.number ==
+                                              watched?.episode,
+                                          framePath: framePath,
+                                          onPressed: () => _play(start + index),
+                                        );
+                                      }, childCount: visible.length),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                              if (!_loading) ...[
+                                SliverToBoxAdapter(
+                                  child: _recommendedSection(drama),
+                                ),
+                                SliverToBoxAdapter(
+                                  child: _crossSiteSection(drama),
+                                ),
+                                SliverToBoxAdapter(
+                                  child: _descriptionSection(drama),
+                                ),
+                                SliverToBoxAdapter(child: _magnetSection()),
+                                SliverToBoxAdapter(
+                                  child: _relatedSection(drama),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                        if (_loading || _error != null || episodes.isEmpty)
-                          SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: _episodeStatus(),
-                          )
-                        else ...[
-                          SliverToBoxAdapter(child: _seriesSelector(drama)),
-                          SliverToBoxAdapter(child: _lineSelector()),
-                          SliverToBoxAdapter(
-                            child: _episodeSummary(
-                              episodes,
-                              currentNumber: watched?.episode,
-                              expanded: showEpisodes,
-                            ),
-                          ),
-                          if (showEpisodes) ...[
-                            SliverToBoxAdapter(
-                              child: EpisodeRangeBar(
-                                key: _episodeAnchor,
-                                episodes: episodes,
-                                page: _episodePage,
-                                title: '分组',
-                                currentNumber: watched?.episode,
-                                onLocate: _locateEpisode,
-                              ),
-                            ),
-                            SliverPadding(
-                              padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-                              sliver: SliverGrid(
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: _episodeColumns(
-                                        constraints.maxWidth,
-                                      ),
-                                      mainAxisExtent: _episodeCardExtent(
-                                        context,
-                                        constraints.maxWidth,
-                                      ),
-                                      crossAxisSpacing: 8,
-                                      mainAxisSpacing: 10,
-                                    ),
-                                delegate: SliverChildBuilderDelegate((
-                                  context,
-                                  index,
-                                ) {
-                                  final episode = visible[index];
-                                  // 卡片建出来（进入可见/预取范围）才请求取帧：
-                                  // 服务内部去重，只补新增的；内嵌播时不取。
-                                  if (_embeddedIndex == null) {
-                                    _frameService.prefetch(drama, [episode]);
-                                  }
-                                  final preview = previews[start + index];
-                                  final frameKey = EpisodeFrameCache.frameKey(
-                                    source: drama.source,
-                                    dramaId: drama.id,
-                                    episodeNumber: episode.number,
-                                  );
-                                  final framePath =
-                                      _frameKeys.contains(frameKey)
-                                      ? EpisodeFrameCache.instance.pathForKey(
-                                          frameKey,
-                                        )
-                                      : null;
-                                  return EpisodePreviewCard(
-                                    key: ValueKey('episode-${episode.number}'),
-                                    episode: episode,
-                                    tmdb: preview.tmdb,
-                                    stillUrl: preview.stillUrl,
-                                    posterUrl: preview.posterUrl,
-                                    current: episode.number == watched?.episode,
-                                    framePath: framePath,
-                                    onPressed: () => _play(start + index),
-                                  );
-                                }, childCount: visible.length),
-                              ),
-                            ),
-                          ],
-                        ],
-                        if (!_loading) ...[
-                          SliverToBoxAdapter(child: _crossSiteSection(drama)),
-                          SliverToBoxAdapter(child: _descriptionSection(drama)),
-                          SliverToBoxAdapter(child: _magnetSection()),
-                          SliverToBoxAdapter(child: _relatedSection(drama)),
-                        ],
                       ],
                     );
                   },
@@ -1269,6 +1334,49 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  /// 推荐视频区：选集区下方，取本站视频（同分类优先），卡片与相关
+  /// 推荐同一套样式，点卡进详情页（不直接播）；无数据时隐藏。
+  /// 落点：窄屏布局选集网格之后、跨站选线区之前（帧画面缩小后空出
+  /// 的位置）；宽屏/TV 双栏布局不放（右侧是选集浏览器，左栏已有
+  /// 相关推荐）。
+  Widget _recommendedSection(Drama drama) {
+    if (_recommended.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('推荐视频', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
+              final tileWidth =
+                  (constraints.maxWidth - (columns - 1) * 10) / columns;
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  mainAxisExtent: DramaTile.extentFor(context, tileWidth),
+                ),
+                itemCount: _recommended.length,
+                itemBuilder: (context, index) => DramaTile(
+                  key: ValueKey('recommended-${_recommended[index].id}'),
+                  drama: _recommended[index],
+                  repository: widget.repository,
+                  onTap: () => _openRelated(_recommended, _recommended[index]),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _relatedSection(Drama drama) {
     final related = _detail?.related ?? const <Drama>[];
     if (related.isEmpty) return const SizedBox.shrink();
@@ -1443,7 +1551,7 @@ class _DetailScreenState extends State<DetailScreen> {
       if (viewport == null) return;
       final start = viewport.getOffsetToReveal(render, 0).offset;
       final extent = _episodeCardExtent(context, render.size.width);
-      final columns = _episodeColumns(render.size.width);
+      final columns = episodePreviewColumns(render.size.width);
       final target =
           start +
           render.size.height +
@@ -1457,15 +1565,10 @@ class _DetailScreenState extends State<DetailScreen> {
     });
   }
 
-  int _episodeColumns(double width) {
-    // 预览图卡片：单卡约 104 逻辑像素，手机 3 列、宽屏最多 4 列。
-    return ((width - 40) / 106).floor().clamp(2, 4);
-  }
-
   /// 预览图卡片的网格高度：16:9 图 + 文字区（标题一行 + 副标题一行，
   /// 随文字缩放放大，上限 1.4 倍）。网格与定位滚动共用同一算法。
   double _episodeCardExtent(BuildContext context, double width) {
-    final columns = _episodeColumns(width);
+    final columns = episodePreviewColumns(width);
     final tileWidth = (width - 40 - (columns - 1) * 8) / columns;
     return episodePreviewCardExtent(context, tileWidth);
   }
@@ -1563,7 +1666,7 @@ class _DetailScreenState extends State<DetailScreen> {
             child: Text(
               [
                 if (drama.onlineDate.isNotEmpty) '${drama.onlineDate} 上线',
-                if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
+                if (drama.heat.isNotEmpty) heatDisplayText(drama.heat),
                 if (drama.views.isNotEmpty) '播放 ${drama.views}',
               ].join(' · '),
               style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),

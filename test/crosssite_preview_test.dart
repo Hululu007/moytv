@@ -96,6 +96,30 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
+/// 拖动详情页主滚动视图直到目标建出来：scrollUntilVisible 在详情页
+/// 有多个 Scrollable 时取 .single 抛错，显式拖 CustomScrollView。
+Future<void> _dragPageTo(WidgetTester tester, Finder target) async {
+  for (var i = 0; i < 15 && target.evaluate().isEmpty; i++) {
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      const Offset(0, -500),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
+/// 在弹窗内拖到目标行可点：弹窗内容可滚动，靠下的行须先拖动。
+Future<void> _dragSheetTo(WidgetTester tester, Finder target) async {
+  final scrollable = find.descendant(
+    of: find.byKey(const ValueKey('crosssite-sheet')),
+    matching: find.byType(SingleChildScrollView),
+  );
+  for (var i = 0; i < 10 && target.hitTestable().evaluate().isEmpty; i++) {
+    await tester.drag(scrollable, const Offset(0, -200));
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 /// 测试里 JarBridge._specs 与 SourceSite.importedSites 默认是空的
 /// （应用启动时的内置注册只在 Android 上跑），按内置登记直接注册
 /// 探活要用的三家站源，否则选线区一行站源都没有。只注 id 与
@@ -197,9 +221,13 @@ _PreviewRepository _repositoryWithAv01() {
 }
 
 /// 把选线区顶对到标签条下方约 175px，上露选集区、下露简介标题。
+/// 弹窗打开时不取景：弹窗本身就是要拍的全量内容。
 Future<void> _frameSection(WidgetTester tester) async {
+  if (find.byKey(const ValueKey('crosssite-sheet')).evaluate().isNotEmpty) {
+    return;
+  }
   final section = find.byKey(const ValueKey('crosssite-section'));
-  await tester.scrollUntilVisible(section, 200);
+  await _dragPageTo(tester, section);
   await tester.pump();
   final top = tester.getTopLeft(section).dy;
   const targetTop = 175.0;
@@ -323,9 +351,16 @@ void main() {
         // 先展开选集网格，让选集区本体入画。
         await tester.tap(find.text('展开'));
         await tester.pump(const Duration(milliseconds: 100));
-        await tester.scrollUntilVisible(
+        // 行内容在弹窗里：先点入口打开弹窗，再点懒查行。
+        await _dragPageTo(
+          tester,
+          find.byKey(const ValueKey('crosssite-entry')),
+        );
+        await tester.tap(find.byKey(const ValueKey('crosssite-entry')));
+        await tester.pump(const Duration(milliseconds: 400));
+        await _dragSheetTo(
+          tester,
           find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
-          200,
         );
         await tester.pump();
         await tester.tap(
@@ -361,18 +396,25 @@ void main() {
         // 先展开选集网格，让选集区本体入画。
         await tester.tap(find.text('展开'));
         await tester.pump(const Duration(milliseconds: 100));
-        await tester.scrollUntilVisible(
+        // 行内容在弹窗里：先点入口打开弹窗，再点懒查行。
+        await _dragPageTo(
+          tester,
+          find.byKey(const ValueKey('crosssite-entry')),
+        );
+        await tester.tap(find.byKey(const ValueKey('crosssite-entry')));
+        await tester.pump(const Duration(milliseconds: 400));
+        await _dragSheetTo(
+          tester,
           find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
-          200,
         );
         await tester.pump();
         await tester.tap(
           find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
         );
         await tester.pump(const Duration(milliseconds: 100));
-        await tester.scrollUntilVisible(
+        await _dragSheetTo(
+          tester,
           find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaJable')),
-          200,
         );
         await tester.pump();
         await tester.tap(

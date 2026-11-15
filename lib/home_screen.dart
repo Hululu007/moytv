@@ -40,6 +40,8 @@ import 'compact_chip.dart';
 import 'tv_filter_bar.dart';
 import 'catalog_browser.dart';
 import 'catalog_sort.dart';
+import 'category_levels.dart';
+import 'left_category_layout.dart';
 import 'catalog_sort_sheet.dart';
 import 'cloud_drive/cloud_drive_screen.dart';
 import 'cloud_drive/cloud_drive_stations.dart';
@@ -168,6 +170,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     widget.store.preferences,
     widget.store.profile.id,
   )..load();
+
+  /// 订阅双入口递进来的直播源：消费待办请求时记下并递给 LiveScreen，
+  /// nonce 每递一次加一，已挂载的直播页靠它识别新请求。
+  String _liveEntrySourceId = '';
+  int _liveEntryNonce = 0;
   final _changedSources = <String>{};
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
@@ -181,6 +188,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _openingPlayback = false;
 
   bool get _isCatalogZone => _zone == HomeZone.library;
+
+  /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：多媒体页虽在片库区内，
+  /// 但自有网盘切换与搜索顶栏，片库顶栏元素不该出现在它上面。
+  bool get _showCatalogHeader => _isCatalogZone && !_multimediaRequested;
 
   String get _zoneTitle => switch (_zone) {
     HomeZone.library => '片库',
@@ -463,6 +474,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       groups: _sourcePickerGroups(),
       initialEditMode: editMode,
       onDeleteSite: _deleteSourceEntry,
+      repository: widget.repository,
     );
     if (picked == null || !mounted) return;
     _applySourcePick(picked);
@@ -475,6 +487,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       currentId: _allSources ? _allSourcesEntryId : _source.id,
       groups: _sourcePickerGroups(),
       onDeleteSite: _deleteSourceEntry,
+      repository: widget.repository,
     );
     if (picked == null || !mounted) return;
     if (_scaffoldKey.currentState?.isDrawerOpen == true) {
@@ -1282,9 +1295,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _applyZoneChange(zone, recordHistory: true);
   }
 
-  /// 当前主题绑定的导航样式（存于显示方案，切主题即变）。
-  NavStyle get _navStyle =>
-      widget.store.displayScheme(widget.store.appTheme).navStyle;
+  /// 当前主题绑定的导航样式：主题固定值（见 navStyleForTheme），
+  /// 只随主题切换一起变，不再读存值里的导航段。
+  NavStyle get _navStyle => navStyleForTheme(widget.store.appTheme);
 
   /// 当前主题绑定的内容档（存于显示方案，切主题即变）。
   ContentTier get _contentTier =>
@@ -1406,6 +1419,39 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _returnGraceTimer = Timer(_returnGrace, () {
       if (mounted) _justReturned = false;
     });
+    _consumeSubscriptionEntryRequest();
+  }
+
+  /// 消费订阅双入口的待办请求（订阅行点“影视/直播”后退回首页时）：
+  /// 直播请求切到直播区并选中该订阅的直播源；影视请求切到片库区
+  /// 并打开该站（先设为可见，与站源管理页“进站浏览”同一口径）。
+  /// 请求只消费一次，消费前先清掉，避免重复触发。
+  void _consumeSubscriptionEntryRequest() {
+    if (!mounted) return;
+    final liveId = widget.store.pendingLiveSourceId;
+    final siteId = widget.store.pendingVideoSiteId;
+    if (liveId.isEmpty && siteId.isEmpty) return;
+    widget.store.clearSubscriptionEntryRequest();
+    if (liveId.isNotEmpty) {
+      _liveEntryNonce++;
+      _liveEntrySourceId = liveId;
+      _setZone(HomeZone.live);
+      // 已在直播区时 _setZone 提前返回，仍需重建把新 nonce 递给直播页。
+      if (mounted) setState(() {});
+      return;
+    }
+    final site = widget.store.sources
+        .where((candidate) => candidate.id == siteId)
+        .firstOrNull;
+    if (site == null) return;
+    unawaited(
+      saveUserChange(
+        context,
+        () => widget.store.setSiteVisible(site.id, true),
+      ),
+    );
+    _setZone(HomeZone.library);
+    _changeSource(site);
   }
 
   bool get _settlingAfterPop => _justReturned;
@@ -1430,7 +1476,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Widget _appBarLeading() {
     final button = _drawerAvatarButton();
-    if (!_isCatalogZone || _selectionMode) return button;
+    if (!_showCatalogHeader || _selectionMode) return button;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1455,16 +1501,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     onWatchRoom: _onWatchRoom,
     onTool: _onTool,
     onMinorProtectionChanged: _onMinorProtectionChanged,
+    onMultimediaRequested: () {
+      // 关抽屉在回调里，与 _onZoneSelected / _onTool 的口径一致；
+      // _onBottomTab(5) 本身不关抽屉，且与底部导航“多媒体”同一目的地。
+      Navigator.of(context).pop();
+      _onBottomTab(5);
+    },
+    multimediaActive: _multimediaRequested,
   );
 
   void _openZoneSettings() {
-    if (_zone == HomeZone.library || _zone == HomeZone.live) {
+    // 片库设置页已废弃（2026-11-14）：片库区直接进通用设置（五项已并入），
+    // 只有直播区还走分区设置页；听书/阅读区本来就直接进通用设置。
+    if (_zone == HomeZone.live) {
       _pushTool(
         ZoneSettingsScreen(
           repository: widget.repository,
           store: widget.store,
           zone: _zone,
-          onHideAdult: () => unawaited(_onMinorProtectionChanged(true)),
         ),
       );
     } else {
@@ -1474,7 +1528,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   void _openSettings() {
     _pushTool(
-      SettingsScreen(repository: widget.repository, store: widget.store),
+      SettingsScreen(
+        repository: widget.repository,
+        store: widget.store,
+        onHideAdult: () => unawaited(_onMinorProtectionChanged(true)),
+      ),
     );
   }
 
@@ -1525,6 +1583,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   void _onZoneSelected(HomeZone zone) {
     Navigator.of(context).pop();
+    if (zone == HomeZone.library &&
+        (_mineRequested || _multimediaRequested)) {
+      // 同区时 _setZone 会提前返回：先清掉“我的/多媒体”请求，
+      // 否则从多媒体区点“影视”回不到片库目录（与 _onBottomTab
+      // 先 setState 递出请求的口径一致）。
+      setState(() {
+        _mineRequested = false;
+        _multimediaRequested = false;
+      });
+    }
     _setZone(zone);
   }
 
@@ -1862,6 +1930,83 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  /// Material 顶栏的片库目录操作组（排序/榜单/全屏流/搜索/网页爬取/
+  /// 刷新/站源下拉）：宽屏放 actions 行，窄屏放顶栏第二行，
+  /// 与玻璃顶栏的胶囊第二行同一道理，避免盖住站源条。
+  List<Widget> _materialCatalogActions({
+    required bool television,
+    required double maxWidth,
+  }) {
+    return [
+      if (!_showRecommendations)
+        IconButton(
+          tooltip: '排序与筛选 · ${widget.store.catalogView.sort.label}',
+          onPressed: _chooseCatalogView,
+          color:
+              widget.store.catalogView.sort != CatalogSort.source ||
+                  widget.store.catalogView.release.isNotEmpty
+              ? Theme.of(context).colorScheme.primary
+              : null,
+          icon: const Icon(Icons.sort_rounded),
+        ),
+      IconButton(
+        key: const ValueKey('open-rankings'),
+        tooltip: '榜单',
+        onPressed: widget.store.visibleSources.isEmpty ? null : _openRankings,
+        icon: const Icon(Icons.leaderboard_outlined),
+      ),
+      IconButton(
+        key: const ValueKey('open-fullscreen-feed'),
+        tooltip: '全屏流',
+        onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
+        icon: const Icon(Icons.play_arrow_rounded),
+      ),
+      // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
+      if (_zone == HomeZone.live && !television)
+        IconButton(
+          key: const ValueKey('open-settings'),
+          tooltip: '设置',
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: _openZoneSettings,
+        ),
+      IconButton(
+        key: const ValueKey('toggle-search'),
+        tooltip: _searchVisible ? '收起搜索' : '搜索',
+        icon: Icon(
+          _searchVisible ? Icons.search_off_rounded : Icons.search_rounded,
+        ),
+        onPressed: _toggleSearch,
+      ),
+      IconButton(
+        key: const ValueKey('web-scrape'),
+        tooltip: '网页爬取',
+        icon: const Icon(Icons.travel_explore_rounded),
+        onPressed: _openWebScrape,
+      ),
+      if (!_showRecommendations && maxWidth >= 400)
+        RefreshAction(
+          key: const ValueKey('catalog-refresh'),
+          loading: _catalogBusy,
+          tooltip: '更新剧库',
+          onPressed:
+              widget.store.visibleSources.isEmpty ? null : _refreshCatalog,
+        ),
+      if (!_showRecommendations && maxWidth < 400)
+        IconButton(
+          tooltip: '更新剧库',
+          onPressed:
+              widget.store.visibleSources.isEmpty ? null : _refreshCatalog,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      OutlinedButton.icon(
+        key: const ValueKey('source-dropdown'),
+        onPressed: _canSwitchSource ? () => unawaited(_pickSource()) : null,
+        icon: const Icon(Icons.expand_more_rounded, size: 18),
+        label: Text('${_group.name} (${_group.sources.length})'),
+      ),
+    ];
+  }
+
   PreferredSizeWidget _glassAppBar() {
     final colors = Theme.of(context).colorScheme;
     final wide = MediaQuery.sizeOf(context).width >= 840;
@@ -1872,7 +2017,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       letterSpacing: 0,
       color: colors.onSurface,
     );
-    final catalog = _isCatalogZone && !_selectionMode;
+    final catalog = _showCatalogHeader && !_selectionMode;
     final customView =
         widget.store.catalogView.sort != CatalogSort.source ||
         widget.store.catalogView.release.isNotEmpty;
@@ -1880,7 +2025,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final Widget title;
     if (_selectionMode) {
       title = Text('选择视频', style: largeTitle);
-    } else if (_isCatalogZone) {
+    } else if (_multimediaRequested) {
+      title = Text('多媒体', style: largeTitle);
+    } else if (_showCatalogHeader) {
       title = GlassTapTarget(
         key: const ValueKey('source-switch'),
         onTap: _canSwitchSource ? () => unawaited(_pickSource()) : null,
@@ -1916,12 +2063,70 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } else {
       title = Text(_zoneTitle, style: largeTitle);
     }
+    // 工具胶囊：窄屏（手机）时顶栏一行放不下 192 宽站源条 + 六项胶囊，
+    // 胶囊会盖住站源名；窄屏改放顶栏第二行（bottom），宽屏仍放 actions 行。
+    final capsule = GlassButtonGroup(
+      children: [
+        if (updating || _loading && _items.isNotEmpty)
+          const GlassGroupItem(
+            key: ValueKey('catalog-refresh'),
+            tooltip: '正在更新',
+            onPressed: null,
+            child: SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+            ),
+          ),
+        if (!_showRecommendations)
+          GlassGroupItem(
+            icon: LucideIcons.arrowUpDown,
+            tooltip: '排序与筛选 · ${widget.store.catalogView.sort.label}',
+            highlighted: customView,
+            onPressed: _chooseCatalogView,
+          ),
+        GlassGroupItem(
+          key: const ValueKey('open-rankings'),
+          icon: LucideIcons.trophy,
+          tooltip: '榜单',
+          onPressed: widget.store.visibleSources.isEmpty
+              ? null
+              : _openRankings,
+        ),
+        GlassGroupItem(
+          key: const ValueKey('open-fullscreen-feed'),
+          icon: LucideIcons.play,
+          tooltip: '全屏流',
+          onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
+        ),
+        GlassGroupItem(
+          key: const ValueKey('toggle-search'),
+          icon: _searchVisible ? LucideIcons.searchX : LucideIcons.search,
+          tooltip: _searchVisible ? '收起搜索' : '搜索',
+          highlighted: _searchVisible,
+          onPressed: _toggleSearch,
+        ),
+        GlassGroupItem(
+          key: const ValueKey('web-scrape'),
+          icon: LucideIcons.globe,
+          tooltip: '网页爬取',
+          onPressed: _openWebScrape,
+        ),
+        if (!_showRecommendations && !updating)
+          GlassGroupItem(
+            icon: LucideIcons.rotateCw,
+            tooltip: '更新剧库',
+            onPressed: widget.store.visibleSources.isEmpty
+                ? null
+                : _refreshCatalog,
+          ),
+      ],
+    );
     return AppBar(
       toolbarHeight: 64,
       centerTitle: false,
       titleSpacing: 20,
       automaticallyImplyLeading: false,
-      leadingWidth: _isCatalogZone && !_selectionMode ? 192 : null,
+      leadingWidth: _showCatalogHeader && !_selectionMode ? 192 : null,
       leading: _appBarLeading(),
       title: title,
       actions: [
@@ -1943,65 +2148,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ] else ...[
           if (catalog) ...[
             if (wide) ...[_sourceDropdownBox(), const SizedBox(width: 8)],
-            GlassButtonGroup(
-              children: [
-                if (updating || _loading && _items.isNotEmpty)
-                  const GlassGroupItem(
-                    key: ValueKey('catalog-refresh'),
-                    tooltip: '正在更新',
-                    onPressed: null,
-                    child: SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                    ),
-                  ),
-                if (!_showRecommendations)
-                  GlassGroupItem(
-                    icon: LucideIcons.arrowUpDown,
-                    tooltip: '排序与筛选 · ${widget.store.catalogView.sort.label}',
-                    highlighted: customView,
-                    onPressed: _chooseCatalogView,
-                  ),
-                GlassGroupItem(
-                  key: const ValueKey('open-rankings'),
-                  icon: LucideIcons.trophy,
-                  tooltip: '榜单',
-                  onPressed: widget.store.visibleSources.isEmpty
-                      ? null
-                      : _openRankings,
-                ),
-                GlassGroupItem(
-                  key: const ValueKey('open-fullscreen-feed'),
-                  icon: LucideIcons.play,
-                  tooltip: '全屏流',
-                  onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
-                ),
-                GlassGroupItem(
-                  key: const ValueKey('toggle-search'),
-                  icon: _searchVisible
-                      ? LucideIcons.searchX
-                      : LucideIcons.search,
-                  tooltip: _searchVisible ? '收起搜索' : '搜索',
-                  highlighted: _searchVisible,
-                  onPressed: _toggleSearch,
-                ),
-                GlassGroupItem(
-                  key: const ValueKey('web-scrape'),
-                  icon: LucideIcons.globe,
-                  tooltip: '网页爬取',
-                  onPressed: _openWebScrape,
-                ),
-                if (!_showRecommendations && !updating)
-                  GlassGroupItem(
-                    icon: LucideIcons.rotateCw,
-                    tooltip: '更新剧库',
-                    onPressed: widget.store.visibleSources.isEmpty
-                        ? null
-                        : _refreshCatalog,
-                  ),
-              ],
-            ),
-            const SizedBox(width: 8),
+            if (wide) capsule,
+            if (wide) const SizedBox(width: 8),
           ],
           // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
           if (!AppLayout.isTelevision(context) && _zone == HomeZone.live)
@@ -2014,6 +2162,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
         const SizedBox(width: 16),
       ],
+      // 窄屏第二行：工具胶囊右对齐独占一行，不再盖住站源条。
+      bottom: catalog && !wide
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(52),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 12, bottom: 8),
+                  child: capsule,
+                ),
+              ),
+            )
+          : null,
     );
   }
 
@@ -2105,7 +2266,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     toolbarHeight: television ? 64 : null,
                     titleSpacing: 12,
                     automaticallyImplyLeading: false,
-                    leadingWidth: _isCatalogZone && !_selectionMode
+                    leadingWidth: _showCatalogHeader && !_selectionMode
                         ? 192
                         : null,
                     leading: _appBarLeading(),
@@ -2115,7 +2276,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           )
-                        : _isCatalogZone
+                        : _multimediaRequested
+                        ? const Text('多媒体')
+                        : _showCatalogHeader
                         ? InkWell(
                             key: const ValueKey('source-switch'),
                             onTap: _canSwitchSource
@@ -2157,103 +2320,36 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           child: const Text('取消'),
                         ),
                       ] else ...[
-                        if (_isCatalogZone) ...[
-                          if (!_showRecommendations)
-                            IconButton(
-                              tooltip:
-                                  '排序与筛选 · ${widget.store.catalogView.sort.label}',
-                              onPressed: _chooseCatalogView,
-                              color:
-                                  widget.store.catalogView.sort !=
-                                          CatalogSort.source ||
-                                      widget
-                                          .store
-                                          .catalogView
-                                          .release
-                                          .isNotEmpty
-                                  ? Theme.of(context).colorScheme.primary
-                                  : null,
-                              icon: const Icon(Icons.sort_rounded),
-                            ),
-                          IconButton(
-                            key: const ValueKey('open-rankings'),
-                            tooltip: '榜单',
-                            onPressed: widget.store.visibleSources.isEmpty
-                                ? null
-                                : _openRankings,
-                            icon: const Icon(Icons.leaderboard_outlined),
-                          ),
-                          IconButton(
-                            key: const ValueKey('open-fullscreen-feed'),
-                            tooltip: '全屏流',
-                            onPressed: _visible.isEmpty
-                                ? null
-                                : _openFullscreenFeed,
-                            icon: const Icon(Icons.play_arrow_rounded),
-                          ),
-                          // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
-                          if (_zone == HomeZone.live && !television)
-                            IconButton(
-                              key: const ValueKey('open-settings'),
-                              tooltip: '设置',
-                              icon: const Icon(Icons.settings_outlined),
-                              onPressed: _openZoneSettings,
-                            ),
-                          IconButton(
-                            key: const ValueKey('toggle-search'),
-                            tooltip: _searchVisible ? '收起搜索' : '搜索',
-                            icon: Icon(
-                              _searchVisible
-                                  ? Icons.search_off_rounded
-                                  : Icons.search_rounded,
-                            ),
-                            onPressed: _toggleSearch,
-                          ),
-                          IconButton(
-                            key: const ValueKey('web-scrape'),
-                            tooltip: '网页爬取',
-                            icon: const Icon(Icons.travel_explore_rounded),
-                            onPressed: _openWebScrape,
-                          ),
-                        ],
-                        if (_isCatalogZone &&
-                            !_showRecommendations &&
-                            constraints.maxWidth >= 400)
-                          RefreshAction(
-                            key: const ValueKey('catalog-refresh'),
-                            loading: _catalogBusy,
-                            tooltip: '更新剧库',
-                            onPressed: widget.store.visibleSources.isEmpty
-                                ? null
-                                : _refreshCatalog,
-                          ),
-                        if (_isCatalogZone &&
-                            !_showRecommendations &&
-                            constraints.maxWidth < 400)
-                          IconButton(
-                            tooltip: '更新剧库',
-                            onPressed: widget.store.visibleSources.isEmpty
-                                ? null
-                                : _refreshCatalog,
-                            icon: const Icon(Icons.refresh_rounded),
-                          ),
-                        if (_isCatalogZone)
-                          OutlinedButton.icon(
-                            key: const ValueKey('source-dropdown'),
-                            onPressed: _canSwitchSource
-                                ? () => unawaited(_pickSource())
-                                : null,
-                            icon: const Icon(
-                              Icons.expand_more_rounded,
-                              size: 18,
-                            ),
-                            label: Text(
-                              '${_group.name} (${_group.sources.length})',
-                            ),
+                        if (_showCatalogHeader &&
+                            constraints.maxWidth >= 840)
+                          ..._materialCatalogActions(
+                            television: television,
+                            maxWidth: constraints.maxWidth,
                           ),
                       ],
                       const SizedBox(width: 8),
                     ],
+                    // 窄屏第二行：目录操作组横排独占一行，不再盖住站源条。
+                    bottom: _showCatalogHeader &&
+                            !_selectionMode &&
+                            constraints.maxWidth < 840
+                        ? PreferredSize(
+                            preferredSize: const Size.fromHeight(56),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: _materialCatalogActions(
+                                    television: television,
+                                    maxWidth: constraints.maxWidth,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        : null,
                   ),
             body: SafeArea(
               top: false,
@@ -2418,6 +2514,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         greenMode: false,
         onExitLeft: () => _navKey.currentState?.focusCurrent(),
         appStore: widget.store,
+        initialSourceId: _liveEntrySourceId,
+        initialSourceNonce: _liveEntryNonce,
       );
     }
     if (_zone == HomeZone.audio) {
@@ -2502,6 +2600,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Widget _catalog({required bool selectionInBody}) {
     final items = _visible;
     final television = AppLayout.isTelevision(context);
+    // 左侧分类主题（第 9 套）专属布局：只在手机/平板目录主面生效；
+    // 电视遥控路径、推荐屏、内容档缺失空态仍走原路径，一字不动。
+    final leftCategoryLayout =
+        widget.store.appTheme == AppThemeMode.leftCategories &&
+        !television &&
+        !_showRecommendations &&
+        !_tierMissing;
     return Column(
       children: [
         if (_searchVisible && !television)
@@ -2576,8 +2681,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ],
             ),
           ),
-        CatalogFilters(
-          key: ValueKey('filters-${_group.id}'),
+        if (!leftCategoryLayout)
+          CatalogFilters(
+            key: ValueKey('filters-${_group.id}'),
           remoteKey: _filtersKey,
           onExitDown: television
               ? () => _gridKey.currentState?.focusCurrent()
@@ -2602,7 +2708,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ],
           ),
         ),
-        if (!_allSources &&
+        if (!leftCategoryLayout &&
+            !_allSources &&
             _drillStack.isEmpty &&
             _catalogFilters.isNotEmpty &&
             !_showRecommendations)
@@ -2617,8 +2724,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   selected: _selectedFilters,
                   onSelected: _changeFilter,
                 ),
-        if (_drillStack.isNotEmpty) _breadcrumbBar(),
-        if (_catalogTags.isNotEmpty && !_showRecommendations) ...[
+        if (!leftCategoryLayout && _drillStack.isNotEmpty) _breadcrumbBar(),
+        if (!leftCategoryLayout &&
+            _catalogTags.isNotEmpty &&
+            !_showRecommendations) ...[
           SizedBox(
             height: compactChipHeight(context),
             child: ListView(
@@ -2641,7 +2750,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           const SizedBox(height: 4),
         ],
-        if (_level2Tags.isNotEmpty && !_showRecommendations) ...[
+        if (!leftCategoryLayout &&
+            _level2Tags.isNotEmpty &&
+            !_showRecommendations) ...[
           SizedBox(
             height: compactChipHeight(context),
             child: ListView(
@@ -2672,7 +2783,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           const SizedBox(height: 4),
         ],
-        if (_tagLevel2 != null &&
+        if (!leftCategoryLayout &&
+            _tagLevel2 != null &&
             _level3Tags.isNotEmpty &&
             !_showRecommendations) ...[
           SizedBox(
@@ -2705,7 +2817,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           const SizedBox(height: 4),
         ],
-        if (_showRecommendations)
+        if (leftCategoryLayout)
+          Expanded(child: _leftCategoryView(items))
+        else if (_showRecommendations)
           Expanded(
             child: GestureDetector(
               onHorizontalDragEnd: television ? null : _swipeCategory,
@@ -2796,6 +2910,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           ? () => _load(more: true)
                           : null,
                       action: '加载更多',
+                      secondaryAction:
+                          widget.repository.supportsSourceManagement
+                          ? TextButton(
+                              onPressed: _manageSources,
+                              child: const Text('站源诊断'),
+                            )
+                          : null,
                     )
                   : LayoutBuilder(
                       builder: (context, constraints) {
@@ -2905,6 +3026,163 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
           ),
         ],
+      ],
+    );
+  }
+
+  /// 左侧分类主题（第 9 套）的目录视图：左一级纵栏 + 右二级/筛选/
+  /// 卡堆 + 下方现有网格。分类与筛选点选走 _changeCategory /
+  /// _changeFilter，与现有分类行/筛选行同一链路；卡堆数据与首页
+  /// 轮播同一条（目录头部有封面的条目），搜索/下钻/多选/多站时隐藏。
+  Widget _leftCategoryView(List<Drama> items) {
+    final levels = splitCategoryLevels(_displayCategories);
+    final stackItems =
+        !_allSources &&
+            !_searchVisible &&
+            _drillStack.isEmpty &&
+            !_selectionMode
+        ? carouselItems(items)
+        : const <Drama>[];
+    return LeftCategoryLayout(
+      categories: levels.level1,
+      selectedCategory: _displayCategory,
+      onCategory: _changeCategory,
+      subCategories: levels.level2,
+      // 筛选行与原路径同口径：只在单站源、非下钻时显示目录自带的筛选组。
+      filterGroups: !_allSources && _drillStack.isEmpty
+          ? _catalogFilters
+          : const <CatalogFilterGroup>[],
+      selectedFilters: _selectedFilters,
+      onFilter: _changeFilter,
+      stackItems: stackItems,
+      repository: widget.repository,
+      onOpen: _openDrama,
+      breadcrumb: _drillStack.isNotEmpty ? _breadcrumbBar() : null,
+      catalogTags: _catalogTags,
+      onOpenTag: _openTag,
+      level2Tags: _level2Tags,
+      selectedTagLevel2: _tagLevel2,
+      onSelectTagLevel2: _selectTagLevel2,
+      level3Tags: _level3Tags,
+      selectedTagLevel3: _tagLevel3,
+      onSelectTagLevel3: _selectTagLevel3,
+      body: _leftCatalogBody(items),
+    );
+  }
+
+  /// 左侧分类主题的内容区：加载/失败/空态与现有目录同一文案，网格
+  /// 复用现有 dramaGridDelegate 与 _catalogTile（DramaTile），不含
+  /// 首页轮播（卡堆已在布局中部）与横滑切分类（横滑只翻卡堆）。
+  Widget _leftCatalogBody(List<Drama> items) {
+    final Widget state;
+    if (_loading && _items.isEmpty) {
+      state = const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator.adaptive(),
+            SizedBox(height: 18),
+            Text('正在加载剧集'),
+          ],
+        ),
+      );
+    } else if (_items.isEmpty && _error != null) {
+      state = StatusPanel(
+        title: '暂时无法加载',
+        message: _error!,
+        onRetry: () => _load(force: true),
+        secondaryAction: widget.repository.supportsSourceManagement
+            ? TextButton(
+                onPressed: _manageSources,
+                child: const Text('站源诊断'),
+              )
+            : null,
+        icon: Icons.wifi_off_rounded,
+      );
+    } else if (items.isEmpty) {
+      state = StatusPanel(
+        title: '没有找到匹配的短剧',
+        message: _hideVip
+            ? '可以换个搜索词，或显示 VIP 内容。'
+            : widget.store.visibleSources.length > 1
+            ? '可以换个搜索词或切换站源。'
+            : '可以换个搜索词，或刷新后重试。',
+        onRetry:
+            _hasMore &&
+                !_loadingMore &&
+                (!_onlineSearch ||
+                    _search.text.isEmpty ||
+                    _group.sources.any((source) => source.pagedSearch))
+            ? () => _load(more: true)
+            : null,
+        action: '加载更多',
+        secondaryAction: widget.repository.supportsSourceManagement
+            ? TextButton(
+                onPressed: _manageSources,
+                child: const Text('站源诊断'),
+              )
+            : null,
+      );
+    } else {
+      state = LayoutBuilder(
+        builder: (context, constraints) {
+          final padding = constraints.maxWidth < 600 ? 16.0 : 24.0;
+          return RefreshIndicator.adaptive(
+            onRefresh: _refreshCatalog,
+            child: CustomScrollView(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(padding, 0, padding, 16),
+                  sliver: SliverGrid(
+                    gridDelegate: dramaGridDelegate(
+                      context,
+                      constraints.maxWidth - 2 * padding,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (_, index) => _catalogTile(items[index]),
+                      childCount: items.length,
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      bottom: 24 + MediaQuery.paddingOf(context).bottom,
+                    ),
+                    child: Center(
+                      child: _loadingMore
+                          ? const CircularProgressIndicator.adaptive()
+                          : _hasMore
+                          ? OutlinedButton.icon(
+                              onPressed: () => _load(more: true),
+                              icon: const Icon(Icons.expand_more_rounded),
+                              label: const Text('加载更多'),
+                            )
+                          : Text(
+                              '已经看到这里的全部剧集',
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+    return Column(
+      children: [
+        if (_loading && _items.isNotEmpty)
+          const LinearProgressIndicator(minHeight: 2),
+        Expanded(child: state),
       ],
     );
   }

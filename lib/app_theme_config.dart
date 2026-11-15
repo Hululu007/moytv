@@ -7,7 +7,9 @@ import 'package:path_provider/path_provider.dart';
 
 import 'liquid_glass.dart';
 
-/// 全局主题：8 套固定主题（用户 2026-11-13 发来的代码定版）。
+/// 全局主题：12 套固定主题（用户 2026-11-13 发来的代码定版 8 套，
+/// 2026-11-14 新增第 9 套“左侧分类”，同日新增霓虹三套；名与配色
+/// 均为暂定、用户可改；紫蓝霓虹配色取用户发的霓虹定义精确值）。
 ///
 /// 配色与名字与用户文件逐字一致；每套主题绑定一种分类侧边栏样式。
 /// 亮暗由各主题自身底色决定，不再跟随系统、不再套旧的 light/dark 两套。
@@ -19,7 +21,11 @@ enum AppThemeMode {
   kidFamily,
   minimalCard,
   retroFilm,
-  tvBigScreen;
+  tvBigScreen,
+  leftCategories,
+  cyanCyberNeon,
+  redBlackNeon,
+  pinkPurpleNeon;
 
   String get storageValue => name;
 
@@ -72,10 +78,14 @@ enum ContentTier {
       );
 }
 
-/// 主题绑定的显示方案：导航样式 + 内容档。切主题时两件一起变。
+/// 主题绑定的显示方案：导航样式 + 内容档。切主题时四件一起变
+/// （导航、分类、内容、列表样式），其中导航样式与列表样式是固定映射
+/// （见 [navStyleForTheme] 与 [siteListStyleForTheme]），不存偏好、
+/// 不设开关；只有内容档由用户在主题卡片上改、按主题存取。
 ///
-/// 存储值格式为 `导航样式:内容档`（如 `bottomTabs:manhua`）；只写导航
-/// 样式的旧值（如 `drawer`）解析时内容档回落全部内容；非法值整体回默认。
+/// 存储值格式为 `导航样式:内容档`（如 `bottomTabs:manhua`）；导航段是
+/// 历史遗留，解析时忽略、只取内容档（导航样式只取主题固定值），只写
+/// 导航样式的旧值（如 `drawer`）内容档回落全部内容；非法值整体回默认。
 class ThemeDisplayScheme {
   const ThemeDisplayScheme({
     this.navStyle = NavStyle.drawer,
@@ -94,8 +104,11 @@ class ThemeDisplayScheme {
       return const ThemeDisplayScheme.defaults();
     }
     final parts = value.split(':');
+    // 导航段是历史遗留：导航样式自 2026-11-14 起只取主题固定值，
+    // 这里忽略存值里的导航段、只取内容档，旧值绝不崩。生效的导航
+    // 样式以 LocalStore.displayScheme 叠加 navStyleForTheme 为准。
     return ThemeDisplayScheme(
-      navStyle: NavStyle.fromStorageValue(parts.first),
+      navStyle: NavStyle.drawer,
       contentTier: parts.length > 1
           ? ContentTier.fromStorageValue(parts[1])
           : ContentTier.all,
@@ -118,6 +131,50 @@ class ThemeDisplayScheme {
   int get hashCode => Object.hash(navStyle, contentTier);
 }
 
+/// 站点列表样式：普通列表，或 3D 方块列（一个站点一个可拖动旋转的方块）。
+enum SiteListStyle {
+  normal,
+  cube,
+}
+
+/// 列表样式固定映射：紫蓝霓虹主题（默认主题）= 3D 方块，其余主题 = 普通。
+/// 固定值只随主题切换一起变，不存偏好、不在主题设置里单设此项。
+SiteListStyle siteListStyleForTheme(AppThemeMode mode) => switch (mode) {
+  AppThemeMode.purpleNeon => SiteListStyle.cube,
+  AppThemeMode.lightClean => SiteListStyle.normal,
+  AppThemeMode.goldVip => SiteListStyle.normal,
+  AppThemeMode.cyberBlue => SiteListStyle.normal,
+  AppThemeMode.kidFamily => SiteListStyle.normal,
+  AppThemeMode.minimalCard => SiteListStyle.normal,
+  AppThemeMode.retroFilm => SiteListStyle.normal,
+  AppThemeMode.tvBigScreen => SiteListStyle.normal,
+  AppThemeMode.leftCategories => SiteListStyle.normal,
+  AppThemeMode.cyanCyberNeon => SiteListStyle.normal,
+  AppThemeMode.redBlackNeon => SiteListStyle.normal,
+  AppThemeMode.pinkPurpleNeon => SiteListStyle.normal,
+};
+
+/// 导航样式固定映射：紫蓝霓虹 = 底部标签，其余 11 套 = 抽屉。
+///
+/// 用户 2026-11-14 23:59 定：底部标签要，绑在紫蓝霓虹（当前默认主题）
+/// 上；要换绑哪套用户再说。导航只随主题变、不另设开关。用户已存的
+/// 各主题导航偏好（存值里的导航段）自此被固定值覆盖，只剩内容档
+/// 继续按存值走。
+NavStyle navStyleForTheme(AppThemeMode mode) => switch (mode) {
+  AppThemeMode.purpleNeon => NavStyle.bottomTabs,
+  AppThemeMode.lightClean => NavStyle.drawer,
+  AppThemeMode.goldVip => NavStyle.drawer,
+  AppThemeMode.cyberBlue => NavStyle.drawer,
+  AppThemeMode.kidFamily => NavStyle.drawer,
+  AppThemeMode.minimalCard => NavStyle.drawer,
+  AppThemeMode.retroFilm => NavStyle.drawer,
+  AppThemeMode.tvBigScreen => NavStyle.drawer,
+  AppThemeMode.leftCategories => NavStyle.drawer,
+  AppThemeMode.cyanCyberNeon => NavStyle.drawer,
+  AppThemeMode.redBlackNeon => NavStyle.drawer,
+  AppThemeMode.pinkPurpleNeon => NavStyle.drawer,
+};
+
 enum CategoryNavStyle {
   darkSidebar,
   colorBlockSidebar,
@@ -127,6 +184,7 @@ enum CategoryNavStyle {
   goldSidebar,
   cyberSidebar,
   tvWideSidebar,
+  leftCategorySidebar,
 }
 
 class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
@@ -147,6 +205,15 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
     this.backgroundGradient,
     this.selectedGradient,
     required this.navStyle,
+    // 霓虹字段（用户 2026-11-14 发来的 NeonTheme 定义所有，见字段映射）：
+    // 非霓虹主题取中性默认值（点缀/发光取主色、边框取分隔色、
+    // 发光半径 0、无标题阴影），霓虹四套取原文精确值。
+    required this.accentColor,
+    required this.cardBorderColor,
+    required this.glowColor,
+    required this.glowBlur,
+    required this.titleShadows,
+    required this.subtitleShadows,
   });
 
   final AppThemeMode mode;
@@ -169,6 +236,22 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
 
   final CategoryNavStyle navStyle;
 
+  /// 点缀色（NeonTheme.accent）：霓虹高亮点缀。
+  final Color accentColor;
+
+  /// 卡片边框色（NeonTheme.cardBorder）：霓虹卡片发光边框。
+  final Color cardBorderColor;
+
+  /// 发光色（NeonTheme.glowColor）与发光半径（NeonTheme.glowBlur）。
+  final Color glowColor;
+  final double glowBlur;
+
+  /// 标题/副标题发光阴影（NeonTheme.titleStyle/subStyle 的 shadows；
+  /// 字号字重不进配置，沿用 App 全局 12px 字约定，颜色进
+  /// textPrimary/textSecondary）。
+  final List<Shadow> titleShadows;
+  final List<Shadow> subtitleShadows;
+
   /// 亮暗由底色定：浅色清爽 / 亲子儿童 / 极简卡片是浅底，其余是深底。
   Brightness get brightness => switch (mode) {
     AppThemeMode.lightClean ||
@@ -186,29 +269,46 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
   factory AppThemeConfig.forTheme(AppThemeMode mode) {
     switch (mode) {
       case AppThemeMode.purpleNeon:
+        // 配色取用户发的 purpleBlueNeon 定义精确值（原文 5–34 行）；
+        // NeonTheme 没有的纯色底/面色/选中色沿用旧值，选中色跟新主色。
         return AppThemeConfig(
           mode: mode,
           themeName: '紫蓝霓虹',
-          primaryColor: Color(0xFFE847A2),
-          secondaryColor: Color(0xFF7B42E0),
+          primaryColor: Color(0xFFE040FB),
+          secondaryColor: Color(0xFF00BCD4),
           backgroundColor: Color(0xFF14102A),
           surfaceColor: Color(0xFF1F1A3C),
           textPrimary: Colors.white,
-          textSecondary: Colors.white70,
+          textSecondary: Color(0xFFB3E5FC),
           dividerColor: Colors.white12,
-          selectedBg: Color(0xFFE847A2),
+          selectedBg: Color(0xFFE040FB),
           selectedText: Colors.white,
           unselectedBg: Colors.white12,
           unselectedText: Colors.white70,
           backgroundGradient: LinearGradient(
-            colors: [Color(0xFF5B2C99), Color(0xFF2478C2)],
+            colors: [
+              Color(0xFF6A0572),
+              Color(0xFF1A2980),
+              Color(0xFF000000),
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           selectedGradient: LinearGradient(
-            colors: [Color(0xFFE847A2), Color(0xFF7B42E0)],
+            colors: [Color(0xFFE040FB), Color(0xFF00BCD4)],
           ),
           navStyle: CategoryNavStyle.darkSidebar,
+          accentColor: Color(0xFFFF2EC6),
+          cardBorderColor: Color(0xFF00E5FF),
+          glowColor: Color(0xFF00BCD4),
+          glowBlur: 18,
+          titleShadows: const [
+            Shadow(color: Color(0xFFE040FB), blurRadius: 12),
+            Shadow(color: Color(0xFF00BCD4), blurRadius: 12),
+          ],
+          subtitleShadows: const [
+            Shadow(color: Color(0xFF00BCD4), blurRadius: 8),
+          ],
         );
 
       case AppThemeMode.lightClean:
@@ -227,6 +327,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Color(0xFFF1F5F9),
           unselectedText: Color(0xFF616161),
           navStyle: CategoryNavStyle.lightSidebar,
+          accentColor: Color(0xFF2196F3),
+          cardBorderColor: Color(0xFFEEEEEE),
+          glowColor: Color(0xFF2196F3),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.goldVip:
@@ -251,6 +357,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
             colors: [Color(0xFFFFC107), Color(0xFF8D6E00)],
           ),
           navStyle: CategoryNavStyle.goldSidebar,
+          accentColor: Color(0xFFFFC107),
+          cardBorderColor: Colors.white12,
+          glowColor: Color(0xFFFFC107),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.cyberBlue:
@@ -276,6 +388,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
             colors: [Color(0xFF00FFD5), Color(0xFF00B4D8)],
           ),
           navStyle: CategoryNavStyle.cyberSidebar,
+          accentColor: Color(0xFF00FFD5),
+          cardBorderColor: Color(0x3300FFD5),
+          glowColor: Color(0xFF00FFD5),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.kidFamily:
@@ -300,6 +418,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
             colors: [Color(0xFFFF7096), Color(0xFFFFD166)],
           ),
           navStyle: CategoryNavStyle.colorBlockSidebar,
+          accentColor: Color(0xFFFF7096),
+          cardBorderColor: Color(0xFFFFE4F0),
+          glowColor: Color(0xFFFF7096),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.minimalCard:
@@ -318,6 +442,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Color(0xFFFAFAFA),
           unselectedText: Colors.black54,
           navStyle: CategoryNavStyle.miniIconSidebar,
+          accentColor: Colors.black,
+          cardBorderColor: Color(0xFFEEEEEE),
+          glowColor: Colors.black,
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.retroFilm:
@@ -342,6 +472,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
             colors: [Color(0xFFC8894B), Color(0xFF6F4E37)],
           ),
           navStyle: CategoryNavStyle.foldFilterSidebar,
+          accentColor: Color(0xFFC8894B),
+          cardBorderColor: Color(0xFF6F4E37),
+          glowColor: Color(0xFFC8894B),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
 
       case AppThemeMode.tvBigScreen:
@@ -366,6 +502,174 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
             colors: [Color(0xFF40C9FF), Color(0xFF7B66FF)],
           ),
           navStyle: CategoryNavStyle.tvWideSidebar,
+          accentColor: Color(0xFF40C9FF),
+          cardBorderColor: Colors.white12,
+          glowColor: Color(0xFF40C9FF),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
+        );
+
+      // 第 9 套“左侧分类”：暂定配色、用户可改。骨架取紫蓝霓虹的深色
+      // 底（深紫底 + 白字），主色改青蓝、辅色留霓虹粉，与效果图的
+      // 紫蓝底 + 青粉霓虹光一致；亮暗走通配分支（深色）。
+      case AppThemeMode.leftCategories:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: '左侧分类',
+          primaryColor: Color(0xFF22D3EE),
+          secondaryColor: Color(0xFFE847A2),
+          backgroundColor: Color(0xFF120E2B),
+          surfaceColor: Color(0xFF1E1838),
+          textPrimary: Colors.white,
+          textSecondary: Colors.white70,
+          dividerColor: Colors.white12,
+          selectedBg: Color(0xFF22D3EE),
+          selectedText: Colors.black,
+          unselectedBg: Colors.white12,
+          unselectedText: Colors.white70,
+          backgroundGradient: LinearGradient(
+            colors: [Color(0xFF2A1B5E), Color(0xFF0E3A5C)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFF22D3EE), Color(0xFFE847A2)],
+          ),
+          navStyle: CategoryNavStyle.leftCategorySidebar,
+          accentColor: Color(0xFF22D3EE),
+          cardBorderColor: Colors.white12,
+          glowColor: Color(0xFF22D3EE),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
+        );
+
+      // 青绿赛博：颜色取用户发的 cyanCyberNeon 定义精确值（原文 36–65 行）。
+      // 纯色底/面色/选中色原文没有，按渐变中间色派生（已注明），选中色跟主色。
+      case AppThemeMode.cyanCyberNeon:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: '青绿赛博',
+          primaryColor: Color(0xFF1DE9B6),
+          secondaryColor: Color(0xFF00E676),
+          backgroundColor: Color(0xFF001A1A),
+          surfaceColor: Color(0xFF0B2B25),
+          textPrimary: Colors.white,
+          textSecondary: Color(0xFFB9F6CA),
+          dividerColor: Colors.white12,
+          selectedBg: Color(0xFF1DE9B6),
+          selectedText: Colors.black,
+          unselectedBg: Colors.white12,
+          unselectedText: Color(0xFFB9F6CA),
+          backgroundGradient: LinearGradient(
+            colors: [
+              Color(0xFF004D40),
+              Color(0xFF001A1A),
+              Color(0xFF000000),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFF1DE9B6), Color(0xFF00E676)],
+          ),
+          navStyle: CategoryNavStyle.cyberSidebar,
+          accentColor: Color(0xFF76FF03),
+          cardBorderColor: Color(0xFF1DE9B6),
+          glowColor: Color(0xFF1DE9B6),
+          glowBlur: 22,
+          titleShadows: const [
+            Shadow(color: Color(0xFF1DE9B6), blurRadius: 14),
+            Shadow(color: Color(0xFF00E676), blurRadius: 10),
+          ],
+          subtitleShadows: const [
+            Shadow(color: Color(0xFF1DE9B6), blurRadius: 8),
+          ],
+        );
+
+      // 红黑霓虹：颜色取用户发的 redBlackNeon 定义精确值（原文 67–96 行）。
+      case AppThemeMode.redBlackNeon:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: '红黑霓虹',
+          primaryColor: Color(0xFFFF1744),
+          secondaryColor: Color(0xFFFF5252),
+          backgroundColor: Color(0xFF1A0000),
+          surfaceColor: Color(0xFF2B0B0B),
+          textPrimary: Colors.white,
+          textSecondary: Color(0xFFFFCDD2),
+          dividerColor: Colors.white12,
+          selectedBg: Color(0xFFFF1744),
+          selectedText: Colors.white,
+          unselectedBg: Colors.white12,
+          unselectedText: Color(0xFFFFCDD2),
+          backgroundGradient: LinearGradient(
+            colors: [
+              Color(0xFF4A0000),
+              Color(0xFF1A0000),
+              Color(0xFF000000),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFFFF1744), Color(0xFFFF5252)],
+          ),
+          navStyle: CategoryNavStyle.darkSidebar,
+          accentColor: Color(0xFFFF8A80),
+          cardBorderColor: Color(0xFFFF1744),
+          glowColor: Color(0xFFFF1744),
+          glowBlur: 20,
+          titleShadows: const [
+            Shadow(color: Color(0xFFFF1744), blurRadius: 14),
+            Shadow(color: Color(0xFFFF5252), blurRadius: 10),
+          ],
+          subtitleShadows: const [
+            Shadow(color: Color(0xFFFF1744), blurRadius: 8),
+          ],
+        );
+
+      // 粉紫霓虹：颜色取用户发的 pinkPurpleNeon 定义精确值（原文 98–127 行）。
+      case AppThemeMode.pinkPurpleNeon:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: '粉紫霓虹',
+          primaryColor: Color(0xFFFF4081),
+          secondaryColor: Color(0xFFE040FB),
+          backgroundColor: Color(0xFF1A0033),
+          surfaceColor: Color(0xFF2A0A4A),
+          textPrimary: Colors.white,
+          textSecondary: Color(0xFFF8BBD0),
+          dividerColor: Colors.white12,
+          selectedBg: Color(0xFFFF4081),
+          selectedText: Colors.white,
+          unselectedBg: Colors.white12,
+          unselectedText: Color(0xFFF8BBD0),
+          backgroundGradient: LinearGradient(
+            colors: [
+              Color(0xFFF06292),
+              Color(0xFF4A148C),
+              Color(0xFF1A0033),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFFFF4081), Color(0xFFE040FB)],
+          ),
+          navStyle: CategoryNavStyle.colorBlockSidebar,
+          accentColor: Color(0xFFD500F9),
+          cardBorderColor: Color(0xFFFF4081),
+          glowColor: Color(0xFFE040FB),
+          glowBlur: 16,
+          titleShadows: const [
+            Shadow(color: Color(0xFFFF4081), blurRadius: 12),
+            Shadow(color: Color(0xFFE040FB), blurRadius: 12),
+          ],
+          subtitleShadows: const [
+            Shadow(color: Color(0xFFFF4081), blurRadius: 8),
+          ],
         );
     }
   }
@@ -648,6 +952,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
     Gradient? backgroundGradient,
     Gradient? selectedGradient,
     CategoryNavStyle? navStyle,
+    Color? accentColor,
+    Color? cardBorderColor,
+    Color? glowColor,
+    double? glowBlur,
+    List<Shadow>? titleShadows,
+    List<Shadow>? subtitleShadows,
   }) {
     return AppThemeConfig(
       mode: mode ?? this.mode,
@@ -666,6 +976,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
       backgroundGradient: backgroundGradient ?? this.backgroundGradient,
       selectedGradient: selectedGradient ?? this.selectedGradient,
       navStyle: navStyle ?? this.navStyle,
+      accentColor: accentColor ?? this.accentColor,
+      cardBorderColor: cardBorderColor ?? this.cardBorderColor,
+      glowColor: glowColor ?? this.glowColor,
+      glowBlur: glowBlur ?? this.glowBlur,
+      titleShadows: titleShadows ?? this.titleShadows,
+      subtitleShadows: subtitleShadows ?? this.subtitleShadows,
     );
   }
 
@@ -697,6 +1013,13 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
         t,
       ),
       navStyle: t < 0.5 ? navStyle : other.navStyle,
+      accentColor: Color.lerp(accentColor, other.accentColor, t)!,
+      cardBorderColor: Color.lerp(cardBorderColor, other.cardBorderColor, t)!,
+      glowColor: Color.lerp(glowColor, other.glowColor, t)!,
+      glowBlur: glowBlur + (other.glowBlur - glowBlur) * t,
+      // 阴影列表与 mode/themeName 同口径：中点切换，不逐项插值。
+      titleShadows: t < 0.5 ? titleShadows : other.titleShadows,
+      subtitleShadows: t < 0.5 ? subtitleShadows : other.subtitleShadows,
     );
   }
 }

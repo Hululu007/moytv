@@ -1,8 +1,10 @@
-/// 网盘登录中心（设置内入口）：四家网盘扫码登录 + 凭证管理。
+/// 网盘登录中心（设置内入口）：五家网盘登录 + 凭证管理。
 ///
 /// 对标 TVBox_Web website.html 的配置中心，界面与文案全是魔蚁自己的。
-/// 凭证只存本机（混淆存储，见 CloudCredentialStore 文件头说明），
-/// 可逐家清除；登录后网盘作为站源进站点列表，全局通用。
+/// 115/夸克/阿里/百度走扫码登录，移动云盘走手机号 + 短信验证码登录
+/// （触发风控时在内嵌页里完成滑块验证）。凭证只存本机（混淆存储，
+/// 见 CloudCredentialStore 文件头说明），可逐家清除；登录后网盘作为
+/// 站源进站点列表，全局通用。
 library;
 
 import 'dart:async';
@@ -11,10 +13,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import '../local_store.dart';
 import 'cloud_credential_store.dart';
 import 'cloud_drive_stations.dart';
+import 'cloud_provider_139.dart';
 import 'cloud_providers.dart';
 import 'qr_code_widget.dart';
 
@@ -24,6 +28,7 @@ const _verifyNotes = <String, String>{
   'quark': '扫码接口已实测；文件浏览与播放需真账号验证',
   'aliyun': '扫码接口已实测；文件浏览与播放需真账号验证',
   'baidu': '扫码接口已实测；文件浏览与播放需真账号验证',
+  'yun139': '短信登录；文件浏览与播放需真账号验证',
 };
 
 class CloudDriveScreen extends StatefulWidget {
@@ -133,6 +138,47 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${provider.displayName}登录成功，已加入站源列表')),
+      );
+    }
+  }
+
+  Future<void> _startSmsLogin(Yun139Provider provider) async {
+    final store = _credentialStore;
+    if (store == null) return;
+    final credentials = await showDialog<CloudCredentials>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _SmsLoginDialog(
+        provider: provider,
+        client: _client,
+      ),
+    );
+    if (credentials == null || !mounted) return;
+    await store.save(provider.id, credentials);
+    _refreshStations();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${provider.displayName}登录成功，已加入站源列表')),
+      );
+    }
+  }
+
+  Future<void> _refreshYun139(Yun139Provider provider) async {
+    final store = _credentialStore;
+    if (store == null) return;
+    final current = store.load(provider.id);
+    if (current == null) return;
+    try {
+      final refreshed = await provider.refreshCredentials(_client, current);
+      await store.save(provider.id, refreshed);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('移动云盘登录已刷新')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('刷新失败：$e，请清除后重新登录')),
       );
     }
   }
@@ -252,6 +298,7 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
 
   Widget _providerCard(CloudDriveProvider provider) {
     final loggedIn = _loggedIn.contains(provider.id);
+    final yun139 = provider is Yun139Provider;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -281,15 +328,25 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
             Wrap(
               spacing: 8,
               children: [
-                if (!loggedIn)
+                if (!loggedIn && yun139)
+                  FilledButton(
+                    onPressed: () => _startSmsLogin(provider),
+                    child: const Text('短信登录'),
+                  ),
+                if (!loggedIn && !yun139)
                   FilledButton(
                     onPressed: () => _startQrLogin(provider),
                     child: const Text('扫码登录'),
                   ),
-                if (!loggedIn)
+                if (!loggedIn && !yun139)
                   OutlinedButton(
                     onPressed: () => _manualLogin(provider),
                     child: const Text('手动粘贴凭证'),
+                  ),
+                if (loggedIn && yun139)
+                  OutlinedButton(
+                    onPressed: () => _refreshYun139(provider),
+                    child: const Text('刷新登录'),
                   ),
                 if (loggedIn)
                   OutlinedButton(
@@ -480,6 +537,261 @@ class _QrLoginDialogState extends State<_QrLoginDialog> {
           child: const Text('取消'),
         ),
       ],
+    );
+  }
+}
+
+/// 移动云盘短信登录弹窗：手机号 + 获取验证码 + 验证码 + 登录。
+///
+/// 触发风控时打开内嵌滑块页（[_CaptchaWebViewPage]），用户在页内完成
+/// 滑块后返回本弹窗等短信、输验证码登录；登录时带上发短信时返回的
+/// 滑块头。发短信后 60 秒内不重复发送，避免连点刷接口。
+class _SmsLoginDialog extends StatefulWidget {
+  const _SmsLoginDialog({required this.provider, required this.client});
+
+  final Yun139Provider provider;
+  final http.Client client;
+
+  @override
+  State<_SmsLoginDialog> createState() => _SmsLoginDialogState();
+}
+
+class _SmsLoginDialogState extends State<_SmsLoginDialog> {
+  final _phoneController = TextEditingController();
+  final _codeController = TextEditingController();
+  Timer? _cooldownTimer;
+  int _cooldownSeconds = 0;
+  bool _busy = false;
+  bool _smsSent = false;
+  String _status = '输入手机号获取验证码，触发验证时会打开滑块页。';
+  Map<String, String> _sliderHeaders = const {};
+
+  @override
+  void dispose() {
+    _cooldownTimer?.cancel();
+    _phoneController.dispose();
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  void _startCooldown() {
+    _cooldownTimer?.cancel();
+    setState(() => _cooldownSeconds = 60);
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_cooldownSeconds <= 1) {
+        timer.cancel();
+        setState(() => _cooldownSeconds = 0);
+      } else {
+        setState(() => _cooldownSeconds--);
+      }
+    });
+  }
+
+  Future<void> _sendSms() async {
+    final phone = _phoneController.text.trim();
+    if (phone.isEmpty) {
+      setState(() => _status = '请先输入手机号');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = '正在发送验证码…';
+    });
+    Yun139SmsResult result;
+    try {
+      result = await widget.provider.sendSms(widget.client, phone);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = '发送失败：$e';
+      });
+      return;
+    }
+    if (!mounted) return;
+    if (result.requiresCaptcha) {
+      setState(() {
+        _busy = false;
+        _status = '需要完成滑块验证，正在打开验证页…';
+      });
+      final completed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => _CaptchaWebViewPage(url: result.captchaUrl),
+        ),
+      );
+      if (!mounted) return;
+      if (completed == true) {
+        setState(() {
+          _sliderHeaders = result.sliderHeaders;
+          _smsSent = true;
+          _status = '滑块已完成，请查收短信验证码并输入，60 秒后可重发。';
+        });
+        _startCooldown();
+      } else {
+        setState(() => _status = '滑块验证未完成，请重新获取验证码。');
+      }
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _smsSent = true;
+      _status = result.message;
+    });
+    _startCooldown();
+  }
+
+  Future<void> _login() async {
+    setState(() {
+      _busy = true;
+      _status = '正在登录…';
+    });
+    try {
+      final credentials = await widget.provider.loginWithSms(
+        widget.client,
+        _phoneController.text,
+        _codeController.text,
+        sliderHeaders: _sliderHeaders,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(credentials);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = '登录失败：$e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('移动云盘短信登录'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: '手机号',
+                hintText: '11 位移动手机号',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _codeController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '短信验证码',
+                      hintText: '6 位数字',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: (_busy || _cooldownSeconds > 0) ? null : _sendSms,
+                  child: Text(
+                    _cooldownSeconds > 0 ? '$_cooldownSeconds 秒后重发' : '获取验证码',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(_status),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: (_busy || !_smsSent) ? null : _login,
+          child: const Text('登录'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 滑块验证内嵌页：最小 WebView（与清关桥同款 WebViewController 用法，
+/// 不复用清关页——那页绑的是 cf_clearance 回填逻辑，与滑块无关）。
+///
+/// 滑块完成没有可监听的可靠信号（源头前端也是 iframe + 用户自行返回
+/// 等短信），所以这里不猜“完成了”：用户在页内完成滑块后自己点
+/// “我已完成验证”返回；点返回不代表服务端已通过，短信没来就重发。
+class _CaptchaWebViewPage extends StatefulWidget {
+  const _CaptchaWebViewPage({required this.url});
+
+  final String url;
+
+  @override
+  State<_CaptchaWebViewPage> createState() => _CaptchaWebViewPageState();
+}
+
+class _CaptchaWebViewPageState extends State<_CaptchaWebViewPage> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted);
+    unawaited(_controller.loadRequest(Uri.parse(widget.url)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('滑块验证')),
+      body: Column(
+        children: [
+          Expanded(child: WebViewWidget(controller: _controller)),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('请在上方页面内完成滑块验证，完成后点下面按钮返回，等待短信验证码。'),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: const Text('我已完成验证'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'app_theme_config.dart';
+import 'core_bridge.dart';
 import 'neon_glass_kit.dart';
+import 'site_cube.dart';
 
 class SourcePickerEntry {
   const SourcePickerEntry({
@@ -36,6 +38,11 @@ Future<String?> showSitePickerDialog(
   required List<SourcePickerGroup> groups,
   bool initialEditMode = false,
   Future<bool> Function(SourcePickerEntry entry)? onDeleteSite,
+
+  /// 取各站首页海报用的仓库：非空且当前主题列表样式为方块时，
+  /// 弹窗改渲染 3D 方块列；为空时永远是普通列表（直播/阅读区
+  /// 不传，方块只在片库区出现）。
+  AppRepository? repository,
 }) => showDialog<String>(
   context: context,
   builder: (context) => SitePickerDialog(
@@ -44,6 +51,7 @@ Future<String?> showSitePickerDialog(
     groups: groups,
     initialEditMode: initialEditMode,
     onDeleteSite: onDeleteSite,
+    repository: repository,
   ),
 );
 
@@ -55,6 +63,7 @@ class SitePickerDialog extends StatefulWidget {
     required this.groups,
     this.initialEditMode = false,
     this.onDeleteSite,
+    this.repository,
   });
 
   final String sectionName;
@@ -62,6 +71,7 @@ class SitePickerDialog extends StatefulWidget {
   final List<SourcePickerGroup> groups;
   final bool initialEditMode;
   final Future<bool> Function(SourcePickerEntry entry)? onDeleteSite;
+  final AppRepository? repository;
 
   @override
   State<SitePickerDialog> createState() => _SitePickerDialogState();
@@ -132,6 +142,14 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       if (entries.isEmpty) continue;
       visible.add((title: group.title, entries: entries));
     }
+    // 方块列只在三个条件同时满足时出现：调用方传了仓库（片库区）、
+    // 当前主题列表样式为方块、且不在编辑模式（编辑模式要留删除按钮，
+    // 仍用普通列表）。其它情况一律走原有普通列表，一字不动。
+    final cubeMode =
+        widget.repository != null &&
+        !_editMode &&
+        siteListStyleForTheme(AppThemeConfig.of(context).mode) ==
+            SiteListStyle.cube;
     return Dialog(
       key: const ValueKey('site-picker-dialog'),
       backgroundColor: colors.surface,
@@ -198,6 +216,8 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                           ),
                         ),
                       )
+                    : cubeMode
+                    ? _cubeList(visible, searching)
                     : ListView(
                         children: [
                           for (final group in visible) ...[
@@ -327,6 +347,166 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 方块列：每站一行（方块 + 站名），点方块与普通列表点行完全一致
+  /// （pop 回站 id，调用方切站进频道）。惰性 ListView：只有滚到眼前
+  /// 的行才取首页海报，避免开弹窗就并发打全部站。
+  Widget _cubeList(
+    List<({String title, List<SourcePickerEntry> entries})> visible,
+    bool searching,
+  ) {
+    final rows = <_CubeRow>[];
+    for (final group in visible) {
+      if (!searching && group.title.isNotEmpty) {
+        rows.add(
+          _CubeRow.header('${group.title}（${group.entries.length}）'),
+        );
+      }
+      for (final entry in group.entries) {
+        rows.add(_CubeRow.entry(entry));
+      }
+    }
+    return ListView.builder(
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        final header = row.header;
+        if (header != null) {
+          return NeonSectionTitle(
+            header,
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+          );
+        }
+        final entry = row.entry!;
+        final selected = entry.id == widget.currentId;
+        return _SiteCubeRow(
+          key: ValueKey('site-picker-row-${entry.id}'),
+          entry: entry,
+          selected: selected,
+          currentKey: selected ? _currentKey : null,
+          repository: widget.repository!,
+          onTap: () => Navigator.pop(context, entry.id),
+        );
+      },
+    );
+  }
+}
+
+/// 方块列里的一行：组标题，或一个站点。
+class _CubeRow {
+  const _CubeRow.header(this.header) : entry = null;
+
+  const _CubeRow.entry(this.entry) : header = null;
+
+  final String? header;
+  final SourcePickerEntry? entry;
+}
+
+/// 方块列里的一站：方块（六个面取该站首页前 6 张海报）+ 站名行。
+/// 海报用调用方已有的仓库取：catalog(siteId, page: 1) 取首页条目，
+/// 再逐条调 repository.cover 解析成本地封面文件；任一环节失败或
+/// 为空都显示占位面，不编假图、不另写裸请求。
+class _SiteCubeRow extends StatefulWidget {
+  const _SiteCubeRow({
+    super.key,
+    required this.entry,
+    required this.selected,
+    this.currentKey,
+    required this.repository,
+    required this.onTap,
+  });
+
+  final SourcePickerEntry entry;
+  final bool selected;
+
+  /// 当前站的定位 key（滚到当前站用），只在选中行上挂。
+  final Key? currentKey;
+  final AppRepository repository;
+  final VoidCallback onTap;
+
+  @override
+  State<_SiteCubeRow> createState() => _SiteCubeRowState();
+}
+
+class _SiteCubeRowState extends State<_SiteCubeRow> {
+  late final Future<List<String>> _covers;
+
+  @override
+  void initState() {
+    super.initState();
+    _covers = _loadCovers();
+  }
+
+  Future<List<String>> _loadCovers() async {
+    try {
+      final page = await widget.repository.catalog(
+        widget.entry.id,
+        page: 1,
+      );
+      final covers = <String>[];
+      for (final drama in page.items.take(6)) {
+        try {
+          final resolved = await widget.repository.cover(drama);
+          if (resolved.isNotEmpty) {
+            covers.add(resolved);
+            continue;
+          }
+        } catch (_) {
+          // 单张解析失败就回落到条目自带的封面地址，继续下一张。
+        }
+        if (drama.cover.isNotEmpty) covers.add(drama.cover);
+      }
+      return covers;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
+    final theme = Theme.of(context);
+    return Container(
+      key: widget.currentKey,
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Column(
+        children: [
+          FutureBuilder<List<String>>(
+            future: _covers,
+            builder: (context, snapshot) => SiteCube(
+              siteName: widget.entry.name,
+              covers: snapshot.data ?? const [],
+              size: 132,
+              onTap: widget.onTap,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  widget.entry.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: widget.selected
+                        ? config.primaryColor
+                        : config.unselectedText,
+                    fontWeight: widget.selected ? FontWeight.w600 : null,
+                  ),
+                ),
+              ),
+              if (widget.selected) ...[
+                const SizedBox(width: 6),
+                Icon(Icons.check, size: 18, color: config.primaryColor),
+              ],
+            ],
+          ),
+        ],
       ),
     );
   }

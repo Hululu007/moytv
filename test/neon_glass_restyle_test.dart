@@ -199,7 +199,7 @@ void main() {
   });
 
   group('分类侧栏全显', () {
-    testWidgets('8 套主题侧栏长分类名都不截断且可点', (tester) async {
+    testWidgets('12 套主题侧栏长分类名都不截断且可点', (tester) async {
       for (final mode in AppThemeMode.values) {
         String? selected;
         await _pumpThemed(
@@ -281,7 +281,7 @@ void main() {
     testWidgets('主题切换入口显示当前主题名，点按上报工具', (tester) async {
       final tools = await pumpDrawer(tester, appTheme: AppThemeMode.lightClean);
       expect(find.text('主题切换'), findsOneWidget);
-      expect(find.text('当前：浅色清爽 · 8 套主题'), findsOneWidget);
+      expect(find.text('当前：浅色清爽 · 12 套主题'), findsOneWidget);
       await tester.tap(find.text('主题切换'));
       expect(tools, [AppDrawerTool.themeSettings]);
     });
@@ -311,6 +311,8 @@ void main() {
         of: find.byKey(const ValueKey('drawer-shelf-tabs')),
         matching: find.byType(AnimatedContainer),
       );
+      // 架签 4 个：影视/阅读/小程序三枚分区胶囊 + 多媒体胶囊
+      // （音乐架已在反馈批中删除，多媒体 Tab 后加）。
       expect(containers, findsNWidgets(4));
       var gradientCount = 0;
       var glassCount = 0;
@@ -481,7 +483,7 @@ void main() {
         settle: false,
       );
       await _pumpCoverFrames(tester);
-      expect(find.text(data.items.first.title), findsNWidgets(8));
+      expect(find.text(data.items.first.title), findsNWidgets(12));
       expect(find.text(data.categories[1].name), findsWidgets);
       expect(find.text('内容未加载'), findsNothing);
       expect(find.text('紫蓝霓虹'), findsOneWidget);

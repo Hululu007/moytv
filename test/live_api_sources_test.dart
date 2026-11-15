@@ -243,6 +243,8 @@ class _FakeLiveHttp extends LiveHttp {
   Future<String> get(
     String url, {
     Map<String, String> headers = const {},
+    Duration? timeout,
+    String? proxyResourceKey,
   }) async {
     final text = _responses[url];
     if (text == null) throw StateError('unexpected url: $url');

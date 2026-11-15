@@ -6,7 +6,7 @@ import 'local_store.dart';
 import 'models.dart';
 import 'widgets.dart';
 
-/// 外观主题：8 套固定主题，点选即时生效（不重启）。
+/// 外观主题：12 套固定主题，点选即时生效（不重启）。
 ///
 /// 每张主题卡片带一块真实内容小预览：当前站源拉回的分类名与视频卡
 /// （标题 + 封面），用该主题自身的配色画。没有仓库或拉不到数据时只显示
@@ -90,7 +90,7 @@ class _ThemeSettingsScreenState extends State<ThemeSettingsScreen> {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           Text(
-            '8 套主题，点选即时生效；分类侧边栏样式随主题自动切换。',
+            '12 套主题，点选即时生效；分类侧边栏样式随主题自动切换。',
             style: TextStyle(color: colors.onSurfaceVariant, fontSize: 13),
           ),
           const SizedBox(height: 12),
@@ -461,5 +461,6 @@ class _ThemeSettingsScreenState extends State<ThemeSettingsScreen> {
     CategoryNavStyle.goldSidebar => '黑金侧边栏',
     CategoryNavStyle.cyberSidebar => '赛博侧边栏',
     CategoryNavStyle.tvWideSidebar => 'TV 宽侧边栏',
+    CategoryNavStyle.leftCategorySidebar => '左侧分类侧边栏',
   };
 }

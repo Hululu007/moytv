@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +13,15 @@ import 'py_spider_validator.dart';
 class PyLazyFetch {
   static const _prefsKey = 'py_lazy_files_v1';
 
+  /// py 蜘蛛文件上限：蜘蛛是源代码文本，8MB 已极宽裕；原先下载正文
+  /// 无上限、无总超时，慢速滴漏的响应会一直占着下载不放。
+  static const maxSpiderBytes = 8 << 20;
+
+  /// 下载总预算：建连与等响应头各有自己的超时，正文收集另受此限。
+  static const downloadTimeout = Duration(seconds: 60);
+
+  static final Map<String, Future<String>> _inflight = {};
+
   static Future<String?> savedFileName(String siteId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -23,12 +33,40 @@ class PyLazyFetch {
     return null;
   }
 
-  static Future<String> fetchAndSave(String siteId, String url) async {
+  static Future<String> fetchAndSave(
+    String siteId,
+    String url, {
+    Duration downloadTimeout = PyLazyFetch.downloadTimeout,
+  }) async {
+    // 同站去重：并发打开同站时只下载一次；原先每次调用都重新下载，
+    // 且两次保存与 prefs 读-改-写会互相覆盖。
+    final inflight = _inflight[siteId];
+    if (inflight != null) return inflight;
+    final future = _fetchAndSaveUncached(
+      siteId,
+      url,
+      downloadTimeout: downloadTimeout,
+    );
+    _inflight[siteId] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inflight[siteId], future)) _inflight.remove(siteId);
+    }
+  }
+
+  static Future<String> _fetchAndSaveUncached(
+    String siteId,
+    String url, {
+    required Duration downloadTimeout,
+  }) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 20);
     List<int> bytes;
     try {
-      final request = await client.getUrl(Uri.parse(url));
+      final request = await client
+          .getUrl(Uri.parse(url))
+          .timeout(downloadTimeout);
       request.headers.set(HttpHeaders.userAgentHeader, 'okhttp/4.12.0');
       final response = await request.close().timeout(
         const Duration(seconds: 30),
@@ -36,9 +74,13 @@ class PyLazyFetch {
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw FormatException('py 文件下载失败：HTTP ${response.statusCode}');
       }
-      bytes = <int>[];
-      await for (final chunk in response) {
-        bytes.addAll(chunk);
+      try {
+        bytes = await collectCappedBytes(
+          response,
+          maxSpiderBytes,
+        ).timeout(downloadTimeout);
+      } on TimeoutException {
+        throw const FormatException('py 文件下载超时');
       }
     } finally {
       client.close();
@@ -81,4 +123,19 @@ class PyLazyFetch {
     } catch (_) {}
     return fileName;
   }
+}
+
+/// 收字节流并验上限，超限抛 FormatException（顶层函数，供单测直接验）。
+Future<List<int>> collectCappedBytes(
+  Stream<List<int>> stream,
+  int maxBytes,
+) async {
+  final bytes = <int>[];
+  await for (final chunk in stream) {
+    bytes.addAll(chunk);
+    if (bytes.length > maxBytes) {
+      throw const FormatException('py 文件过大');
+    }
+  }
+  return bytes;
 }

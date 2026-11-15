@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'app_theme_config.dart';
+
 double compactChipHeight(BuildContext context) {
   return math.max(22, MediaQuery.textScalerOf(context).scale(10) + 12);
 }
@@ -23,6 +25,7 @@ class CompactFilterChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final config = AppThemeConfig.of(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -32,8 +35,9 @@ class CompactFilterChip extends StatelessWidget {
           height: compactChipHeight(context),
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
+            // 选中态跟当前主题选中色（原写死浅绿），未选中态跟主题容器色。
             color: selected
-                ? const Color(0xFFC8E6C9)
+                ? config.selectedBg
                 : scheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(10),
           ),
@@ -50,7 +54,7 @@ class CompactFilterChip extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 10,
                   height: 1.0,
-                  color: scheme.onSurface,
+                  color: selected ? config.selectedText : scheme.onSurface,
                 ),
               ),
             ],

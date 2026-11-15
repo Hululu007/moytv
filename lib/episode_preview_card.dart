@@ -8,11 +8,18 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'widgets.dart';
 
-/// 播放页横排选集里单张预览卡的固定宽度：104 逻辑像素，一屏
-/// 能完整看到 3 张（360 宽手机：3×104 + 2×8 间距 = 328，
-/// 小于 332 可用宽）。详情页网格卡按列宽自适应；滚回当前集
-/// 的估算步长也按它加间距算。
-const double episodePreviewCardWidth = 104;
+/// 播放页横排选集里单张预览卡的固定宽度：84 逻辑像素（2026-11-14
+/// 由 104 缩小一档，帧画面小一圈、仍能看清，空出的纵向空间留给
+/// 选集区下方的推荐视频区）。一屏能完整看到 3 张（360 宽手机：
+/// 3×84 + 2×8 间距 = 268，小于 332 可用宽，第 4 张露一半）。
+/// 详情页网格卡按列宽自适应；滚回当前集的估算步长也按它加间距算。
+const double episodePreviewCardWidth = 84;
+
+/// 详情页选集网格列数：单卡约 84 逻辑像素，360 宽手机 4 列、
+/// 窄屏最少 2 列、宽屏最多 5 列。与播放页横排共用同一档尺寸，
+/// 两边帧画面一致。
+int episodePreviewColumns(double width) =>
+    ((width - 40) / 80).floor().clamp(2, 5);
 
 /// 预览卡总高度 = 16:9 图高 + 56 文字区，字号缩放钳制在 1.0–1.4。
 /// 详情页网格与播放页横排共用同一公式。
@@ -185,7 +192,7 @@ class EpisodePreviewCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        episode.title,
+                        displayEpisodeTitle(episode.title, episode.number),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.bodyMedium?.copyWith(

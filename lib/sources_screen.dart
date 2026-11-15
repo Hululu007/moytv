@@ -10,8 +10,11 @@ import 'custom_sources_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'neon_glass_kit.dart';
+import 'plugin_manager.dart';
 import 'remote_widgets.dart';
 import 'source_status.dart';
+import 'subscription_entries.dart';
+import 'tvbox_config.dart';
 import 'widgets.dart';
 
 String sourceTimestamp(DateTime? value) {
@@ -414,10 +417,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                         ),
                         childrenPadding: const EdgeInsets.all(8),
                         children: _expandedGroups.contains(group.id)
-                            ? [
-                                for (final source in group.sources)
-                                  _sourceCard(source),
-                              ]
+                            ? [_configLiveEntry(group), _groupGrid(group)]
                             : const [],
                       ),
                     ),
@@ -429,6 +429,52 @@ class _SourcesScreenState extends State<SourcesScreen> {
       );
     },
   );
+
+  /// 导入配置组的直播入口：该配置附带直播时，在组内站点卡片上方
+  /// 出一个“直播”入口（影视侧已有每站“进站浏览”，两边分别进入）；
+  /// 无直播的组不占地方。
+  Widget _configLiveEntry(SourceGroup group) {
+    if (!group.isConfig || group.configId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final record = TvBoxConfigStore.configFor(group.configId);
+    if (record == null || !record.hasLive) return const SizedBox.shrink();
+    final entries = subscriptionEntriesForConfig(
+      record,
+    ).where((entry) => entry.isLive).toList();
+    if (entries.isEmpty) return const SizedBox.shrink();
+    return SubscriptionEntryButtons(
+      entries: entries,
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+      onEnterVideo: (_) {},
+      onEnterLive: (sourceId) =>
+          enterSubscriptionLive(context, widget.store, sourceId),
+    );
+  }
+
+  /// 组内卡片平铺：宽屏 3 列、手机 2 列、极窄屏 1 列；卡片内容、
+  /// 按钮、点击行为与排序一律不动，只改布局。
+  Widget _groupGrid(SourceGroup group) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final columns = constraints.maxWidth >= 700
+            ? 3
+            : constraints.maxWidth >= 380
+            ? 2
+            : 1;
+        final cardWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+        return Wrap(
+          spacing: spacing,
+          children: [
+            for (final source in group.sources)
+              SizedBox(width: cardWidth, child: _sourceCard(source)),
+          ],
+        );
+      },
+    );
+  }
 
   Widget _sourceCard(SourceSite source) {
     final status = _statuses[source.id];
@@ -450,7 +496,10 @@ class _SourcesScreenState extends State<SourcesScreen> {
           children: [
             Row(
               children: [
-                const NeonIconTile(icon: Icons.dns_outlined),
+                NeonIconTile(
+                  icon: Icons.dns_outlined,
+                  child: PluginManager.pluginIconForSource(source),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -753,6 +802,10 @@ class _SourceVisibilityScreenState extends State<SourceVisibilityScreen> {
                         for (final source in group.sources)
                           NeonRow(
                             icon: Icons.dns_outlined,
+                            leading: NeonIconTile(
+                              icon: Icons.dns_outlined,
+                              child: PluginManager.pluginIconForSource(source),
+                            ),
                             title:
                                 group.id == 'huangguo' &&
                                     group.sources.length > 1

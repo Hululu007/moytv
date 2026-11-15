@@ -271,13 +271,13 @@ func extractParsedURL(body []byte, contentType, finalURL string) (string, map[st
 	return "", nil, false
 }
 
-func resolveViaParseAPIs(ctx context.Context, rawURL, referer string, apis []string) (string, map[string]string, error) {
+func resolveViaParseAPIs(ctx context.Context, rawURL, referer string, apis []string, headersList []map[string]string) (string, map[string]string, error) {
 	if len(apis) == 0 {
 		return "", nil, errors.New("需要解析但未配置解析接口")
 	}
 	client := &http.Client{Timeout: parseAPIRequestTimeout}
 	var lastErr error
-	for _, template := range apis {
+	for index, template := range apis {
 		template = strings.TrimSpace(template)
 		if template == "" {
 			continue
@@ -295,6 +295,15 @@ func resolveViaParseAPIs(ctx context.Context, rawURL, referer string, apis []str
 		req.Header.Set("User-Agent", userAgent)
 		if referer != "" {
 			req.Header.Set("Referer", referer)
+		}
+		// 配置自带的逐条请求头（如 parses.conf / 配置 JSON 里的 header），
+		// 后设置，优先于默认 UA/Referer；缺失的条目按空处理（旧行为）。
+		if index < len(headersList) {
+			for key, value := range headersList[index] {
+				if strings.TrimSpace(value) != "" {
+					req.Header.Set(key, value)
+				}
+			}
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -333,7 +342,7 @@ func (engine *nativeEngine) nativeResolveParse(ctx context.Context, input native
 	if input.Headers != nil {
 		referer = firstNonEmpty(input.Headers["Referer"], input.Headers["referer"])
 	}
-	real, parsedHeaders, err := resolveViaParseAPIs(ctx, input.URL, referer, input.ParseAPIs)
+	real, parsedHeaders, err := resolveViaParseAPIs(ctx, input.URL, referer, input.ParseAPIs, input.ParseAPIHeaders)
 	if err != nil {
 		return nativePlan{}, err
 	}

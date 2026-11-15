@@ -4,15 +4,19 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
@@ -44,7 +48,12 @@ internal class TvboxPlayerView(
 ) : PlatformView {
     private val appContext = context.applicationContext
     private val channel = MethodChannel(messenger, "$TVBOX_PLAYER_VIEW_TYPE/$viewId")
-    private val playerView = PlayerView(context).apply { useController = false }
+    private val playerView = PlayerView(context).apply {
+        useController = false
+        // 字幕改由 Dart 层叠放渲染（同组多 cue 不重叠），原生
+        // SubtitleView 隐藏，否则同一组 cue 会画两遍。构建时验。
+        subtitleView?.visibility = View.GONE
+    }
     private val positionHandler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private var released = false
@@ -75,6 +84,31 @@ internal class TvboxPlayerView(
 
         override fun onPlayerError(error: PlaybackException) {
             channel.invokeMethod("onError", error.message ?: "播放失败")
+        }
+
+        // 字幕组变化时原样转发给 Dart 层叠放渲染；只实现 CueGroup
+        // 这一版 onCues（已废弃的 List<Cue> 版与它同时触发，勿重复实现）。
+        // 空组也转发，Dart 侧据此清掉上一组字幕。构建时验。
+        override fun onCues(cueGroup: CueGroup) {
+            val cueList = ArrayList<Map<String, Any?>>()
+            for (cue in cueGroup.cues) {
+                val text = cue.text?.toString() ?: ""
+                if (text.isEmpty()) continue
+                val map = HashMap<String, Any?>()
+                map["text"] = text
+                if (cue.line != Cue.DIMEN_UNSET) map["line"] = cue.line.toDouble()
+                if (cue.position != Cue.DIMEN_UNSET) {
+                    map["position"] = cue.position.toDouble()
+                }
+                cueList.add(map)
+            }
+            channel.invokeMethod(
+                "onCues",
+                mapOf(
+                    "presentationTimeUs" to cueGroup.presentationTimeUs,
+                    "cues" to cueList
+                )
+            )
         }
     }
 
@@ -219,13 +253,23 @@ internal class TvboxPlayerView(
             .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
         if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
+        // 文本轨默认只选带语言的：MKV 内嵌 ASS 常无语言标记，须显式
+        // 允许未定语言轨，否则字幕轨根本不被选中。构建时验。
+        val trackSelector = DefaultTrackSelector(appContext).apply {
+            parameters = buildUponParameters()
+                .setRendererDisabled(C.TRACK_TYPE_TEXT, false)
+                .setSelectUndeterminedTextLanguage(true)
+                .build()
+        }
         val current = ExoPlayer.Builder(appContext)
+            .setTrackSelector(trackSelector)
             .setRenderersFactory(renderersFactory(decoderMode))
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build()
         player = current
         current.addListener(listener)
         playerView.player = current
+        playerView.subtitleView?.visibility = View.GONE
         current.setMediaItem(MediaItem.Builder().setUri(normalized).build())
         current.playWhenReady = play
         if (positionMs > 0) current.seekTo(positionMs)

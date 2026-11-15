@@ -476,6 +476,9 @@ func (d *Downloader) fetchMaccmsCustomCatalog(ctx context.Context, source string
 	if isT4CustomSource(source) {
 		return t4CatalogPage(ctx, d, source, page, category)
 	}
+	if isDrpysCustomSource(source) {
+		return drpysCatalogPage(ctx, d, source, page, category)
+	}
 	// XBPQ 规则源：一切按规则字段截取，不走模板识别。
 	if rule, ok := customXBPQRule(source); ok {
 		return d.xbpqCatalog(ctx, source, base, page, category, rule)
@@ -604,6 +607,9 @@ func (d *Downloader) fetchMaccmsDetail(ctx context.Context, source, sourceID str
 	base := d.duanjuBaseURL(source)
 	if isT4CustomSource(source) {
 		return t4Detail(ctx, d, source, sourceID)
+	}
+	if isDrpysCustomSource(source) {
+		return drpysDetail(ctx, d, source, sourceID)
 	}
 	// XBPQ 规则源：详情与分集按规则截取。
 	if rule, ok := customXBPQRule(source); ok {
@@ -861,6 +867,9 @@ func (d *Downloader) searchMaccms(ctx context.Context, source, query string) ([]
 	case isCustomMaccmsSource(source):
 		if isT4CustomSource(source) {
 			return t4Search(ctx, d, source, query)
+		}
+		if isDrpysCustomSource(source) {
+			return drpysSearch(ctx, d, source, query)
 		}
 		// XBPQ 规则源：搜索走规则「搜索url」。
 		if rule, ok := customXBPQRule(source); ok {
@@ -1318,6 +1327,9 @@ func (d *Downloader) fetchMaccmsCustomCategories(ctx context.Context, source str
 	}
 	if isT4CustomSource(source) {
 		return t4Categories(ctx, d, source)
+	}
+	if isDrpysCustomSource(source) {
+		return drpysCategories(ctx, d, source)
 	}
 	// XBPQ 规则源：分类直接来自规则「分类」字段。
 	if rule, ok := customXBPQRule(source); ok {

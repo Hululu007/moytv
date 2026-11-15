@@ -9,6 +9,8 @@ class ParseInterface {
     required this.url,
     this.source = '',
     this.enabled = true,
+    this.jsonApi = false,
+    this.headers = const {},
   });
 
   final String id;
@@ -22,12 +24,26 @@ class ParseInterface {
 
   final bool enabled;
 
+  /// JSON 型解析接口（配置里 type:1）：返回 JSON 而不是待嗅探的网页，
+  /// 只走 Go 解析管线（resolveViaParseAPIs 会从 JSON 里取地址），
+  /// 不直接拼给播放器（见 [applySelectedParse]）。
+  final bool jsonApi;
+
+  /// 配置自带的逐条请求头（如 type:1 条目里的 header 对象），
+  /// Go 管线发解析请求时带上。
+  final Map<String, String> headers;
+
   factory ParseInterface.fromJson(Map<String, dynamic> json) => ParseInterface(
     id: json['id'] as String? ?? '',
     name: json['name'] as String? ?? '',
     url: json['url'] as String? ?? '',
     source: json['source'] as String? ?? '',
     enabled: json['enabled'] as bool? ?? true,
+    jsonApi: json['jsonApi'] as bool? ?? false,
+    headers: {
+      for (final entry in (json['headers'] as Map? ?? const {}).entries)
+        entry.key.toString(): entry.value.toString(),
+    },
   );
 
   Map<String, dynamic> toJson() => {
@@ -36,6 +52,8 @@ class ParseInterface {
     'url': url,
     if (source.isNotEmpty) 'source': source,
     'enabled': enabled,
+    if (jsonApi) 'jsonApi': true,
+    if (headers.isNotEmpty) 'headers': headers,
   };
 
   String apply(String rawUrl) {
@@ -135,6 +153,9 @@ String? applySelectedParse({
   required ParseInterface? selected,
 }) {
   if (selected == null || url.isEmpty) return null;
+  // JSON 型解析返回的是 JSON 文本，不是可播放/可嗅探的页面地址，
+  // 不能直接拼给播放器；这类接口只走 Go 解析管线（resolveParse）。
+  if (selected.jsonApi) return null;
   if (!needsParse && !looksLikeWebPage(url)) return null;
   return selected.apply(url);
 }

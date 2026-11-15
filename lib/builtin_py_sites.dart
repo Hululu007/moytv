@@ -1,7 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import 'import_file_store.dart';
 import 'models.dart';
+import 'py_bridge.dart';
+
+/// 内置 py 插件的一条站点记录：一个 py 文件对应一条，jinguo.py 对应两条。
+class BuiltinPyEntry {
+  const BuiltinPyEntry({
+    required this.siteId,
+    required this.site,
+    required this.assetPath,
+    required this.fileId,
+  });
+
+  final String siteId;
+  final SourceSite site;
+  final String assetPath;
+  final String fileId;
+}
 
 class BuiltinPySites {
   BuiltinPySites._();
@@ -591,635 +609,157 @@ class BuiltinPySites {
     importType: 'py',
   );
 
-  static Future<bool> register() async {
+  /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
+  static const List<BuiltinPyEntry> entries = [
+    BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
+    BuiltinPyEntry(siteId: abjavSiteId, site: abjavSite, assetPath: abjavAssetPath, fileId: abjavFileId),
+    BuiltinPyEntry(siteId: ai2026SiteId, site: ai2026Site, assetPath: ai2026AssetPath, fileId: ai2026FileId),
+    BuiltinPyEntry(siteId: ai4kSiteId, site: ai4kSite, assetPath: ai4kAssetPath, fileId: ai4kFileId),
+    BuiltinPyEntry(siteId: aidjSiteId, site: aidjSite, assetPath: aidjAssetPath, fileId: aidjFileId),
+    BuiltinPyEntry(siteId: aiduanjuSiteId, site: aiduanjuSite, assetPath: aiduanjuAssetPath, fileId: aiduanjuFileId),
+    BuiltinPyEntry(siteId: aimoveSiteId, site: aimoveSite, assetPath: aimoveAssetPath, fileId: aimoveFileId),
+    BuiltinPyEntry(siteId: aisxpcSiteId, site: aisxpcSite, assetPath: aisxpcAssetPath, fileId: aisxpcFileId),
+    BuiltinPyEntry(siteId: asextvSiteId, site: asextvSite, assetPath: asextvAssetPath, fileId: asextvFileId),
+    BuiltinPyEntry(siteId: avhwaSiteId, site: avhwaSite, assetPath: avhwaAssetPath, fileId: avhwaFileId),
+    BuiltinPyEntry(siteId: avtodaySiteId, site: avtodaySite, assetPath: avtodayAssetPath, fileId: avtodayFileId),
+    BuiltinPyEntry(siteId: avyanjiuyuanSiteId, site: avyanjiuyuanSite, assetPath: avyanjiuyuanAssetPath, fileId: avyanjiuyuanFileId),
+    BuiltinPyEntry(siteId: badyiSiteId, site: badyiSite, assetPath: badyiAssetPath, fileId: badyiFileId),
+    BuiltinPyEntry(siteId: caoliuSiteId, site: caoliuSite, assetPath: caoliuAssetPath, fileId: caoliuFileId),
+    BuiltinPyEntry(siteId: chinaxSiteId, site: chinaxSite, assetPath: chinaxAssetPath, fileId: chinaxFileId),
+    BuiltinPyEntry(siteId: chinaxselecla08SiteId, site: chinaxselecla08Site, assetPath: chinaxselecla08AssetPath, fileId: chinaxselecla08FileId),
+    BuiltinPyEntry(siteId: danaiSiteId, site: danaiSite, assetPath: danaiAssetPath, fileId: danaiFileId),
+    BuiltinPyEntry(siteId: dingjiasekuSiteId, site: dingjiasekuSite, assetPath: dingjiasekuAssetPath, fileId: dingjiasekuFileId),
+    BuiltinPyEntry(siteId: dj69SiteId, site: dj69Site, assetPath: dj69AssetPath, fileId: dj69FileId),
+    BuiltinPyEntry(siteId: dj91SiteId, site: dj91Site, assetPath: dj91AssetPath, fileId: dj91FileId),
+    BuiltinPyEntry(siteId: djwoSiteId, site: djwoSite, assetPath: djwoAssetPath, fileId: djwoFileId),
+    BuiltinPyEntry(siteId: duanjuoneSiteId, site: duanjuoneSite, assetPath: duanjuoneAssetPath, fileId: duanjuoneFileId),
+    BuiltinPyEntry(siteId: aihiSiteId, site: aihiSite, assetPath: aihiAssetPath, fileId: aihiFileId),
+    BuiltinPyEntry(siteId: ficeforandSiteId, site: ficeforandSite, assetPath: ficeforandAssetPath, fileId: ficeforandFileId),
+    BuiltinPyEntry(siteId: aipornxSiteId, site: aipornxSite, assetPath: aipornxAssetPath, fileId: aipornxFileId),
+    BuiltinPyEntry(siteId: aiyinhangSiteId, site: aiyinhangSite, assetPath: aiyinhangAssetPath, fileId: aiyinhangFileId),
+    BuiltinPyEntry(siteId: aiwuSiteId, site: aiwuSite, assetPath: aiwuAssetPath, fileId: aiwuFileId),
+    BuiltinPyEntry(siteId: xojavSiteId, site: xojavSite, assetPath: xojavAssetPath, fileId: xojavFileId),
+    BuiltinPyEntry(siteId: porncgwSiteId, site: porncgwSite, assetPath: porncgwAssetPath, fileId: porncgwFileId),
+    BuiltinPyEntry(siteId: xhongyanSiteId, site: xhongyanSite, assetPath: xhongyanAssetPath, fileId: xhongyanFileId),
+    BuiltinPyEntry(siteId: kankuxSiteId, site: kankuxSite, assetPath: kankuxAssetPath, fileId: kankuxFileId),
+    BuiltinPyEntry(siteId: guohnsqjSiteId, site: guohnsqjSite, assetPath: guohnsqjAssetPath, fileId: guohnsqjFileId),
+    BuiltinPyEntry(siteId: xz51SiteId, site: xz51Site, assetPath: xz51AssetPath, fileId: xz51FileId),
+    BuiltinPyEntry(siteId: sexaixSiteId, site: sexaixSite, assetPath: sexaixAssetPath, fileId: sexaixFileId),
+    BuiltinPyEntry(siteId: qipaospSiteId, site: qipaospSite, assetPath: qipaospAssetPath, fileId: qipaospFileId),
+    BuiltinPyEntry(siteId: youzidjSiteId, site: youzidjSite, assetPath: youzidjAssetPath, fileId: youzidjFileId),
+    BuiltinPyEntry(siteId: tanhuavip14SiteId, site: tanhuavip14Site, assetPath: tanhuavip14AssetPath, fileId: tanhuavip14FileId),
+    BuiltinPyEntry(siteId: fuchouSiteId, site: fuchouSite, assetPath: fuchouAssetPath, fileId: fuchouFileId),
+    BuiltinPyEntry(siteId: heitaoSiteId, site: heitaoSite, assetPath: heitaoAssetPath, fileId: heitaoFileId),
+    BuiltinPyEntry(siteId: jinguoSiteId, site: jinguoSite, assetPath: jinguoAssetPath, fileId: jinguoFileId),
+    BuiltinPyEntry(siteId: jinguoJgSiteId, site: jinguoJgSite, assetPath: jinguoAssetPath, fileId: jinguoJgFileId),
+    BuiltinPyEntry(siteId: duoduoSiteId, site: duoduoSite, assetPath: duoduoAssetPath, fileId: duoduoFileId),
+    BuiltinPyEntry(siteId: javmenuSiteId, site: javmenuSite, assetPath: javmenuAssetPath, fileId: javmenuFileId),
+    BuiltinPyEntry(siteId: avdbSiteId, site: avdbSite, assetPath: avdbAssetPath, fileId: avdbFileId),
+    BuiltinPyEntry(siteId: memojavSiteId, site: memojavSite, assetPath: memojavAssetPath, fileId: memojavFileId),
+  ];
+
+  static BuiltinPyEntry? entryFor(String siteId) {
+    for (final entry in entries) {
+      if (entry.siteId == siteId) return entry;
+    }
+    return null;
+  }
+
+  static Future<void> _install(BuiltinPyEntry entry) async {
+    final bytes = await rootBundle.load(entry.assetPath);
+    final fileName = await ImportFileStore.save(
+      entry.fileId,
+      'py',
+      bytes.buffer.asUint8List(),
+    );
+    SourceSite.importedSites[entry.siteId] = entry.site;
+    SourceSite.importedPyFiles[entry.siteId] = fileName;
+  }
+
+  static Future<bool> register() => registerSkipping(const {});
+
+  /// 注册全部内置 py 插件，跳过 [skipSiteIds]（用户已卸载的插件的站点）。
+  static Future<bool> registerSkipping(Set<String> skipSiteIds) async {
     try {
-      final bytes = await rootBundle.load(hmavAssetPath);
-      final fileName = await ImportFileStore.save(
-        hmavFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[hmavSiteId] = hmavSite;
-      SourceSite.importedPyFiles[hmavSiteId] = fileName;
-      await _registerAbjav();
-      await _registerAi2026();
-      await _registerAi4k();
-      await _registerAidj();
-      await _registerAiduanju();
-      await _registerAimove();
-      await _registerAisxpc();
-      await _registerAsextv();
-      await _registerAvhwa();
-      await _registerAvtoday();
-      await _registerAvyanjiuyuan();
-      await _registerBadyi();
-      await _registerCaoliu();
-      await _registerChinax();
-      await _registerChinaxselecla08();
-      await _registerDanai();
-      await _registerDingjiaseku();
-      await _registerDj69();
-      await _registerDj91();
-      await _registerDjwo();
-      await _registerDuanjuone();
-      await _registerAihi();
-      await _registerFiceforand();
-      await _registerAipornx();
-      await _registerAiyinhang();
-      await _registerAiwu();
-      await _registerXojav();
-      await _registerPorncgw();
-      await _registerXhongyan();
-      await _registerKankux();
-      await _registerGuohnsqj();
-      await _register51xz();
-      await _registerSexaix();
-      await _registerQipaosp();
-      await _registerYouzidj();
-      await _registerTanhuavip14();
-      await _registerFuchou();
-      await _registerHeitao();
-      await _registerJinguo();
-      await _registerJinguoJg();
-      await _registerDuoduo();
-      await _registerJavmenu();
-      await _registerAvdb();
-      await _registerMemojav();
+      for (final entry in entries) {
+        if (skipSiteIds.contains(entry.siteId)) continue;
+        try {
+          await _install(entry);
+        } catch (_) {}
+      }
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  static Future<void> _registerAbjav() async {
+  /// 安装单个内置 py 站点（插件重装时用）。失败返回 false。
+  static Future<bool> installEntry(String siteId) async {
+    final entry = entryFor(siteId);
+    if (entry == null) return false;
     try {
-      final bytes = await rootBundle.load(abjavAssetPath);
-      final fileName = await ImportFileStore.save(
-        abjavFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[abjavSiteId] = abjavSite;
-      SourceSite.importedPyFiles[abjavSiteId] = fileName;
-    } catch (_) {}
+      await _install(entry);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
-  static Future<void> _registerAi2026() async {
-    try {
-      final bytes = await rootBundle.load(ai2026AssetPath);
-      final fileName = await ImportFileStore.save(
-        ai2026FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[ai2026SiteId] = ai2026Site;
-      SourceSite.importedPyFiles[ai2026SiteId] = fileName;
-    } catch (_) {}
+  /// 卸载单个内置 py 站点：撤登记 + 释放该文件的解释器会话 +
+  /// 删落盘文件副本，不留残影。
+  static Future<void> uninstallEntry(String siteId) async {
+    final entry = entryFor(siteId);
+    SourceSite.importedSites.remove(siteId);
+    final fileName = SourceSite.importedPyFiles.remove(siteId);
+    final target = fileName ?? (entry == null ? '' : '${entry.fileId}.py');
+    if (target.isNotEmpty) {
+      final path = await ImportFileStore.pathOf(target);
+      unawaited(PyBridge.dispose(path));
+    }
+    await ImportFileStore.delete(target);
   }
 
-  static Future<void> _registerAi4k() async {
-    try {
-      final bytes = await rootBundle.load(ai4kAssetPath);
-      final fileName = await ImportFileStore.save(
-        ai4kFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[ai4kSiteId] = ai4kSite;
-      SourceSite.importedPyFiles[ai4kSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAidj() async {
-    try {
-      final bytes = await rootBundle.load(aidjAssetPath);
-      final fileName = await ImportFileStore.save(
-        aidjFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aidjSiteId] = aidjSite;
-      SourceSite.importedPyFiles[aidjSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAiduanju() async {
-    try {
-      final bytes = await rootBundle.load(aiduanjuAssetPath);
-      final fileName = await ImportFileStore.save(
-        aiduanjuFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aiduanjuSiteId] = aiduanjuSite;
-      SourceSite.importedPyFiles[aiduanjuSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAimove() async {
-    try {
-      final bytes = await rootBundle.load(aimoveAssetPath);
-      final fileName = await ImportFileStore.save(
-        aimoveFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aimoveSiteId] = aimoveSite;
-      SourceSite.importedPyFiles[aimoveSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAisxpc() async {
-    try {
-      final bytes = await rootBundle.load(aisxpcAssetPath);
-      final fileName = await ImportFileStore.save(
-        aisxpcFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aisxpcSiteId] = aisxpcSite;
-      SourceSite.importedPyFiles[aisxpcSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAsextv() async {
-    try {
-      final bytes = await rootBundle.load(asextvAssetPath);
-      final fileName = await ImportFileStore.save(
-        asextvFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[asextvSiteId] = asextvSite;
-      SourceSite.importedPyFiles[asextvSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAvhwa() async {
-    try {
-      final bytes = await rootBundle.load(avhwaAssetPath);
-      final fileName = await ImportFileStore.save(
-        avhwaFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[avhwaSiteId] = avhwaSite;
-      SourceSite.importedPyFiles[avhwaSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAvtoday() async {
-    try {
-      final bytes = await rootBundle.load(avtodayAssetPath);
-      final fileName = await ImportFileStore.save(
-        avtodayFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[avtodaySiteId] = avtodaySite;
-      SourceSite.importedPyFiles[avtodaySiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAvyanjiuyuan() async {
-    try {
-      final bytes = await rootBundle.load(avyanjiuyuanAssetPath);
-      final fileName = await ImportFileStore.save(
-        avyanjiuyuanFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[avyanjiuyuanSiteId] = avyanjiuyuanSite;
-      SourceSite.importedPyFiles[avyanjiuyuanSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerBadyi() async {
-    try {
-      final bytes = await rootBundle.load(badyiAssetPath);
-      final fileName = await ImportFileStore.save(
-        badyiFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[badyiSiteId] = badyiSite;
-      SourceSite.importedPyFiles[badyiSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerCaoliu() async {
-    try {
-      final bytes = await rootBundle.load(caoliuAssetPath);
-      final fileName = await ImportFileStore.save(
-        caoliuFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[caoliuSiteId] = caoliuSite;
-      SourceSite.importedPyFiles[caoliuSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerChinax() async {
-    try {
-      final bytes = await rootBundle.load(chinaxAssetPath);
-      final fileName = await ImportFileStore.save(
-        chinaxFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[chinaxSiteId] = chinaxSite;
-      SourceSite.importedPyFiles[chinaxSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerChinaxselecla08() async {
-    try {
-      final bytes = await rootBundle.load(chinaxselecla08AssetPath);
-      final fileName = await ImportFileStore.save(
-        chinaxselecla08FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[chinaxselecla08SiteId] = chinaxselecla08Site;
-      SourceSite.importedPyFiles[chinaxselecla08SiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDanai() async {
-    try {
-      final bytes = await rootBundle.load(danaiAssetPath);
-      final fileName = await ImportFileStore.save(
-        danaiFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[danaiSiteId] = danaiSite;
-      SourceSite.importedPyFiles[danaiSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDingjiaseku() async {
-    try {
-      final bytes = await rootBundle.load(dingjiasekuAssetPath);
-      final fileName = await ImportFileStore.save(
-        dingjiasekuFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[dingjiasekuSiteId] = dingjiasekuSite;
-      SourceSite.importedPyFiles[dingjiasekuSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDj69() async {
-    try {
-      final bytes = await rootBundle.load(dj69AssetPath);
-      final fileName = await ImportFileStore.save(
-        dj69FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[dj69SiteId] = dj69Site;
-      SourceSite.importedPyFiles[dj69SiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDj91() async {
-    try {
-      final bytes = await rootBundle.load(dj91AssetPath);
-      final fileName = await ImportFileStore.save(
-        dj91FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[dj91SiteId] = dj91Site;
-      SourceSite.importedPyFiles[dj91SiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDjwo() async {
-    try {
-      final bytes = await rootBundle.load(djwoAssetPath);
-      final fileName = await ImportFileStore.save(
-        djwoFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[djwoSiteId] = djwoSite;
-      SourceSite.importedPyFiles[djwoSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDuanjuone() async {
-    try {
-      final bytes = await rootBundle.load(duanjuoneAssetPath);
-      final fileName = await ImportFileStore.save(
-        duanjuoneFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[duanjuoneSiteId] = duanjuoneSite;
-      SourceSite.importedPyFiles[duanjuoneSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAihi() async {
-    try {
-      final bytes = await rootBundle.load(aihiAssetPath);
-      final fileName = await ImportFileStore.save(
-        aihiFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aihiSiteId] = aihiSite;
-      SourceSite.importedPyFiles[aihiSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerFiceforand() async {
-    try {
-      final bytes = await rootBundle.load(ficeforandAssetPath);
-      final fileName = await ImportFileStore.save(
-        ficeforandFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[ficeforandSiteId] = ficeforandSite;
-      SourceSite.importedPyFiles[ficeforandSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAipornx() async {
-    try {
-      final bytes = await rootBundle.load(aipornxAssetPath);
-      final fileName = await ImportFileStore.save(
-        aipornxFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aipornxSiteId] = aipornxSite;
-      SourceSite.importedPyFiles[aipornxSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAiyinhang() async {
-    try {
-      final bytes = await rootBundle.load(aiyinhangAssetPath);
-      final fileName = await ImportFileStore.save(
-        aiyinhangFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aiyinhangSiteId] = aiyinhangSite;
-      SourceSite.importedPyFiles[aiyinhangSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAiwu() async {
-    try {
-      final bytes = await rootBundle.load(aiwuAssetPath);
-      final fileName = await ImportFileStore.save(
-        aiwuFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[aiwuSiteId] = aiwuSite;
-      SourceSite.importedPyFiles[aiwuSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerXojav() async {
-    try {
-      final bytes = await rootBundle.load(xojavAssetPath);
-      final fileName = await ImportFileStore.save(
-        xojavFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[xojavSiteId] = xojavSite;
-      SourceSite.importedPyFiles[xojavSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerPorncgw() async {
-    try {
-      final bytes = await rootBundle.load(porncgwAssetPath);
-      final fileName = await ImportFileStore.save(
-        porncgwFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[porncgwSiteId] = porncgwSite;
-      SourceSite.importedPyFiles[porncgwSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerXhongyan() async {
-    try {
-      final bytes = await rootBundle.load(xhongyanAssetPath);
-      final fileName = await ImportFileStore.save(
-        xhongyanFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[xhongyanSiteId] = xhongyanSite;
-      SourceSite.importedPyFiles[xhongyanSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerKankux() async {
-    try {
-      final bytes = await rootBundle.load(kankuxAssetPath);
-      final fileName = await ImportFileStore.save(
-        kankuxFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[kankuxSiteId] = kankuxSite;
-      SourceSite.importedPyFiles[kankuxSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerGuohnsqj() async {
-    try {
-      final bytes = await rootBundle.load(guohnsqjAssetPath);
-      final fileName = await ImportFileStore.save(
-        guohnsqjFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[guohnsqjSiteId] = guohnsqjSite;
-      SourceSite.importedPyFiles[guohnsqjSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _register51xz() async {
-    try {
-      final bytes = await rootBundle.load(xz51AssetPath);
-      final fileName = await ImportFileStore.save(
-        xz51FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[xz51SiteId] = xz51Site;
-      SourceSite.importedPyFiles[xz51SiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerSexaix() async {
-    try {
-      final bytes = await rootBundle.load(sexaixAssetPath);
-      final fileName = await ImportFileStore.save(
-        sexaixFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[sexaixSiteId] = sexaixSite;
-      SourceSite.importedPyFiles[sexaixSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerQipaosp() async {
-    try {
-      final bytes = await rootBundle.load(qipaospAssetPath);
-      final fileName = await ImportFileStore.save(
-        qipaospFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[qipaospSiteId] = qipaospSite;
-      SourceSite.importedPyFiles[qipaospSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerYouzidj() async {
-    try {
-      final bytes = await rootBundle.load(youzidjAssetPath);
-      final fileName = await ImportFileStore.save(
-        youzidjFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[youzidjSiteId] = youzidjSite;
-      SourceSite.importedPyFiles[youzidjSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerTanhuavip14() async {
-    try {
-      final bytes = await rootBundle.load(tanhuavip14AssetPath);
-      final fileName = await ImportFileStore.save(
-        tanhuavip14FileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[tanhuavip14SiteId] = tanhuavip14Site;
-      SourceSite.importedPyFiles[tanhuavip14SiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerFuchou() async {
-    try {
-      final bytes = await rootBundle.load(fuchouAssetPath);
-      final fileName = await ImportFileStore.save(
-        fuchouFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[fuchouSiteId] = fuchouSite;
-      SourceSite.importedPyFiles[fuchouSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerHeitao() async {
-    try {
-      final bytes = await rootBundle.load(heitaoAssetPath);
-      final fileName = await ImportFileStore.save(
-        heitaoFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[heitaoSiteId] = heitaoSite;
-      SourceSite.importedPyFiles[heitaoSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerJinguo() async {
-    try {
-      final bytes = await rootBundle.load(jinguoAssetPath);
-      final fileName = await ImportFileStore.save(
-        jinguoFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[jinguoSiteId] = jinguoSite;
-      SourceSite.importedPyFiles[jinguoSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerJinguoJg() async {
-    try {
-      final bytes = await rootBundle.load(jinguoAssetPath);
-      final fileName = await ImportFileStore.save(
-        jinguoJgFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[jinguoJgSiteId] = jinguoJgSite;
-      SourceSite.importedPyFiles[jinguoJgSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerDuoduo() async {
-    try {
-      final bytes = await rootBundle.load(duoduoAssetPath);
-      final fileName = await ImportFileStore.save(
-        duoduoFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[duoduoSiteId] = duoduoSite;
-      SourceSite.importedPyFiles[duoduoSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerJavmenu() async {
-    try {
-      final bytes = await rootBundle.load(javmenuAssetPath);
-      final fileName = await ImportFileStore.save(
-        javmenuFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[javmenuSiteId] = javmenuSite;
-      SourceSite.importedPyFiles[javmenuSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerAvdb() async {
-    try {
-      final bytes = await rootBundle.load(avdbAssetPath);
-      final fileName = await ImportFileStore.save(
-        avdbFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[avdbSiteId] = avdbSite;
-      SourceSite.importedPyFiles[avdbSiteId] = fileName;
-    } catch (_) {}
-  }
 
-  static Future<void> _registerMemojav() async {
-    try {
-      final bytes = await rootBundle.load(memojavAssetPath);
-      final fileName = await ImportFileStore.save(
-        memojavFileId,
-        'py',
-        bytes.buffer.asUint8List(),
-      );
-      SourceSite.importedSites[memojavSiteId] = memojavSite;
-      SourceSite.importedPyFiles[memojavSiteId] = fileName;
-    } catch (_) {}
-  }
+
+
 }

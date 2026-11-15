@@ -7,6 +7,7 @@ import 'content_http.dart';
 import 'core_bridge.dart';
 import 'nexhub_scraper/scraper/verification_detector.dart';
 import 'nexhub_scraper/scraper/web_scrape_service.dart';
+import 'socks5_proxy.dart';
 import 'url_site_probe.dart';
 
 /// 爬取失败：面向用户的中文原因，调用方直接展示 [message]，不编造数据。
@@ -170,7 +171,8 @@ class WebScrapeAnalyzer {
   final ScrapeFetch? _fetchHtml;
   final WebScrapeService? _service;
   final UrlSiteProbe? _probe;
-  final ContentHttp _http = ContentHttp();
+  final ContentHttp _http =
+      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
 
   static const _fetchTimeout = Duration(seconds: 15);
 

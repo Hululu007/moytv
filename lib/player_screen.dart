@@ -120,6 +120,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     with WidgetsBindingObserver {
   late final Player _player;
   late final VideoController? _video;
+
+  /// media_kit Video 的 state，控制层显隐变化时用它抬/落字幕
+  /// （setSubtitleViewPadding）。非 media_kit 核（Exo/IJK/TVBox）与
+  /// 测试桩视频路径下不走 Video，这里保持 null，回调空操作。
+  VideoState? _videoState;
   late final VideoEnhancementController _enhancement;
   late final PictureQualityApplier _pictureQuality;
   late final PlaybackLoader _loader;
@@ -222,9 +227,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _showAudioMiniBar() {
     if (_audioMiniBar != null) return;
     final title = widget.detail.drama.title;
-    final episode = widget.detail.episodes[_index].title.isNotEmpty
-        ? widget.detail.episodes[_index].title
-        : '第 ${widget.detail.episodes[_index].number} 集';
+    final rawEpisodeTitle = widget.detail.episodes[_index].title;
+    final episode =
+        rawEpisodeTitle.isEmpty || episodeTitleLooksLikeUrl(rawEpisodeTitle)
+        ? '第 ${widget.detail.episodes[_index].number} 集'
+        : rawEpisodeTitle;
     AudioContinue.show(title: title, episode: episode);
     final entry = OverlayEntry(
       builder: (overlayContext) {
@@ -3020,8 +3027,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                     actions: [
-                      IconButton(
-                        tooltip: '推送到一起看',
+                      // 桌面独立播放页保留门图标；内嵌在详情页时详情页
+                      // 已有粉色主入口，这里不重复（与顶栏门图标同理）。
+                      if (!widget.embedded)
+                        IconButton(
+                          tooltip: '推送到一起看',
                         onPressed: () => unawaited(
                           pushDramaToWatchRoom(
                             context,
@@ -3125,9 +3135,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   Widget _audioPosterOverlay() {
     final drama = widget.detail.drama;
     final episode = widget.detail.episodes[_index];
-    final chapterTitle = episode.title.isNotEmpty
-        ? episode.title
-        : '第 ${episode.number} 集';
+    final chapterTitle =
+        episode.title.isEmpty || episodeTitleLooksLikeUrl(episode.title)
+        ? '第 ${episode.number} 集'
+        : episode.title;
     return Container(
       color: Colors.black,
       child: Stack(
@@ -3464,16 +3475,29 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ? _retryDanmakuFromControls
                 : null,
             onPush: widget.mediaId == null ? _pushToDevice : null,
-            onPushToWatchRoom: () => unawaited(
-              pushDramaToWatchRoom(
-                context,
-                repository: widget.repository,
-                store: widget.store,
-                drama: widget.detail.drama,
-                episodes: widget.detail.episodes,
-                episodeIndex: _index,
-              ),
-            ),
+            // 内嵌在详情页时顶栏不给门图标：详情页已有粉色“加入房间
+            // 一起看”主入口，同一视野只留一个；独立播放页没有粉色
+            // 按钮，保留顶栏入口。
+            onPushToWatchRoom: widget.embedded
+                ? null
+                : () => unawaited(
+                    pushDramaToWatchRoom(
+                      context,
+                      repository: widget.repository,
+                      store: widget.store,
+                      drama: widget.detail.drama,
+                      episodes: widget.detail.episodes,
+                      episodeIndex: _index,
+                    ),
+                  ),
+            // 控制层显隐变化时抬/落字幕：字幕是 media_kit 的 Flutter 层
+            // SubtitleView，默认底边只留 24px，正好被控制行与进度条盖
+            // 住；可见时抬到 96px（控制行+进度条之上），隐藏时落回
+            // 默认 24px。非 Video 路径下 _videoState 为 null，空操作。
+            onControlsVisibilityChanged: (visible) =>
+                _videoState?.setSubtitleViewPadding(
+                  EdgeInsets.fromLTRB(16, 0, 16, visible ? 96 : 24),
+                ),
             onPictureInPicture: _canUsePictureInPicture
                 ? _enterPictureInPicture
                 : null,
@@ -3597,7 +3621,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                 Video(
                   controller: _video!,
                   fit: BoxFit.contain,
-                  controls: (_) => layeredControls,
+                  controls: (videoState) {
+                    _videoState = videoState;
+                    return layeredControls;
+                  },
                 ),
               if (_audioMode && !hideOverlayForPictureInPicture)
                 Positioned.fill(child: _audioPosterOverlay()),
@@ -3872,7 +3899,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final meta = [
       if (drama.onlineDate.isNotEmpty) drama.onlineDate,
       if (drama.category.isNotEmpty) drama.category,
-      if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
+      if (drama.heat.isNotEmpty) heatDisplayText(drama.heat),
       if (drama.views.isNotEmpty) '播放 ${drama.views}',
     ];
     return Column(
@@ -3994,7 +4021,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     final colors = Theme.of(context).colorScheme;
     // 全集列表上匹配一次、按真实集号下标取，倒序显示不重算、不错位。
     final previews = episodePreviewData(
-      titles: [for (final episode in episodes) episode.title],
+      titles: [
+        for (final episode in episodes)
+          displayEpisodeTitle(episode.title, episode.number),
+      ],
       tmdbEpisodes: _tmdb?.episodes ?? const [],
       config: _tmdbConfig,
       tmdbPosterUrl: _tmdb?.posterUrl(_tmdbConfig) ?? '',

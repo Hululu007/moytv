@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/catalog_filters.dart';
 import 'package:moyi/compact_chip.dart';
 import 'package:moyi/models.dart';
 
 void main() {
   const container = Color(0xFF123456);
-  const selected = Color(0xFFC8E6C9);
+  // 选中态跟当前主题选中色：测试主题带紫蓝霓虹配置，选中色即其新主色。
+  const selected = Color(0xFFE040FB);
   ThemeData theme() => ThemeData(
     colorScheme: const ColorScheme.light(surfaceContainerHighest: container),
+    extensions: [AppThemeConfig.forTheme(AppThemeMode.purpleNeon)],
   );
 
   Color chipColor(WidgetTester tester, String label) {
@@ -58,8 +61,10 @@ void main() {
     expect(all.selected, isTrue);
     expect(chipColor(tester, '全部'), selected);
     expect(chipColor(tester, '全部'), isNot(Colors.white));
-    expect(labelStyle(tester, '全部').color, theme().colorScheme.onSurface);
-    expect(labelStyle(tester, '全部').color, isNot(Colors.white));
+    expect(
+      labelStyle(tester, '全部').color,
+      AppThemeConfig.forTheme(AppThemeMode.purpleNeon).selectedText,
+    );
     expect(daily.selected, isFalse);
     expect(chipColor(tester, '日常'), container);
     expect(chipColor(tester, '日常'), isNot(Colors.white));

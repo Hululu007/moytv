@@ -375,11 +375,37 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     return null;
   }
+  // 子页规则是否裸 JS 代码：野规则的子页 rule 有不带 js: 前缀、
+  // 直接写 JS 的（如 var d = []; 开头）。以前 runPageRule 只认
+  // js: 前缀，裸 JS 会被原样当数据返回，调用方 JSON.parse 拿到
+  // 脚本源码就报 Unexpected token 'v'（“国外精品”整页失败即此
+  // 形态）。判法只看去注释后的首词：var/let/const/function/
+  // return/async 或 $. 调用；JSON 数据（{ [ 开头）、选择器、
+  // 纯文本仍走原样返回，数据页行为不变。
+  function isBareJsRule(text) {
+    var t = String(text == null ? '' : text).replace(/^\uFEFF/, '').trim();
+    var guard = 0;
+    while (guard++ < 10) {
+      if (t.indexOf('//') === 0) {
+        var nl = t.indexOf('\n');
+        if (nl < 0) { t = ''; break; }
+        t = t.slice(nl + 1).trim();
+      } else if (t.indexOf('/*') === 0) {
+        var end = t.indexOf('*/', 2);
+        if (end < 0) { t = ''; break; }
+        t = t.slice(end + 2).trim();
+      } else { break; }
+    }
+    return /^(var|let|const|function|return|async function)\b/.test(t) ||
+      t.indexOf('$.') === 0 || t.indexOf('$(') === 0;
+  }
   function runPageRule(rule) {
     var text = String(rule == null ? '' : rule);
-    if (text.indexOf('js:') === 0) {
+    var trimmed = text.replace(/^\uFEFF/, '').trim();
+    if (trimmed.indexOf('js:') === 0 || isBareJsRule(text)) {
+      var code = trimmed.indexOf('js:') === 0 ? trimmed.slice(3) : trimmed;
       try {
-        var fn = new Function(text.slice(3));
+        var fn = new Function(code);
         var out = fn();
         return out === undefined || out === null ? '' : String(out);
       } catch (error) {
@@ -387,8 +413,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         return '';
       }
     }
-    if (text.indexOf('rule:') === 0) return text.slice(5);
-    if (/^https?:\/\//.test(text)) return rawHttp('GET', text, {});
+    if (trimmed.indexOf('rule:') === 0) return trimmed.slice(5);
+    if (/^https?:\/\//.test(trimmed)) return rawHttp('GET', trimmed, {});
     return text;
   }
   function resolveVirtual(url) {
@@ -864,12 +890,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return moduleCache[key];
     }
     var rule = String(page.rule || '');
-    if (rule.indexOf('js:') !== 0) {
+    var trimmedRule = rule.replace(/^\uFEFF/, '').trim();
+    if (trimmedRule.indexOf('js:') !== 0 && !isBareJsRule(rule)) {
       var value = runPageRule(rule);
       if (!force) moduleCache[key] = value;
       return value;
     }
-    var code = rule.slice(3);
+    var code = trimmedRule.indexOf('js:') === 0 ? trimmedRule.slice(3) : trimmedRule;
     var freshExports = {};
     var savedExports = moduleState.exports;
     var savedImportParam = moduleState.importParam;

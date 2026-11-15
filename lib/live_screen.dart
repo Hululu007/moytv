@@ -13,11 +13,32 @@ import 'live_repository.dart';
 import 'live_sources.dart';
 import 'live_store.dart';
 import 'local_store.dart';
+import 'network_speed.dart';
 import 'player_route.dart';
 import 'remote_widgets.dart';
 import 'source_picker_sheet.dart';
 import 'widgets.dart';
 import 'sleep_timer.dart';
+
+/// 视频区右上角时钟的两行文案：日期行 `M/d 周X`、时间行 `HH:mm:ss`。
+/// 纯函数，方便单测钉住格式；界面上的秒级刷新由 [_LiveClock] 自己计时。
+String liveClockDateLine(DateTime time) {
+  const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  return '${time.month}/${time.day} ${weekdays[time.weekday - 1]}';
+}
+
+String liveClockTimeLine(DateTime time) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${two(time.hour)}:${two(time.minute)}:${two(time.second)}';
+}
+
+/// 视频区角标文字：白字加暗色阴影，压在视频画面上仍可读。
+const _videoOverlayStyle = TextStyle(
+  color: Colors.white,
+  fontSize: 12,
+  fontFeatures: [FontFeature.tabularFigures()],
+  shadows: [Shadow(color: Color(0xCC000000), blurRadius: 4)],
+);
 
 class LiveScreen extends StatefulWidget {
   const LiveScreen({
@@ -29,6 +50,8 @@ class LiveScreen extends StatefulWidget {
     this.appStore,
     this.playbackController,
     this.videoBuilder,
+    this.initialSourceId = '',
+    this.initialSourceNonce = 0,
   });
 
   final LiveRepository repository;
@@ -36,6 +59,11 @@ class LiveScreen extends StatefulWidget {
   final bool greenMode;
   final VoidCallback? onExitLeft;
   final LocalStore? appStore;
+
+  /// 订阅双入口递进来的直播源：首页切区时带上，直播页首选该源。
+  /// [initialSourceNonce] 每递一次加一，已挂载的直播页靠它识别新请求。
+  final String initialSourceId;
+  final int initialSourceNonce;
 
   /// 测试注入：传了就用现成的播放控制器，不再自建。
   final LivePlaybackController? playbackController;
@@ -66,10 +94,14 @@ class _LiveScreenState extends State<LiveScreen> {
   String? _error;
   int _page = 1;
   int _generation = 0;
+  int _consumedEntryNonce = 0;
+  final _groupTileKeys = <String, GlobalKey>{};
   late final LivePlaybackController _playback;
   final _listKey = GlobalKey<RemoteListState>();
   final _groupScroll = ScrollController();
   final _channelScroll = ScrollController();
+  late final NetworkSpeedTracker _speedTracker;
+  StreamSubscription<Duration>? _positionSubscription;
 
   @override
   void initState() {
@@ -78,9 +110,28 @@ class _LiveScreenState extends State<LiveScreen> {
         widget.playbackController ??
         LivePlaybackController(repository: widget.repository);
     _playback.addListener(_playbackChanged);
+    _speedTracker = NetworkSpeedTracker(
+      sample: () async {
+        final player = _playback.player;
+        if (player == null) return null;
+        return fetchMpvNetworkSpeedSample(player);
+      },
+    );
+    _attachSpeedTracker();
     widget.store.addListener(_storeChanged);
     widget.appStore?.addListener(_appStoreChanged);
-    _syncSources();
+    _syncSources(honorEntry: true);
+  }
+
+  /// 播放器出现后开始跟进度采样网速：位置流每次推进就 tick 一次，
+  /// 追踪器内部 900ms 节流；播放器尚未建立时等下一次状态通知再接。
+  void _attachSpeedTracker() {
+    if (_positionSubscription != null) return;
+    final player = _playback.player;
+    if (player == null) return;
+    _positionSubscription = player.stream.position.listen(
+      (_) => unawaited(_speedTracker.tick()),
+    );
   }
 
   void _appStoreChanged() {
@@ -95,9 +146,12 @@ class _LiveScreenState extends State<LiveScreen> {
 
   @override
   void dispose() {
+    _rememberChannelOffset();
     widget.store.removeListener(_storeChanged);
     widget.appStore?.removeListener(_appStoreChanged);
     _playback.removeListener(_playbackChanged);
+    _positionSubscription?.cancel();
+    _speedTracker.dispose();
     _playback.dispose();
     _groupScroll.dispose();
     _channelScroll.dispose();
@@ -105,6 +159,7 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   void _playbackChanged() {
+    _attachSpeedTracker();
     if (mounted) setState(() {});
   }
 
@@ -133,13 +188,25 @@ class _LiveScreenState extends State<LiveScreen> {
   @override
   void didUpdateWidget(covariant LiveScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 订阅双入口的新请求（nonce 变化）：已挂载时直接切到该直播源；
+    // 源不可见时忽略，用户仍可用源选择器自选。
+    if (widget.initialSourceNonce != _consumedEntryNonce &&
+        widget.initialSourceId.isNotEmpty) {
+      _consumedEntryNonce = widget.initialSourceNonce;
+      final target = LiveSource.visible(
+        widget.greenMode,
+      ).where((item) => item.id == widget.initialSourceId).firstOrNull;
+      if (target != null && target.id != _source?.id) {
+        _changeSource(target);
+      }
+    }
     // 分级限制开关会在运行中改变可见源：开关打开时把全部源挡掉，关掉后
     // 又该重新出现，所以必须跟着重算，否则直播页会一直停在空态。
     if (oldWidget.greenMode == widget.greenMode || _source != null) return;
     _syncSources();
   }
 
-  void _syncSources() {
+  void _syncSources({bool honorEntry = false}) {
     final visible = LiveSource.visible(widget.greenMode);
     if (visible.isEmpty) {
       setState(() {
@@ -150,7 +217,15 @@ class _LiveScreenState extends State<LiveScreen> {
       });
       return;
     }
-    _source = visible.first;
+    // 首挂时 honorEntry 才认递进来的源：后续重算（源被挡掉等）不再
+    // 把用户手动切走的源拉回入口源。
+    _consumedEntryNonce = widget.initialSourceNonce;
+    _source = honorEntry && widget.initialSourceId.isNotEmpty
+        ? visible
+              .where((item) => item.id == widget.initialSourceId)
+              .firstOrNull ??
+          visible.first
+        : visible.first;
     unawaited(_loadPlatforms());
   }
 
@@ -201,12 +276,20 @@ class _LiveScreenState extends State<LiveScreen> {
         _platforms = platforms;
         _loading = false;
       });
+      // 手机端切源回来落到上次看的分组（电视端保持首分组原行为）；
+      // 刷新 keepGroup 优先于记忆。
+      final remembered = widget.repository.groupMemory.lastGroupFor(source.id);
       final target =
           keepGroup.isNotEmpty &&
               platforms.any((platform) => platform.id == keepGroup)
           ? keepGroup
+          : !AppLayout.isTelevision(context) &&
+                remembered.isNotEmpty &&
+                platforms.any((platform) => platform.id == remembered)
+          ? remembered
           : platforms.first.id;
       await _loadChannels(target, force: force);
+      _revealSelectedGroup();
     } catch (error) {
       if (!mounted || token != _generation) return;
       setState(() {
@@ -243,7 +326,11 @@ class _LiveScreenState extends State<LiveScreen> {
     if (platform == null) return;
     if (append && !_hasMore) return;
     if (!append && !force && id == _group) return;
-    if (!append) _lastGood = (group: _group, channels: _channels);
+    if (!append) {
+      // 切分组前记下当前分组的滚动位置，回来时恢复，不丢位置。
+      _rememberChannelOffset();
+      _lastGood = (group: _group, channels: _channels);
+    }
     final page = append ? _page + 1 : 1;
     setState(() {
       _group = id;
@@ -278,6 +365,10 @@ class _LiveScreenState extends State<LiveScreen> {
               : channels,
         );
       });
+      if (!append) {
+        widget.repository.groupMemory.rememberGroup(source.id, id);
+        _restoreChannelOffset(id);
+      }
     } catch (error) {
       if (!mounted || token != _generation) return;
       final restore = _lastGood;
@@ -313,8 +404,52 @@ class _LiveScreenState extends State<LiveScreen> {
 
   void _changeSource(LiveSource source) {
     if (source.id == _source?.id) return;
+    _rememberChannelOffset();
     setState(() => _source = source);
     _loadPlatforms();
+  }
+
+  /// 记下当前分组的频道列表滚动位置（换台/切分组/切源/离页时调）。
+  void _rememberChannelOffset() {
+    final source = _source;
+    if (source == null || _group.isEmpty || !_channelScroll.hasClients) {
+      return;
+    }
+    widget.repository.groupMemory.rememberOffset(
+      source.id,
+      _group,
+      _channelScroll.offset,
+    );
+  }
+
+  /// 分组列表加载完后恢复该分组记下的滚动位置（夹在列表可滚范围内）。
+  void _restoreChannelOffset(String groupId) {
+    final source = _source;
+    if (source == null) return;
+    final saved = widget.repository.groupMemory.offsetFor(source.id, groupId);
+    if (saved <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_channelScroll.hasClients) return;
+      _channelScroll.jumpTo(
+        saved.clamp(0, _channelScroll.position.maxScrollExtent),
+      );
+    });
+  }
+
+  /// 切源加载完后把当前分组滚进分组栏视野（分组多时当前分组可能在屏外）。
+  void _revealSelectedGroup() {
+    final key = _groupTileKeys[_group];
+    if (key == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final tileContext = key.currentContext;
+      if (!mounted || tileContext == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          tileContext,
+          duration: const Duration(milliseconds: 200),
+        ),
+      );
+    });
   }
 
   void _open(LiveChannel channel) {
@@ -504,6 +639,35 @@ class _LiveScreenState extends State<LiveScreen> {
               alignment: Alignment.bottomCenter,
               child: _nowPlaying(context),
             ),
+          // 视频区角标：左上实时网速、右上日期时间。内嵌舞台没有控制层
+          // 可跟随、点按要保留进全屏，所以角标常驻显示；全屏里网速本就
+          // 在控制条里、随控制层显隐。电视端保留原有的分组名角标，不叠加。
+          if (!television && _playback.channel != null && error == null) ...[
+            Positioned(
+              top: 8,
+              left: 10,
+              child: IgnorePointer(
+                child: ValueListenableBuilder<String?>(
+                  valueListenable: _speedTracker.speedText,
+                  builder: (_, text, _) {
+                    if (text == null || text.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return Text(
+                      text,
+                      key: const ValueKey('live-speed-badge'),
+                      style: _videoOverlayStyle,
+                    );
+                  },
+                ),
+              ),
+            ),
+            const Positioned(
+              top: 8,
+              right: 10,
+              child: IgnorePointer(child: _LiveClock()),
+            ),
+          ],
           if (television)
             Positioned.fill(
               child: IgnorePointer(
@@ -621,6 +785,7 @@ class _LiveScreenState extends State<LiveScreen> {
 
   Widget _panel(BuildContext context, bool television) => Column(
     children: [
+      _functionRow(context),
       _current(context),
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
@@ -658,10 +823,133 @@ class _LiveScreenState extends State<LiveScreen> {
     ],
   );
 
+  /// 视频下方的功能键排：解码器、线路、默认、倍速。倍速键只显示当前
+  /// 1.0 倍、点按提示不支持变速，与全屏播放器同一口径，不做假变速。
+  Widget _functionRow(BuildContext context) {
+    final theme = Theme.of(context);
+    final channel = _playback.channel;
+    final lineCount = channel?.urls.length ?? 0;
+    final route = lineCount == 0
+        ? 0
+        : _playback.route.clamp(0, lineCount - 1);
+    final labelStyle = theme.textTheme.bodySmall?.copyWith(fontSize: 12);
+    Widget keyButton({
+      required Key key,
+      required String label,
+      required String tooltip,
+      required VoidCallback onPressed,
+    }) => Expanded(
+      child: Tooltip(
+        message: tooltip,
+        child: FilledButton.tonal(
+          key: key,
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          onPressed: onPressed,
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: labelStyle,
+          ),
+        ),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Row(
+        children: [
+          keyButton(
+            key: const ValueKey('live-decoder-button'),
+            label: _playback.decoderMode.label,
+            tooltip: '解码器：点按切换自动 / 硬解 / 软解',
+            onPressed: () {
+              final next = _playback.decoderMode.next;
+              unawaited(_playback.setDecoderMode(next));
+              AppNotice.show(context, '解码已切为${next.label}');
+            },
+          ),
+          const SizedBox(width: 8),
+          keyButton(
+            key: const ValueKey('live-route-button'),
+            label: lineCount == 0 ? '线路' : '线路 ${route + 1}/$lineCount',
+            tooltip: '线路：点按切换当前频道的播放线路',
+            onPressed: _selectRoute,
+          ),
+          const SizedBox(width: 8),
+          keyButton(
+            key: const ValueKey('live-default-button'),
+            label: '默认',
+            tooltip: '恢复默认：线路回到第 1 条、解码回到自动',
+            onPressed: () async {
+              final changed = await _playback.resetDefaults();
+              if (!mounted) return;
+              AppNotice.show(
+                context,
+                changed ? '已恢复默认线路与解码' : '已是默认设置',
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+          keyButton(
+            key: const ValueKey('live-speed-button'),
+            label: '1.0倍速',
+            tooltip: '倍速：直播不支持变速',
+            onPressed: () => AppNotice.show(context, '直播不支持变速'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 内嵌页的线路选择：与全屏页同一份语义（单线路提示、多线路选单），
+  /// 选单样式走当前主题，不复用全屏页的深色面板。
+  Future<void> _selectRoute() async {
+    final channel = _playback.channel;
+    if (channel == null || channel.urls.length < 2) {
+      AppNotice.show(context, '当前频道只有一条线路');
+      return;
+    }
+    final current = _playback.route.clamp(0, channel.urls.length - 1);
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var index = 0; index < channel.urls.length; index++)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.route_rounded),
+                title: Text('线路 ${index + 1}'),
+                trailing: index == current
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => Navigator.pop(context, index),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await _playback.playRoute(picked);
+  }
+
   Widget _current(BuildContext context) {
     final theme = Theme.of(context);
     final channel = _playback.channel;
     final logo = channel?.logo ?? '';
+    final channelName = channel?.name ?? '';
+    // 第二行只显示真实节目信息：源数据带 subtitle（平台源的主播/房间名）
+    // 才显示，没有就落回原来的源名·分组·序号说明，绝不编节目单。
+    final caption = channel != null && channel.subtitle.isNotEmpty
+        ? channel.subtitle
+        : _caption();
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: Material(
@@ -677,11 +965,12 @@ class _LiveScreenState extends State<LiveScreen> {
                   width: 58,
                   height: 58,
                   child: logo.isEmpty
-                      ? _logoFallback(theme)
+                      ? _logoFallback(theme, channelName)
                       : Image.network(
                           logo,
                           fit: BoxFit.contain,
-                          errorBuilder: (_, _, _) => _logoFallback(theme),
+                          errorBuilder: (_, _, _) =>
+                              _logoFallback(theme, channelName),
                         ),
                 ),
                 const SizedBox(width: 14),
@@ -701,7 +990,7 @@ class _LiveScreenState extends State<LiveScreen> {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        _caption(),
+                        caption,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall,
@@ -735,14 +1024,15 @@ class _LiveScreenState extends State<LiveScreen> {
         '${_playback.index + 1}/${_playback.count}';
   }
 
-  Widget _logoFallback(ThemeData theme) => Container(
+  /// 无台标时显示频道名的首字；没有频道时沿用原来的 TV 占位。
+  Widget _logoFallback(ThemeData theme, String name) => Container(
     decoration: BoxDecoration(
       color: theme.colorScheme.surface,
       borderRadius: BorderRadius.circular(10),
     ),
     alignment: Alignment.center,
     child: Text(
-      'TV',
+      name.isEmpty ? 'TV' : String.fromCharCode(name.runes.first),
       style: theme.textTheme.titleLarge?.copyWith(
         fontSize: 12,
         fontWeight: FontWeight.bold,
@@ -858,6 +1148,7 @@ class _LiveScreenState extends State<LiveScreen> {
             key: ValueKey('live-group-${entry.id}'),
             onTap: () => _loadChannels(entry.id),
             child: Container(
+              key: _groupTileKeys.putIfAbsent(entry.id, GlobalKey.new),
               margin: const EdgeInsets.fromLTRB(12, 2, 6, 2),
               padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
               decoration: BoxDecoration(
@@ -866,17 +1157,34 @@ class _LiveScreenState extends State<LiveScreen> {
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
-                entry.name,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected
-                      ? theme.colorScheme.onPrimaryContainer
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    entry.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      color: selected
+                          ? theme.colorScheme.onPrimaryContainer
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  // 分组频道数只显示源数据真实带有的 count，没有就不画。
+                  if (entry.count > 0)
+                    Text(
+                      '${entry.count} 个',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: selected
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ),
             ),
           );
@@ -919,6 +1227,12 @@ class _LiveScreenState extends State<LiveScreen> {
           }
           final channel = _channels[index];
           final selected = channel.key == current;
+          // 第二行只显示真实信息（房间名/分组/线路数），没有就不画，
+          // 绝不编假节目单，见 liveChannelRowCaption。
+          final caption = liveChannelRowCaption(
+            channel,
+            inFavourites: _group == _favouritesId,
+          );
           return InkWell(
             key: ValueKey('live-channel-${channel.key}'),
             onTap: () => _open(channel),
@@ -935,30 +1249,61 @@ class _LiveScreenState extends State<LiveScreen> {
                 children: [
                   SizedBox(
                     width: 34,
-                    child: Text(
-                      channel.number,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                        color: selected
-                            ? theme.colorScheme.onSecondaryContainer
-                            : theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+                    // 当前频道以播放三角代替序号；其余行显示序号。
+                    child: selected
+                        ? Icon(
+                            Icons.play_arrow_rounded,
+                            size: 18,
+                            color: theme.colorScheme.onSecondaryContainer,
+                          )
+                        : Text(
+                            channel.number,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                   ),
                   Expanded(
-                    child: Text(
-                      channel.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        color: selected
-                            ? theme.colorScheme.onSecondaryContainer
-                            : null,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          channel.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: selected
+                                ? theme.colorScheme.onSecondaryContainer
+                                : null,
+                          ),
+                        ),
+                        // 节目行只显示源数据真实带有的信息，没有就不画
+                        // 第二行，只留频道名，绝不编假节目单。
+                        if (caption.isNotEmpty)
+                          Text(
+                            caption,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: selected
+                                  ? theme.colorScheme.onSecondaryContainer
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
                     ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ],
               ),
@@ -966,6 +1311,47 @@ class _LiveScreenState extends State<LiveScreen> {
           );
         },
       ),
+    );
+  }
+}
+
+/// 视频区右上角的日期时间角标：每秒刷新一次，只重建自己这一小块，
+/// 不牵动整个直播页。显示设备本地时间，两行：`M/d 周X` 与 `HH:mm:ss`。
+class _LiveClock extends StatefulWidget {
+  const _LiveClock();
+
+  @override
+  State<_LiveClock> createState() => _LiveClockState();
+}
+
+class _LiveClockState extends State<_LiveClock> {
+  Timer? _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const ValueKey('live-clock'),
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(liveClockDateLine(_now), style: _videoOverlayStyle),
+        Text(liveClockTimeLine(_now), style: _videoOverlayStyle),
+      ],
     );
   }
 }

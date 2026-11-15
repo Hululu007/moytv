@@ -6,13 +6,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'collapsible_section_help.dart';
 import 'crack_config_section.dart';
 import 'import_center.dart';
 import 'import_file_store.dart';
 import 'imported_site_record.dart';
 import 'local_store.dart';
 import 'm3u_subscriptions.dart';
+import 'plugin_market_screen.dart';
 import 'py_bridge.dart';
+import 'socks5_proxy.dart';
+import 'socks5_proxy_picker.dart';
+import 'subscription_entries.dart';
 
 const _maxImportBytes = 32 * 1024 * 1024;
 
@@ -32,6 +37,14 @@ class _PendingFile {
     if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
     return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
+}
+
+String pythonRuntimeLabel(PyRuntimeStatus status) {
+  if (!status.available) return 'Python 运行时：未就绪';
+  final trimmed = status.python.trim();
+  if (trimmed.isEmpty) return 'Python 运行时：可用';
+  final first = trimmed.split(RegExp(r'\s+')).first;
+  return 'Python 运行时：可用（$first）';
 }
 
 class ImportCenterSection extends StatefulWidget {
@@ -139,19 +152,6 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
     final file = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['py'],
-    );
-    if (file == null || !mounted) return;
-    final bytes = await file.readAsBytes();
-    final report = await _engine.importAll([
-      ImportCandidate(name: file.name, bytes: bytes),
-    ]);
-    if (mounted) await _showReport(report);
-  });
-
-  Future<void> _pickSingleJar() => _runBusy('导入中…', () async {
-    final file = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['jar', 'zip'],
     );
     if (file == null || !mounted) return;
     final bytes = await file.readAsBytes();
@@ -314,13 +314,17 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
         const Divider(height: 32),
         Text('导入中心', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
-        const Text(
-          '批量扫描文件夹或多选文件导入 py / js / json / jar / zip：py 经 Python 桥成站，'
-          'XBPQ 规则 JSON 进核心规则通道，自定义源 JSON 进自定义源通道，'
-          'TVBox 配置与 jar 转交 jar 桥（未接入时明确失败），js 先注册占位。'
-          'jar + 配置 JSON 的 zip 包会拆开导入，包里的站点配置自动带上 ext 与站名；'
-          '没有配置的 jar 站点会在报告里明确提醒。'
-          '导入按内容哈希去重，并逐个给出结果报告。',
+        const CollapsibleSectionHelp(
+          key: ValueKey('import-center-help'),
+          toggleKey: ValueKey('import-center-help-toggle'),
+          brief: '批量导入各格式源文件',
+          fullText:
+              '批量扫描文件夹或多选文件导入 py / js / json / jar / zip：py 经 Python 桥成站，'
+              'XBPQ 规则 JSON 进核心规则通道，自定义源 JSON 进自定义源通道，'
+              'TVBox 配置与 jar 转交 jar 桥（未接入时明确失败），js 先注册占位。'
+              'jar + 配置 JSON 的 zip 包会拆开导入，包里的站点配置自动带上 ext 与站名；'
+              '没有配置的 jar 站点会在报告里明确提醒。'
+              '导入按内容哈希去重，并逐个给出结果报告。',
         ),
         const SizedBox(height: 8),
         FutureBuilder<PyRuntimeStatus>(
@@ -329,9 +333,7 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
             final status = snapshot.data;
             if (status == null) return const SizedBox.shrink();
             return Text(
-              status.available
-                  ? 'Python 运行时：可用（${status.python}）'
-                  : 'Python 运行时：未就绪（py 站可见但打开会明确报错）',
+              pythonRuntimeLabel(status),
               style: TextStyle(
                 color: status.available ? colors.primary : colors.error,
                 fontSize: 12,
@@ -364,9 +366,18 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
             ),
             OutlinedButton.icon(
               key: const ValueKey('import-pick-jar'),
-              onPressed: _busy ? null : () => unawaited(_pickSingleJar()),
-              icon: const Icon(Icons.archive_rounded, size: 20),
-              label: const Text('导入单个 jar / zip 包'),
+              onPressed: _busy
+                  ? null
+                  : () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => PluginMarketScreen(
+                            store: widget.store,
+                            repository: widget.repository,
+                          ),
+                        ),
+                      ),
+              icon: const Icon(Icons.extension_outlined, size: 20),
+              label: const Text('安装插件'),
             ),
           ],
         ),
@@ -586,7 +597,10 @@ class _M3uImportSectionState extends State<M3uImportSection> {
     try {
       final String text;
       if (sub.isUrl) {
-        text = await M3uSubscriptionService.fetchText(sub.url);
+        text = await M3uSubscriptionService.fetchText(
+          sub.url,
+          resourceKey: socks5M3uResourceKey(sub.id),
+        );
       } else {
         text = await M3uFileStore.readText(sub.fileName);
       }
@@ -666,9 +680,13 @@ class _M3uImportSectionState extends State<M3uImportSection> {
         const Divider(height: 32),
         Text('m3u 直播订阅', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
-        const Text(
-          '导入本地 m3u 文件或订阅远程地址：#EXTINF 的 group-title 作频道分类、'
-          'tvg-logo 作台标，频道进入直播区；订阅可刷新、改名、删除，解析失败会明确报错。',
+        const CollapsibleSectionHelp(
+          key: ValueKey('m3u-help'),
+          toggleKey: ValueKey('m3u-help-toggle'),
+          brief: '导入 m3u 文件或订阅地址',
+          fullText:
+              '导入本地 m3u 文件或订阅远程地址：#EXTINF 的 group-title 作频道分类、'
+              'tvg-logo 作台标，频道进入直播区；订阅可刷新、改名、删除，解析失败会明确报错。',
         ),
         const SizedBox(height: 12),
         Wrap(
@@ -695,34 +713,54 @@ class _M3uImportSectionState extends State<M3uImportSection> {
             Card(
               key: ValueKey('m3u-${sub.id}'),
               margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                leading: const Icon(Icons.live_tv_rounded),
-                title: Text(sub.name),
-                subtitle: Text(
-                  '${sub.isUrl ? '远程订阅' : '本地文件'} · ${sub.channelCount} 个频道 / ${sub.groupCount} 个分类'
-                  ' · 更新 ${_updatedLabel(sub.updatedAtMs)}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: '刷新',
-                      onPressed: _busy ? null : () => unawaited(_refresh(sub)),
-                      icon: const Icon(Icons.refresh_rounded),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.live_tv_rounded),
+                    title: Text(sub.name),
+                    subtitle: Text(
+                      '${sub.isUrl ? '远程订阅' : '本地文件'} · ${sub.channelCount} 个频道 / ${sub.groupCount} 个分类'
+                      ' · 更新 ${_updatedLabel(sub.updatedAtMs)}',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    IconButton(
-                      tooltip: '改名',
-                      onPressed: _busy ? null : () => unawaited(_rename(sub)),
-                      icon: const Icon(Icons.edit_outlined),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: '刷新',
+                          onPressed: _busy ? null : () => unawaited(_refresh(sub)),
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                        IconButton(
+                          tooltip: '改名',
+                          onPressed: _busy ? null : () => unawaited(_rename(sub)),
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                        IconButton(
+                          tooltip: '删除',
+                          onPressed: _busy ? null : () => unawaited(_remove(sub)),
+                          icon: Icon(Icons.delete_outline, color: colors.error),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: '删除',
-                      onPressed: _busy ? null : () => unawaited(_remove(sub)),
-                      icon: Icon(Icons.delete_outline, color: colors.error),
+                  ),
+                  // m3u 订阅只有直播一边：单个“直播”入口，直接进该订阅的频道列表。
+                  SubscriptionEntryButtons(
+                    entries: subscriptionEntriesForM3u(sub),
+                    onEnterVideo: (_) {},
+                    onEnterLive: (sourceId) =>
+                        enterSubscriptionLive(context, widget.store, sourceId),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16, right: 16),
+                    child: Socks5ResourceProxyPicker(
+                      resourceKey: socks5M3uResourceKey(sub.id),
+                      label: '刷新走代理',
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
         ],

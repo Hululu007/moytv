@@ -59,6 +59,30 @@ class LocalStore extends ChangeNotifier {
   List<M3uSubscription> _m3uSubscriptions = [];
   final Set<String> _registeredM3uIds = {};
 
+  /// 订阅双入口的待办请求（内存态，不落盘）：订阅行点“影视/直播”后
+  /// 记下要进的站源 id 或直播源 id，首页在 didPopNext 里消费后清掉。
+  /// 两个方向互斥，后一次请求覆盖前一次。
+  String _pendingLiveSourceId = '';
+  String _pendingVideoSiteId = '';
+  String get pendingLiveSourceId => _pendingLiveSourceId;
+  String get pendingVideoSiteId => _pendingVideoSiteId;
+
+  void requestSubscriptionEntry({
+    String liveSourceId = '',
+    String siteId = '',
+  }) {
+    _pendingLiveSourceId = liveSourceId;
+    _pendingVideoSiteId = siteId;
+    _notify();
+  }
+
+  void clearSubscriptionEntryRequest() {
+    if (_pendingLiveSourceId.isEmpty && _pendingVideoSiteId.isEmpty) return;
+    _pendingLiveSourceId = '';
+    _pendingVideoSiteId = '';
+    _notify();
+  }
+
   void _initialize() {
     try {
       _snapshot = LocalSnapshot(preferences);
@@ -353,6 +377,10 @@ class LocalStore extends ChangeNotifier {
       }
     }
   }
+
+  /// 插件安装/卸载后通知：站点登记表已变，各处站点列表立即重算。
+  /// 只发通知，不重建登记表（登记表由安装/卸载路径直接维护）。
+  void refreshSiteRegistry() => _notify();
 
   Future<void> syncImportedSites(List<ImportedSiteRecord> records) async {
     final epoch = _epoch;
@@ -922,7 +950,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
-  /// 当前全局主题（8 套固定主题之一），默认紫蓝霓虹。
+  /// 当前全局主题（12 套固定主题之一），默认紫蓝霓虹。
   AppThemeMode get appTheme {
     final value = _configurationError == null
         ? _string('appThemeMode')
@@ -933,18 +961,27 @@ class LocalStore extends ChangeNotifier {
   Future<void> setAppTheme(AppThemeMode mode) =>
       _setting('appThemeMode', mode.storageValue);
 
-  /// 某套主题绑定的显示方案（导航样式 + 内容档），默认抽屉 + 全部内容。
+  /// 某套主题绑定的显示方案：导航样式取主题固定值（见
+  /// navStyleForTheme，存值里的导航段是历史遗留、读取时忽略），
+  /// 内容档按存值走，默认全部内容。
   ThemeDisplayScheme displayScheme(AppThemeMode mode) {
     final value = _configurationError == null
         ? _string('themeScheme_${mode.storageValue}')
         : null;
-    return ThemeDisplayScheme.fromStorageValue(value);
+    return ThemeDisplayScheme.fromStorageValue(
+      value,
+    ).copyWith(navStyle: navStyleForTheme(mode));
   }
 
+  /// 写回显示方案：只有内容档是用户可改的，导航样式写值会被主题
+  /// 固定值覆盖后存盘，保证读回的永远是固定映射。
   Future<void> setDisplayScheme(
     AppThemeMode mode,
     ThemeDisplayScheme scheme,
-  ) => _setting('themeScheme_${mode.storageValue}', scheme.storageValue);
+  ) => _setting(
+    'themeScheme_${mode.storageValue}',
+    scheme.copyWith(navStyle: navStyleForTheme(mode)).storageValue,
+  );
 
   /// 旧主题系统（模式/风格/强调色/背景）是否还留有存值。
   /// 旧值不再被读取，只由迁移清理。

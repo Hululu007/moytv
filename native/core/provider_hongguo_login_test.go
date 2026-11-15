@@ -163,7 +163,6 @@ func TestHongguoAccountQrConfirmKeepsQrWording(t *testing.T) {
 	}
 }
 
-
 func TestHongguoFormatMobileAcceptsCountryCodePrefix(t *testing.T) {
 	// Dart 侧 forBridge 曾把区号拼进来（"+86 138…"），数字串变成 13 位；
 	// 格式化应先剥掉这层区号再校验，合法号码不能误报。

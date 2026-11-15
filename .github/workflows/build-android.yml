@@ -17,6 +17,10 @@ on:
         description: "同时构建 iOS 未签名包（macOS 任务，需手动勾选；未签名包装不到真 iPhone，需自行签名后侧载）"
         type: boolean
         default: false
+      empty_shell:
+        description: "空壳版（不捆绑 jar/py 插件、不自动装插件；海阔规则与直播不动）"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths-ignore:
@@ -27,7 +31,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-${{ github.ref }}-${{ github.event.inputs.variant || 'moyi' }}
+  group: android-${{ github.ref }}-${{ github.event.inputs.variant || 'moyi' }}-${{ github.event.inputs.empty_shell || 'false' }}
   cancel-in-progress: true
 
 env:
@@ -140,6 +144,7 @@ jobs:
           GOPROXY: https://proxy.golang.org,direct
           GOSUMDB: sum.golang.org
           CGO_ENABLED: "1"
+          MOYI_EMPTY_SHELL: ${{ github.event.inputs.empty_shell || 'false' }}
         run: |
           set -e
           ARGS="--abi ${ABI}"

@@ -8,6 +8,7 @@ import 'core_bridge.dart';
 import 'jar_import.dart';
 import 'jar_site_config.dart';
 import 'jar_zip.dart';
+import 'plugin_manifest.dart';
 import 'tvbox_config.dart';
 
 class JarBridgeHandoff {
@@ -23,7 +24,14 @@ class JarBridgeHandoff {
     final report = await TvBoxImporter(
       repository,
     ).importFromText(content, sourceIdentity: 'file:$name');
-    if (report.apiSites + report.jarSites + report.pySites == 0) {
+    if (report.apiSites +
+            report.jarSites +
+            report.pySites +
+            report.jsSites +
+            report.t4Sites +
+            report.lives +
+            report.parses ==
+        0) {
       throw AppFailure(
         'TVBox 配置未注册任何站点'
         '${report.notes.isEmpty ? '' : '：${report.notes.join('；')}'}',
@@ -98,11 +106,15 @@ class JarBridgeHandoff {
     final file = File(path.join(jarDir.path, '$digest.jar'));
     if (!await file.exists()) await file.writeAsBytes(bytes, flush: true);
     final jarId = 'imp${digest.substring(0, 10)}';
+    // 显式配置优先；没有显式配置时，jar 内清单（moyi-plugin.json）优先于
+    // 学习/内置配置；没有清单则走既有匹配。
+    final effectiveConfigs =
+        configs.isEmpty ? extractJarManifestConfigs(bytes) : configs;
     final result = await JarImport.scanAndRegister(
       jarId: jarId,
       jarUrl: file.path,
       jarMd5: digest,
-      configs: configs,
+      configs: effectiveConfigs,
       displayName: name,
     );
     final classes = result.all;
@@ -165,11 +177,16 @@ class JarBridgeHandoff {
       savedExtras.add(path.basename(target.path));
     }
     final jarId = 'imp${digest.substring(0, 10)}';
+    // zip 包内 JSON 配置优先，jar 内清单补空位（先匹配者胜）。
+    final effectiveConfigs = [
+      ...package.configs,
+      ...extractJarManifestConfigs(jarBytes),
+    ];
     final result = await JarImport.scanAndRegister(
       jarId: jarId,
       jarUrl: file.path,
       jarMd5: digest,
-      configs: package.configs,
+      configs: effectiveConfigs,
       displayName: name,
     );
     final classes = result.all;

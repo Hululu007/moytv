@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
@@ -11,6 +12,31 @@ import 'live_sources.dart';
 import 'screen_awake.dart';
 import 'video_output_size.dart';
 import 'sleep_timer.dart';
+
+/// 直播解码模式：只调 mpv 的 hwdec，与点播同一套取值（点播见
+/// player_screen 的起播链）。直播没有 Exo 链路，模式名只说硬解/软解，
+/// 不冒充其他解码器。默认自动，与今天不设 hwdec 时点播的默认值一致。
+enum LiveDecoderMode { auto, hardware, software }
+
+extension LiveDecoderModeX on LiveDecoderMode {
+  String get label => switch (this) {
+    LiveDecoderMode.auto => '自动',
+    LiveDecoderMode.hardware => '硬解',
+    LiveDecoderMode.software => '软解',
+  };
+
+  String get mpvValue => switch (this) {
+    LiveDecoderMode.auto => 'auto-safe',
+    LiveDecoderMode.hardware => 'mediacodec-copy',
+    LiveDecoderMode.software => 'no',
+  };
+
+  LiveDecoderMode get next => switch (this) {
+    LiveDecoderMode.auto => LiveDecoderMode.hardware,
+    LiveDecoderMode.hardware => LiveDecoderMode.software,
+    LiveDecoderMode.software => LiveDecoderMode.auto,
+  };
+}
 
 /// 直播播放状态：顶部内嵌播放器与全屏播放共用同一实例，换台不重建引擎。
 class LivePlaybackController extends ChangeNotifier {
@@ -64,6 +90,7 @@ class LivePlaybackController extends ChangeNotifier {
   int _generation = 0;
   int _retries = 0;
   int _route = 0;
+  LiveDecoderMode _decoderMode = LiveDecoderMode.auto;
   bool _loading = false;
   bool _buffering = false;
   bool _disposed = false;
@@ -82,6 +109,7 @@ class LivePlaybackController extends ChangeNotifier {
   bool get buffering => _buffering;
   bool get ready => _player != null;
   int get route => _route;
+  LiveDecoderMode get decoderMode => _decoderMode;
   String? get error => _error;
   double get aspectRatio => _aspectRatio;
 
@@ -202,6 +230,7 @@ class LivePlaybackController extends ChangeNotifier {
       _ensurePlayer();
       final player = _player;
       if (player == null) throw AppFailure('直播播放器无法启动');
+      await _applyDecoderMode(player);
       final plan = await _resolve(source, channel);
       if (_disposed || token != _generation) return;
       _frames = false;
@@ -246,6 +275,41 @@ class LivePlaybackController extends ChangeNotifier {
   Future<void> playRoute(int route) {
     _route = route < 0 ? 0 : route;
     return play(_index);
+  }
+
+  /// 切换解码模式：hwdec 只在下一次打开流时生效，所以切完重播当前频道。
+  Future<void> setDecoderMode(LiveDecoderMode mode) async {
+    if (_disposed || mode == _decoderMode) return;
+    _decoderMode = mode;
+    notifyListeners();
+    if (_channels.isEmpty) return;
+    await play(_index);
+  }
+
+  /// 默认：线路回到第 1 条、解码回到自动。返回是否真的改动过，
+  /// 调用方据此决定提示文案。改动过且有频道时重播当前频道。
+  Future<bool> resetDefaults() async {
+    if (_disposed) return false;
+    final changed = _route != 0 || _decoderMode != LiveDecoderMode.auto;
+    _route = 0;
+    _decoderMode = LiveDecoderMode.auto;
+    if (!changed) return false;
+    notifyListeners();
+    if (_channels.isEmpty) return true;
+    await play(_index);
+    return true;
+  }
+
+  /// 起播前应用当前解码模式：只在安卓原生 mpv 上设属性，其余平台
+  /// 与测试替身直接跳过；属性设置失败绝不打断起播。
+  Future<void> _applyDecoderMode(Player player) async {
+    if (!Platform.isAndroid) return;
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.setProperty('hwdec', _decoderMode.mpvValue);
+      await platform.setProperty('hwdec-codecs', 'all');
+    } catch (_) {}
   }
 
   /// 上一台 / 下一台，越界时环绕。

@@ -74,26 +74,34 @@ bool tgIsAdPost({required String title, required String description}) {
   return false;
 }
 
-/// 去重：同标题（去首尾空白、折叠空白、小写）且同非空封面只留第一条。
-/// 封面为空的条目不去重——不同频道可能发同标题无封面帖，列表行里
-/// 没有可区分的链接字段，宁可多留不可误删。
+/// 去重：归一键（tgTitleKey，小写）+ 集号（tgEpisodeNumber）相同只
+/// 留一条，优先留有封面的；无封面的同键同集也去重。不同集号不去
+/// 重（走集数归拢）。归一键为空的条目不去重——空键没有身份信息，
+/// 宁可多留不可误删。归一与集号逻辑本身不动（jar 逐行移植）。
 List<Drama> tgDedupeItems(List<Drama> items) {
-  final seen = <String>{};
   final kept = <Drama>[];
+  final indexByKey = <String, int>{};
   for (final item in items) {
-    final cover = item.cover.trim();
-    if (cover.isEmpty) {
+    final key = tgTitleKey(item.title).toLowerCase();
+    if (key.isEmpty) {
       kept.add(item);
       continue;
     }
-    final key = '${_normalizeTitle(item.title)}\n$cover';
-    if (seen.add(key)) kept.add(item);
+    final dedupeKey = '$key\n${tgEpisodeNumber(item.title)}';
+    final existing = indexByKey[dedupeKey];
+    if (existing == null) {
+      indexByKey[dedupeKey] = kept.length;
+      kept.add(item);
+      continue;
+    }
+    // 同键同集：已留的无封面、新来的有封面时换成有封面的那条。
+    if (kept[existing].cover.trim().isEmpty &&
+        item.cover.trim().isNotEmpty) {
+      kept[existing] = item;
+    }
   }
   return kept;
 }
-
-String _normalizeTitle(String title) =>
-    title.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
 
 // ---- 标题归一：jar titleKeyOf / epNoOf 的逐行移植 ----
 
