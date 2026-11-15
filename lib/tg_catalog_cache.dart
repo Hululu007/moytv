@@ -1,6 +1,6 @@
 import 'models.dart';
 
-/// TG 两站（ZakaTg / ZakaTgMovie）目录 1 小时缓存：只放内存，不落盘。
+/// TG 三站（ZakaTg / ZakaTgMovie / ZakaTgPianku）目录 1 小时缓存：只放内存，不落盘。
 ///
 /// 口径：按站 + 分类区分，只缓存第 1 页的普通浏览（无搜索词、无筛
 /// 选）；搜索、详情、翻页（第 2 页起）、手动强制刷新一律不走缓存。

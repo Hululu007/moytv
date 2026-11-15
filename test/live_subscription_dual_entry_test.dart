@@ -358,11 +358,11 @@ void main() {
         ),
       );
 
-      await tester.pumpWidget(frame(sourceId: 'huya', nonce: 1));
+      await tester.pumpWidget(frame(sourceId: 'xiuguo', nonce: 1));
       await _waitForLiveReady(tester);
       // 当前频道带 subtitle 时简介行显示 subtitle 而不是源名，
       // 故直接断言播放器选中的源。
-      expect(playback.source?.id, 'huya');
+      expect(playback.source?.id, 'xiuguo');
 
       await tester.pumpWidget(frame(sourceId: 'bilibili', nonce: 2));
       for (var i = 0; i < 30 && playback.source?.id != 'bilibili'; i++) {

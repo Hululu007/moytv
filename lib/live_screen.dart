@@ -785,7 +785,6 @@ class _LiveScreenState extends State<LiveScreen> {
 
   Widget _panel(BuildContext context, bool television) => Column(
     children: [
-      _functionRow(context),
       _current(context),
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
@@ -822,123 +821,6 @@ class _LiveScreenState extends State<LiveScreen> {
       Expanded(child: _lists(context, television)),
     ],
   );
-
-  /// 视频下方的功能键排：解码器、线路、默认、倍速。倍速键只显示当前
-  /// 1.0 倍、点按提示不支持变速，与全屏播放器同一口径，不做假变速。
-  Widget _functionRow(BuildContext context) {
-    final theme = Theme.of(context);
-    final channel = _playback.channel;
-    final lineCount = channel?.urls.length ?? 0;
-    final route = lineCount == 0
-        ? 0
-        : _playback.route.clamp(0, lineCount - 1);
-    final labelStyle = theme.textTheme.bodySmall?.copyWith(fontSize: 12);
-    Widget keyButton({
-      required Key key,
-      required String label,
-      required String tooltip,
-      required VoidCallback onPressed,
-    }) => Expanded(
-      child: Tooltip(
-        message: tooltip,
-        child: FilledButton.tonal(
-          key: key,
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-          onPressed: onPressed,
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: labelStyle,
-          ),
-        ),
-      ),
-    );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: Row(
-        children: [
-          keyButton(
-            key: const ValueKey('live-decoder-button'),
-            label: _playback.decoderMode.label,
-            tooltip: '解码器：点按切换自动 / 硬解 / 软解',
-            onPressed: () {
-              final next = _playback.decoderMode.next;
-              unawaited(_playback.setDecoderMode(next));
-              AppNotice.show(context, '解码已切为${next.label}');
-            },
-          ),
-          const SizedBox(width: 8),
-          keyButton(
-            key: const ValueKey('live-route-button'),
-            label: lineCount == 0 ? '线路' : '线路 ${route + 1}/$lineCount',
-            tooltip: '线路：点按切换当前频道的播放线路',
-            onPressed: _selectRoute,
-          ),
-          const SizedBox(width: 8),
-          keyButton(
-            key: const ValueKey('live-default-button'),
-            label: '默认',
-            tooltip: '恢复默认：线路回到第 1 条、解码回到自动',
-            onPressed: () async {
-              final changed = await _playback.resetDefaults();
-              if (!mounted) return;
-              AppNotice.show(
-                context,
-                changed ? '已恢复默认线路与解码' : '已是默认设置',
-              );
-            },
-          ),
-          const SizedBox(width: 8),
-          keyButton(
-            key: const ValueKey('live-speed-button'),
-            label: '1.0倍速',
-            tooltip: '倍速：直播不支持变速',
-            onPressed: () => AppNotice.show(context, '直播不支持变速'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 内嵌页的线路选择：与全屏页同一份语义（单线路提示、多线路选单），
-  /// 选单样式走当前主题，不复用全屏页的深色面板。
-  Future<void> _selectRoute() async {
-    final channel = _playback.channel;
-    if (channel == null || channel.urls.length < 2) {
-      AppNotice.show(context, '当前频道只有一条线路');
-      return;
-    }
-    final current = _playback.route.clamp(0, channel.urls.length - 1);
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var index = 0; index < channel.urls.length; index++)
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.route_rounded),
-                title: Text('线路 ${index + 1}'),
-                trailing: index == current
-                    ? const Icon(Icons.check_rounded)
-                    : null,
-                onTap: () => Navigator.pop(context, index),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (picked == null || !mounted) return;
-    await _playback.playRoute(picked);
-  }
 
   Widget _current(BuildContext context) {
     final theme = Theme.of(context);

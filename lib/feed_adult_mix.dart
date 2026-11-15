@@ -10,8 +10,18 @@ import 'models.dart';
 /// 取不到成人内容时原样回落，不留空位。
 
 /// 推荐频道混入比例：每 [recommendAdultMixDenominator] 条里约 1 条
-/// 成人条目（约五分之一）。
+/// 成人条目（约五分之一）。无可分类观看历史时的默认比例。
 const recommendAdultMixDenominator = 5;
+
+/// 口味混排的比例边界（分母）：偏成人最低 2（约一半成人），偏
+/// 短剧最高 8（约八分之一成人）；成人占比永远在 1/8 到 1/2 之间，
+/// 既不为 0 也不独占，两种内容永远混合。
+const recommendAdultMixMinDenominator = 2;
+const recommendAdultMixMaxDenominator = 8;
+
+/// 口味窗口：只看最近 [tasteRecentCount] 条观看记录（调用方须按
+/// 更新时间从新到旧传，[LocalStore.history] 本就是这个顺序）。
+const tasteRecentCount = 30;
 
 /// 成人频道每次重抽时取的成人站数上限（绝不全量拉站）。
 const feedAdultMaxSites = 6;
@@ -79,6 +89,43 @@ List<Drama> mixRecommendFeed({
     }
   }
   return mixed;
+}
+
+/// 由本地观看历史算推荐混排分母：取最近 [recentCount] 条记录，
+/// 按条目站源是否成人计占比——占比 0（全看短剧）→ 分母 8，占比
+/// 1（全看成人）→ 分母 2，中间线性、取整；占比一半时正好回到
+/// 默认分母 5。无可分类记录（无历史、站源为空、站源已不在当前
+/// 站源表里）时返回默认分母。只读本机数据，不联网、不上报。
+///
+/// [isAdultSource] 对站源 id 返回 true=成人、false=非成人、
+/// null=无法归类（跳过不计，不编数据）。
+int recommendDenominatorFromHistory(
+  List<WatchEntry> history, {
+  required bool? Function(String sourceId) isAdultSource,
+  int recentCount = tasteRecentCount,
+}) {
+  var adult = 0;
+  var total = 0;
+  for (final entry in history.take(recentCount)) {
+    final source = entry.drama.source;
+    if (source.isEmpty) continue;
+    final isAdult = isAdultSource(source);
+    if (isAdult == null) continue;
+    total++;
+    if (isAdult) adult++;
+  }
+  if (total == 0) return recommendAdultMixDenominator;
+  final share = adult / total;
+  final denominator =
+      (recommendAdultMixMaxDenominator -
+              share *
+                  (recommendAdultMixMaxDenominator -
+                      recommendAdultMixMinDenominator))
+          .round();
+  return denominator.clamp(
+    recommendAdultMixMinDenominator,
+    recommendAdultMixMaxDenominator,
+  );
 }
 
 /// 混排重抽键：可见成人站集合或基础目录变化才重抽；同一份数据

@@ -340,17 +340,29 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
   Widget build(BuildContext context) {
     final state = _state;
     final controller = _controller;
+    // 紧凑按钮样式：高度与内边距缩小一档，一屏多看几项；
+    // 收缩点击区只影响视觉高度，文字与行为原样不动。
+    final compactFilled = FilledButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final compactOutlined = OutlinedButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('代理内核')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
         children: [
           const Text(
             '本地代理模式：只代理本应用自身的 HTTP 流量（经 127.0.0.1 本地端口），'
             '不做系统 VPN，不影响其它应用。',
           ),
           if (state != null && !state.supported) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             const Card(
               child: ListTile(
                 title: Text('iOS 暂不支持代理内核'),
@@ -361,12 +373,14 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
               ),
             ),
           ] else ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             if (state == null)
               const LinearProgressIndicator()
             else ...[
               ListTile(
                 contentPadding: EdgeInsets.zero,
+                dense: true,
+                visualDensity: VisualDensity.compact,
                 title: Text(state.running ? '运行中' : '已停止'),
                 subtitle: Text(
                   state.installed
@@ -380,47 +394,54 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
               if (_busy) const LinearProgressIndicator(),
               if (_progress.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.only(top: 6),
                   child: Text(_progress),
                 ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Wrap(
                 spacing: 8,
-                runSpacing: 8,
+                runSpacing: 6,
                 children: [
                   if (!state.running)
                     FilledButton.icon(
+                      style: compactFilled,
                       onPressed: _busy || !state.installed ? null : _start,
                       icon: const Icon(Icons.play_arrow_outlined),
                       label: const Text('开启'),
                     )
                   else
                     FilledButton.icon(
+                      style: compactFilled,
                       onPressed: _busy ? null : _stop,
                       icon: const Icon(Icons.stop_outlined),
                       label: const Text('停止'),
                     ),
                   FilledButton.icon(
+                    style: compactFilled,
                     onPressed: _busy ? null : _updateKernel,
                     icon: const Icon(Icons.download_outlined),
                     label: const Text('更新内核'),
                   ),
                   if (state.hasExternal)
                     OutlinedButton.icon(
+                      style: compactOutlined,
                       onPressed: _busy ? null : _deleteExternal,
                       icon: const Icon(Icons.delete_outline),
                       label: const Text('删除外置内核'),
                     ),
                   OutlinedButton.icon(
+                    style: compactOutlined,
                     onPressed: _busy ? null : _reload,
                     icon: const Icon(Icons.refresh_outlined),
                     label: const Text('刷新状态'),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,
+                dense: true,
+                visualDensity: VisualDensity.compact,
                 value: _autoStart,
                 title: const Text('启动时自动开启'),
                 subtitle: const Text('应用启动后若内核已下载且订阅已有节点，自动按上次订阅启动'),
@@ -431,27 +452,33 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
                         if (mounted) setState(() => _autoStart = value);
                       },
               ),
-              const Divider(height: 32),
+              const Divider(height: 20),
               Text('订阅地址', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               const Text('默认空，用户自填；只用于拉取 Clash YAML 订阅。'),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               TextField(
                 controller: _subscriptionController,
                 decoration: const InputDecoration(
                   hintText: 'https://…（Clash 订阅地址）',
                   border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
                 keyboardType: TextInputType.url,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               FilledButton.icon(
+                style: compactFilled,
                 onPressed: _busy ? null : _updateSubscription,
                 icon: const Icon(Icons.sync_outlined),
                 label: const Text('保存并更新订阅'),
               ),
               if (_nodes.isNotEmpty) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 Text(
                   '节点（${_nodes.length}）',
                   style: Theme.of(context).textTheme.titleMedium,
@@ -486,12 +513,12 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
                   ),
               ],
               if (controller != null && controller.selectGroup != null) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
                   '当前选中：${controller.selectGroup!.current.isEmpty ? '未选择' : controller.selectGroup!.current}',
                 ),
               ],
-              const Divider(height: 32),
+              const Divider(height: 20),
               Row(
                 children: [
                   Text('运行日志', style: Theme.of(context).textTheme.titleMedium),
@@ -503,14 +530,14 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   border: Border.all(
                     color: Theme.of(context).colorScheme.outlineVariant,
                   ),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(
                   state.logTail.isEmpty ? '暂无日志' : state.logTail,
@@ -519,36 +546,38 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
               ),
               if (!Platform.isAndroid)
                 const Padding(
-                  padding: EdgeInsets.only(top: 12),
+                  padding: EdgeInsets.only(top: 8),
                   child: Text('当前平台不是 Android，启停与节点控制在真机 Android 端验证。'),
                 ),
             ],
           ],
-          const Divider(height: 32),
+          const Divider(height: 20),
           Text('SOCKS5 代理', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           const Text(
             '手动添加的 SOCKS5 代理，经本机转发器连接，不依赖上面的代理内核。'
             '测速发真实请求计时；一键识别逐个测全部代理并标可用/不可用。',
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           if (_socks5Busy) const LinearProgressIndicator(),
           if (_socks5Progress.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: 6),
               child: Text(_socks5Progress),
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Wrap(
             spacing: 8,
-            runSpacing: 8,
+            runSpacing: 6,
             children: [
               FilledButton.icon(
+                style: compactFilled,
                 onPressed: _socks5Busy ? null : () => _editSocks5(),
                 icon: const Icon(Icons.add_outlined),
                 label: const Text('新增代理'),
               ),
               FilledButton.icon(
+                style: compactFilled,
                 onPressed: _socks5Busy || _socks5Proxies.isEmpty
                     ? null
                     : _identifySocks5,
@@ -559,7 +588,7 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
           ),
           if (_socks5Proxies.isEmpty)
             const Padding(
-              padding: EdgeInsets.only(top: 12),
+              padding: EdgeInsets.only(top: 8),
               child: Text('还没有 SOCKS5 代理，点“新增代理”添加。'),
             )
           else
@@ -600,7 +629,7 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
                   ],
                 ),
               ),
-          const Divider(height: 32),
+          const Divider(height: 20),
           Text('各资源代理', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           const Text(
@@ -622,7 +651,7 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
             ),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 16),
+              padding: const EdgeInsets.only(top: 10),
               child: Text(
                 _error!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
@@ -718,7 +747,7 @@ class _Socks5ProxyEditDialogState extends State<_Socks5ProxyEditDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
               controller: _hostController,
               decoration: const InputDecoration(
@@ -728,7 +757,7 @@ class _Socks5ProxyEditDialogState extends State<_Socks5ProxyEditDialog> {
               ),
               keyboardType: TextInputType.url,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
               controller: _portController,
               decoration: const InputDecoration(
@@ -738,7 +767,7 @@ class _Socks5ProxyEditDialogState extends State<_Socks5ProxyEditDialog> {
               ),
               keyboardType: TextInputType.number,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
               controller: _usernameController,
               decoration: const InputDecoration(
@@ -746,7 +775,7 @@ class _Socks5ProxyEditDialogState extends State<_Socks5ProxyEditDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
               controller: _passwordController,
               obscureText: !_showPassword,

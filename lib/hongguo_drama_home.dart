@@ -23,6 +23,7 @@ import 'multimedia_screen.dart';
 import 'neon/neon_channel_view.dart';
 import 'neon/neon_home_view.dart';
 import 'neon/neon_ui.dart';
+import 'neon_glass_kit.dart';
 import 'playback_foreground.dart';
 import 'theme_settings_screen.dart';
 import 'tvbox_player_bridge.dart';
@@ -259,6 +260,23 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   /// 混入（显示未混排的基础目录）。与成人频道共用同一重抽键。
   List<Drama>? _recommendMixed;
 
+  /// 推荐频道混排分母：由本地观看历史算口味（成人站按站名 🔞
+  /// 认，与混排口径一致；站源表里没有的旧记录归类不了，跳过）。
+  /// 混排结果缓存期间分母不变，数据刷新重抽时重新算。
+  int _tasteDenominator() {
+    final sources = widget.store.sources;
+    final knownIds = sources.map((site) => site.id).toSet();
+    final adultIds = sources
+        .where((site) => isAdultSourceName(site.name))
+        .map((site) => site.id)
+        .toSet();
+    return recommendDenominatorFromHistory(
+      widget.store.history,
+      isAdultSource: (id) =>
+          knownIds.contains(id) ? adultIds.contains(id) : null,
+    );
+  }
+
   /// 成人频道与推荐混排的重抽判断：只在成人/推荐频道才取数；键
   /// 不变时不重抽、不重取，牌序一会话内固定。
   void _maybeRefreshAdultFeed() {
@@ -278,6 +296,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           base: base,
           adult: _adultFeed!,
           random: Random(key.hashCode),
+          denominator: _tasteDenominator(),
         );
       }
       return;
@@ -338,6 +357,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         base: base,
         adult: verified,
         random: Random(key.hashCode),
+        denominator: _tasteDenominator(),
       );
     });
     // 成人频道刚取到内容时主动起播首条；推荐频道若已在播则不打断，
@@ -1001,7 +1021,10 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     return Scaffold(
       backgroundColor: _tab == 0 ? Colors.black : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
-      body: hideCapsuleBar && _tab != 0
+      // 我的页不显示内部导航芯片行：回其它页走外层底栏。
+      body: hideCapsuleBar &&
+              _tab != 0 &&
+              _tab != HongguoDramaHome.mineTabIndex
           ? Column(
               children: [
                 _internalNavRow(),
@@ -1021,8 +1044,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
 
   /// 底部标签样式下的内层页签行：胶囊栏藏起后，首页/频道/多媒体/
   /// 推荐四个内层去向改由这行芯片到达（“我的”走外层底栏经
-  /// requestedTab 驱动）。全屏流页签不显示此行，改由顶栏返回键
-  /// 退出（全屏流要保持全屏）。
+  /// requestedTab 驱动，我的页上不显示这行）。全屏流页签不显示此行，
+  /// 改由顶栏返回键退出（全屏流要保持全屏）。
   Widget _internalNavRow() {
     const entries = [
       ('home', '首页', _neonHomeTab),
@@ -1114,26 +1137,44 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   Widget _feed(BuildContext context) {
     final videos = _videos;
     if (videos.isEmpty) {
+      // 空态也不能丢顶栏：否则用户点了关注（空）就再也点不回推荐。
+      // 黑底上顶栏置顶，下方是转圈/空态面板，与有内容时同一套顶栏。
       if (_channel == 'adult' && _adultFeed == null) {
-        return const SafeArea(
-          child: Center(
-            child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-          ),
+        return Column(
+          children: [
+            _feedTopBar(),
+            const Expanded(
+              child: SafeArea(
+                child: Center(
+                  child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+                ),
+              ),
+            ),
+          ],
         );
       }
-      return SafeArea(
-        child: StatusPanel(
-          title: _channel == 'follow'
-              ? '暂无关注短剧'
-              : _channel == 'adult'
-              ? '暂无成人视频'
-              : '暂无可播短剧',
-          message: _channel == 'follow'
-              ? '在剧集上点收藏后，这里会显示你关注的短剧。'
-              : _channel == 'adult'
-              ? '没有可见的成人站，或成人站暂无内容。'
-              : '可以换个分类或刷新后重试。',
-        ),
+      return Column(
+        children: [
+          _feedTopBar(),
+          Expanded(
+            child: SafeArea(
+              child: StatusPanel(
+                title: _channel == 'follow'
+                    ? '暂无关注短剧'
+                    : _channel == 'adult'
+                    ? '暂无成人视频'
+                    : '暂无可播短剧',
+                message: _channel == 'follow'
+                    ? '在剧集上点收藏后，这里会显示你关注的短剧。'
+                    : _channel == 'adult'
+                    ? '没有可见的成人站，或成人站暂无内容。'
+                    : '可以换个分类或刷新后重试。',
+                action: '回推荐',
+                onRetry: () => _onChannelTap(_recommendChannel()),
+              ),
+            ),
+          ),
+        ],
       );
     }
     return Stack(
@@ -1585,63 +1626,114 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
+  /// 我的页：设置页同款视觉语言——分段标题 + 圆角分组卡片 + 渐变
+  /// 图标块 + 右侧箭头，复用设置页的共享组件、跟随当前主题。
+  /// 分组：帐户（登录行 + 云端 4 项）/ 内容（追剧、最近观看）/
+  /// 外观与设置（主题切换、设置）。条目、文字、计数、点击行为
+  /// 与旧版一致；页顶不显示内部导航芯片行（见 build）。
   Widget _mine(BuildContext context) {
+    final config = AppThemeConfig.of(context);
     return SafeArea(
       child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
         children: [
-          ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.person)),
-            title: const Text('我的'),
-            subtitle: Text(widget.sourceLabel),
-          ),
-          const Divider(),
-          HongguoAccountEntry(
-            controller: _accountController,
-            repository: widget.repository,
-          ),
-          const Divider(),
-          HongguoAccountCloudSection(
-            controller: _accountController,
-            onOpenDrama: widget.onOpenDrama,
-          ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.bookmark_outline),
-            title: const Text('追剧'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => widget.onOpenSaved(history: false),
-          ),
-          ListTile(
-            leading: const Icon(Icons.history_outlined),
-            title: const Text('最近观看'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => widget.onOpenSaved(history: true),
-          ),
-          ListTile(
-            key: const ValueKey('mine-theme-entry'),
-            leading: const Icon(Icons.palette_outlined),
-            title: const Text('主题切换'),
-            subtitle: Text(
-              '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 12 套主题',
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 6, 4, 14),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 26,
+                  backgroundColor: config.primaryColor.withValues(alpha: 0.16),
+                  child: Icon(
+                    Icons.person,
+                    size: 30,
+                    color: config.primaryColor,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '我的',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: config.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.sourceLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: config.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-              appPageRoute<void>(
-                builder: (_) => ThemeSettingsScreen(
-                  store: widget.store,
-                  repository: widget.repository,
-                  sourceId: widget.store.source,
+          ),
+          const NeonSectionTitle('帐户'),
+          NeonRowGroup(
+            children: [
+              HongguoAccountEntry(
+                controller: _accountController,
+                repository: widget.repository,
+              ),
+              HongguoAccountCloudSection(
+                controller: _accountController,
+                onOpenDrama: widget.onOpenDrama,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const NeonSectionTitle('内容'),
+          NeonRowGroup(
+            children: [
+              NeonRow(
+                icon: Icons.bookmark_outline,
+                title: '追剧',
+                onTap: () => widget.onOpenSaved(history: false),
+              ),
+              NeonRow(
+                icon: Icons.history_outlined,
+                title: '最近观看',
+                onTap: () => widget.onOpenSaved(history: true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const NeonSectionTitle('外观与设置'),
+          NeonRowGroup(
+            children: [
+              NeonRow(
+                key: const ValueKey('mine-theme-entry'),
+                icon: Icons.palette_outlined,
+                title: '主题切换',
+                detail:
+                    '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 12 套主题',
+                onTap: () => Navigator.of(context).push(
+                  appPageRoute<void>(
+                    builder: (_) => ThemeSettingsScreen(
+                      store: widget.store,
+                      repository: widget.repository,
+                      sourceId: widget.store.source,
+                    ),
+                  ),
                 ),
               ),
-            ),
+              if (widget.onSettingsPressed != null)
+                NeonRow(
+                  icon: Icons.settings_outlined,
+                  title: '设置',
+                  onTap: widget.onSettingsPressed,
+                ),
+            ],
           ),
-          if (widget.onSettingsPressed != null)
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('设置'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: widget.onSettingsPressed,
-            ),
         ],
       ),
     );

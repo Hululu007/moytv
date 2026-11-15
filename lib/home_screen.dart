@@ -1334,7 +1334,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   int get _bottomTabIndex {
-    if (_zone == HomeZone.library && _multimediaRequested) return 5;
+    if (_zone == HomeZone.library && _multimediaRequested) return 4;
     return switch (_zone) {
       HomeZone.library => 0,
       HomeZone.live => 1,
@@ -1344,8 +1344,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _onBottomTab(int tabIndex) {
-    final wantMine = tabIndex == 4;
-    final wantMultimedia = tabIndex == 5;
+    final wantMine = tabIndex == 5;
+    final wantMultimedia = tabIndex == 4;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
       2 => HomeZone.audio,
@@ -1503,9 +1503,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     onMinorProtectionChanged: _onMinorProtectionChanged,
     onMultimediaRequested: () {
       // 关抽屉在回调里，与 _onZoneSelected / _onTool 的口径一致；
-      // _onBottomTab(5) 本身不关抽屉，且与底部导航“多媒体”同一目的地。
+      // _onBottomTab(4) 本身不关抽屉，且与底部导航“多媒体”同一目的地。
       Navigator.of(context).pop();
-      _onBottomTab(5);
+      _onBottomTab(4);
     },
     multimediaActive: _multimediaRequested,
   );
@@ -2206,6 +2206,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               return Scaffold(
                 key: _scaffoldKey,
                 drawer: _drawer(),
+                // 抽屉不许边缘滑动打开：手势导航的边缘滑动（系统返回手势）会误触
+                // 把抽屉拖出来，小退回来首页就被抽屉盖住了；点左上角头像照样能开。
+                drawerEnableOpenDragGesture: false,
                 extendBody: glass,
                 bottomNavigationBar: bottomTabBar,
                 body: SafeArea(
@@ -2258,6 +2261,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           final scaffold = Scaffold(
             key: _scaffoldKey,
             drawer: _drawer(),
+            // 同上：禁边缘滑动打开抽屉，防手势误触。
+            drawerEnableOpenDragGesture: false,
             extendBody: glass && !desktop,
             bottomNavigationBar: bottomTabBar,
             appBar: glass

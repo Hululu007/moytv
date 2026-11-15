@@ -432,6 +432,7 @@ void main() {
     // SOCKS5 区在页面底部：须滚动到可见处 ListView 才会构建对应行，
     // 逐段滚到可见再断言，避免滚过头后上方的行被回收。
     await _scrollListToVisible(tester, find.text('SOCKS5 代理'));
+    await _scrollListToVisible(tester, find.text('一键识别'));
     await tester.pumpAndSettle();
     expect(find.text('SOCKS5 代理'), findsOneWidget);
     expect(find.text('一键识别'), findsOneWidget);

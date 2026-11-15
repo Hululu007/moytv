@@ -73,7 +73,7 @@ class _LayoutLiveRepository extends LiveRepository {
 }
 
 /// 播放控制器替身：与 live_fullscreen_exit_test 的 _FakePlayback 同款，
-/// 另记线路与解码模式，供功能键排断言。画面走 videoBuilder 替身。
+/// 另记线路与解码模式，供默认行为断言。画面走 videoBuilder 替身。
 class _LayoutFakePlayback extends LivePlaybackController {
   _LayoutFakePlayback({required super.repository})
     : _player = Player(platformPlayer: ScriptedPlayer());
@@ -224,10 +224,6 @@ Future<_LayoutFakePlayback> _pumpLive(WidgetTester tester) async {
   return playback;
 }
 
-/// AppNotice 气泡 3 秒自动消失：泵够时间排空，避免它盖住后续点按。
-Future<void> _dismissNotice(WidgetTester tester) async {
-  await tester.pump(const Duration(milliseconds: 3500));
-}
 
 Future<void> _waitForText(WidgetTester tester, String text) async {
   for (var i = 0; i < 30 && find.text(text).evaluate().isEmpty; i++) {
@@ -235,35 +231,7 @@ Future<void> _waitForText(WidgetTester tester, String text) async {
   }
 }
 
-/// 等底部选单滑入到位：一次泵 300ms 时动画计时器刚起步、选单仍在屏外
-/// 点按落空；小步循环泵到选单项可命中再点。
-Future<void> _waitForSheetOpen(WidgetTester tester) async {
-  for (
-    var i = 0;
-    i < 20 &&
-        find
-            .widgetWithText(ListTile, '线路 2')
-            .hitTestable()
-            .evaluate()
-            .isEmpty;
-    i++
-  ) {
-    await tester.pump(const Duration(milliseconds: 100));
-  }
-}
 
-/// 等底部选单彻底关闭：关闭动画跑完、路由移除，选单 Future 才完成，
-/// 调用方的 playRoute 才轮到执行，固定泵 300ms 不够稳。
-Future<void> _waitForSheetClosed(WidgetTester tester) async {
-  for (
-    var i = 0;
-    i < 20 &&
-        find.widgetWithText(ListTile, '线路 2').evaluate().isNotEmpty;
-    i++
-  ) {
-    await tester.pump(const Duration(milliseconds: 100));
-  }
-}
 
 void main() {
   test('时钟格式：日期行与时间行', () {
@@ -284,22 +252,6 @@ void main() {
     expect(LiveDecoderMode.auto.next, LiveDecoderMode.hardware);
     expect(LiveDecoderMode.hardware.next, LiveDecoderMode.software);
     expect(LiveDecoderMode.software.next, LiveDecoderMode.auto);
-  });
-
-  testWidgets('功能键排：四键齐全、线路显示当前与总数', (tester) async {
-    await _pumpLive(tester);
-    expect(
-      find.byKey(const ValueKey('live-decoder-button')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('live-route-button')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-default-button')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-speed-button')), findsOneWidget);
-    expect(find.text('自动'), findsOneWidget);
-    expect(find.text('线路 1/2'), findsOneWidget);
-    expect(find.text('默认'), findsOneWidget);
-    expect(find.text('1.0倍速'), findsOneWidget);
-    expect(tester.takeException(), isNull);
   });
 
   testWidgets('视频区角标：时钟在、网速无数据时不显示', (tester) async {
@@ -398,89 +350,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('线路切换：选单选第 2 条、按钮标签跟变', (tester) async {
+  testWidgets('功能键排已删：四键与标签都不在、频道卡与列表仍在', (tester) async {
     final playback = await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-route-button')));
-    await _waitForSheetOpen(tester);
-    // 选单项用 ListTile 限定：视频区底部信息条也有同名“线路 2”文本。
-    expect(find.widgetWithText(ListTile, '线路 1'), findsOneWidget);
-    expect(find.widgetWithText(ListTile, '线路 2'), findsOneWidget);
-    await tester.tap(find.widgetWithText(ListTile, '线路 2'));
-    await _waitForSheetClosed(tester);
-    expect(playback.route, 1);
-    expect(find.text('线路 2/2'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('单线路频道点线路键：提示只有一条线路', (tester) async {
-    await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-channel-k2')));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(find.byKey(const ValueKey('live-route-button')));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('当前频道只有一条线路'), findsOneWidget);
-    await _dismissNotice(tester);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('解码切换：点按循环自动、硬解、软解', (tester) async {
-    final playback = await _pumpLive(tester);
-    final decoder = find.byKey(const ValueKey('live-decoder-button'));
-    await tester.tap(decoder);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(playback.decoderMode, LiveDecoderMode.hardware);
-    expect(find.text('硬解'), findsOneWidget);
-    expect(find.text('解码已切为硬解'), findsOneWidget);
-    await _dismissNotice(tester);
-    await tester.tap(decoder);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(playback.decoderMode, LiveDecoderMode.software);
-    expect(find.text('软解'), findsOneWidget);
-    await _dismissNotice(tester);
-    await tester.tap(decoder);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(playback.decoderMode, LiveDecoderMode.auto);
-    expect(find.text('自动'), findsOneWidget);
-    await _dismissNotice(tester);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('默认键：线路与解码一起回到默认', (tester) async {
-    final playback = await _pumpLive(tester);
-    // 先改掉线路与解码。
-    await tester.tap(find.byKey(const ValueKey('live-route-button')));
-    await _waitForSheetOpen(tester);
-    await tester.tap(find.widgetWithText(ListTile, '线路 2'));
-    await _waitForSheetClosed(tester);
-    await tester.tap(find.byKey(const ValueKey('live-decoder-button')));
-    await tester.pump(const Duration(milliseconds: 100));
-    await _dismissNotice(tester);
-    expect(playback.route, 1);
-    expect(playback.decoderMode, LiveDecoderMode.hardware);
-    // 点默认，全部回默认。
-    await tester.tap(find.byKey(const ValueKey('live-default-button')));
-    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('live-decoder-button')), findsNothing);
+    expect(find.byKey(const ValueKey('live-route-button')), findsNothing);
+    expect(find.byKey(const ValueKey('live-default-button')), findsNothing);
+    expect(find.byKey(const ValueKey('live-speed-button')), findsNothing);
+    expect(find.text('1.0倍速'), findsNothing);
+    expect(find.text('线路 1/2'), findsNothing);
+    // 底层仍走默认：首条线路、自动解码。
     expect(playback.route, 0);
     expect(playback.decoderMode, LiveDecoderMode.auto);
-    expect(find.text('线路 1/2'), findsOneWidget);
-    expect(find.text('自动'), findsOneWidget);
-    expect(find.text('已恢复默认线路与解码'), findsOneWidget);
-    await _dismissNotice(tester);
-    // 已是默认时再点，提示已是默认。
-    await tester.tap(find.byKey(const ValueKey('live-default-button')));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('已是默认设置'), findsOneWidget);
-    await _dismissNotice(tester);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('倍速键：提示不支持变速、标签不变', (tester) async {
-    await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-speed-button')));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('直播不支持变速'), findsOneWidget);
-    expect(find.text('1.0倍速'), findsOneWidget);
-    await _dismissNotice(tester);
+    // 频道卡、收藏行、分组/频道列表都在，布局上移不留空。
+    expect(find.text('频'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('live-favourites-button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('live-channel-k1')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

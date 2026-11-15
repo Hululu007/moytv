@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'live_models.dart';
 
-enum LiveApiPlayKind { direct, bilibili, huya }
+enum LiveApiPlayKind { direct, bilibili }
 
 class LiveApiSpec {
   const LiveApiSpec({
@@ -87,50 +87,6 @@ const liveApiSpecs = <String, LiveApiSpec>{
     flattenPlatforms: true,
     paginated: true,
     headers: {'Referer': 'https://live.bilibili.com/'},
-  ),
-  'huya': LiveApiSpec(
-    id: 'huya',
-    listUrl:
-        'https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&gameId={platform}&page={page}',
-    listPaths: ['data.datas', 'data.list', 'data.rooms', 'data'],
-    titleKeys: ['roomName', 'title'],
-    nameKeys: ['nick', 'uname'],
-    coverKeys: ['screenshot', 'cover'],
-    idKeys: ['roomId', 'uid', 'id'],
-    playKeys: [],
-    playUrl:
-        'https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid={id}',
-    playKind: LiveApiPlayKind.huya,
-    derivePlatformName: true,
-    deriveNameKey: 'gameFullName',
-    deriveCountPath: 'data.totalCount',
-    singlePlatformId: '1',
-    singlePlatformName: '虎牙直播',
-    paginated: true,
-    headers: {'Referer': 'https://www.huya.com/'},
-  ),
-  'pandalive': LiveApiSpec(
-    id: 'pandalive',
-    listUrl: 'https://api.pandalive.co.kr/v1/live',
-    listPaths: ['list', 'data.list', 'data'],
-    titleKeys: ['title', 'roomTitle', 'name'],
-    nameKeys: ['userId', 'nick', 'username'],
-    coverKeys: ['thumbnail', 'thumb', 'image', 'cover'],
-    idKeys: ['userId', 'id', 'roomId'],
-    playKeys: ['playUrl', 'streamUrl', 'hlsUrl', 'url'],
-    singlePlatformName: '全部',
-  ),
-  'sakuralive': LiveApiSpec(
-    id: 'sakuralive',
-    listUrl:
-        'https://chat.sakuralive.com/jsonSL/listing/freechat?guest=slen',
-    listPaths: ['online_performers', 'data.online_performers'],
-    titleKeys: ['name', 'username', 'title'],
-    nameKeys: ['username', 'name'],
-    coverKeys: ['image', 'thumb', 'cover'],
-    idKeys: ['username', 'name', 'id'],
-    playKeys: ['playUrl', 'streamUrl', 'hlsUrl', 'url'],
-    singlePlatformName: '全部',
   ),
 };
 
@@ -285,8 +241,6 @@ String? parseApiPlayUrl(LiveApiSpec spec, String text) {
   switch (spec.playKind) {
     case LiveApiPlayKind.bilibili:
       return _bilibiliPlayUrl(decoded);
-    case LiveApiPlayKind.huya:
-      return _huyaPlayUrl(decoded);
     case LiveApiPlayKind.direct:
       for (final path in spec.playPaths) {
         final value = _atPath(decoded, path);
@@ -332,26 +286,3 @@ String? _bilibiliPlayUrl(dynamic decoded) {
   return fallback;
 }
 
-String? _huyaPlayUrl(dynamic decoded) {
-  final candidates = <String>[];
-  final stream = _atPath(decoded, 'data.stream');
-  if (stream is Map) {
-    for (final key in ['hls', 'flv']) {
-      final entry = stream[key];
-      if (entry is Map) {
-        final url = '${entry['url'] ?? ''}'.trim();
-        if (url.isNotEmpty) candidates.add(url);
-      } else if (entry is String && entry.trim().isNotEmpty) {
-        candidates.add(entry.trim());
-      }
-    }
-  }
-  for (final path in ['data.hls', 'data.flv', 'data.url', 'data.streamUrl']) {
-    final value = _atPath(decoded, path);
-    if (value is String && value.trim().isNotEmpty) candidates.add(value);
-  }
-  for (final url in candidates) {
-    if (isPlayableLiveUrl(url)) return url;
-  }
-  return null;
-}

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:moyi/jar_site_config.dart';
+import 'package:moyi/models.dart';
 import 'package:moyi/zakatv_builtin.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -203,6 +204,70 @@ void main() {
       expect(removedUsers.contains(user), isFalse, reason: '已删频道回潮：$user');
       expect(name.contains('洛丽塔'), isFalse, reason: '频道名含未成年指向词：$name');
     }
+  });
+
+  test('tg片库注册存在：新类 + 125 频道 ext（与 TG电影同表同序）', () {
+    final site = zakatvBuiltinSites.singleWhere(
+      (s) => s.key == 'ZakaTgPianku',
+    );
+    expect(site.name, 'tg片库');
+    expect(site.className, 'com.github.catvod.spider.ZakaTgAllAmns');
+    expect(site.audioOnly, isFalse);
+    expect(site.section, SourceSite.sectionVideo);
+    final ext = _decodeExt(site.ext);
+    // 开关取 ZakaTg（AllAmns）已验参数集，不带 Movie 类专属开关；
+    // filterAds 不写 flag：新版类默认 true（与 ZakaTg 一致）。
+    final tgSite = zakatvBuiltinSites.singleWhere((s) => s.key == 'ZakaTg');
+    final tgExt = _decodeExt(tgSite.ext);
+    for (final key in tgExt.keys) {
+      if (key == 'channels') continue;
+      expect(ext[key], tgExt[key], reason: '开关 $key 与 ZakaTg 不一致');
+    }
+    expect(ext.containsKey('channelsUrl'), isFalse);
+    expect(ext.containsKey('filterAds'), isFalse);
+    expect(ext.containsKey('autoDiscover'), isFalse);
+    expect(ext.containsKey('groupByTag'), isFalse);
+    // 频道表与 TG电影逐个一致、同序，一个不增一个不减。
+    final movieSite = zakatvBuiltinSites.singleWhere(
+      (s) => s.key == 'ZakaTgMovie',
+    );
+    final movieChannels = _decodeExt(movieSite.ext)['channels'] as List;
+    final channels = ext['channels'] as List;
+    expect(channels, hasLength(125));
+    expect(channels, movieChannels);
+    for (final channel in channels) {
+      final map = Map<String, dynamic>.from(channel as Map);
+      expect(
+        _hasFlaggedTerm(map['name']?.toString() ?? ''),
+        isFalse,
+        reason: '频道名命中词表：${map['name']}',
+      );
+      expect(
+        _hasFlaggedTerm(map['user']?.toString() ?? ''),
+        isFalse,
+        reason: '用户名命中词表',
+      );
+    }
+  });
+
+  test('tg片库 JSON 配置与 Dart 注册一致', () {
+    final text = File('assets/jar_site_configs.json').readAsStringSync();
+    final configs = parseJarSiteConfigs(text);
+    final matched = configs.singleWhere((c) => c.key == 'ZakaTgPianku');
+    expect(matched.name, 'tg片库');
+    expect(matched.api, 'csp_ZakaTgAllAmns');
+    final dartSite = zakatvBuiltinSites.singleWhere(
+      (s) => s.key == 'ZakaTgPianku',
+    );
+    expect(_decodeExt(matched.ext), _decodeExt(dartSite.ext));
+    // 类名首匹配仍是 ZakaTg：导入流按类名取配置，顺序不能变。
+    expect(
+      matchJarSiteConfig(
+        'com.github.catvod.spider.ZakaTgAllAmns',
+        configs,
+      )!.key,
+      'ZakaTg',
+    );
   });
 
   test('合并后 jar 指纹与盘上文件一致', () {

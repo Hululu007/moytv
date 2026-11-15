@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'models.dart';
 
-/// TG 两个 jar 站源（ZakaTg / ZakaTgMovie）的壳侧列表后处理：广告帖
+/// TG 三个 jar 站源（ZakaTg / ZakaTgMovie / ZakaTgPianku）的壳侧列表后处理：广告帖
 /// 过滤、去重、同名集数归拢。只对这两个站源的 jar 列表生效，以
 /// spider 类名 gate，绝不波及其他站源。
 ///

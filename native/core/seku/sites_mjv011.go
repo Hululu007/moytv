@@ -45,7 +45,10 @@ func mjvGet(rawurl string) (string, error) {
 		}
 		req.Header.Set("User-Agent", mjvUA)
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+		// The site gates player rows on Accept-Language: with zh-CN the
+		// detail page renders SERVER: zero and no mvarr rows; zh-TW
+		// returns the rows. Verified live 2026-11-15, do not change back.
+		req.Header.Set("Accept-Language", "zh-TW,zh;q=0.9")
 		req.Header.Set("Referer", mjvHost+"/")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -122,6 +125,35 @@ func mjvHeaders() map[string]string {
 
 var mjvPostRe = regexp.MustCompile(`(?s)<div class='post[^']*'>.*?<a[^>]*href="([^"]+)"[^>]*>.*?<img[^>]*src='([^']+)'[^>]*>.*?<h3[^>]*><a[^>]*>([^<]+)</a></h3>(?:\s*<div class='meta'>([^<]*)</div>)?`)
 var mjvContentRe = regexp.MustCompile(`/([^/]+)_content/(\d+)/([^/]+)\.html`)
+
+// Novel list posts carry no cover image: <div class='post'><div
+// class='con'><h3><a href="...novel_content/...">title</a></h3>. The image
+// post regex matches none of them, so novels need their own parser (the
+// jar spider's parseTextPosts equivalent).
+var mjvTextPostRe = regexp.MustCompile(`<div class='post'>\s*<div class='con'>\s*<h3[^>]*><a[^>]*href="([^"]+)"[^>]*>([^<]+)</a></h3>`)
+
+func mjvParseTextPosts(text string) []interface{} {
+	out := []interface{}{}
+	seen := map[string]bool{}
+	for _, m := range mjvTextPostRe.FindAllStringSubmatch(text, -1) {
+		href, title := m[1], strings.TrimSpace(g6StripTags(m[2]))
+		href = strings.TrimPrefix(href, mjvHost)
+		if !strings.HasPrefix(href, "/") {
+			continue
+		}
+		mm := mjvContentRe.FindStringSubmatch(href)
+		if mm == nil {
+			continue
+		}
+		raw := mm[1] + "#" + mm[2] + "#" + mm[3]
+		if seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		out = append(out, makeDrama("mjv011", raw, title, "", "", "", ""))
+	}
+	return out
+}
 
 func mjvParsePosts(text string) []interface{} {
 	out := []interface{}{}
@@ -204,7 +236,15 @@ func mjvCatalog(slot, category string, page int) ([]interface{}, int, bool, erro
 		if err != nil || text == "" {
 			continue
 		}
-		items := mjvParsePosts(text)
+		var items []interface{}
+		if mjvIsNovel(category) {
+			// Novel pages must be parsed as text posts: the _list
+			// candidate serves mixed video posts, which the text
+			// parser skips, so the loop falls through to _random.
+			items = mjvParseTextPosts(text)
+		} else {
+			items = mjvParsePosts(text)
+		}
 		if len(items) > 0 {
 			return items, page*len(items) + 1, true, nil
 		}
@@ -261,6 +301,21 @@ func mjvChapter(slot, parentRaw, epRaw, title string, idx int) map[string]interf
 	}
 }
 
+// mjvNovelContent extracts the full novel text. No truncation: live
+// novels run past 3000 runes (6414 verified 2026-11-15) and the jar
+// spider serves the full text.
+func mjvNovelContent(text string) string {
+	if m := regexp.MustCompile(`(?s)id=['"]novel_content_txtsize['"][^>]*>(.*?)</div>`).FindStringSubmatch(text); m != nil {
+		if c := g6StripTags(m[1]); c != "" {
+			return c
+		}
+	}
+	if m := regexp.MustCompile(`(?s)<span class='content_18h_wpcg'>(.*?)</span>\s*<div class='contents'`).FindStringSubmatch(text); m != nil {
+		return g6StripTags(m[1])
+	}
+	return ""
+}
+
 func mjvDetail(slot, rawID string) (map[string]interface{}, error) {
 	parts := strings.SplitN(rawID, "#", 3)
 	if len(parts) != 3 {
@@ -275,18 +330,7 @@ func mjvDetail(slot, rawID string) (map[string]interface{}, error) {
 	cover := mjvCover(text)
 	d := makeDrama(slot, rawID, title, cover, "", "", "")
 	if mjvIsNovel(ctype) {
-		content := ""
-		if m := regexp.MustCompile(`(?s)id=['"]novel_content_txtsize['"][^>]*>(.*?)</div>`).FindStringSubmatch(text); m != nil {
-			content = g6StripTags(m[1])
-		}
-		if content == "" {
-			if m := regexp.MustCompile(`(?s)<span class='content_18h_wpcg'>(.*?)</span>\s*<div class='contents'`).FindStringSubmatch(text); m != nil {
-				content = g6StripTags(m[1])
-			}
-		}
-		if len([]rune(content)) > 3000 {
-			content = string([]rune(content)[:3000]) + "..."
-		}
+		content := mjvNovelContent(text)
 		payload, _ := json.Marshal(map[string]string{"title": title, "content": content})
 		ep := "novel://" + string(payload)
 		ch := []interface{}{mjvChapter(slot, rawID, ep, "阅读", 1)}

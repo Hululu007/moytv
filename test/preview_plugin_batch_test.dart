@@ -786,7 +786,7 @@ void main() {
     );
   });
 
-  // 9. 直播区新布局：视频区 + 功能键排 + 当前频道卡 + 左右双栏。
+  // 9. 直播区新布局：视频区 + 当前频道卡 + 左右双栏（功能键排已删）。
   testWidgets('预览 直播新布局', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
@@ -820,7 +820,7 @@ void main() {
         ),
       ),
       name: 'live_new_layout',
-      label: '预览 · 假数据 · 直播新布局：视频区 + 功能键排 + 当前频道卡 + 左右双栏（左分组右频道）',
+      label: '预览 · 假数据 · 直播新布局：视频区 + 当前频道卡 + 左右双栏（左分组右频道）',
       beforeCapture: () async {
         for (
           var i = 0;

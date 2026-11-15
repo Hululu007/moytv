@@ -10,6 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 // SakuraLive 四个 JSON 接口源，加 445569.xyz 七个 m3u 聚合源；
 // 哔哩哔哩、虎牙已于本次恢复为内置源（2026-11-07 删站令作废），
 // 欲火直播仍删。注册漏挂/归属写错即红。
+// 2026-11-15 用户令：哔哩哔哩以下的直播站全删（虎牙、PandaLive、
+// SakuraLive 与 7 个 445569 m3u 聚合源），只留哔哩哔哩。
 // 成人点播频道表为修仙版原样复制版（9,966 条 EXTINF / 17 分组，
 // 解析器按（分组,台名）合并多线路后为 9,958 个频道）。
 void main() {
@@ -54,7 +56,7 @@ void main() {
     });
   });
 
-  group('直播区：修仙版四源 + 绿果鉴十一源 + 内置 m3u 二十二源', () {
+  group('直播区：修仙版四源 + 哔哩哔哩 + 内置 m3u 二十二源', () {
     test('内置直播源清单与协议/端点锁定', () {
       expect(LiveSource.values.map((s) => s.id), [
         'xiuguo',
@@ -85,16 +87,6 @@ void main() {
         'm3u_guochanse',
         'm3u_riben2',
         'bilibili',
-        'huya',
-        'pandalive',
-        'sakuralive',
-        'm3u_douyin',
-        'm3u_douyu',
-        'm3u_huya',
-        'm3u_kugou',
-        'm3u_tiktok',
-        'm3u_twitch',
-        'm3u_yy',
       ]);
       expect(LiveSource.values.map((s) => s.name), [
         '🔞秀果',
@@ -124,16 +116,6 @@ void main() {
         '🔞国产色情',
         '🔞日本有码 2',
         '哔哩哔哩',
-        '虎牙',
-        'PandaLive',
-        'SakuraLive',
-        '抖音直播',
-        '斗鱼直播',
-        '虎牙直播',
-        '酷狗直播',
-        'TikTok直播',
-        'Twitch直播',
-        'YY直播',
       ]);
       final maiyoux = LiveSource.byId('maiyoux')!;
       expect(maiyoux.protocol, LiveProtocol.pingtai);
@@ -159,16 +141,21 @@ void main() {
       expect(bilibili.paginated, isTrue);
       expect(bilibili.greenCategoryFilter, isFalse);
 
-      final huya = LiveSource.byId('huya')!;
-      expect(huya.protocol, LiveProtocol.api);
-      expect(huya.adult, isFalse);
-      expect(huya.paginated, isTrue);
-
-      final m3uDouyu = LiveSource.byId('m3u_douyu')!;
-      expect(m3uDouyu.protocol, LiveProtocol.list);
-      expect(m3uDouyu.endpoint, 'https://douyu.445569.xyz/live.m3u');
-      expect(m3uDouyu.adult, isFalse);
-      expect(m3uDouyu.greenCategoryFilter, isFalse);
+      // 2026-11-15 删站：哔哩哔哩之后的 10 个直播站全部查无此源。
+      for (final id in [
+        'huya',
+        'pandalive',
+        'sakuralive',
+        'm3u_douyin',
+        'm3u_douyu',
+        'm3u_huya',
+        'm3u_kugou',
+        'm3u_tiktok',
+        'm3u_twitch',
+        'm3u_yy',
+      ]) {
+        expect(LiveSource.byId(id), isNull);
+      }
 
       expect(LiveSource.byId('yuhuo_live'), isNull);
       expect(LiveSource.byId('uu'), isNull);
@@ -178,22 +165,10 @@ void main() {
     test('绿色模式下成人源全部隐藏，主流源全部可见', () {
       expect(
         LiveSource.visible(true).map((s) => s.id),
-        [
-          'bilibili',
-          'huya',
-          'pandalive',
-          'sakuralive',
-          'm3u_douyin',
-          'm3u_douyu',
-          'm3u_huya',
-          'm3u_kugou',
-          'm3u_tiktok',
-          'm3u_twitch',
-          'm3u_yy',
-        ],
+        ['bilibili'],
       );
-      // 11 个主流源 + 26 个成人源（4 个原有 + 22 个内置 m3u 清单）。
-      expect(LiveSource.visible(false), hasLength(37));
+      // 1 个主流源（哔哩哔哩）+ 26 个成人源（4 个原有 + 22 个内置 m3u 清单）。
+      expect(LiveSource.visible(false), hasLength(27));
     });
   });
 

@@ -150,7 +150,7 @@ void main() {
     });
   }
 
-  testWidgets('底栏 5 个 Tab 点按回传下标', (tester) async {
+  testWidgets('底栏 6 个 Tab 点按回传下标', (tester) async {
     final tapped = <int>[];
     await _pumpBar(
       tester,
@@ -158,11 +158,32 @@ void main() {
       index: 0,
       onSelect: tapped.add,
     );
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 6; i++) {
       await tester.tap(find.byKey(ValueKey('moyi-bottom-tab-$i')));
       await tester.pump();
     }
-    expect(tapped, [0, 1, 2, 3, 4]);
+    expect(tapped, [0, 1, 2, 3, 4, 5]);
+  });
+
+  testWidgets('底栏顺序为片库/直播/听书/阅读/多媒体/我的，图标跟标签走', (tester) async {
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.purpleNeon,
+      index: 0,
+      onSelect: (_) {},
+    );
+    const order = ['片库', '直播', '听书', '阅读', '多媒体', '我的'];
+    var previousX = -1.0;
+    for (final label in order) {
+      expect(find.text(label), findsOneWidget);
+      final x = tester.getTopLeft(find.text(label)).dx;
+      expect(x, greaterThan(previousX));
+      previousX = x;
+    }
+    // 多媒体（硬盘）在我的（人形）左边。
+    final driveX = tester.getTopLeft(find.byIcon(LucideIcons.hardDrive)).dx;
+    final userX = tester.getTopLeft(find.byIcon(LucideIcons.user)).dx;
+    expect(driveX, lessThan(userX));
   });
 
   testWidgets('切主题后底栏立即变色', (tester) async {
@@ -268,9 +289,12 @@ void main() {
     throw StateError('widget 拖 12 次仍未出现');
   }
 
-  Future<HomeZone> currentZone(WidgetTester tester) async {
+  Future<HomeZone> currentZone(
+    WidgetTester tester, {
+    String drawerKey = 'open-app-drawer',
+  }) async {
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
+    await tester.tap(find.byKey(ValueKey(drawerKey)));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     final drawer = tester.widget<AppDrawer>(find.byType(AppDrawer));
@@ -364,6 +388,54 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('最近观看'), findsNothing);
   });
+
+  // 底部标签样式下 6 个 Tab 逐个点、各进各的页：多媒体在第 4 位、
+  // 我的在第 5 位（换位后）。紫蓝霓虹主题固定底部标签样式；用红果源，
+  // 因为“我的”页只在红果组分支渲染（requestedTab 落在红果首页里）。
+  testWidgets('底部标签 6 个 Tab 逐个点各进各的页', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'source': 'hongguo',
+      'hiddenSites': '[]',
+      'appThemeMode': 'purpleNeon',
+    });
+    final store = LocalStore(await SharedPreferences.getInstance());
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorObservers: [homeRouteObserver],
+        home: HomeScreen(repository: FixtureRepository(), store: store),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byType(MoyiBottomTabBar), findsOneWidget);
+
+    Future<void> tapTab(int i) async {
+      await tester.tap(find.byKey(ValueKey('moyi-bottom-tab-$i')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    await tapTab(1);
+    expect(await currentZone(tester), HomeZone.live);
+    await tapTab(2);
+    expect(await currentZone(tester), HomeZone.audio);
+    await tapTab(3);
+    expect(await currentZone(tester), HomeZone.novel);
+    await tapTab(4);
+    final multimediaShown =
+        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
+        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
+    expect(multimediaShown, isTrue);
+    await tapTab(5);
+    expect(find.text('最近观看'), findsOneWidget);
+    await tapTab(0);
+    // 片库区走红果分支，抽屉按钮是 neon-avatar。
+    expect(await currentZone(tester, drawerKey: 'neon-avatar'), HomeZone.library);
+    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
+    expect(find.byKey(const ValueKey('multimedia-screen')), findsNothing);
+    expect(find.text('最近观看'), findsNothing);
+  }, skip: !allSourcesEnabled);
 
   testWidgets('短剧首页 requestedTab 直达我的页', (tester) async {
     final store = await _makeStore();

@@ -29,10 +29,10 @@ void main() {
       expect(jar.id, PluginManager.jarPluginId);
       expect(jar.kind, PluginIconKind.jar);
       expect(jar.md5, zakatvJarMd5);
-      // 146 条配置，1 条 audioOnly 不进站点列表。
-      expect(zakatvBuiltinSites.length, 146);
-      expect(jar.siteCount, 145);
-      expect(jar.detail, contains('146'));
+      // 147 条配置，1 条 audioOnly 不进站点列表。
+      expect(zakatvBuiltinSites.length, 147);
+      expect(jar.siteCount, 146);
+      expect(jar.detail, contains('147'));
     });
 
     test('44 py plugins in today register order', () {
