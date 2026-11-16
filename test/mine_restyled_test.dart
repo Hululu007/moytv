@@ -4,7 +4,6 @@ import 'package:moyi/core_bridge.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
-import 'package:moyi/theme_settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -102,17 +101,15 @@ void main() {
     // 内容组与外观组（第三组在首屏下，滚到可见再断言）。
     expect(find.text('追剧'), findsOneWidget);
     expect(find.text('最近观看'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('mine-theme-entry')),
-      200,
-    );
-    expect(find.text('主题切换'), findsOneWidget);
-    expect(find.textContaining('12 套主题'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('设置'), 200);
+    // 14 版：主题切换行已从“我的”页删除，设置是唯一主题入口。
+    expect(find.text('主题切换'), findsNothing);
+    expect(find.textContaining('12 套主题'), findsNothing);
     expect(find.text('设置'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('点击行为不变：追剧/最近观看/设置回调与主题页', (tester) async {
+  testWidgets('点击行为不变：追剧/最近观看/设置回调（主题行已删）', (tester) async {
     final savedCalls = <bool>[];
     var settingsPressed = false;
     await pumpMine(
@@ -130,14 +127,7 @@ void main() {
     await tester.tap(find.text('设置'));
     await tester.pump();
     expect(settingsPressed, isTrue);
-    await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('mine-theme-entry')),
-      200,
-    );
-    await tester.tap(find.byKey(const ValueKey('mine-theme-entry')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byType(ThemeSettingsScreen), findsOneWidget);
+    expect(find.text('主题切换'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

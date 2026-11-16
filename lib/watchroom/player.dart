@@ -8,6 +8,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../models.dart';
+import '../mpv_egress.dart';
 import '../playback_loader.dart';
 import '../playback_preferences.dart';
 import '../tvbox_video_pane.dart';
@@ -139,6 +140,9 @@ class RoomPlayerHandle extends ChangeNotifier {
           ),
         );
         _subscribePlayerStreams();
+        // MPV 出口：每次开播都按当前决策设一次 http-proxy，并登记到
+        // 决策点，决策变化时自动重设（同一播放器重复登记会覆盖）。
+        bindMpvEgress(_player!);
         final platform = _player!.platform;
         if (Platform.isAndroid &&
             platform is NativePlayer &&
@@ -238,6 +242,8 @@ class RoomPlayerHandle extends ChangeNotifier {
     }
     _subscriptions.clear();
     unawaited(_positionController.close());
+    final player = _player;
+    if (player != null) unbindMpvEgress(player);
     unawaited(_player?.dispose());
     _player = null;
     _videoController = null;
@@ -339,7 +345,7 @@ class RoomPlayerView extends StatelessWidget {
         return const ColoredBox(
           color: Colors.black,
           child: Center(
-            child: Text('等待房主推送视频', style: TextStyle(color: Colors.white70)),
+            child: Text('等待播放', style: TextStyle(color: Colors.white70)),
           ),
         );
       },

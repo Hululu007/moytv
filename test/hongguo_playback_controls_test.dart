@@ -294,26 +294,26 @@ void main() {
   });
 
   group('红果播放设置落盘', () {
-    test('默认关/自动，非法值归位，写读往返', () async {
+    test('默认值、非法值归位，写读往返', () async {
       SharedPreferences.setMockInitialValues({});
       final store = LocalStore(await SharedPreferences.getInstance());
       expect(store.hongguoFrameMode, 'fit');
       expect(store.hongguoVideoRotation, 0);
       expect(store.hongguoAlwaysShowProgress, isFalse);
-      expect(store.hongguoSeasonAutoplay, isFalse);
+      expect(store.hongguoSeasonAutoplay, isTrue);
       expect(store.hongguoQuality, 0);
       expect(store.hongguoDecoderLessonsRaw, '');
 
       await store.setHongguoFrameMode('zoom');
       await store.setHongguoVideoRotation(90);
       await store.setHongguoAlwaysShowProgress(true);
-      await store.setHongguoSeasonAutoplay(true);
+      await store.setHongguoSeasonAutoplay(false);
       await store.setHongguoQuality(720);
       await store.setHongguoDecoderLessons('{"|0|1080":2}');
       expect(store.hongguoFrameMode, 'zoom');
       expect(store.hongguoVideoRotation, 90);
       expect(store.hongguoAlwaysShowProgress, isTrue);
-      expect(store.hongguoSeasonAutoplay, isTrue);
+      expect(store.hongguoSeasonAutoplay, isFalse);
       expect(store.hongguoQuality, 720);
       expect(store.hongguoDecoderLessonsRaw, '{"|0|1080":2}');
 
@@ -321,7 +321,7 @@ void main() {
       final reopened = LocalStore(await SharedPreferences.getInstance());
       expect(reopened.hongguoFrameMode, 'zoom');
       expect(reopened.hongguoVideoRotation, 90);
-      expect(reopened.hongguoSeasonAutoplay, isTrue);
+      expect(reopened.hongguoSeasonAutoplay, isFalse);
       expect(reopened.hongguoQuality, 720);
 
       // 非法值归位：超上限的清晰度与不存在的旋转角都不存。

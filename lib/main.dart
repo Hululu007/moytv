@@ -29,17 +29,20 @@ import 'plugin_share_intent.dart';
 import 'profiles_screen.dart';
 import 'cloud_drive/cloud_credential_store.dart';
 import 'cloud_drive/cloud_drive_stations.dart';
-import 'lan_web/lan_web_server.dart';
 import 'package_smoke.dart';
-import 'lan_controller.dart';
-import 'player_picker.dart';
 import 'proxy_kernel_service.dart';
+import 'proxy_egress.dart';
+import 'proxy_egress_wiring.dart';
 import 'signature_check.dart';
 import 'socks5_proxy.dart';
 import 'video_enhancement_assets.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 全局 HTTP 出口：所有未显式指定 findProxy 的 HttpClient（封面图、
+  // 取数、海阔等）默认走出口决策点；回环目标永远直连。
+  // 显式指定过 findProxy 的客户端不受影响（规则自带 proxy 优先于全局）。
+  HttpOverrides.global = ProxyEgressHttpOverrides();
   unawaited(PlaybackForeground.clearStaleFlag());
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -79,10 +82,6 @@ class _AppBootstrapState extends State<AppBootstrap>
   void dispose() {
     _hongguoRenewalTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    LanController.current?.dispose();
-    LanController.current = null;
-    unawaited(LanWebController.current?.stop());
-    LanWebController.current = null;
     store?.dispose();
     super.dispose();
   }
@@ -155,6 +154,10 @@ class _AppBootstrapState extends State<AppBootstrap>
       unawaited(ensureHongguoAccountLoaded());
       await _refreshDevice();
       await repository.initialize();
+      // 出口接线：必须在内核自启与 SOCKS5 加载之前绑好，这样启停/
+      // 加载触发的决策变化能同步到 Go 核、py、原生层；绑定时先读
+      // 一次存量手填地址做初始同步。
+      await ProxyEgressWiring.bind(repository: repository);
       // 冷启动恢复红果账号会话：把持久化的会话交回 Go 核再确认
       // 状态（HongguoAccountStore.load 内做，空 Cookie 不交回）。
       // 恢复失败不阻塞启动；打开账号页时 load() 会再试一次。
@@ -171,73 +174,14 @@ class _AppBootstrapState extends State<AppBootstrap>
           unawaited(JarBridge.setJarFingerprint(store!.jarFingerprintEnabled));
           unawaited(store!.syncLibraryFromDb());
           repository.access = store;
-          LanController.current?.dispose();
-          final link = LanController(
-            repository,
-            store!,
-            kind: device.television
-                ? 'tv'
-                : Platform.isWindows
-                ? 'computer'
-                : 'phone',
-          );
-          LanController.current = link;
-          link.openPlayback = (request) async {
-            final epoch = request.profileEpoch;
-            if (request.cancelled ||
-                !mounted ||
-                store!.locked ||
-                !link.receiving ||
-                store!.profileEpoch != epoch ||
-                !store!.allowsSource(request.detail.drama.source)) {
-              throw StateError('当前用户不能接收播放');
-            }
-            await link.playbackHost?.stop();
-            if (request.cancelled ||
-                !mounted ||
-                store!.locked ||
-                store!.profileEpoch != epoch ||
-                !link.receiving) {
-              throw StateError('播放接收已取消');
-            }
-            final navigation = navigator.currentState;
-            if (navigation == null) throw StateError('接收设备界面尚未就绪');
-            unawaited(
-              navigation.pushAndRemoveUntil<void>(
-                buildPlayerRoute<void>(
-                  navigation.context,
-                  detail: request.detail,
-                  initialIndex: request.index,
-                  initialPosition: request.position,
-                  repository: repository,
-                  store: store!,
-                  handoff: request,
-                ),
-                (route) => route.isFirst,
-              ),
-            );
-          };
         });
       }
       await ZooBuiltinSeeder.seed(repository);
       // 网盘站源恢复：登录过的网盘重新注册进站点列表。
-      // 局域网服务恢复：上次开启的服务自动重启（启动失败不阻塞启动）。
       final createdStore = store;
       if (createdStore != null) {
         final credentialStore = CloudCredentialStore(preferences);
         CloudDriveStations.refresh(credentialStore);
-        await LanWebController.current?.stop();
-        final lanWeb = LanWebController(
-          LanWebRepositoryBridge(
-            repository: repository,
-            store: createdStore,
-            credentialStore: credentialStore,
-          ),
-        );
-        LanWebController.current = lanWeb;
-        if (createdStore.lanWebEnabled) {
-          unawaited(lanWeb.start(createdStore.lanWebPort));
-        }
         PluginShareIntent.start(
           store: createdStore,
           repository: repository,
@@ -303,10 +247,10 @@ class MoyiApp extends StatelessWidget {
   );
 
   Widget _application() {
-    // 当前全局主题（12 套之一）：配色与亮暗全由主题自身决定；
+    // 当前全局主题（13 套之一）：配色与亮暗全由主题自身决定；
     // 同步给全局通知器，抽屉、内容区等深层组件据此决定是否走霓虹视觉。
     final config = AppThemeConfig.forTheme(
-      store?.appTheme ?? AppThemeMode.purpleNeon,
+      store?.appTheme ?? AppThemeMode.win7,
     );
     appThemeNotifier.value = config.mode;
     final themeData = config.toThemeData();

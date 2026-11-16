@@ -64,7 +64,6 @@ class MockupGroupedDrawer extends StatelessWidget {
               ),
               _mockupItem(icon: Icons.video_library_rounded, label: '点播'),
               _mockupItem(icon: Icons.live_tv_rounded, label: '直播'),
-              _mockupItem(icon: Icons.group_rounded, label: '一起看房间'),
             ],
           ),
           _mockupGroup(

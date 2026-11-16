@@ -170,6 +170,18 @@ class HongguoRelatedWork {
   final bool upcoming;
 
   String get seasonLabel => season > 0 ? '第 $season 季' : '';
+
+  /// 转详情页/播放页可用的 Drama：id 与站内目录同一格式
+  /// （hongguo:<数字 id>），供相关剧集区与跨季连播复用；待上线
+  /// 的条目调用方须先滤掉（播不了），这里不拦。
+  Drama toDrama() => Drama(
+    id: '${SourceSite.hongguo.id}:$seriesId',
+    source: SourceSite.hongguo.id,
+    sourceId: seriesId,
+    title: title,
+    description: description,
+    cover: cover,
+  );
 }
 
 /// 预约写的结果：ok 只表示写操作被服务端确认，不代表已预约成功；

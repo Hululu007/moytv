@@ -104,11 +104,11 @@ void main() {
     expect(await File('${temp.path}/builtin_seeded.json').exists(), isFalse);
   });
 
-  test('真实内置包能播种 130 条（读 asset 文件本身）', () async {
+  test('真实内置包能播种 158 条（读 asset 文件本身）', () async {
     final seeded = await store.ensureBuiltinRules();
-    expect(seeded, 130);
+    expect(seeded, 158);
     final programs = await store.list();
-    expect(programs, hasLength(130));
+    expect(programs, hasLength(158));
     expect(programs.map((p) => p.origin).toSet(), {'内置规则'});
     expect(
       programs.map((p) => p.name).toSet(),

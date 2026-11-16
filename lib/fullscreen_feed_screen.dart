@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'center_feed_loader.dart';
 import 'core_bridge.dart';
 import 'feed_diagonal_drag.dart';
 import 'hongguo_comment.dart';
@@ -94,6 +95,7 @@ class FullscreenFeedScreen extends StatefulWidget {
     this.categories = const [],
     this.selectedCategory = '',
     this.onCategorySelected,
+    this.onLoadFeed,
   });
 
   final List<Drama> dramas;
@@ -103,6 +105,11 @@ class FullscreenFeedScreen extends StatefulWidget {
   final List<CatalogCategory> categories;
   final String selectedCategory;
   final ValueChanged<String>? onCategorySelected;
+
+  /// 加载器模式：提供时屏自己取数（打开即取、点分类重取、点
+  /// 刷新重取并重新随机混排），分类行用取回的分类；不提供时
+  /// 走旧快照路径（[dramas]/[categories]/[onCategorySelected]）。
+  final Future<CenterFeedData> Function(String categoryId)? onLoadFeed;
 
   @override
   State<FullscreenFeedScreen> createState() => _FullscreenFeedScreenState();
@@ -138,6 +145,72 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
   String? _commentDramaId;
   HongguoCommentPage? _commentPage;
 
+  // 加载器模式状态：分类与选中分类由取数结果驱动；代次守卫保证
+  // 只有最新一次取数生效，过期结果直接丢弃。
+  late List<CatalogCategory> _feedCategories = widget.categories;
+  late String _feedCategory = widget.selectedCategory;
+  bool _feedLoading = false;
+  String? _feedError;
+  int _feedGen = 0;
+
+  bool get _loaderMode => widget.onLoadFeed != null;
+
+  List<CatalogCategory> get _shownCategories =>
+      _loaderMode ? _feedCategories : widget.categories;
+
+  String get _shownCategory =>
+      _loaderMode ? _feedCategory : widget.selectedCategory;
+
+  void _selectCategory(String id) {
+    if (_loaderMode) {
+      if (id != _feedCategory) unawaited(_loadFeed(id));
+    } else {
+      widget.onCategorySelected?.call(id);
+    }
+  }
+
+  Future<void> _loadFeed(String categoryId) async {
+    final loader = widget.onLoadFeed;
+    if (loader == null) return;
+    final gen = ++_feedGen;
+    _savePosition();
+    _playToken++;
+    setState(() {
+      _feedLoading = true;
+      _feedError = null;
+      _feedCategory = categoryId;
+      _items = const [];
+      _index = 0;
+      _episode = 0;
+      _detailError = null;
+    });
+    try {
+      final data = await loader(categoryId);
+      if (!mounted || gen != _feedGen) return;
+      setState(() {
+        _feedLoading = false;
+        _feedCategories = data.categories;
+        _items = data.dramas;
+        _index = 0;
+        _episode = 0;
+        _detailError = null;
+      });
+      if (data.dramas.isEmpty) return;
+      if (_pages.hasClients && (_pages.page ?? 0) != 0) {
+        _pages.jumpToPage(0);
+      } else {
+        unawaited(_playCurrent());
+        _prefetch(1);
+      }
+    } catch (_) {
+      if (!mounted || gen != _feedGen) return;
+      setState(() {
+        _feedLoading = false;
+        _feedError = '加载失败，请重试';
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -154,7 +227,9 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
     _player.addListener(_onPlayerChanged);
     WidgetsBinding.instance.addObserver(this);
     _lastPlaying = _player.playing;
-    if (_items.isNotEmpty) {
+    if (_loaderMode) {
+      unawaited(_loadFeed(widget.selectedCategory));
+    } else if (_items.isNotEmpty) {
       unawaited(_playCurrent());
       _prefetch(1);
     }
@@ -163,6 +238,8 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
   @override
   void didUpdateWidget(FullscreenFeedScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 加载器模式：数据归加载器所有，父重建不得冲掉已取的流。
+    if (_loaderMode) return;
     final next = feedPlayableDramas(widget.dramas);
     final nextKeys = [for (final drama in next) _keyFor(drama)].join('|');
     final currentKeys = [for (final drama in _items) _keyFor(drama)].join('|');
@@ -1272,11 +1349,24 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
                         ),
                       ),
                       networkSpeedLabel(_speedTracker.speedText),
+                      // 加载器模式：点一下重新取数、重新随机混排。
+                      if (_loaderMode)
+                        IconButton(
+                          key: const ValueKey('feed-refresh'),
+                          tooltip: '换一批',
+                          onPressed: _feedLoading
+                              ? null
+                              : () => unawaited(_loadFeed(_feedCategory)),
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                            color: Colors.white,
+                          ),
+                        ),
                     ],
                   ),
                   if (!_landscape &&
-                      widget.categories.isNotEmpty &&
-                      widget.onCategorySelected != null)
+                      _shownCategories.isNotEmpty &&
+                      (_loaderMode || widget.onCategorySelected != null))
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.only(left: 12, bottom: 4),
@@ -1284,14 +1374,14 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
                         children: [
                           _feedTab(
                             '全部',
-                            widget.selectedCategory.isEmpty,
-                            () => widget.onCategorySelected!(''),
+                            _shownCategory.isEmpty,
+                            () => _selectCategory(''),
                           ),
-                          for (final category in widget.categories)
+                          for (final category in _shownCategories)
                             _feedTab(
                               category.name,
-                              category.id == widget.selectedCategory,
-                              () => widget.onCategorySelected!(category.id),
+                              category.id == _shownCategory,
+                              () => _selectCategory(category.id),
                             ),
                         ],
                       ),
@@ -1655,6 +1745,9 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
   @override
   Widget build(BuildContext context) {
     if (_items.isEmpty) {
+      // 加载器模式：加载中转圈、失败可重试、取到空是诚实空态；
+      // 旧快照路径保持原来的“暂无可播短剧”。
+      final showRetry = _loaderMode && _feedError != null;
       return Scaffold(
         backgroundColor: Colors.black,
         appBar: AppBar(
@@ -1662,8 +1755,36 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
           foregroundColor: Colors.white,
           title: const Text('全屏流'),
         ),
-        body: const Center(
-          child: Text('暂无可播短剧', style: TextStyle(color: Colors.white70)),
+        body: Center(
+          child: _loaderMode && _feedLoading
+              ? const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 12),
+                    Text('加载中…', style: TextStyle(color: Colors.white70)),
+                  ],
+                )
+              : showRetry
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _feedError!,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      key: const ValueKey('feed-retry'),
+                      onPressed: () => unawaited(_loadFeed(_feedCategory)),
+                      child: const Text('重试'),
+                    ),
+                  ],
+                )
+              : const Text(
+                  '暂无可播短剧',
+                  style: TextStyle(color: Colors.white70),
+                ),
         ),
       );
     }

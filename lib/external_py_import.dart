@@ -10,6 +10,7 @@ import 'import_center.dart';
 import 'legado_gbk.dart';
 import 'local_store.dart';
 import 'py_spider_validator.dart';
+import 'shared_json_import.dart';
 
 const maxExternalPyBytes = 32 * 1024 * 1024;
 
@@ -125,6 +126,10 @@ class _ExternalPyImportListenerState extends State<ExternalPyImportListener>
   final _processing = <String>{};
   bool _draining = false;
 
+  late final _jsonHandler = SharedJsonImportHandler(
+    repository: widget.repository,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -202,6 +207,14 @@ class _ExternalPyImportListenerState extends State<ExternalPyImportListener>
     } catch (_) {
       _showSnack('文件「${file.name}」无法读取');
       await _deleteStaged(file.path);
+      return;
+    }
+    // JSON 文件不走 py/jar 校验：按内容分流到小程序/书源/配置导入。
+    // 大小上限与 py/jar 同一条（maxExternalPyBytes 32MB），上面已拦过。
+    if (file.kind == 'json') {
+      final message = await _jsonHandler.handle(bytes, fileName: file.name);
+      await _deleteStaged(file.path);
+      _showSnack(message);
       return;
     }
     if (file.isJar) {

@@ -135,6 +135,22 @@ class PlaybackSettingsScreen extends StatelessWidget {
                         ),
                 ),
                 SwitchListTile(
+                  key: const ValueKey('season-autoplay-switch'),
+                  value: store.hongguoSeasonAutoplay,
+                  title: const Text('跨季自动连播'),
+                  subtitle: preferences.autoAdvance
+                      ? const Text(
+                          '短剧播完本季最后一集后，倒计时 5 秒自动播放下一季。',
+                        )
+                      : const Text('自动连播未开，本开关暂不生效。'),
+                  onChanged: !enabled
+                      ? null
+                      : (value) => saveUserChange(
+                          context,
+                          () => store.setHongguoSeasonAutoplay(value),
+                        ),
+                ),
+                SwitchListTile(
                   value: preferences.preload,
                   title: const Text('预加载下一集'),
                   subtitle: const Text('后台提前缓冲下一集，加快切换速度，消耗更多流量。'),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
 import 'live_sources.dart';
+import 'proxy_egress.dart';
 import 'proxy_kernel.dart';
 import 'proxy_kernel_service.dart';
 import 'socks5_proxy.dart';
@@ -361,6 +362,40 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
             '本地代理模式：只代理本应用自身的 HTTP 流量（经 127.0.0.1 本地端口），'
             '不做系统 VPN，不影响其它应用。',
           ),
+          const SizedBox(height: 10),
+          // 当前生效出口：决策点实时状态 + 各路覆盖范围。决策链：
+          // 内核 > SOCKS5 > 手填地址 > 系统代理 > 直连，上一档没了自动落下一档。
+          ListenableBuilder(
+            listenable: ProxyEgressController.instance.decisionNotifier,
+            builder: (context, _) {
+              final decision = ProxyEgressController.instance.decision;
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '当前生效出口：${decision.label}',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        '覆盖范围：站源（Go 核）、Dart 取数、封面图、海阔取数、'
+                        'py 源、jar 源、Exo / ijk / MPV 三个播放器，全部跟随'
+                        '当前出口；海阔规则自带 proxy 字段时优先用规则的。',
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        '嗅探 WebView 保持直连：它走系统网络栈，不进本应用的'
+                        '出口（jar 里自建客户端写死代理的蜘蛛也不受出口控制）。',
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
           if (state != null && !state.supported) ...[
             const SizedBox(height: 10),
             const Card(
@@ -555,7 +590,8 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
           Text('SOCKS5 代理', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           const Text(
-            '手动添加的 SOCKS5 代理，经本机转发器连接，不依赖上面的代理内核。'
+            '手动添加的 SOCKS5 代理，经本机转发器连接，不依赖上面的代理内核；'
+            '列表里第一个已启用的代理同时是全局出口的第二档（内核停了时顶上）。'
             '测速发真实请求计时；一键识别逐个测全部代理并标可用/不可用。',
           ),
           const SizedBox(height: 6),
@@ -633,7 +669,7 @@ class _ProxyKernelScreenState extends State<ProxyKernelScreen> {
           Text('各资源代理', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           const Text(
-            '每个资源单独选代理或直连；跟随默认则走上面的代理内核链路。'
+            '每个资源单独选代理或直连；跟随默认则走当前生效出口（见本页顶部的出口状态）。'
             '影视站源的取流走 Go 核全局代理（在“网络与资源”里设置），'
             '这里只管直播与抓取链路。',
           ),

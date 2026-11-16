@@ -15,9 +15,9 @@ void main() {
     return LocalStore(await SharedPreferences.getInstance());
   }
 
-  test('主题偏好经 LocalStore 往返，默认紫蓝霓虹', () async {
+  test('主题偏好经 LocalStore 往返，默认 Win7', () async {
     final store = await localStore();
-    expect(store.appTheme, AppThemeMode.purpleNeon);
+    expect(store.appTheme, AppThemeMode.win7);
     await store.setAppTheme(AppThemeMode.goldVip);
     expect(store.appTheme, AppThemeMode.goldVip);
     final restored = LocalStore(store.preferences);
@@ -36,13 +36,13 @@ void main() {
       'themeBackgroundImage': 'bg.jpg',
     });
     expect(store.hasLegacyThemeSettings, isTrue);
-    // 旧值不影响新主题：仍是默认紫蓝霓虹。
-    expect(store.appTheme, AppThemeMode.purpleNeon);
+    // 旧值不影响新主题：仍是默认 Win7。
+    expect(store.appTheme, AppThemeMode.win7);
     await store.migrateLegacyThemeSettings();
     expect(store.hasLegacyThemeSettings, isFalse);
     final restored = LocalStore(store.preferences);
     expect(restored.hasLegacyThemeSettings, isFalse);
-    expect(restored.appTheme, AppThemeMode.purpleNeon);
+    expect(restored.appTheme, AppThemeMode.win7);
     store.dispose();
     restored.dispose();
   });
@@ -51,11 +51,11 @@ void main() {
     final store = await localStore();
     expect(store.hasLegacyThemeSettings, isFalse);
     await store.migrateLegacyThemeSettings();
-    expect(store.appTheme, AppThemeMode.purpleNeon);
+    expect(store.appTheme, AppThemeMode.win7);
     store.dispose();
   });
 
-  testWidgets('主题设置页列出 12 套主题，点选即时存盘', (tester) async {
+  testWidgets('主题设置页列出 13 套主题，点选即时存盘', (tester) async {
     final store = await localStore();
     await tester.pumpWidget(
       MaterialApp(home: ThemeSettingsScreen(store: store)),
@@ -70,13 +70,14 @@ void main() {
     }
     expect(find.text('紫蓝霓虹'), findsOneWidget);
     expect(find.text('黑金VIP'), findsOneWidget);
+    expect(find.text('Win7'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('app-theme-goldVip')));
     await tester.pumpAndSettle();
     expect(store.appTheme, AppThemeMode.goldVip);
     store.dispose();
   });
 
-  testWidgets('恢复默认主题回到紫蓝霓虹', (tester) async {
+  testWidgets('恢复默认主题回到 Win7', (tester) async {
     final store = await localStore();
     await store.setAppTheme(AppThemeMode.cyberBlue);
     await tester.pumpWidget(
@@ -92,7 +93,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(resetButton);
     await tester.pumpAndSettle();
-    expect(store.appTheme, AppThemeMode.purpleNeon);
+    expect(store.appTheme, AppThemeMode.win7);
     store.dispose();
   });
 }

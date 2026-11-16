@@ -16,6 +16,7 @@ import '../../app_build.dart';
 import '../../app_orientation.dart';
 import '../../app_theme.dart';
 import '../../network_speed.dart';
+import '../../nonvideo_content.dart';
 import '../../playback_preferences.dart';
 import '../../player_controls.dart';
 import '../../player_interactions.dart';
@@ -103,6 +104,27 @@ HaikuoPlayRoute resolvePlayRoute({
   if (playerActive) return HaikuoPlayRoute.deliver;
   if (fromDetail) return HaikuoPlayRoute.inline;
   return HaikuoPlayRoute.push;
+}
+
+/// 小程序播放消息的内容分流：小说进阅读视图、图片集进图片浏览，
+/// 其余进视频播放器。判定只认规则实际返回的 novel:// 与 pics://
+/// 载荷（与壳内其它区同一解析函数），不按扩展名猜。
+enum HaikuoPlayContent { video, novel, pics }
+
+HaikuoPlayContent classifyHaikuoPlayContent(String url) {
+  final content = parseNonVideoUrl(url);
+  if (content == null) return HaikuoPlayContent.video;
+  return content.isNovel ? HaikuoPlayContent.novel : HaikuoPlayContent.pics;
+}
+
+/// 跟随重定向后的最终地址：按重定向链逐级解析（Dart 的
+/// HttpClientResponse.redirects 只记每次跳转的 location）。
+Uri haikuoResolveFinalUri(Uri original, Iterable<Uri> redirectLocations) {
+  var current = original;
+  for (final location in redirectLocations) {
+    current = current.resolve(location.toString());
+  }
+  return current;
 }
 
 /// 非全屏播放器槽位高度：按视频宽高比适配，竖屏视频不再被压进
@@ -469,6 +491,12 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
           final String s => int.tryParse(s),
           _ => null,
         };
+        // 非视频内容分流：小说/图片集进对应查看器，不进视频播放器。
+        final nonVideo = parseNonVideoUrl(url, headers: headers);
+        if (nonVideo != null) {
+          _openNonVideo(nonVideo, title);
+          return;
+        }
         final controller = _playerController;
         final route = resolvePlayRoute(
           fromDetail: payload['detail'] == true,
@@ -528,6 +556,11 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       case 'open':
         final url = '${payload['url'] ?? ''}';
         if (url.isEmpty) return;
+        final openNonVideo = parseNonVideoUrl(url);
+        if (openNonVideo != null) {
+          _openNonVideo(openNonVideo, '${payload['title'] ?? ''}');
+          return;
+        }
         _openLink(url, '${payload['title'] ?? ''}');
     }
   }
@@ -536,6 +569,24 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     if (!mounted || text.isEmpty) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(text), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  /// 非视频内容查看页：复用壳内已有的小说阅读视图与图片浏览视图，
+  /// 标题优先用载荷自带的标题，其次用规则条目的标题。
+  Future<void> _openNonVideo(NonVideoContent content, String title) async {
+    final label = content.title.isNotEmpty ? content.title : title;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(
+            title: Text(label.isEmpty ? widget.program.name : label),
+          ),
+          body: content.isNovel
+              ? NovelReaderView(content: content, title: label)
+              : PicsViewerView(content: content, title: label),
+        ),
+      ),
     );
   }
 
@@ -2088,7 +2139,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     final response = request.response;
     response.headers.contentType = ContentType.json;
     if (!target.startsWith('http://') && !target.startsWith('https://')) {
-      response.write(jsonEncode({'code': 0, 'body': '', 'headers': {}}));
+      response.write(
+        jsonEncode({'code': 0, 'body': '', 'headers': {}, 'url': target}),
+      );
       await response.close();
       return;
     }
@@ -2113,7 +2166,10 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       final client = _httpClient ??= HttpClient()
         ..connectionTimeout = const Duration(seconds: 20)
         ..idleTimeout = const Duration(seconds: 15);
-      // 规则 proxy 字段：本页一个规则，代理固定写在共用客户端上。
+      // 规则 proxy 字段优先于全局出口：本页一个规则，代理固定写在
+      // 共用客户端上，显式赋值会覆盖全局 HttpOverrides 的默认值。
+      // 规则没有 proxy 字段时不写 findProxy，客户端走全局出口决策
+      //（内核/SOCKS5/手填/系统/直连），决策变化实时生效。
       final proxy = _ruleProxy;
       if (proxy != null) {
         client.findProxy = (_) => 'PROXY $proxy';
@@ -2163,17 +2219,29 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
             ? base64Encode(raw)
             : _decodeWithCharset(raw, charset);
       }
+      // 最终地址：跟随重定向后的实际地址，onlyHeaders 形态回给规则。
+      final finalUri = haikuoResolveFinalUri(
+        uri,
+        resp.redirects.map((redirect) => redirect.location),
+      );
       response.write(
         jsonEncode({
           'code': resp.statusCode,
           'body': bodyText,
           'headers': headerMap,
+          'url': finalUri.toString(),
         }),
       );
       await response.close();
     } catch (error) {
       response.write(
-        jsonEncode({'code': 0, 'body': '', 'headers': {}, 'error': '$error'}),
+        jsonEncode({
+          'code': 0,
+          'body': '',
+          'headers': {},
+          'url': target,
+          'error': '$error',
+        }),
       );
       await response.close();
     }

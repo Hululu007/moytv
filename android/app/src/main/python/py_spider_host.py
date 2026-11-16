@@ -11,6 +11,8 @@ import threading
 import time
 import traceback
 import types
+import urllib.parse
+import urllib.request
 
 try:
     _ssl_paths = ssl.get_default_verify_paths()
@@ -162,6 +164,46 @@ def _norm_timeout(timeout):
 
 _cf_disguise_enabled = True
 
+# Egress proxy pushed by the Dart decision point (proxy_egress.dart):
+# full URL such as "http://127.0.0.1:7890", or None for direct.
+# Applied three ways so every HTTP stack spiders may use follows it:
+# explicit urllib opener (the cached global opener snapshots env vars,
+# so env vars alone cannot change it), proxy env vars (real `requests`
+# reads them per request), and explicit curl_cffi Session proxies.
+_egress_proxy_url = None
+_EGRESS_NO_PROXY = "localhost,127.0.0.1,::1"
+
+
+class _EgressProxyHandler(urllib.request.ProxyHandler):
+    # Loopback targets never go through the proxy: they are local
+    # services (kernel controller, forwarder, local proxy). Returning
+    # None lets the next handler in the chain open the URL directly.
+    def proxy_open(self, req, proxy, type):
+        host = (urllib.parse.urlsplit(req.full_url).hostname or "").lower()
+        if host in ("localhost", "127.0.0.1", "::1"):
+            return None
+        return super().proxy_open(req, proxy, type)
+
+
+def set_egress_proxy(proxy_url):
+    global _egress_proxy_url
+    proxy_url = (proxy_url or "").strip() or None
+    _egress_proxy_url = proxy_url
+    if proxy_url:
+        proxies = {"http": proxy_url, "https": proxy_url}
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            os.environ[key] = proxy_url
+    else:
+        proxies = {}
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            os.environ.pop(key, None)
+    os.environ["no_proxy"] = _EGRESS_NO_PROXY
+    os.environ["NO_PROXY"] = _EGRESS_NO_PROXY
+    urllib.request.install_opener(
+        urllib.request.build_opener(_EgressProxyHandler(proxies))
+    )
+    return True
+
 
 def _pick_impersonate(hdrs):
     ua = ""
@@ -225,7 +267,14 @@ def _do_http_curl(method, url, hdrs, data, timeout):
     except Exception:
         return None
     try:
-        session = Session(impersonate=_pick_impersonate(hdrs))
+        session = Session(
+            impersonate=_pick_impersonate(hdrs),
+            proxies=(
+                {"http": _egress_proxy_url, "https": _egress_proxy_url}
+                if _egress_proxy_url
+                else None
+            ),
+        )
         try:
             resp = session.request(
                 method.upper(),
@@ -1042,6 +1091,12 @@ def handle(path, request_json):
                 _cf_disguise_enabled = request["enabled"]
             return json.dumps(
                 {"ok": True, "data": {"cfDisguise": _cf_disguise_enabled}},
+                ensure_ascii=False,
+            )
+        if action == "setEgressProxy":
+            set_egress_proxy(request.get("proxyUrl") or "")
+            return json.dumps(
+                {"ok": True, "data": {"egressProxy": _egress_proxy_url or ""}},
                 ensure_ascii=False,
             )
         if isinstance(request.get("cfDisguise"), bool):

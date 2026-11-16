@@ -418,11 +418,111 @@ String _emitProxyFields(Map<String, String> fields) {
   return buffer.toString();
 }
 
+/// 内置最小分流规则：回环与内网地址直连，其余全部走 PROXY 组。
+/// 包里没有 GEOIP/GEOSITE 数据库，也不下发规则集文件，所以这里不写
+/// 任何地理规则——写了内核也跑不起来。订阅自带可用规则时优先用订阅的
+///（见 [extractSubscriptionRules]），没有时才用这套。
+const List<String> proxyKernelMinimalRules = [
+  'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
+  'IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
+  'IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
+  'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
+  'IP-CIDR,::1/128,DIRECT,no-resolve',
+  'IP-CIDR,fc00::/8,DIRECT,no-resolve',
+  'IP-CIDR,fe80::/10,DIRECT,no-resolve',
+  'MATCH,$proxyKernelSelectGroup',
+];
+
+/// 订阅规则里允许直接沿用的简单类型。复合类型（AND/OR/NOT）、规则集
+///（RULE-SET）、地理类型（GEOIP/GEOSITE）与脚本类型一律丢掉：它们要么
+/// 需要包里没有的数据文件，要么嵌套结构无法按行过滤，写进配置只会让
+/// 内核启动失败；丢掉的部分由末尾的 MATCH 兜底走 PROXY，不会断流。
+const Set<String> _subscriptionRuleAllowedTypes = {
+  'DOMAIN',
+  'DOMAIN-SUFFIX',
+  'DOMAIN-KEYWORD',
+  'DOMAIN-REGEX',
+  'IP-CIDR',
+  'IP-CIDR6',
+  'IP-ASN',
+  'SRC-IP-CIDR',
+  'SRC-PORT',
+  'DST-PORT',
+  'PROCESS-NAME',
+  'PROCESS-PATH',
+  'NETWORK',
+  'MATCH',
+};
+
+/// 从订阅文本里提取可用的 `rules:` 规则（纯函数，可单测）。
+/// 只保留目标是 DIRECT/REJECT/REJECT-DROP/PROXY 组/已知节点名的规则；
+/// 指向不存在的策略组的规则丢掉（本应用生成的配置只有一个 PROXY 组）。
+/// 订阅无 rules 段、内容非法、或一条都留不下时返回空列表，
+/// 调用方随后用 [proxyKernelMinimalRules] 兜底。
+List<String> extractSubscriptionRules(String raw, Set<String> nodeNames) {
+  String text;
+  try {
+    text = _decodeSubscriptionText(raw);
+  } catch (_) {
+    return const [];
+  }
+  final lines = _splitYamlLines(text);
+  var rulesIndent = -1;
+  var start = -1;
+  for (var i = 0; i < lines.length; i++) {
+    final trimmed = lines[i].trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+    if (trimmed == 'rules:' || trimmed.startsWith('rules: ')) {
+      if (trimmed.startsWith('rules: [')) return const [];
+      rulesIndent = _indentOf(lines[i]);
+      start = i + 1;
+      break;
+    }
+  }
+  if (start < 0) return const [];
+  final kept = <String>[];
+  for (var i = start; i < lines.length; i++) {
+    final line = lines[i];
+    final trimmed = line.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+    final indent = _indentOf(line);
+    if (indent <= rulesIndent && !trimmed.startsWith('- ')) break;
+    if (!trimmed.startsWith('- ')) continue;
+    final rule = trimmed.substring(2).trim();
+    if (rule.isEmpty) continue;
+    final usable = _filterSubscriptionRule(rule, nodeNames);
+    if (usable != null) kept.add(usable);
+  }
+  return kept;
+}
+
+String? _filterSubscriptionRule(String rule, Set<String> nodeNames) {
+  final parts = rule.split(',');
+  if (parts.length < 2) return null;
+  final type = parts[0].trim().toUpperCase();
+  if (!_subscriptionRuleAllowedTypes.contains(type)) return null;
+  var targetIndex = parts.length - 1;
+  if (parts[targetIndex].trim().toLowerCase() == 'no-resolve') {
+    targetIndex--;
+    if (targetIndex < 1) return null;
+  }
+  final target = parts[targetIndex].trim();
+  final upper = target.toUpperCase();
+  if (upper == 'DIRECT' || upper == 'REJECT' || upper == 'REJECT-DROP') {
+    return rule;
+  }
+  if (target == proxyKernelSelectGroup || nodeNames.contains(target)) {
+    return rule;
+  }
+  return null;
+}
+
 String buildProxyKernelConfig({
   required List<ProxyKernelNode> nodes,
   required int mixedPort,
   required int controllerPort,
   required String secret,
+  List<String>? rules,
 }) {
   if (nodes.isEmpty) {
     throw ProxyKernelFailure('没有节点，无法生成代理内核配置');
@@ -457,7 +557,20 @@ String buildProxyKernelConfig({
   }
   buffer.writeln('      - DIRECT');
   buffer.writeln('rules:');
-  buffer.writeln('  - MATCH,$proxyKernelSelectGroup');
+  // 订阅规则优先；没有或为空时用内置最小规则。订阅规则里若没有 MATCH
+  // 兜底，补一条 MATCH,PROXY，保证所有流量都有去处。
+  final effectiveRules = (rules == null || rules.isEmpty)
+      ? proxyKernelMinimalRules
+      : rules;
+  for (final rule in effectiveRules) {
+    buffer.writeln('  - $rule');
+  }
+  final hasMatch = effectiveRules.any(
+    (rule) => rule.trim().toUpperCase().startsWith('MATCH,'),
+  );
+  if (!hasMatch) {
+    buffer.writeln('  - MATCH,$proxyKernelSelectGroup');
+  }
   return buffer.toString();
 }
 

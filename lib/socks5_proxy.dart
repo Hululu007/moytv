@@ -272,6 +272,11 @@ class Socks5ProxyRouter {
 
   static final Socks5ProxyRouter instance = Socks5ProxyRouter();
 
+  /// 快照变化回调：出口决策点（`proxy_egress.dart`）的接线层挂在这里，
+  /// 代理增删改/启停/启动加载时刷新 SOCKS5 档。默认为空，现有调用方
+  /// 与测试不受影响；回调里不许再调 `update()`（避免递归）。
+  static void Function()? onUpdated;
+
   List<Socks5ProxyEntry> _proxies = const [];
   Map<String, String> _assignments = const {};
   int _generation = 0;
@@ -284,6 +289,7 @@ class Socks5ProxyRouter {
     _proxies = List.unmodifiable(proxies);
     _assignments = Map.unmodifiable(assignments);
     _generation++;
+    onUpdated?.call();
   }
 
   Socks5Route resolve(String? resourceKey) =>

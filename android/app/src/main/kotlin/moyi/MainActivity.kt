@@ -41,6 +41,9 @@ class MainActivity : FlutterActivity() {
     // 插件分享读流上限：与 Flutter 侧外部导入的 32MB 上限一致。
     private val maxPluginShareBytes = 32L * 1024 * 1024
     private val pendingJarFiles = mutableListOf<Map<String, Any?>>()
+    // 分享来的 JSON 文件暂存队列（kind=json）：与 py/jar 旧队列同一条
+    // takePending 通道取走，Flutter 侧按 kind 分流，不走插件安装。
+    private val pendingJsonFiles = mutableListOf<Map<String, Any?>>()
     private var televisionMode = false
 
     // 播放页左半屏竖向拖动临时调亮度：只改本窗口 screenBrightness（-1f 表示跟随系统），
@@ -217,29 +220,37 @@ class MainActivity : FlutterActivity() {
                 (mime == "text/x-python" || mime == "application/x-python")))
         val looksJar = !looksZip && !looksPy && (lowerName.endsWith(".jar") ||
             mime == "application/java-archive" || mime == "application/x-java-archive")
-        if (!looksPy && !looksJar && !looksZip) return
+        // JSON：只认 .json 后缀或 application/json 类型；text/plain 不带后缀时
+        // 不认（否则所有纯文本分享都会进 JSON 分流）。py/jar/zip 优先于 JSON。
+        val looksJson = !looksZip && !looksPy && !looksJar &&
+            (lowerName.endsWith(".json") || mime == "application/json")
+        if (!looksPy && !looksJar && !looksZip && !looksJson) return
         if (action == Intent.ACTION_VIEW) {
             // 打开方式进插件分享通道：Flutter 侧按 URI 读流后走插件安装；
             // 不再同时进旧的 py/jar 暂存队列，避免一次打开装两次。
             // SEND（分享到）仍走旧的暂存队列，行为不变。
+            // JSON 也走这条 URI 队列，但带 kind=json 标记，Flutter 侧按
+            // 内容分流到小程序/书源/配置导入，不进插件安装。
             val fallbackName = if (looksZip) "import.zip"
-                else if (looksJar) "import.jar" else "import.py"
+                else if (looksJar) "import.jar"
+                else if (looksJson) "import.json" else "import.py"
             val uriString = uri.toString()
             if (pendingPluginShareFiles.none { it["uri"] == uriString }) {
-                pendingPluginShareFiles.add(
-                    mapOf(
-                        "uri" to uriString,
-                        "name" to if (name.isNotEmpty()) name else fallbackName,
-                    ),
+                val entry = mutableMapOf<String, Any?>(
+                    "uri" to uriString,
+                    "name" to if (name.isNotEmpty()) name else fallbackName,
                 )
+                if (looksJson) entry["kind"] = "json"
+                pendingPluginShareFiles.add(entry)
             }
             return
         }
         // zip 只走打开方式的插件分享通道，SEND 来的 zip 不进旧队列。
         if (looksZip) return
         val staged = runCatching {
-            val dir = java.io.File(cacheDir, if (looksJar) "jarimport" else "pyimport").apply { if (!exists()) mkdirs() }
-            val suffix = if (looksJar) "jar" else "py"
+            val dirName = if (looksJar) "jarimport" else if (looksJson) "jsonimport" else "pyimport"
+            val dir = java.io.File(cacheDir, dirName).apply { if (!exists()) mkdirs() }
+            val suffix = if (looksJar) "jar" else if (looksJson) "json" else "py"
             val target = java.io.File(dir, "${System.currentTimeMillis()}_${(0..9999).random()}.$suffix")
             contentResolver.openInputStream(uri)?.use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
@@ -248,11 +259,13 @@ class MainActivity : FlutterActivity() {
         }.getOrNull() ?: return
         val entry = mapOf(
             "path" to staged.absolutePath,
-            "name" to if (name.isNotEmpty()) name else if (looksJar) "import.jar" else "import.py",
+            "name" to if (name.isNotEmpty()) name else if (looksJar) "import.jar" else if (looksJson) "import.json" else "import.py",
             "size" to staged.length(),
-            "kind" to if (looksJar) "jar" else "py"
+            "kind" to if (looksJar) "jar" else if (looksJson) "json" else "py"
         )
-        if (looksJar) pendingJarFiles.add(entry) else pendingPyFiles.add(entry)
+        if (looksJar) pendingJarFiles.add(entry)
+        else if (looksJson) pendingJsonFiles.add(entry)
+        else pendingPyFiles.add(entry)
     }
 
     // 插件分享读流：Flutter 侧只认 URI + 字节流，不假设文件路径。
@@ -344,6 +357,21 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         "playbackPower" -> result.success(runCatching { playbackPower() }.getOrNull())
+                        "setEgressProxy" -> {
+                            val proxyUrl = call.argument<String>("proxyUrl")
+                            if (proxyUrl.isNullOrEmpty()) {
+                                result.error("invalid_egress_proxy", "缺少出口地址", null)
+                            } else {
+                                EgressProxySelector.install(proxyUrl)
+                                IjkEgress.proxyUrl = proxyUrl
+                                result.success(null)
+                            }
+                        }
+                        "clearEgressProxy" -> {
+                            EgressProxySelector.clear()
+                            IjkEgress.proxyUrl = null
+                            result.success(null)
+                        }
                         "signatureSha256" -> result.success(signatureSha256())
                         "compatibleRendering" -> result.success(compatibleRendering())
                         "setCompatibleRendering" -> {
@@ -410,9 +438,10 @@ class MainActivity : FlutterActivity() {
             .also { channel ->
                 channel.setMethodCallHandler { call, result ->
                     if (call.method == "takePending") {
-                        val pending = pendingPyFiles.toList() + pendingJarFiles.toList()
+                        val pending = pendingPyFiles.toList() + pendingJarFiles.toList() + pendingJsonFiles.toList()
                         pendingPyFiles.clear()
                         pendingJarFiles.clear()
+                        pendingJsonFiles.clear()
                         result.success(pending)
                     } else {
                         result.notImplemented()

@@ -64,6 +64,11 @@ type proxyRouter struct {
 	system         nativeSystemProxy
 	systemRead     time.Time
 	systemOverride bool
+	// egress 是 Dart 出口决策点的覆盖地址（代理内核 / SOCKS5 转发器 /
+	// 手填地址），非空时优先于 mode/manual/system 生效；回环目标不受影响。
+	// 它是运行时覆盖，不落盘；applyResourceSettings 刻意不碰它，Dart 侧
+	// 清掉覆盖后自动回到用户原来的模式与手填地址。
+	egress *url.URL
 }
 
 func (router *proxyRouter) proxy(request *http.Request) (*url.URL, error) {
@@ -71,8 +76,11 @@ func (router *proxyRouter) proxy(request *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	router.mu.RLock()
-	mode, manual := router.mode, router.manual
+	egress, mode, manual := router.egress, router.mode, router.manual
 	router.mu.RUnlock()
+	if egress != nil {
+		return egress, nil
+	}
 	switch mode {
 	case "direct":
 		return nil, nil
@@ -125,6 +133,8 @@ func (engine *nativeEngine) applyResourceSettings(settings nativeResourceSetting
 	router := engine.downloader.proxyRouter
 	manual, _ := url.Parse(settings.ProxyURL)
 	router.mu.Lock()
+	// 只写 mode/manual：egress 覆盖是 Dart 出口决策点的运行时状态，
+	// 用户保存资源设置不该把它清掉，决策点自己负责同步与恢复。
 	router.mode, router.manual = settings.ProxyMode, manual
 	router.mu.Unlock()
 	limiter := engine.downloader.limiter
@@ -162,4 +172,31 @@ func (engine *nativeEngine) saveResourceSettings(settings nativeResourceSettings
 	engine.applyResourceSettings(settings)
 	engine.downloader.client.CloseIdleConnections()
 	return settings, nil
+}
+
+// setEgressProxy 设置或清除 Dart 出口决策点的代理覆盖地址。
+// 空地址表示清除覆盖，之后按用户保存的资源设置（mode/manual/system）走。
+// 非空地址按资源设置同样的规则校验，非法地址拒绝且保持原覆盖不变。
+// 地址变化时关闭空闲连接，让已建连接不继续走旧出口。
+func (engine *nativeEngine) setEgressProxy(address string) error {
+	address = strings.TrimSpace(address)
+	var parsed *url.URL
+	if address != "" {
+		settings := defaultResourceSettings()
+		settings.ProxyMode, settings.ProxyURL = "manual", address
+		if err := settings.validate(); err != nil {
+			return err
+		}
+		parsed, _ = url.Parse(address)
+	}
+	router := engine.downloader.proxyRouter
+	router.mu.Lock()
+	changed := (router.egress == nil) != (parsed == nil) ||
+		(router.egress != nil && parsed != nil && router.egress.String() != parsed.String())
+	router.egress = parsed
+	router.mu.Unlock()
+	if changed {
+		engine.downloader.client.CloseIdleConnections()
+	}
+	return nil
 }

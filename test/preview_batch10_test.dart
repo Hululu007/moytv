@@ -466,13 +466,13 @@ void main() {
     );
   });
 
-  // 4. 我的页：抽屉拆除后主题切换与设置的去处。
+  // 4. 我的页：主题切换行已删，设置是唯一主题入口。
   testWidgets('预览 我的页', (tester) async {
     final store = await _previewStore();
     await _capture(
       tester,
       name: 'mine_page_v2',
-      label: '预览 · 我的页 · 主题切换与设置入口在此',
+      label: '预览 · 我的页 · 设置入口在此（主题切换已移入设置）',
       screen: MinePage(
         repository: FixtureRepository(),
         store: store,

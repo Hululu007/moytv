@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'app_page_route.dart';
 import 'core_bridge.dart';
 import 'hongguo_account_store.dart';
+import 'hongguo_cloud_records.dart';
 import 'hongguo_comment.dart';
 import 'hongguo_danmaku.dart';
 import 'hongguo_preload.dart';
+import 'hongguo_season_countdown.dart';
 import 'hongguo_series.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -270,14 +272,7 @@ Drama? hongguoNextSeasonDrama({
   required Iterable<Drama> candidates,
 }) {
   final entries = hongguoSeriesEntries(anchor, candidates);
-  final anchorEntry = entries
-      .where((entry) => entry.drama.id == anchor.id)
-      .firstOrNull;
-  if (anchorEntry == null) return null;
-  final next = entries
-      .where((entry) => entry.season > anchorEntry.season)
-      .firstOrNull;
-  return next?.drama;
+  return hongguoNextSeasonEntry(entries, anchor.id)?.drama;
 }
 
 class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
@@ -324,6 +319,11 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   String? _lastPlayerError;
   HongguoDecoderLessons _decoderLessons = HongguoDecoderLessons();
 
+  // 跨季连播倒计时：本季最后一集播完、找到下一季时启动，5 秒后
+  // 自动打开下一季；取消/切集/退出时 _cancelSeasonCountdown 停掉。
+  SeasonAutoplayCountdown? _seasonCountdown;
+  HongguoSeriesEntry? _pendingNextSeason;
+
   @override
   void initState() {
     super.initState();
@@ -342,6 +342,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
 
   @override
   void dispose() {
+    _cancelSeasonCountdown();
     _recoveryTimer?.cancel();
     _recoveryTimer = null;
     _player.removeListener(_onPlayerChanged);
@@ -534,6 +535,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   }
 
   void _openDrama(Drama drama) {
+    _cancelSeasonCountdown();
     unawaited(
       Navigator.of(context).push<void>(
         appPageRoute<void>(
@@ -549,6 +551,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
 
   Future<void> _playCurrent() async {
     if (!mounted) return;
+    _cancelSeasonCountdown();
     if (_opening) {
       _pendingPlay = true;
       return;
@@ -677,25 +680,99 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
       _playEpisode(_episode + 1);
       return;
     }
-    // 本季最后一集：自动连播与跨季开关都开时才进下一季，否则保持原行为
-    // （开选集面板）。季内连播本身不设门，行为与原来一致。
+    // 本季最后一集：自动连播与跨季开关都开时找下一季，找到就出
+    // 5 秒倒计时提示、走完自动播下一季；找不到或开关没开时保持
+    // 原行为（开选集面板）。季内连播本身不设门，行为与原来一致。
     if (hongguoSeasonAutoplayAllowed(
       autoNext: widget.store.playbackPreferences.autoAdvance,
       seasonAutoplay: widget.store.hongguoSeasonAutoplay,
     )) {
-      final candidates = <Drama>{
-        ...detail.related,
-        ...widget.store.seriesDramasFor(widget.drama),
-      };
-      final next = hongguoNextSeasonDrama(
+      unawaited(_maybeAutoplayNextSeason(detail));
+      return;
+    }
+    _openEpisodeSheet(initialTab: 1);
+  }
+
+  /// 跨季连播查找：先走标题规律（本地候选，无网络），找不到再试
+  /// 站方相关接口（带季号）；找到就启动倒计时，找不到开选集面板。
+  /// 接口请求是异步的，回来时须确认还在同一集、还没别的倒计时，
+  /// 否则这次完播上下文已过期，什么都不做。
+  Future<void> _maybeAutoplayNextSeason(DramaDetail detail) async {
+    final episode = _episode;
+    final candidates = <Drama>{
+      ...detail.related,
+      ...widget.store.seriesDramasFor(widget.drama),
+    };
+    var next = hongguoNextSeasonEntry(
+      hongguoSeriesEntries(widget.drama, candidates),
+      widget.drama.id,
+    );
+    next ??= await _fetchApiNextSeason(candidates);
+    if (!mounted || _episode != episode || _seasonCountdown != null) return;
+    if (next != null) {
+      _startSeasonCountdown(next);
+      return;
+    }
+    _openEpisodeSheet(initialTab: 1);
+  }
+
+  /// 站方相关接口找下一季：待上线的不算（播不了）；季号不可信的
+  /// 条目由 hongguoMergedSeasonEntries 按标题规律复核。接口不可用
+  /// （抛错/无数字 id）时返回 null，不影响标题规律的结果。
+  Future<HongguoSeriesEntry?> _fetchApiNextSeason(
+    Set<Drama> candidates,
+  ) async {
+    final seriesId = hongguoNumericId(widget.drama.id);
+    if (seriesId == null) return null;
+    try {
+      final works = await HongguoCloudRecords(
+        widget.repository,
+      ).fetchRelated(seriesId);
+      final apiSeasons = [
+        for (final work in works)
+          if (!work.upcoming && work.seriesId.isNotEmpty)
+            (drama: work.toDrama(), seasonIndex: work.seasonIndex),
+      ];
+      if (apiSeasons.isEmpty) return null;
+      final entries = hongguoMergedSeasonEntries(
         anchor: widget.drama,
+        apiSeasons: apiSeasons,
         candidates: candidates,
       );
-      if (next != null) {
-        _openDrama(next);
-        return;
-      }
+      return hongguoNextSeasonEntry(entries, widget.drama.id);
+    } catch (_) {
+      return null;
     }
+  }
+
+  void _startSeasonCountdown(HongguoSeriesEntry next) {
+    _cancelSeasonCountdown();
+    final countdown = SeasonAutoplayCountdown(
+      onFire: () {
+        final target = _pendingNextSeason;
+        _cancelSeasonCountdown();
+        if (!mounted) return;
+        setState(() {});
+        if (target != null) _openDrama(target.drama);
+      },
+    );
+    _seasonCountdown = countdown;
+    _pendingNextSeason = next;
+    countdown.start();
+    setState(() {});
+  }
+
+  void _cancelSeasonCountdown() {
+    _seasonCountdown?.dispose();
+    _seasonCountdown = null;
+    _pendingNextSeason = null;
+  }
+
+  /// 倒计时取消：停掉倒计时，回到现有完播状态（开选集面板），
+  /// 不再连播。
+  void _cancelSeasonCountdownWithSheet() {
+    _cancelSeasonCountdown();
+    if (mounted) setState(() {});
     _openEpisodeSheet(initialTab: 1);
   }
 
@@ -736,6 +813,8 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   }
 
   Future<void> _openEpisodeSheet({required int initialTab}) async {
+    // 用户动手选集即接管播放：倒计时停掉，不再自动切下一季。
+    _cancelSeasonCountdown();
     final detail = _detail;
     if (detail == null) {
       if (!_detailLoading) unawaited(_playCurrent());
@@ -1357,6 +1436,34 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
                     ),
                   if (_recoveryExhausted)
                     Positioned.fill(child: _recoveryExhaustedPanel()),
+                  // 跨季连播倒计时：卡片吸住自己的点按，不触发画面点播/暂停。
+                  if (_pendingNextSeason != null && _seasonCountdown != null)
+                    Positioned(
+                      left: 16,
+                      right: 16,
+                      bottom: 24,
+                      child: Center(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {},
+                          child: ListenableBuilder(
+                            listenable: _seasonCountdown!,
+                            builder: (context, _) {
+                              final pending = _pendingNextSeason;
+                              if (pending == null) {
+                                return const SizedBox.shrink();
+                              }
+                              return SeasonAutoplayCountdownOverlay(
+                                nextTitle: pending.drama.title,
+                                seasonLabel: pending.label,
+                                remaining: _seasonCountdown!.remaining,
+                                onCancel: _cancelSeasonCountdownWithSheet,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             );

@@ -166,4 +166,45 @@ void main() {
     expect(find.byKey(const ValueKey('site-picker-delete-a')), findsNothing);
     expect(find.byIcon(Icons.check), findsOneWidget);
   });
+
+  testWidgets('打开弹窗自动滚到当前选中的站（宫格）', (tester) async {
+    final groups = [
+      SourcePickerGroup(
+        title: '内置',
+        entries: [
+          for (var i = 1; i <= 30; i++)
+            SourcePickerEntry(id: 's$i', name: '站$i'),
+        ],
+      ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () async {
+                  await showSitePickerDialog(
+                    context,
+                    sectionName: '短剧',
+                    currentId: 's30',
+                    groups: groups,
+                  );
+                },
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    final states = tester.stateList<ScrollableState>(find.byType(Scrollable));
+    expect(states.any((s) => s.position.pixels > 0), isTrue);
+    expect(
+      find.byKey(const ValueKey('site-picker-row-s30')),
+      findsOneWidget,
+    );
+  });
 }

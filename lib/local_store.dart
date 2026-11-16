@@ -23,10 +23,7 @@ import 'download_preferences.dart';
 import 'catalog_sort.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
-import 'lan_sync_models.dart';
 import 'xigua/watch_stats.dart';
-
-part 'local_store_sync.dart';
 
 class LocalStore extends ChangeNotifier {
   LocalStore(this.preferences) {
@@ -35,11 +32,6 @@ class LocalStore extends ChangeNotifier {
 
   final SharedPreferences preferences;
   LocalSnapshot? _snapshot;
-  LanDocument? _lanDocumentCache;
-  int _lanRevision = 0;
-  int _lanUrgentRevision = 0;
-  int get lanRevision => _lanRevision;
-  int get lanUrgentRevision => _lanUrgentRevision;
   final Map<String, WatchEntry> _history = {};
   final Map<String, Drama> _favorites = {};
   final Map<String, FollowState> _followStates = {};
@@ -449,7 +441,6 @@ class LocalStore extends ChangeNotifier {
   }
 
   void _loadLibrary() {
-    _lanDocumentCache = null;
     _history.clear();
     _favorites.clear();
     _followStates.clear();
@@ -610,12 +601,7 @@ class LocalStore extends ChangeNotifier {
       .reversed
       .toList();
   WatchEntry? watched(String id) {
-    WatchEntry? entry = _history[id];
-    if (entry == null && isFavorite(id)) {
-      try {
-        entry = lanDocument.records[id]?.watch;
-      } catch (_) {}
-    }
+    final entry = _history[id];
     return entry != null && allowsSource(entry.drama.source) ? entry : null;
   }
 
@@ -808,9 +794,6 @@ class LocalStore extends ChangeNotifier {
     Map<String, Object> changes, {
     Iterable<String> remove = const [],
     bool replace = false,
-    bool trackSync = true,
-    bool syncUrgent = true,
-    Set<String> clearSyncProgress = const {},
   }) async {
     final snapshot = _snapshot;
     if (snapshot == null) throw StateError('请先恢复本地配置');
@@ -819,13 +802,6 @@ class LocalStore extends ChangeNotifier {
       values.remove(key);
     }
     values.addAll(changes);
-    if (trackSync && !replace) {
-      _trackLanChanges(
-        values,
-        keys: {...changes.keys, ...remove},
-        clearProgress: clearSyncProgress,
-      );
-    }
     values.putIfAbsent(
       'profiles',
       () => jsonEncode(_profiles.map((profile) => profile.toJson()).toList()),
@@ -833,17 +809,6 @@ class LocalStore extends ChangeNotifier {
     values.putIfAbsent('activeProfile', () => _current);
     try {
       await snapshot.commit(values);
-      if (trackSync &&
-          !replace &&
-          {...changes.keys, ...remove}.any(
-            (key) =>
-                key == _key('favorites') ||
-                key == _key('history') ||
-                key == _key('followStates'),
-          )) {
-        _lanRevision++;
-        if (syncUrgent) _lanUrgentRevision++;
-      }
       try {
         await _syncLibraryKeysToDb(changes, remove);
       } catch (_) {}
@@ -879,25 +844,6 @@ class LocalStore extends ChangeNotifier {
 
   Future<void> setJarFingerprintEnabled(bool value) =>
       _setting(_key('jarFingerprintEnabled'), value);
-
-  /// 局域网网页服务是否开启（默认关闭）。
-  bool get lanWebEnabled => _configurationError == null
-      ? _bool(_key('lanWebEnabled')) ?? false
-      : false;
-
-  Future<void> setLanWebEnabled(bool value) =>
-      _setting(_key('lanWebEnabled'), value);
-
-  /// 局域网网页服务端口（默认 8999，被占时顺延）。
-  int get lanWebPort {
-    if (_configurationError != null) return 8999;
-    final raw = _string(_key('lanWebPort'));
-    final port = int.tryParse(raw ?? '') ?? 8999;
-    return port >= 1024 && port <= 65535 ? port : 8999;
-  }
-
-  Future<void> setLanWebPort(int value) =>
-      _setting(_key('lanWebPort'), '$value');
 
   /// 网盘浏览是否显示疑似广告视频（默认隐藏，只过滤显示、不删文件）。
   bool get showSuspectedAdVideos => _configurationError == null
@@ -950,7 +896,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
-  /// 当前全局主题（12 套固定主题之一），默认紫蓝霓虹。
+  /// 当前全局主题（13 套固定主题之一），默认 Win7。
   AppThemeMode get appTheme {
     final value = _configurationError == null
         ? _string('appThemeMode')
@@ -1056,8 +1002,10 @@ class LocalStore extends ChangeNotifier {
     _notify();
   }
 
+  // 跨季自动连播默认开（用户 2026-11-16 令）：播完本季最后一集
+  // 倒计时 5 秒自动播下一季；关掉则停在选集面板。
   bool get hongguoSeasonAutoplay =>
-      preferences.getBool('hongguoSeasonAutoplay') ?? false;
+      preferences.getBool('hongguoSeasonAutoplay') ?? true;
 
   Future<void> setHongguoSeasonAutoplay(bool value) async {
     await preferences.setBool('hongguoSeasonAutoplay', value);
@@ -1219,7 +1167,7 @@ class LocalStore extends ChangeNotifier {
             favorites.values.map((entry) => entry.toJson()).toList(),
           ),
         },
-      }, syncUrgent: false);
+      });
       _loadLibrary();
       _notify();
     });
@@ -1276,7 +1224,6 @@ class LocalStore extends ChangeNotifier {
       await _commit(
         {},
         remove: [_key('history')],
-        clearSyncProgress: {..._history.keys, ...lanDocument.records.keys},
       );
       _loadLibrary();
       _notify();
@@ -1294,7 +1241,6 @@ class LocalStore extends ChangeNotifier {
             entries.values.map((entry) => entry.toJson()).toList(),
           ),
         },
-        clearSyncProgress: {id},
       );
       _loadLibrary();
       _notify();

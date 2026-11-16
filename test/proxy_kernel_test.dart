@@ -317,6 +317,11 @@ void main() {
       store: MemoryProxyKernelStore(),
       supportDirectory: () async => Directory.systemTemp,
     );
+    // 面板很长（含顶部的出口状态卡）：拉高测试视口让列表一次建完，
+    // 否则深处的“运行日志”进不了 ListView 的构建范围。
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(home: ProxyKernelScreen(service: service)),
     );
@@ -327,6 +332,7 @@ void main() {
       find.text('本地代理模式：只代理本应用自身的 HTTP 流量（经 127.0.0.1 本地端口），不做系统 VPN，不影响其它应用。'),
       findsOneWidget,
     );
+    expect(find.textContaining('当前生效出口：'), findsOneWidget);
     expect(find.text('订阅地址'), findsOneWidget);
     expect(find.text('开启'), findsOneWidget);
     expect(find.text('更新内核'), findsOneWidget);

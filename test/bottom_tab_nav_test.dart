@@ -16,14 +16,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
-/// 壳子底部栏的 7 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
-/// 定义）：片库/直播/听书/阅读/多媒体/小程序/我的，中间播放键在
-/// 听书之后（centerAfter: 3）。
+/// 壳子底部栏的 6 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
+/// 定义）：片库/直播/听读/多媒体/小程序/我的，中间播放键在
+/// 听读之后（centerAfter: 3）。
 const _shellEntries = [
   (LucideIcons.clapperboard, '片库'),
   (LucideIcons.tv, '直播'),
-  (LucideIcons.headphones, '听书'),
-  (LucideIcons.bookOpen, '阅读'),
+  (LucideIcons.bookHeadphones, '听读'),
   (LucideIcons.hardDrive, '多媒体'),
   (LucideIcons.layoutGrid, '小程序'),
   (LucideIcons.user, '我的'),
@@ -141,7 +140,7 @@ void main() {
     final config = AppThemeConfig.forTheme(mode);
     testWidgets('底栏颜色随主题走 ${config.themeName}', (tester) async {
       await _pumpBar(tester, mode: mode, index: 1, onSelect: (_) {});
-      for (final label in ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的']) {
+      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的']) {
         expect(find.text(label), findsOneWidget);
       }
       // 霓虹胶囊栏：选中 = primaryColor，无选中胶囊/圆点。
@@ -157,7 +156,7 @@ void main() {
     });
   }
 
-  testWidgets('底栏 7 个 Tab 点按回传下标，中间播放键另回', (tester) async {
+  testWidgets('底栏 6 个 Tab 点按回传下标，中间播放键另回', (tester) async {
     final tapped = <int>[];
     var centerTapped = 0;
     await _pumpBar(
@@ -167,25 +166,25 @@ void main() {
       onSelect: tapped.add,
       onCenter: () => centerTapped++,
     );
-    for (var i = 0; i < 7; i++) {
+    for (var i = 0; i < 6; i++) {
       await tester.tap(find.byKey(ValueKey('shell-tab-$i')));
       await tester.pump();
     }
-    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
+    expect(tapped, [0, 1, 2, 3, 4, 5]);
     await tester.tap(find.byKey(const ValueKey('shell-center')));
     await tester.pump();
     expect(centerTapped, 1);
-    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
+    expect(tapped, [0, 1, 2, 3, 4, 5]);
   });
 
-  testWidgets('底栏顺序为片库/直播/听书/[播放键]/阅读/多媒体/小程序/我的', (tester) async {
+  testWidgets('底栏顺序为片库/直播/听读/[播放键]/多媒体/小程序/我的', (tester) async {
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: (_) {},
     );
-    const order = ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的'];
+    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的'];
     var previousX = -1.0;
     for (final label in order) {
       expect(find.text(label), findsOneWidget);
@@ -193,12 +192,12 @@ void main() {
       expect(x, greaterThan(previousX));
       previousX = x;
     }
-    // 中间播放键在听书与阅读之间。
+    // 中间播放键在听读与多媒体之间。
     final centerX = tester.getCenter(find.byKey(const ValueKey('shell-center'))).dx;
-    final audioX = tester.getCenter(find.text('听书')).dx;
-    final novelX = tester.getCenter(find.text('阅读')).dx;
-    expect(centerX, greaterThan(audioX));
-    expect(centerX, lessThan(novelX));
+    final listenReadX = tester.getCenter(find.text('听读')).dx;
+    final mediaX = tester.getCenter(find.text('多媒体')).dx;
+    expect(centerX, greaterThan(listenReadX));
+    expect(centerX, lessThan(mediaX));
     // 多媒体（硬盘）在我的（人形）左边。
     final driveX = tester.getTopLeft(find.byIcon(LucideIcons.hardDrive)).dx;
     final userX = tester.getTopLeft(find.byIcon(LucideIcons.user)).dx;
@@ -279,46 +278,48 @@ void main() {
 
   testWidgets('底栏多媒体进多媒体屏、切其它区能离开、点片库能回', (tester) async {
     await pumpHome(tester);
-    await tapShellTab(tester, 4);
+    await tapShellTab(tester, 3);
     expect(multimediaShown(tester), isTrue);
     await tapShellTab(tester, 1);
     expect(currentZone(tester), HomeZone.live);
     expect(multimediaShown(tester), isFalse);
-    await tapShellTab(tester, 4);
+    await tapShellTab(tester, 3);
     expect(multimediaShown(tester), isTrue);
     await tapShellTab(tester, 0);
     expect(multimediaShown(tester), isFalse);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('底栏切区：直播→阅读', (tester) async {
+  testWidgets('底栏切区：直播→听读（默认听书）→页内子切换到阅读', (tester) async {
     await pumpHome(tester, source: 'hongguo');
     await tapShellTab(tester, 1);
     expect(currentZone(tester), HomeZone.live);
-    await tapShellTab(tester, 3);
+    await tapShellTab(tester, 2);
+    expect(currentZone(tester), HomeZone.audio);
+    await tester.tap(find.byKey(const ValueKey('listenread-novel')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(currentZone(tester), HomeZone.novel);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('我的页里主题切换可达', (tester) async {
+  testWidgets('我的页里不再有主题切换行，设置行可达', (tester) async {
     await pumpHome(tester);
-    await tapShellTab(tester, 6);
+    await tapShellTab(tester, 5);
     expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
-      if (find
-          .byKey(const ValueKey('mine-theme-entry'))
-          .evaluate()
-          .isNotEmpty) {
+      if (find.text('设置').evaluate().isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
     }
-    expect(find.byKey(const ValueKey('mine-theme-entry')), findsOneWidget);
+    expect(find.text('主题切换'), findsNothing);
+    expect(find.text('设置'), findsOneWidget);
   }, skip: !allSourcesEnabled);
 
   testWidgets('底栏小程序进小程序首页', (tester) async {
     await pumpHome(tester);
-    await tapShellTab(tester, 5);
+    await tapShellTab(tester, 4);
     expect(find.byType(MiniAppHomePage), findsOneWidget);
     await tapShellTab(tester, 0);
     expect(find.byType(MiniAppHomePage), findsNothing);
@@ -362,9 +363,10 @@ void main() {
     expect(find.text('最近观看'), findsNothing);
   });
 
-  // 底部标签 7 个 Tab 逐个点、各进各的页：多媒体在第 4 位、
-  // 小程序在第 5 位、我的在第 6 位。红果源走短剧分支。
-  testWidgets('底部标签 7 个 Tab 逐个点各进各的页', (tester) async {
+  // 底部标签 6 个 Tab 逐个点、各进各的页：听读在第 2 位（默认
+  // 听书子区，页内子切换进阅读，再点标签回到上次的子区）、多媒
+  // 体在第 3 位、小程序在第 4 位、我的在第 5 位。红果源走短剧分支。
+  testWidgets('底部标签 6 个 Tab 逐个点各进各的页', (tester) async {
     await pumpHome(tester, source: 'hongguo', theme: 'purpleNeon');
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
 
@@ -372,13 +374,25 @@ void main() {
     expect(currentZone(tester), HomeZone.live);
     await tapShellTab(tester, 2);
     expect(currentZone(tester), HomeZone.audio);
-    await tapShellTab(tester, 3);
+    // 听读页内子切换：阅读。
+    await tester.tap(find.byKey(const ValueKey('listenread-novel')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(currentZone(tester), HomeZone.novel);
-    await tapShellTab(tester, 4);
+    // 离开再点听读标签：回到上次的子区（阅读）。
+    await tapShellTab(tester, 0);
+    await tapShellTab(tester, 2);
+    expect(currentZone(tester), HomeZone.novel);
+    // 子切换回听书。
+    await tester.tap(find.byKey(const ValueKey('listenread-audio')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(currentZone(tester), HomeZone.audio);
+    await tapShellTab(tester, 3);
     expect(multimediaShown(tester), isTrue);
-    await tapShellTab(tester, 5);
+    await tapShellTab(tester, 4);
     expect(find.byType(MiniAppHomePage), findsOneWidget);
-    await tapShellTab(tester, 6);
+    await tapShellTab(tester, 5);
     expect(find.text('最近观看'), findsOneWidget);
     await tapShellTab(tester, 0);
     expect(currentZone(tester), isNull);
@@ -425,17 +439,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
-      if (find
-          .byKey(const ValueKey('mine-theme-entry'))
-          .evaluate()
-          .isNotEmpty) {
+      if (find.text('设置').evaluate().isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
     }
-    expect(find.byKey(const ValueKey('mine-theme-entry')), findsOneWidget);
+    expect(find.text('主题切换'), findsNothing);
+    expect(find.text('设置'), findsOneWidget);
   });
 
   testWidgets('短剧首页 requestedTab 直达小程序页', (tester) async {

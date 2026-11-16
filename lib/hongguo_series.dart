@@ -8,6 +8,18 @@ final _seasonSuffix = RegExp(
   r'第\s*([0-9零〇一二两兩三四五六七八九十百]+)\s*([季部])[\s\u3000，。！？、：；·「」『』（）【】《》“”‘’.,!?:;\-_/()\[\]{}]*$',
 );
 
+// S2 / Season 2：S 前必须有分隔符（空格/-/_/·），避免把标题正文
+// 里的 S 误认；季号只认 1~200（与 _seasonNumber 的上限一致）。
+final _seasonSuffixS = RegExp(
+  r'[\s\-_·]\s*[Ss](?:eason)?\s*([0-9]{1,3})[\s\u3000，。！？、：；·「」『』（）【】《》“”‘’.,!?:;\-_/()\[\]{}]*$',
+);
+
+// 上部/下部：无数字，以上下定季号 1/2，单位记“部”，与“第X部”
+// 同组；只有“上部/下部”两个字、前面没有剧名的不算（base 为空）。
+final _seasonSuffixPart = RegExp(
+  r'([上下])部[\s\u3000，。！？、：；·「」『』（）【】《》“”‘’.,!?:;\-_/()\[\]{}]*$',
+);
+
 class HongguoSeriesInfo {
   const HongguoSeriesInfo({
     required this.baseTitle,
@@ -91,26 +103,139 @@ HongguoSeriesInfo? hongguoSeriesInfo(Drama drama, {String? unit}) {
   if (drama.source != SourceSite.hongguo.id) return null;
   final title = drama.title.trim();
   final match = _seasonSuffix.firstMatch(title);
-  if (match == null) {
-    if (unit == null || title.isEmpty) return null;
+  if (match != null) {
+    final base = title.substring(0, match.start).trim();
+    final season = _seasonNumber(match[1]!);
+    if (base.isEmpty || season == null) return null;
     return HongguoSeriesInfo(
-      baseTitle: title,
-      key: normalizedSearchText(title),
-      season: 1,
-      unit: unit,
-      explicit: false,
+      baseTitle: base,
+      key: normalizedSearchText(base),
+      season: season,
+      unit: match[2]!,
+      explicit: true,
     );
   }
-  final base = title.substring(0, match.start).trim();
-  final season = _seasonNumber(match[1]!);
-  if (base.isEmpty || season == null) return null;
+  final sMatch = _seasonSuffixS.firstMatch(title);
+  if (sMatch != null) {
+    final base = title.substring(0, sMatch.start).trim();
+    final season = _seasonNumber(sMatch[1]!);
+    if (base.isEmpty || season == null) return null;
+    return HongguoSeriesInfo(
+      baseTitle: base,
+      key: normalizedSearchText(base),
+      season: season,
+      unit: '季',
+      explicit: true,
+    );
+  }
+  final partMatch = _seasonSuffixPart.firstMatch(title);
+  if (partMatch != null) {
+    final base = title.substring(0, partMatch.start).trim();
+    if (base.isEmpty) return null;
+    return HongguoSeriesInfo(
+      baseTitle: base,
+      key: normalizedSearchText(base),
+      season: partMatch[1] == '上' ? 1 : 2,
+      unit: '部',
+      explicit: true,
+    );
+  }
+  if (unit == null || title.isEmpty) return null;
   return HongguoSeriesInfo(
-    baseTitle: base,
-    key: normalizedSearchText(base),
-    season: season,
-    unit: match[2]!,
-    explicit: true,
+    baseTitle: title,
+    key: normalizedSearchText(title),
+    season: 1,
+    unit: unit,
+    explicit: false,
   );
+}
+
+/// 站方相关接口返回的季条目：Drama 已转好，seasonIndex 为站方季号。
+/// seasonIndex <= 0 或超上限的不可信，合并时按标题规律复核。
+typedef HongguoApiSeason = ({Drama drama, int seasonIndex});
+
+/// 站方接口 + 标题规律合并后的同系列条目：按季号升序，含当前这部。
+///
+/// 口径（保守）：站方季号 > 0 的直接采信（站方自己的数据）；季号
+/// 不可信的条目须标题规律复核通过（同基础标题 + 同单位）才收；标题
+/// 规律的分组沿用 hongguoSeriesEntries。同季号只留一个：当前这部
+/// 优先（去重重复上架），其余先入列者留。不足 2 部时返回空（无兄弟
+/// 不成区）。只认红果站内数据，不跨站。
+List<HongguoSeriesEntry> hongguoMergedSeasonEntries({
+  required Drama anchor,
+  required List<HongguoApiSeason> apiSeasons,
+  required Iterable<Drama> candidates,
+}) {
+  if (anchor.source != SourceSite.hongguo.id) return const [];
+  final byId = <String, HongguoSeriesEntry>{};
+  for (final entry in hongguoSeriesEntries(anchor, candidates)) {
+    byId[entry.drama.id] = entry;
+  }
+  final anchorPattern = byId[anchor.id];
+  final anchorInfo = hongguoSeriesInfo(anchor);
+  final unit = anchorPattern?.unit ?? anchorInfo?.unit ?? '季';
+  final anchorSeason = anchorPattern?.season ?? anchorInfo?.season ?? 1;
+  final anchorKey =
+      anchorInfo?.key ?? normalizedSearchText(anchor.title.trim());
+  for (final api in apiSeasons) {
+    if (api.drama.id == anchor.id ||
+        api.drama.source != SourceSite.hongguo.id) {
+      continue;
+    }
+    var season = api.seasonIndex;
+    if (season <= 0 || season > _hongguoSeriesLimit) {
+      final info = hongguoSeriesInfo(api.drama, unit: unit);
+      if (info == null || info.key != anchorKey || info.unit != unit) {
+        continue;
+      }
+      season = info.season;
+    }
+    byId[api.drama.id] = HongguoSeriesEntry(
+      drama: api.drama,
+      season: season,
+      unit: unit,
+    );
+  }
+  if (byId.keys.where((id) => id != anchor.id).isEmpty) return const [];
+  byId[anchor.id] = HongguoSeriesEntry(
+    drama: anchor,
+    season: anchorSeason,
+    unit: unit,
+  );
+  final bySeason = <int, HongguoSeriesEntry>{};
+  for (final entry in byId.values) {
+    final previous = bySeason[entry.season];
+    if (previous == null || entry.drama.id == anchor.id) {
+      bySeason[entry.season] = entry;
+    }
+  }
+  final entries = bySeason.values.toList()
+    ..sort((a, b) {
+      final season = a.season.compareTo(b.season);
+      return season != 0
+          ? season
+          : naturalTitleCompare(a.drama.title, b.drama.title);
+    });
+  return entries.length > 1 ? entries : const [];
+}
+
+/// 在已按季号升序的条目里找比当前季大的最小一季；没有返回 null。
+/// entries 须已排序（hongguoSeriesEntries 与 hongguoMergedSeasonEntries
+/// 的返回都满足）；未排序时结果只保证季号大于当前季。
+HongguoSeriesEntry? hongguoNextSeasonEntry(
+  List<HongguoSeriesEntry> entries,
+  String anchorId,
+) {
+  final anchorEntry = entries
+      .where((entry) => entry.drama.id == anchorId)
+      .firstOrNull;
+  if (anchorEntry == null) return null;
+  HongguoSeriesEntry? next;
+  for (final entry in entries) {
+    if (entry.season <= anchorEntry.season) continue;
+    if (next == null || entry.season < next.season) next = entry;
+  }
+  return next;
 }
 
 List<HongguoSeriesEntry> hongguoSeriesEntries(

@@ -70,10 +70,15 @@ class _FakeSource extends ContentSource {
 }
 
 class _FakeTts implements NovelTtsEngine {
+  _FakeTts({this.hasVoice = true, this.failSpeak = false});
+
   final spoken = <String>[];
   final rates = <double>[];
   int stopCount = 0;
   void Function()? lastComplete;
+  void Function()? lastError;
+  bool hasVoice;
+  bool failSpeak;
 
   @override
   Future<void> setLanguage(String language) async {}
@@ -84,9 +89,18 @@ class _FakeTts implements NovelTtsEngine {
   }
 
   @override
-  Future<void> speak(String text, void Function() onComplete) async {
+  Future<bool> hasChineseVoice() async => hasVoice;
+
+  @override
+  Future<void> speak(
+    String text,
+    void Function() onComplete, {
+    void Function()? onError,
+  }) async {
+    if (failSpeak) throw StateError('speak 失败');
     spoken.add(text);
     lastComplete = onComplete;
+    lastError = onError;
   }
 
   @override
@@ -95,6 +109,8 @@ class _FakeTts implements NovelTtsEngine {
   }
 
   void complete() => lastComplete?.call();
+
+  void fireError() => lastError?.call();
 }
 
 Future<void> _pumpReader(
@@ -249,6 +265,70 @@ void main() {
     await _pumpReader(tester, _FakeSource(failChapter: true), tts);
     expect(find.text('加载章节失败'), findsOneWidget);
     expect(tts.spoken, isEmpty);
+  });
+
+  testWidgets('常驻朗读钮可见，点按开始朗读', (tester) async {
+    final tts = _FakeTts();
+    await _pumpReader(tester, _FakeSource(), tts);
+    final fab = find.byKey(const ValueKey('novel-tts-fab'));
+    expect(fab, findsOneWidget);
+    expect(find.text('朗读'), findsOneWidget);
+    await tester.tap(fab);
+    await tester.pumpAndSettle();
+    expect(tts.spoken, ['第一章内容。']);
+    expect(find.text('暂停'), findsOneWidget);
+  });
+
+  testWidgets('覆盖层打开时常驻朗读钮隐藏，底部栏接管', (tester) async {
+    final tts = _FakeTts();
+    await _pumpReader(tester, _FakeSource(), tts);
+    expect(find.byKey(const ValueKey('novel-tts-fab')), findsOneWidget);
+    await _openOverlay(tester);
+    expect(find.byKey(const ValueKey('novel-tts-fab')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('novel-tts-play-pause')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('无中文语音时点朗读明说，不出声也不静默', (tester) async {
+    final tts = _FakeTts(hasVoice: false);
+    await _pumpReader(tester, _FakeSource(), tts);
+    await tester.tap(find.byKey(const ValueKey('novel-tts-fab')));
+    await tester.pumpAndSettle();
+    expect(tts.spoken, isEmpty);
+    expect(find.textContaining('没有中文语音'), findsOneWidget);
+  });
+
+  testWidgets('朗读失败时明说失败，不卡在播放态', (tester) async {
+    final tts = _FakeTts(failSpeak: true);
+    await _pumpReader(tester, _FakeSource(), tts);
+    await tester.tap(find.byKey(const ValueKey('novel-tts-fab')));
+    await tester.pumpAndSettle();
+    expect(find.text('朗读失败'), findsOneWidget);
+    expect(find.text('朗读'), findsOneWidget);
+  });
+
+  testWidgets('引擎报错回调时停下并明说失败', (tester) async {
+    final tts = _FakeTts();
+    await _pumpReader(tester, _FakeSource(), tts);
+    await tester.tap(find.byKey(const ValueKey('novel-tts-fab')));
+    await tester.pumpAndSettle();
+    expect(tts.spoken, ['第一章内容。']);
+    tts.fireError();
+    await tester.pumpAndSettle();
+    expect(find.text('朗读失败'), findsOneWidget);
+    expect(find.text('朗读'), findsOneWidget);
+  });
+
+  testWidgets('出错时常驻朗读钮不出现', (tester) async {
+    final tts = _FakeTts();
+    await _pumpReader(
+      tester,
+      _FakeSource(chapters: const [], texts: const {}),
+      tts,
+    );
+    expect(find.byKey(const ValueKey('novel-tts-fab')), findsNothing);
   });
 
   testWidgets('page turn still works after fullscreen change', (tester) async {

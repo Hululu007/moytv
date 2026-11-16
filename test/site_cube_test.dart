@@ -153,4 +153,48 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('方块列打开弹窗自动滚到当前选中的站', (tester) async {
+    final groups = [
+      SourcePickerGroup(
+        title: '内置短剧',
+        entries: [
+          for (var i = 1; i <= 30; i++)
+            SourcePickerEntry(id: 's$i', name: '站$i'),
+        ],
+      ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppThemeConfig.forTheme(AppThemeMode.purpleNeon).toThemeData(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () async {
+                  await showSitePickerDialog(
+                    context,
+                    sectionName: '片库',
+                    currentId: 's30',
+                    groups: groups,
+                    repository: FixtureRepository(),
+                  );
+                },
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    // 懒加载方块列：没滚到的话最后一行根本不会建出来。
+    expect(
+      find.byKey(const ValueKey('site-picker-row-s30')),
+      findsOneWidget,
+    );
+    final states = tester.stateList<ScrollableState>(find.byType(Scrollable));
+    expect(states.any((s) => s.position.pixels > 0), isTrue);
+  });
 }

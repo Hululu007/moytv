@@ -35,16 +35,16 @@ void main() {
       expect(jar.detail, contains('147'));
     });
 
-    test('45 py plugins in today register order', () {
+    test('50 py plugins in today register order', () {
       final plugins = PluginManager.builtinPlugins();
       final py = plugins.where((p) => p.kind == PluginIconKind.py).toList();
-      expect(py.length, 45);
-      expect(plugins.length, 46);
+      expect(py.length, 50);
+      expect(plugins.length, 51);
       expect(py.first.id, 'py:hmav');
       expect(py.first.name, '🔞河马AV');
-      expect(py.last.id, 'py:chaoliu');
+      expect(py.last.id, 'py:xhsapp');
       final ids = py.map((p) => p.id).toSet();
-      expect(ids.length, 45);
+      expect(ids.length, 50);
     });
 
     test('jinguo file plugin carries both sites', () {

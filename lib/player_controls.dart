@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
-import 'lan_controller.dart';
 import 'network_speed.dart';
 import 'playback_preferences.dart';
 import 'player_core.dart';
@@ -44,9 +43,7 @@ class PlayerControls extends StatefulWidget {
     this.onSeek,
     this.onDanmaku,
     this.onRetryDanmaku,
-    this.onPush,
     this.onPictureInPicture,
-    this.onPushToWatchRoom,
     this.onSettings,
     this.routeLabel = '',
     this.routeCount = 1,
@@ -90,9 +87,7 @@ class PlayerControls extends StatefulWidget {
   final Future<void> Function(Duration)? onSeek;
   final Future<void> Function()? onDanmaku;
   final Future<void> Function()? onRetryDanmaku;
-  final Future<void> Function()? onPush;
   final Future<void> Function()? onPictureInPicture;
-  final VoidCallback? onPushToWatchRoom;
   final Future<void> Function()? onSettings;
   final String routeLabel;
   final int routeCount;
@@ -457,12 +452,6 @@ class _PlayerControlsState extends State<PlayerControls> {
             if (widget.networkSpeed != null)
               networkSpeedLabel(widget.networkSpeed!),
             if (widget.onOrientationMode != null) _orientationMenu(),
-            if (widget.onPushToWatchRoom != null)
-              _overlayIconButton(
-                tooltip: '推送到一起看',
-                onPressed: widget.onPushToWatchRoom,
-                icon: Icons.meeting_room_rounded,
-              ),
             if (compact)
               _overlayIconButton(
                 tooltip: '旋转与全屏',
@@ -586,9 +575,6 @@ class _PlayerControlsState extends State<PlayerControls> {
     final showEpisodes = !mobile;
     final showSpeedQuality =
         mobile || fullscreen && width >= 720 || !fullscreen && width >= 560;
-    final showPush =
-        widget.onPush != null &&
-        (mobile || fullscreen && width >= 860 || !fullscreen && width >= 680);
     final showCompare = fullscreen && width >= 820;
     final showVolume = !widget.swipeEnabled && width >= 360;
     return Align(
@@ -603,7 +589,6 @@ class _PlayerControlsState extends State<PlayerControls> {
               fullscreen: fullscreen,
               showEpisodes: showEpisodes,
               showSpeedQuality: showSpeedQuality,
-              showPush: showPush,
               showCompare: showCompare,
               showVolume: showVolume,
               volume: volume,
@@ -747,33 +732,6 @@ class _PlayerControlsState extends State<PlayerControls> {
   Widget _toolGroup(List<Widget> children) =>
       Row(mainAxisSize: MainAxisSize.min, children: children);
 
-  Widget _lanPushTool(Key key) {
-    final link = LanController.current;
-    if (link == null) return const SizedBox.shrink();
-    return AnimatedBuilder(
-      animation: link,
-      builder: (context, _) => _toolButton(
-        key: key,
-        tooltip: link.connection == null
-            ? '推送'
-            : '推送到 ${link.connection!.peer.name}',
-        onPressed: widget.enabled ? () => _panel(widget.onPush!) : null,
-        child: link.pushing
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Icon(
-                link.connection == null
-                    ? Icons.cast_rounded
-                    : Icons.cast_connected_rounded,
-                size: 22,
-              ),
-      ),
-    );
-  }
-
   Widget _clusteredToolRow(List<Widget> tools) {
     if (tools.isEmpty) return const SizedBox.shrink();
     if (tools.length <= 5) {
@@ -832,7 +790,6 @@ class _PlayerControlsState extends State<PlayerControls> {
     required bool fullscreen,
     required bool showEpisodes,
     required bool showSpeedQuality,
-    required bool showPush,
     required bool showCompare,
     required bool showVolume,
     required double volume,
@@ -856,7 +813,6 @@ class _PlayerControlsState extends State<PlayerControls> {
         ),
         if (routeTool != null) routeTool,
       ],
-      if (showPush) _lanPushTool(const ValueKey('fullscreen-lan-push')),
       if (showEpisodes)
         _toolIcon(
           key: const ValueKey('player-episodes'),
@@ -934,8 +890,6 @@ class _PlayerControlsState extends State<PlayerControls> {
         width: 52,
       ),
       if (routeTool != null) routeTool,
-      if (widget.onPush != null)
-        _lanPushTool(const ValueKey('fullscreen-lan-push')),
       if (widget.onSettings != null)
         _toolIcon(
           key: const ValueKey('player-settings'),

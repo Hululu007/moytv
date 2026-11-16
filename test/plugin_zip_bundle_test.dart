@@ -10,9 +10,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   // 与 ~/workspace/moyi_jar_plugins/moyi_plugins.zip 同格式的包：
-  // 平铺 1 个整包 jar + 44 个视频 py，文件名取自真实注册表。
+  // 平铺 1 个整包 jar + 50 个视频 py，文件名取自真实注册表。
   // 真实字节的 md5 校验由 assemble_plugin_zip.py 在组装时完成；
-  // 这里验证安装路径的 zip 展开认得出这 45 个包、且名字与注册表一致。
+  // 这里验证安装路径的 zip 展开认得出这 51 个包、且名字与注册表一致。
   List<int> buildBundleZip() {
     final archive = Archive();
     final jarName = zakatvJarAsset.split('/').last;
@@ -30,16 +30,16 @@ void main() {
     return ZipEncoder().encode(archive);
   }
 
-  test('bundle expands to the whole jar plus 45 py plugins', () {
+  test('bundle expands to the whole jar plus 50 py plugins', () {
     final entries = expandPluginZip(buildBundleZip());
-    expect(entries.length, 46);
+    expect(entries.length, 51);
     final jars = entries.where((e) => e.isJar).toList();
     expect(jars.length, 1);
     expect(jars.single.name, 'zakatv.jar');
     final pyNames = entries.where((e) => e.isPy).map((e) => e.name).toList();
-    expect(pyNames.length, 45);
-    expect(pyNames.toSet().length, 45);
-    // jinguo 一文件双站：注册表 46 条、文件 45 个，包里只应出现一次。
+    expect(pyNames.length, 50);
+    expect(pyNames.toSet().length, 50);
+    // jinguo 一文件双站：注册表 51 条、文件 50 个，包里只应出现一次。
     expect(pyNames.where((n) => n == 'jinguo.py').length, 1);
     // 未注册的 4 个文件不得进包。
     for (final excluded in ['hghub.py', 'roshy.py', 'javtiful.py', 'youtube.py']) {
@@ -52,7 +52,7 @@ void main() {
       for (final entry in BuiltinPySites.entries)
         entry.assetPath.split('/').last,
     };
-    expect(pyNames.length, 45);
-    expect(BuiltinPySites.entries.length, 46);
+    expect(pyNames.length, 50);
+    expect(BuiltinPySites.entries.length, 51);
   });
 }

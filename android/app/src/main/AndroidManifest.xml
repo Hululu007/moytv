@@ -2,7 +2,6 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
@@ -76,6 +75,19 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/json"/>
+                <data android:scheme="content" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.json"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/json"/>
+                <data android:scheme="file" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.json"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="application/json"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="content" android:host="*" android:mimeType="text/x-python"/>
                 <data android:scheme="content" android:host="*" android:mimeType="application/x-python"/>
@@ -92,6 +104,10 @@
                 <data android:scheme="content" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.zip"/>
                 <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.zip"/>
                 <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.ZIP"/>
+                <data android:scheme="content" android:host="*" android:mimeType="application/json"/>
+                <data android:scheme="content" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.json"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.json"/>
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.JSON"/>
                 <data android:scheme="file" android:host="*" android:mimeType="text/x-python"/>
                 <data android:scheme="file" android:host="*" android:mimeType="application/x-python"/>
                 <data android:scheme="file" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.py"/>
@@ -107,6 +123,10 @@
                 <data android:scheme="file" android:host="*" android:mimeType="application/octet-stream" android:pathPattern=".*\\.zip"/>
                 <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.zip"/>
                 <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.ZIP"/>
+                <data android:scheme="file" android:host="*" android:mimeType="application/json"/>
+                <data android:scheme="file" android:host="*" android:mimeType="text/plain" android:pathPattern=".*\\.json"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.json"/>
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.JSON"/>
             </intent-filter>
         </activity>
         <provider

@@ -12,7 +12,7 @@ import 'fixtures.dart';
 
 /// 第 9 套主题“左侧分类”测试：三层结构、空数据隐藏、卡堆手势、
 ///
-/// 切主题布局跟变、12 套固定映射。只写代码不运行，由父代理统一验证。
+/// 切主题布局跟变、13 套固定映射。只写代码不运行，由父代理统一验证。
 
 class _LeftCategoryRepository extends FixtureRepository {
   @override
@@ -306,8 +306,8 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  test('12 套主题导航与列表样式固定映射', () {
-    expect(AppThemeMode.values.length, 12);
+  test('13 套主题导航与列表样式固定映射', () {
+    expect(AppThemeMode.values.length, 13);
     for (final mode in AppThemeMode.values) {
       expect(navStyleForTheme(mode), NavStyle.bottomTabs, reason: '$mode 导航');
       expect(

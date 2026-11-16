@@ -65,7 +65,11 @@ void main() {
     late LocalStore store;
 
     setUp(() async {
-      SharedPreferences.setMockInitialValues({'hiddenSites': '[]'});
+      SharedPreferences.setMockInitialValues({
+        'hiddenSites': '[]',
+        // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+        'appThemeMode': 'purpleNeon',
+      });
       store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
       // 种子一个已登录网盘：与 CloudDriveStations.refresh 同一注册表。
@@ -94,8 +98,8 @@ void main() {
     }
 
     Future<void> openMultimedia(WidgetTester tester) async {
-      // 底部标签栏第 4 位是多媒体。
-      await tester.tap(find.byKey(const ValueKey('shell-tab-4')));
+      // 底部标签栏下标 3 是多媒体（听读合并后）。
+      await tester.tap(find.byKey(const ValueKey('shell-tab-3')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.byType(MultimediaScreen), findsOneWidget);

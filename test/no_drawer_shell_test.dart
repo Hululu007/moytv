@@ -15,6 +15,8 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'source': 'huangdou',
       'hiddenSites': '[]',
+      // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+      'appThemeMode': 'purpleNeon',
     });
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
@@ -32,8 +34,8 @@ void main() {
     await pumpHome(tester);
     expect(find.byType(Drawer), findsNothing);
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
-    // 底栏 7 个标签都在。
-    for (final label in ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的']) {
+    // 底栏 6 个标签都在（听书/阅读已并为“听读”一个标签）。
+    for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的']) {
       expect(find.text(label), findsOneWidget);
     }
   }, skip: !allSourcesEnabled);

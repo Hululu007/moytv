@@ -1,6 +1,55 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+
+/// 规则自带 icon 是 data: URI 时解出图片字节；不是 data: 图片或
+/// base64 解不出时返回 null（调用方回落 favicon/首字色块）。
+Uint8List? haikuoDataIconBytes(String iconValue) {
+  final text = iconValue.trim();
+  if (!text.startsWith('data:image/')) return null;
+  final comma = text.indexOf(',');
+  if (comma < 0) return null;
+  if (!text.substring(0, comma).contains(';base64')) return null;
+  try {
+    final bytes = base64Decode(text.substring(comma + 1).trim());
+    return bytes.isEmpty ? null : bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 由规则的 host/入口链接推导站点 favicon 地址；推导不出返回 null。
+///
+/// 只认规则里真实出现的地址：host 字段优先，入口链接次之；
+/// hiker://empty##https://站/... 这种嵌着真实地址的也认（取里面
+/// 的第一个 http(s) 地址的 origin）；裸域名默认按 https 取 origin。
+/// 推导不出或地址不是 http(s) 时返回 null，绝不编一个假地址。
+String? haikuoFaviconUrl(HaikuoProgram program) {
+  for (final candidate in [program.host, program.url]) {
+    final origin = _haikuoOriginOf(candidate);
+    if (origin != null) return '$origin/favicon.ico';
+  }
+  return null;
+}
+
+String? _haikuoOriginOf(String value) {
+  final text = value.trim();
+  if (text.isEmpty) return null;
+  final embedded = RegExp(r'https?://[^\s#]+').firstMatch(text);
+  final raw = embedded?.group(0) ?? text;
+  var uri = Uri.tryParse(raw);
+  if (uri == null) return null;
+  if (uri.scheme.isEmpty && !raw.contains('://')) {
+    uri = Uri.tryParse('https://$raw');
+  }
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    return null;
+  }
+  return uri.origin;
+}
 
 /// 海阔小程序条目类型。
 ///
@@ -26,6 +75,7 @@ class HaikuoProgram {
     this.description = '',
     this.script = '',
     this.url = '',
+    this.host = '',
     this.kind = HaikuoKind.script,
     this.origin = '',
     this.rawJson = '',
@@ -47,6 +97,10 @@ class HaikuoProgram {
 
   /// 入口链接（[HaikuoKind.link] / [HaikuoKind.rule] 常用）。
   final String url;
+
+  /// 规则自带的站点地址（host/homeUrl/baseUrl 字段），用于推导
+  /// 站点 favicon；没有该字段的规则为空，瓦片回落首字色块。
+  final String host;
 
   final HaikuoKind kind;
 
@@ -89,6 +143,7 @@ class HaikuoProgram {
     'description': description,
     'script': script,
     'url': url,
+    'host': host,
     'kind': kind.name,
     'origin': origin,
     'raw': rawJson,
@@ -109,6 +164,7 @@ class HaikuoProgram {
       description: '${json['description'] ?? ''}',
       script: '${json['script'] ?? ''}',
       url: '${json['url'] ?? ''}',
+      host: '${json['host'] ?? ''}',
       kind: HaikuoKind.values.firstWhere(
         (kind) => kind.name == kindName,
         orElse: () => HaikuoKind.script,
@@ -144,6 +200,7 @@ class HaikuoProgram {
       description: description,
       script: script,
       url: url,
+      host: host,
       kind: kind ?? this.kind,
       origin: origin ?? this.origin,
       rawJson: rawJson,

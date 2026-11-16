@@ -414,7 +414,7 @@ void main() {
           onSettingsPressed: () {},
         ),
         name: 'preview_mine_theme_$suffix',
-        label: '我的页已向下滚动 · 主题切换行可见 · 当前主题：$themeName',
+        label: '我的页已向下滚动 · 设置行可见（主题切换已移入设置） · 当前主题：$themeName',
         beforeCapture: () async {
           await tester.drag(find.byType(ListView), const Offset(0, -520));
         },

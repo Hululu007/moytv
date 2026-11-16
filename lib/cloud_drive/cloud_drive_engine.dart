@@ -897,8 +897,8 @@ class CloudDriveEngine {
       if (file.kind == CloudFileKind.image) {
         // 图片走 pics:// 浏览链路（与现有非视频内容协议一致）。
         // 注意：图片查看器只透传 User-Agent/Referer，不透传 Cookie，
-        // 需要 Cookie 的图片直链在应用内可能打不开（局域网页的
-        // /cover 路径不受此限），已在回报里列为已知缺口。
+        // 需要 Cookie 的图片直链在应用内可能打不开，
+        // 已在回报里列为已知缺口。
         return PlaybackPlan(
           url: 'pics://${link.url}',
           originalUrl: link.url,

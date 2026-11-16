@@ -9,7 +9,7 @@
 /// 列表、直链四步需真账号，均未实测，列为手机待验。
 ///
 /// 所有请求都走注入的 [http.Client]，便于单测用假客户端替换。
-/// 凭证只存在 [CloudCredentialStore] 里，不进日志、不进局域网接口。
+/// 凭证只存在 [CloudCredentialStore] 里，不进日志、不出本机。
 library;
 
 import 'dart:convert';

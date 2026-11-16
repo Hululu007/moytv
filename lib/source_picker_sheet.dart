@@ -1,20 +1,28 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'app_theme_config.dart';
 import 'core_bridge.dart';
 import 'neon_glass_kit.dart';
 import 'site_cube.dart';
+import 'site_icon.dart';
 
 class SourcePickerEntry {
   const SourcePickerEntry({
     required this.id,
     required this.name,
     this.deletable = true,
+    this.iconUrls = const [],
   });
 
   final String id;
   final String name;
   final bool deletable;
+
+  /// 调用方给定的站标候选地址（按序尝试）。为空时按 [id] 查 jar 站
+  /// ext 派生；都为空则宫格显示站名首字块，不联网。
+  final List<String> iconUrls;
 }
 
 class SourcePickerGroup {
@@ -79,9 +87,12 @@ class SitePickerDialog extends StatefulWidget {
 
 class _SitePickerDialogState extends State<SitePickerDialog> {
   final _searchController = TextEditingController();
+  final _scrollController = ScrollController();
   final _currentKey = GlobalKey();
   String _query = '';
   bool _scrolledToCurrent = false;
+  int _scrollSteps = 0;
+  double _lastMaxExtent = -1;
   late bool _editMode;
   late List<_EditableGroup> _groups;
 
@@ -96,21 +107,44 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
+  /// 打开弹窗自动滚到当前选中的站。宫格列表一次全建出来，选中行
+  /// 首帧就在树里，直接 ensureVisible；方块列是懒加载（每行进树
+  /// 才请求封面，不能改全量），选中行没建出来时按视口步进往下
+  /// 跳、直到它出现再 ensureVisible；到底且范围不再变就放弃。
   void _scrollToCurrent() {
-    if (_scrolledToCurrent) return;
-    final context = _currentKey.currentContext;
-    if (context == null || !mounted) return;
-    _scrolledToCurrent = true;
-    Scrollable.ensureVisible(
-      context,
-      alignment: 0.2,
-      duration: const Duration(milliseconds: 250),
-    );
+    if (_scrolledToCurrent || !mounted || _scrollSteps >= 80) return;
+    final targetContext = _currentKey.currentContext;
+    if (targetContext != null) {
+      _scrolledToCurrent = true;
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.2,
+        duration: const Duration(milliseconds: 250),
+      );
+      return;
+    }
+    _scrollSteps++;
+    if (_scrollController.hasClients) {
+      final position = _scrollController.position;
+      final max = position.maxScrollExtent;
+      if (position.pixels < max) {
+        _scrollController.jumpTo(
+          math.min(position.pixels + position.viewportDimension, max),
+        );
+        _lastMaxExtent = max;
+      } else if (max == _lastMaxExtent) {
+        return;
+      } else {
+        _lastMaxExtent = max;
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -219,6 +253,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                     : cubeMode
                     ? _cubeList(visible, searching)
                     : ListView(
+                        controller: _scrollController,
                         children: [
                           for (final group in visible) ...[
                             if (!searching && group.title.isNotEmpty)
@@ -229,100 +264,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                                   bottom: 4,
                                 ),
                               ),
-                            GridView.builder(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              gridDelegate:
-                                  const SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 128,
-                                    mainAxisSpacing: 8,
-                                    crossAxisSpacing: 8,
-                                    childAspectRatio: 2.4,
-                                  ),
-                              itemCount: group.entries.length,
-                              itemBuilder: (context, index) {
-                                final entry = group.entries[index];
-                                final selected = entry.id == widget.currentId;
-                                final config = AppThemeConfig.of(context);
-                                return InkWell(
-                                  key: ValueKey('site-picker-row-${entry.id}'),
-                                  borderRadius: BorderRadius.circular(12),
-                                  onTap: _editMode
-                                      ? null
-                                      : () => Navigator.pop(context, entry.id),
-                                  child: Container(
-                                    key: selected ? _currentKey : null,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      gradient: selected
-                                          ? neonSelectedGradient(config)
-                                          : null,
-                                      color: selected
-                                          ? null
-                                          : config.unselectedBg,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: selected
-                                            ? Colors.transparent
-                                            : config.dividerColor,
-                                      ),
-                                      boxShadow: selected
-                                          ? [neonGlow(config)]
-                                          : null,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            entry.name,
-                                            maxLines: 2,
-                                            style: theme.textTheme.bodyMedium
-                                                ?.copyWith(
-                                                  // 长站名缩小字号换行显示，
-                                                  // 不截断、不省略号。
-                                                  fontSize:
-                                                      entry.name.length > 12
-                                                      ? 9.5
-                                                      : entry.name.length > 8
-                                                      ? 10.5
-                                                      : 12,
-                                                  color: selected
-                                                      ? config.selectedText
-                                                      : config.unselectedText,
-                                                  fontWeight: selected
-                                                      ? FontWeight.w600
-                                                      : null,
-                                                ),
-                                          ),
-                                        ),
-                                        if (!_editMode && selected)
-                                          Icon(
-                                            Icons.check,
-                                            size: 18,
-                                            color: config.selectedText,
-                                          )
-                                        else if (_editMode &&
-                                            entry.deletable &&
-                                            widget.onDeleteSite != null)
-                                          IconButton(
-                                            key: ValueKey(
-                                              'site-picker-delete-${entry.id}',
-                                            ),
-                                            icon: const Icon(
-                                              Icons.delete_outline,
-                                              size: 20,
-                                            ),
-                                            color: colors.error,
-                                            onPressed: () => _delete(entry),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
+                            _siteGrid(group),
                           ],
                         ],
                       ),
@@ -351,6 +293,137 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
+  /// 图标宫格：普通列表样式下的站点呈现——圆角图标块 + 下面站名，
+  /// 点块进站（与旧文字芯片点行完全一致，pop 回站 id）。方块列
+  /// （霓虹主题 + 传仓库 + 非编辑模式）走 [_cubeList]，不受影响。
+  /// 图标取不到时显示站名首字块，见 [SiteIcon]。
+  Widget _siteGrid(({String title, List<SourcePickerEntry> entries}) group) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final columns = width >= 480 ? 5 : width >= 340 ? 4 : 3;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 4,
+            // 固定行高 74：图标 30 + 间距 4 + 两行站名，窄屏不溢出。
+            mainAxisExtent: 74,
+          ),
+          itemCount: group.entries.length,
+          itemBuilder: (context, index) => _siteGridTile(group.entries[index]),
+        );
+      },
+    );
+  }
+
+  Widget _siteGridTile(SourcePickerEntry entry) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final config = AppThemeConfig.of(context);
+    final selected = entry.id == widget.currentId;
+    final showDelete =
+        _editMode && entry.deletable && widget.onDeleteSite != null;
+    return InkWell(
+      key: ValueKey('site-picker-row-${entry.id}'),
+      borderRadius: BorderRadius.circular(12),
+      onTap: _editMode ? null : () => Navigator.pop(context, entry.id),
+      child: Container(
+        key: selected ? _currentKey : null,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    border: selected
+                        ? Border.all(color: config.primaryColor, width: 2)
+                        : null,
+                    boxShadow: selected ? [neonGlow(config)] : null,
+                  ),
+                  child: SiteIcon(
+                    siteId: entry.id,
+                    siteName: entry.name,
+                    iconUrls: entry.iconUrls,
+                    size: 30,
+                    borderRadius: 14,
+                  ),
+                ),
+                if (!_editMode && selected)
+                  Positioned(
+                    top: -4,
+                    right: -4,
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: config.primaryColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: colors.surface, width: 2),
+                      ),
+                      child: Icon(
+                        Icons.check,
+                        size: 13,
+                        color: config.selectedText,
+                      ),
+                    ),
+                  ),
+                if (showDelete)
+                  Positioned(
+                    top: -8,
+                    right: -8,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: colors.surface,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: colors.error),
+                      ),
+                      child: IconButton(
+                        key: ValueKey('site-picker-delete-${entry.id}'),
+                        padding: EdgeInsets.zero,
+                        style: IconButton.styleFrom(
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: const Icon(Icons.delete_outline, size: 17),
+                        color: colors.error,
+                        onPressed: () => _delete(entry),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              entry.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                // 长站名缩小字号换行显示（与旧芯片同一阈值）。
+                fontSize: entry.name.length > 12
+                    ? 9.5
+                    : entry.name.length > 8
+                    ? 10.5
+                    : 12,
+                color: selected ? config.primaryColor : config.unselectedText,
+                fontWeight: selected ? FontWeight.w600 : null,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 方块列：每站一行（方块 + 站名），点方块与普通列表点行完全一致
   /// （pop 回站 id，调用方切站进频道）。惰性 ListView：只有滚到眼前
   /// 的行才取首页海报，避免开弹窗就并发打全部站。
@@ -370,6 +443,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       }
     }
     return ListView.builder(
+      controller: _scrollController,
       itemCount: rows.length,
       itemBuilder: (context, index) {
         final row = rows[index];

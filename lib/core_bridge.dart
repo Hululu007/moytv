@@ -38,6 +38,7 @@ import 'cloud_drive/cloud_drive_engine.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
 import 'resource_settings.dart';
+import 'proxy_egress.dart';
 import 'source_fanout.dart';
 
 typedef _NativeRequest = Pointer<Utf8> Function(Pointer<Utf8>);
@@ -91,23 +92,14 @@ class AppFailure implements Exception {
 }
 
 abstract class AppRepository {
-  Future<Map<String, dynamic>> lan(
-    String command,
-    Map<String, dynamic> payload,
-  ) async => throw AppFailure('当前环境不支持设备互联');
-  Future<PlaybackPlan?> prepareHandoff(
-    Drama drama,
-    Episode episode, {
-    int quality = 0,
-    int route = 0,
-    bool adBlock = true,
-  }) =>
-      preload(drama, episode, quality: quality, route: route, adBlock: adBlock);
-  Future<void> cancelHandoff() async {}
   Future<ResourceSettings> resourceSettings() async => const ResourceSettings();
   Future<ResourceSettings> saveResourceSettings(
     ResourceSettings settings,
   ) async => throw AppFailure('当前环境不支持资源设置');
+
+  /// 把出口决策点的覆盖地址同步进 Go 核（null/空表示清除覆盖，
+  /// 恢复用户保存的资源设置）。默认空实现：测试替身不需要 Go 核。
+  Future<void> setEgressProxy(String? goUrl) async {}
   Future<Map<String, dynamic>> crackConfigSet(String content) async => {};
   Future<Map<String, dynamic>> hongguoDeviceStatus() async =>
       throw AppFailure('当前环境不支持设备注册档案');
@@ -1179,35 +1171,6 @@ class NativeRepository extends AppRepository {
   int _readSequence = 0;
   final _activeReads = <String, int>{};
 
-  @override
-  Future<Map<String, dynamic>> lan(
-    String command,
-    Map<String, dynamic> payload,
-  ) => _call({'action': 'lan', 'command': command, 'lan': payload});
-
-  @override
-  Future<PlaybackPlan?> prepareHandoff(
-    Drama drama,
-    Episode episode, {
-    int quality = 0,
-    int route = 0,
-    bool adBlock = true,
-  }) async {
-    final data = await _read('handoff', {
-      'action': 'prepareHandoff',
-      'drama': drama.toJson(),
-      'chapter': episode.raw,
-      'index': episode.number,
-      'quality': quality,
-      'route': route,
-      'adBlock': adBlock,
-      'force': access != null && !access!.canDownload,
-    });
-    return PlaybackPlan.fromJson(data);
-  }
-
-  @override
-  Future<void> cancelHandoff() => _cancelReads('handoff');
 
   void _adminPermission() {
     if (access != null && (access!.locked || !access!.profile.admin)) {
@@ -1228,12 +1191,26 @@ class NativeRepository extends AppRepository {
     ResourceSettings settings,
   ) async {
     _adminPermission();
-    return ResourceSettings.fromJson(
+    final saved = ResourceSettings.fromJson(
       await _call({
         'action': 'saveResourceSettings',
         'settings': settings.toJson(),
       }),
     );
+    // 手填地址变了：刷新出口决策点的手填档（Go 核的覆盖地址由接线层
+    // 按新决策同步，这里只更新决策输入，不直接改 Go 核状态）。
+    unawaited(
+      ProxyEgressController.instance.refreshManualEgress(
+        saved.proxyMode,
+        saved.proxyUrl,
+      ),
+    );
+    return saved;
+  }
+
+  @override
+  Future<void> setEgressProxy(String? goUrl) async {
+    await _call({'action': 'setEgressProxy', 'egressProxy': goUrl ?? ''});
   }
 
   @override
@@ -1983,15 +1960,9 @@ class NativeRepository extends AppRepository {
             'cancelPlayback',
             'cancelRead',
             'updateSystemProxy',
+            'setEgressProxy',
           }.contains(action) ||
-          action == 'workLease' && input['command'] == 'end' ||
-          action == 'lan' &&
-              {
-                'stop',
-                'respond',
-                'cancel',
-                'disconnect',
-              }.contains(input['command']);
+          action == 'workLease' && input['command'] == 'end';
       final epoch = access?.profileEpoch;
       if (!unrestricted && access?.locked == true) throw AppFailure('请先解锁当前用户');
       if (action == 'rankings') {
@@ -2021,7 +1992,6 @@ class NativeRepository extends AppRepository {
         'metadata',
         'resolve',
         'preload',
-        'prepareHandoff',
         'enqueueDownloads',
         'localPlayback',
       }.contains(action)) {
@@ -2090,7 +2060,6 @@ class NativeRepository extends AppRepository {
             'danmaku',
             'comments',
             'preload',
-            'prepareHandoff',
           }.contains(input['action'])) {
         unawaited(
           _call({
@@ -2121,6 +2090,10 @@ class NativeRepository extends AppRepository {
     if (!background) {
       SystemProxyMonitor.start((value) async {
         await _call({'action': 'updateSystemProxy', 'systemProxy': value});
+        // 系统代理变了：同步刷新出口决策点的系统档。
+        ProxyEgressController.instance.setSystemAddress(
+          systemProxyAddressFromMap(value),
+        );
       });
     }
   }

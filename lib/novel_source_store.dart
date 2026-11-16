@@ -229,8 +229,67 @@ class NovelSourceStore {
     }
     final stamp = DateTime.now().millisecondsSinceEpoch;
     final records = await load();
-    var added = 0;
-    var skipped = 0;
+    if (decodedJson && (decoded is List || decoded is Map)) {
+      return _importDecodedJson(
+        decoded,
+        records,
+        stamp,
+        sourceText: text,
+      );
+    }
+    if (!isTxt && !isNovelComicPyText(text)) {
+      throw const FormatException('不是小说漫画源');
+    }
+    final fileName = await ImportFileStore.save(
+      'novel_$stamp',
+      isTxt ? 'txt' : 'py',
+      bytes,
+    );
+    final base = (picked.name.split('/').last.split('\\').last).replaceAll(
+      RegExp(r'\.(py|txt|json)$', caseSensitive: false),
+      '',
+    );
+    final record = NovelImportRecord(
+      id: 'novel_$stamp',
+      name: base.isEmpty ? '小说源$stamp' : base,
+      fileName: fileName,
+      kind: isTxt ? NovelImportKind.txt : NovelImportKind.py,
+      sourceType: 0,
+    );
+    records.add(record);
+    await _save(records);
+    return (records: [record], skipped: 0);
+  }
+
+  /// 直接导入一段 JSON 文本（系统分享/打开的 JSON 文件走这里）：
+  /// 与选文件导入同一套 JSON 分支，单条与批量同一规则。
+  static Future<({List<NovelImportRecord> records, int skipped})>
+  importJsonText(String text) async {
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(text);
+    } catch (_) {
+      throw const FormatException('不是合法 JSON');
+    }
+    final records = await load();
+    return _importDecodedJson(
+      decoded,
+      records,
+      DateTime.now().millisecondsSinceEpoch,
+      sourceText: text,
+    );
+  }
+
+  /// 已解码的 JSON（对象或数组）→ 书源记录：选文件导入与
+  /// 分享导入共用。数组逐条校验、合法的进、不合法的计入跳过，
+  /// 一条都进不去时抛错；单对象不合法时复述校验的具体原因。
+  static Future<({List<NovelImportRecord> records, int skipped})>
+  _importDecodedJson(
+    dynamic decoded,
+    List<NovelImportRecord> records,
+    int stamp, {
+    required String sourceText,
+  }) async {
     Future<NovelImportRecord?> saveJsonSource(
       Map<String, dynamic> map,
       String id,
@@ -255,7 +314,9 @@ class NovelSourceStore {
       );
     }
 
-    if (decodedJson && decoded is List) {
+    if (decoded is List) {
+      var added = 0;
+      var skipped = 0;
       for (var i = 0; i < decoded.length; i++) {
         final item = decoded[i];
         if (item is! Map) {
@@ -282,41 +343,20 @@ class NovelSourceStore {
         skipped: skipped,
       );
     }
-    if (decodedJson && decoded is Map) {
+    if (decoded is Map) {
       final record = await saveJsonSource(
         Map<String, dynamic>.from(decoded),
         'novel_$stamp',
       );
       if (record == null) {
-        validateLegadoJson(text);
+        validateLegadoJson(sourceText);
         throw const FormatException('不是书源 JSON');
       }
       records.add(record);
       await _save(records);
       return (records: [record], skipped: 0);
     }
-    if (!isTxt && !isNovelComicPyText(text)) {
-      throw const FormatException('不是小说漫画源');
-    }
-    final fileName = await ImportFileStore.save(
-      'novel_$stamp',
-      isTxt ? 'txt' : 'py',
-      bytes,
-    );
-    final base = (picked.name.split('/').last.split('\\').last).replaceAll(
-      RegExp(r'\.(py|txt|json)$', caseSensitive: false),
-      '',
-    );
-    final record = NovelImportRecord(
-      id: 'novel_$stamp',
-      name: base.isEmpty ? '小说源$stamp' : base,
-      fileName: fileName,
-      kind: isTxt ? NovelImportKind.txt : NovelImportKind.py,
-      sourceType: 0,
-    );
-    records.add(record);
-    await _save(records);
-    return (records: [record], skipped: 0);
+    throw const FormatException('不是书源 JSON');
   }
 
   static Future<void> remove(NovelImportRecord record) async {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart'
@@ -17,6 +18,23 @@ import 'mini_app_sources.dart';
 import '../playback_sniffer.dart';
 import 'haikuo/haikuo_runner_page.dart';
 
+/// 一次内嵌播放的参数：播放器槽位据此建 [HaikuoPlayerView]。
+/// 小程序侧不带选集表（详情页自己的选集按钮每次重新调 player.open），
+/// 换源/切集走控制器的递送，不重建视图。
+class _InlinePlay {
+  const _InlinePlay({
+    required this.url,
+    required this.title,
+    this.headers = const {},
+  });
+
+  final String url;
+  final String title;
+
+  /// 取流请求头（source.play 回的 header 原样带上，如 Referer/UA）。
+  final Map<String, String> headers;
+}
+
 class MiniAppHostPage extends StatefulWidget {
   const MiniAppHostPage({
     super.key,
@@ -24,12 +42,21 @@ class MiniAppHostPage extends StatefulWidget {
     required this.runtime,
     required this.settings,
     this.launchOptions = const <String, dynamic>{},
+    this.playerFactory,
+    this.videoBuilder,
   });
 
   final MiniAppManifest manifest;
   final MiniAppRuntime runtime;
   final MiniAppSettings settings;
   final Map<String, dynamic> launchOptions;
+
+  /// 测试注入播放器：默认内嵌视图直接 new Player()。
+  final Player Function()? playerFactory;
+
+  /// 测试注入视频画面：默认真实 Video + VideoController；传了它
+  /// 就不建 VideoController（假播放器没有平台 handle）。
+  final WidgetBuilder? videoBuilder;
 
   @override
   State<MiniAppHostPage> createState() => _MiniAppHostPageState();
@@ -44,6 +71,18 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
   bool _loading = true;
   bool _showLoadingOverlay = false;
   String _loadingMessage = '';
+  // 详情页内嵌播放：非空时播放器顶在 WebView 上方，详情页保持
+  // 可见可滑，不推新页面（与片库详情页的钉顶播放器同一布局）。
+  _InlinePlay? _inline;
+  // 内嵌播放器的递送控制器：已在播时新的 player.open 经它换源。
+  HaikuoPlayerController? _playerController;
+  bool _inlineFullscreen = false;
+  // 内嵌视频的宽高比（videoParams 到达前默认 16:9）：槽位按它算高。
+  double _inlineAspectRatio = 16 / 9;
+  // 内嵌播放会话序号：每次新建播放器加一，视图以它为 key——
+  // 关闭后同帧内重开也不会复用旧视图状态；递送换源不加一，
+  // 视图状态保持、只换媒体。
+  int _playerSession = 0;
 
   @override
   void initState() {
@@ -231,9 +270,12 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
     }
   }
 
-  /// 播放器桥的宿主实现：直链直接进播放页；网页/解析线路先过
-  /// 嗅探页找到流再播。播放页与海阔共用同一套控件层（HaikuoPlayPage）。
-  /// 返回 true 表示确实打开了播放器；嗅探页被用户取消时返回 false。
+  /// 播放器桥的宿主实现：直链直接内嵌播；网页/解析线路先过
+  /// 嗅探页找到流，回到本页内嵌播。内嵌播放器与海阔共用同一套
+  /// 控件层（HaikuoPlayerView），详情页保持可见可滑，不跳页。
+  /// 已在播时新的 player.open（选集/清晰度切换）经控制器递送换源，
+  /// 不重建视图、不重载详情页。返回 true 表示确实打开了播放器；
+  /// 嗅探页被用户取消时返回 false。
   Future<bool> _openPlayer(MiniAppPlayTarget target) async {
     if (!mounted) return false;
     var url = target.url;
@@ -243,6 +285,39 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
       url = found;
     }
     if (!mounted) return false;
+    final controller = _playerController;
+    if (controller != null &&
+        _inline != null &&
+        controller.onDeliver != null) {
+      // 内嵌播放器已就绪：递送换源。快照先同步新地址，视图的
+      // onStateChange 随后会按真实进度刷新。
+      controller.deliver(
+        url: url,
+        title: target.title,
+        index: 0,
+        headers: target.headers,
+      );
+      _playerState = <String, dynamic>{
+        'opened': true,
+        'url': url,
+        'title': target.title,
+        'playing': false,
+        'positionMs': 0,
+        'durationMs': 0,
+      };
+      setState(() {
+        _inline = _InlinePlay(
+          url: url,
+          title: target.title,
+          headers: target.headers,
+        );
+        // 新视频宽高比未知：先回 16:9，videoParams 到达后再按实调。
+        _inlineAspectRatio = 16 / 9;
+      });
+      return true;
+    }
+    final next = HaikuoPlayerController();
+    _playerController = next;
     _playerState = <String, dynamic>{
       'opened': true,
       'url': url,
@@ -251,23 +326,32 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
       'positionMs': 0,
       'durationMs': 0,
     };
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => HaikuoPlayPage(
-          url: url,
-          title: target.title,
-          headers: target.headers,
-          onStateChange: (state) {
-            _playerState = Map<String, dynamic>.from(state);
-            unawaited(_bridge?.emit('player.stateChange', _playerState));
-          },
-        ),
-      ),
-    );
-    _playerState = const {'opened': false};
-    unawaited(_bridge?.emit('player.close', {'url': url}));
+    setState(() {
+      _playerSession++;
+      _inline = _InlinePlay(
+        url: url,
+        title: target.title,
+        headers: target.headers,
+      );
+      _inlineFullscreen = false;
+      _inlineAspectRatio = 16 / 9;
+    });
     return true;
+  }
+
+  /// 关闭内嵌播放器：播放器区收起、详情页恢复整页；桥事件
+  /// player.close 与状态快照与旧的推页行为保持一致。
+  void _closeInlinePlayer() {
+    final inline = _inline;
+    if (inline == null) return;
+    _playerController = null;
+    if (!mounted) return;
+    setState(() {
+      _inline = null;
+      _inlineFullscreen = false;
+    });
+    _playerState = const {'opened': false};
+    unawaited(_bridge?.emit('player.close', {'url': inline.url}));
   }
 
   /// 嗅探页找流：自动播放模式，第一个候选地址一出现就回填并关页；
@@ -344,20 +428,36 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.manifest.name),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: '刷新',
-            onPressed: controller == null
-                ? null
-                : () => unawaited(controller.reload()),
-          ),
-        ],
+    return PopScope(
+      // 内嵌播放器开着时返回键先关播放器（全屏时先退全屏），
+      // 播放器关了再返回才退出小程序，不一次返回丢详情页。
+      canPop: _inline == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_inlineFullscreen) {
+          setState(() => _inlineFullscreen = false);
+          return;
+        }
+        _closeInlinePlayer();
+      },
+      child: Scaffold(
+        // 内嵌全屏时顶栏连占位高度一起藏掉，播放器真正占满屏幕。
+        appBar: _inlineFullscreen
+            ? null
+            : AppBar(
+                title: Text(widget.manifest.name),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded),
+                    tooltip: '刷新',
+                    onPressed: controller == null
+                        ? null
+                        : () => unawaited(controller.reload()),
+                  ),
+                ],
+              ),
+        body: _buildBody(controller),
       ),
-      body: _buildBody(controller),
     );
   }
 
@@ -402,35 +502,85 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
             ),
           )
         : WebViewWidget(controller: controller);
-    return Stack(
-      children: [
-        webView,
-        if (_loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(),
-          ),
-        if (_showLoadingOverlay)
-          Container(
-            color: Colors.black45,
-            alignment: Alignment.center,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(color: Colors.white),
-                if (_loadingMessage.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    _loadingMessage,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
-              ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final inline = _inline;
+        return Column(
+          children: [
+            // 播放器槽位始终在树里（未播放时高度为 0），保证
+            // WebView 的树位置不变，切入切出内嵌播放不重载页面。
+            SizedBox(
+              height: inline == null
+                  ? 0
+                  : _inlineFullscreen
+                  ? constraints.maxHeight
+                  : haikuoSlotHeight(
+                      aspectRatio: _inlineAspectRatio,
+                      maxWidth: constraints.maxWidth,
+                      maxHeight: constraints.maxHeight,
+                    ),
+              child: inline == null
+                  ? null
+                  : HaikuoPlayerView(
+                      key: ValueKey<int>(_playerSession),
+                      url: inline.url,
+                      title: inline.title,
+                      controller: _playerController,
+                      headers: inline.headers,
+                      onStateChange: (state) {
+                        _playerState = Map<String, dynamic>.from(state);
+                        unawaited(
+                          _bridge?.emit('player.stateChange', _playerState),
+                        );
+                      },
+                      fullscreen: _inlineFullscreen,
+                      onFullscreenChanged: (value) =>
+                          setState(() => _inlineFullscreen = value),
+                      // 播放器内返回键即关闭入口：停播收起、详情页恢复整页。
+                      onClose: _closeInlinePlayer,
+                      onAspectRatioChanged: (ratio) =>
+                          setState(() => _inlineAspectRatio = ratio),
+                      playerFactory: widget.playerFactory,
+                      videoBuilder: widget.videoBuilder,
+                    ),
             ),
-          ),
-      ],
+            Expanded(
+              child: Stack(
+                children: [
+                  webView,
+                  if (_loading)
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: LinearProgressIndicator(),
+                    ),
+                  if (_showLoadingOverlay)
+                    Container(
+                      color: Colors.black45,
+                      alignment: Alignment.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(
+                            color: Colors.white,
+                          ),
+                          if (_loadingMessage.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              _loadingMessage,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

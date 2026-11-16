@@ -165,6 +165,18 @@ class ContentRegistry {
       assetPath: 'assets/novel_spiders/kxmanhua.py',
       section: ContentSection.novel,
     ),
+    PyContentSource(
+      id: 'akmh',
+      name: '🔞爱看漫画',
+      assetPath: 'assets/novel_spiders/akmh.py',
+      section: ContentSection.novel,
+    ),
+    PyContentSource(
+      id: 'hhlz',
+      name: '🔞嘿嘿连载',
+      assetPath: 'assets/novel_spiders/hhlz.py',
+      section: ContentSection.novel,
+    ),
   ];
 
   static final List<ContentSource> _novelImports = [];

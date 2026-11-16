@@ -201,7 +201,7 @@ void main() {
   });
 
   group('分类侧栏全显', () {
-    testWidgets('12 套主题侧栏长分类名都不截断且可点', (tester) async {
+    testWidgets('13 套主题侧栏长分类名都不截断且可点', (tester) async {
       for (final mode in AppThemeMode.values) {
         String? selected;
         await _pumpThemed(
@@ -280,14 +280,11 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('主题切换入口显示当前主题名，点按进主题设置页', (tester) async {
+    testWidgets('我的页不再有主题切换行，设置行是唯一入口', (tester) async {
       await pumpMine(tester, appTheme: AppThemeMode.lightClean);
-      expect(find.text('主题切换'), findsOneWidget);
-      expect(find.text('当前：浅色清爽 · 12 套主题'), findsOneWidget);
-      await tester.tap(find.text('主题切换'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byType(ThemeSettingsScreen), findsOneWidget);
+      expect(find.text('主题切换'), findsNothing);
+      expect(find.textContaining('12 套主题'), findsNothing);
+      expect(find.text('设置'), findsOneWidget);
     });
 
     testWidgets('我的页内文字一律不截断', (tester) async {
@@ -354,7 +351,7 @@ void main() {
   });
 
   group('站点切换列表', () {
-    testWidgets('长站名完整显示，选中瓦片用主题渐变', (tester) async {
+    testWidgets('长站名两行后省略显示，选中瓦片描边加对勾', (tester) async {
       const longStation = '这是一个名字非常长的站点名称应当完整显示';
       const groups = [
         SourcePickerGroup(
@@ -390,18 +387,32 @@ void main() {
       );
       await tester.tap(find.text('打开'));
       await tester.pumpAndSettle();
-      _expectNoEllipsis(find.text(longStation));
+      // 宫格瓦片契约：站名最多两行，超长省略显示（旧列表的完整显示已随宫格改版作废）。
+      final nameFinder = find.text(longStation);
+      expect(nameFinder, findsWidgets);
+      for (final element in nameFinder.evaluate()) {
+        final text = element.widget as Text;
+        expect(text.maxLines, 2);
+        expect(text.overflow, TextOverflow.ellipsis);
+      }
+      final row = find.byKey(const ValueKey('site-picker-row-long'));
+      expect(row, findsOneWidget);
+      // 选中瓦片契约（宫格）：描边用主题主色 + 右上角对勾徽标，没有渐变。
       final containers = find.descendant(
-        of: find.byKey(const ValueKey('site-picker-row-long')),
+        of: row,
         matching: find.byType(Container),
       );
       expect(containers, findsWidgets);
-      final hasGradient = containers.evaluate().any((element) {
-        final decoration =
-            (element.widget as Container).decoration as BoxDecoration?;
-        return decoration?.gradient != null;
+      final hasSelectedBorder = containers.evaluate().any((element) {
+        final decoration = (element.widget as Container).decoration;
+        final border = decoration is BoxDecoration ? decoration.border : null;
+        return border is Border && border.top.color == config.primaryColor;
       });
-      expect(hasGradient, isTrue);
+      expect(hasSelectedBorder, isTrue);
+      expect(
+        find.descendant(of: row, matching: find.byIcon(Icons.check)),
+        findsOneWidget,
+      );
     });
   });
 
@@ -457,10 +468,12 @@ void main() {
     });
   });
 
-  testWidgets('头像进我的页，主题入口打开主题选择界面', (tester) async {
+  testWidgets('头像进我的页，设置行打开设置页（主题入口在设置里）', (tester) async {
     SharedPreferences.setMockInitialValues({
       'source': 'huangdou',
       'hiddenSites': '[]',
+      // 默认主题已改 Win7：本测试验通用外壳头像入口，显式钉住紫蓝霓虹。
+      'appThemeMode': 'purpleNeon',
     });
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
@@ -477,17 +490,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
-      if (find
-          .byKey(const ValueKey('mine-theme-entry'))
-          .evaluate()
-          .isNotEmpty) {
+      if (find.text('设置').evaluate().isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
     }
-    final entry = find.byKey(const ValueKey('mine-theme-entry'));
+    expect(find.text('主题切换'), findsNothing);
+    final entry = find.text('设置');
     expect(entry, findsOneWidget);
     await tester.ensureVisible(entry);
     await tester.pump(const Duration(milliseconds: 200));
@@ -495,7 +506,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump();
-    expect(find.byType(ThemeSettingsScreen), findsOneWidget);
+    expect(find.byType(SettingsScreen), findsOneWidget);
   }, skip: !allSourcesEnabled);
 
   group('主题卡片真实内容', () {
@@ -514,7 +525,7 @@ void main() {
         settle: false,
       );
       await _pumpCoverFrames(tester);
-      expect(find.text(data.items.first.title), findsNWidgets(12));
+      expect(find.text(data.items.first.title), findsNWidgets(13));
       expect(find.text(data.categories[1].name), findsWidgets);
       expect(find.text('内容未加载'), findsNothing);
       expect(find.text('紫蓝霓虹'), findsOneWidget);

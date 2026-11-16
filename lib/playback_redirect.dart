@@ -19,14 +19,21 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 
 import 'cloud_drive/cloud_providers.dart' show mergeCookieHeader;
-import 'lan_web/stream_gateway.dart' show isLoopbackHost;
 import 'models.dart';
 
 /// 预解析结果：最终地址 + 沿途合并后的请求头。
 typedef ResolvedPlaybackUrl = ({String url, Map<String, String> headers});
 
+/// 是否回环地址（localhost / 127.x / ::1）：回环地址不做跳转预解析。
+bool isLoopbackHost(String host) {
+  final lower = host.toLowerCase();
+  if (lower == 'localhost' || lower == '::1' || lower == '[::1]') return true;
+  if (lower.startsWith('127.')) return true;
+  return false;
+}
+
 /// 是否应对该播放计划做跳转预解析：仅 http(s) 直链、非本地文件、
-/// 无解密密钥、非回环地址。网关改写的判定口径与此相同，两处保持一致。
+/// 无解密密钥、非回环地址。
 bool shouldPreResolveRedirects(PlaybackPlan plan) {
   if (plan.local) return false;
   if (plan.decryptionKey.isNotEmpty) return false;

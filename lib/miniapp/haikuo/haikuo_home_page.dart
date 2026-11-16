@@ -894,6 +894,21 @@ class _ProgramTile extends StatelessWidget {
     final iconUrl = program.icon.trim();
     final hasIconImage =
         iconUrl.startsWith('http://') || iconUrl.startsWith('https://');
+    // 真图标链：规则自带 http(s) 图标 → data: 图标 → 站点 favicon →
+    // 首字色块；每级加载失败都往下一级走，点按行为不动。
+    final dataBytes = hasIconImage ? null : haikuoDataIconBytes(iconUrl);
+    final faviconUrl = haikuoFaviconUrl(program);
+    Widget faviconOrGlyph() {
+      if (faviconUrl == null) return _glyph(color);
+      return Image.network(
+        faviconUrl,
+        width: 58,
+        height: 58,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _glyph(color),
+      );
+    }
+
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -927,9 +942,17 @@ class _ProgramTile extends StatelessWidget {
                     width: 58,
                     height: 58,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => _glyph(color),
+                    errorBuilder: (_, _, _) => faviconOrGlyph(),
                   )
-                : _glyph(color),
+                : dataBytes != null
+                ? Image.memory(
+                    dataBytes,
+                    width: 58,
+                    height: 58,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => faviconOrGlyph(),
+                  )
+                : faviconOrGlyph(),
           ),
           const SizedBox(height: 7),
           Text(

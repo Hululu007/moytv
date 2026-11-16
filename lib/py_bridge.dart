@@ -237,6 +237,17 @@ class PyBridge {
     } catch (_) {}
   }
 
+  /// 把出口决策同步进 py 运行时：非空时蜘蛛的 urllib/requests/curl 请求
+  /// 走该代理，null 时清掉恢复直连。失败静默（桥不可用时蜘蛛本来也跑不了）。
+  static Future<void> setEgressProxy(String? httpProxyUrl) async {
+    try {
+      await callRaw('', {
+        'action': 'setEgressProxy',
+        'proxyUrl': httpProxyUrl ?? '',
+      });
+    } catch (_) {}
+  }
+
   static Future<void> dispose(String path) async {
     try {
       await _channel.invokeMethod<String>('dispose', {'path': path});

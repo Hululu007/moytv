@@ -10,6 +10,7 @@ import 'audio_media_session.dart';
 import 'content_models.dart';
 import 'core_bridge.dart';
 import 'floating_window.dart';
+import 'mpv_egress.dart';
 import 'playback_foreground.dart';
 
 /// 听书播放引擎的最小接口：控制器只依赖它，不直接碰 media_kit。
@@ -37,7 +38,10 @@ abstract class AudioPlayerEngine {
 
 /// media_kit 实现：与旧详情页私有播放器同一用法（open/setRate/play）。
 class MediaKitAudioEngine implements AudioPlayerEngine {
-  MediaKitAudioEngine() : _player = Player();
+  MediaKitAudioEngine() : _player = Player() {
+    // MPV 出口：按当前决策设 http-proxy，决策变化时自动重设。
+    bindMpvEgress(_player);
+  }
 
   final Player _player;
 
@@ -84,7 +88,10 @@ class MediaKitAudioEngine implements AudioPlayerEngine {
   Future<void> setRate(double rate) => _player.setRate(rate);
 
   @override
-  Future<void> dispose() => _player.dispose();
+  Future<void> dispose() {
+    unbindMpvEgress(_player);
+    return _player.dispose();
+  }
 }
 
 /// 外部音频会话：自带播放器的另一条音频链路（片库/搜索播放页的音频模式）。

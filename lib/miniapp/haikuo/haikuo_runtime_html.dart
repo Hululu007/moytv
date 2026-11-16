@@ -477,7 +477,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     // webview:// 前缀：改走 WebView 取码（带后缀的已在 fetch() 里拆好）。
     if (String(url || '').indexOf('webview://') === 0) {
       var wvHtml = fetchCodeByWebView(String(url).slice(10), opt);
-      return { body: wvHtml, code: wvHtml ? 200 : 0, headers: {} };
+      return { body: wvHtml, code: wvHtml ? 200 : 0, headers: {}, url: String(url || '') };
     }
     // proxy 改写行（`原地址=>新地址`，包含匹配）：改写后地址进缓存键。
     url = applyProxyRewrites(String(url || ''));
@@ -495,8 +495,19 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var ruleUa = PROGRAM.rule && PROGRAM.rule.ua;
     if (!hasUA && ruleUa) headers['User-Agent'] = String(ruleUa);
     var body = opt.body;
+    var bodyWasObject = false;
     if (body !== undefined && body !== null && typeof body !== 'string') {
+      bodyWasObject = true;
       try { body = JSON.stringify(body); } catch (e) { body = String(body); }
+    }
+    // 对象 body 按官方行为自动加 application/json（指南有载）；
+    // 规则自带 content-type 时不动（胖大AV 站方缺此头回 415）。
+    if (bodyWasObject) {
+      var hasCT = false;
+      for (var ctk in headers) {
+        if (String(ctk).toLowerCase() === 'content-type') { hasCT = true; break; }
+      }
+      if (!hasCT) headers['Content-Type'] = 'application/json';
     }
     var upperMethod = (method || 'GET').toUpperCase();
     var noCache = opt.cache === false;
@@ -512,7 +523,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (upperMethod === 'GET' && !noCache && !opt.onlyHeaders && !opt.toHex) {
       cacheKey = fetchCacheKey('GET', url, headers);
       var cached = fetchCacheGet(cacheKey);
-      if (cached !== null) return { body: cached, code: resCode, headers: lastResponseHeaders };
+      if (cached !== null) return { body: cached, code: resCode, headers: lastResponseHeaders, url: url };
     }
     var timeoutMs = 30000;
     if (typeof opt.timeout === 'number' && isFinite(opt.timeout)) {
@@ -543,11 +554,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       xhr.send(null);
     } catch (e) {
       say('请求失败：' + url + '\n' + e);
-      return { body: '', code: 0, headers: {} };
+      return { body: '', code: 0, headers: {}, url: url };
     }
     if (xhr.status !== 200) {
       say('请求失败：HTTP ' + xhr.status + '\n' + url);
-      return { body: '', code: 0, headers: {} };
+      return { body: '', code: 0, headers: {}, url: url };
     }
     var text = xhr.responseText || '';
     try {
@@ -558,11 +569,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         var out = parsed.body == null ? '' : String(parsed.body);
         if (opt.toHex) out = base64ToHex(out);
         if (cacheKey) fetchCachePut(cacheKey, resCode, out, lastResponseHeaders);
-        return { body: out, code: resCode, headers: lastResponseHeaders };
+        return { body: out, code: resCode, headers: lastResponseHeaders, url: parsed.url || url };
       }
     } catch (e) { /* 不是包装结构，原样返回 */ }
     if (cacheKey) fetchCachePut(cacheKey, resCode, text, {});
-    return { body: text, code: resCode, headers: {} };
+    return { body: text, code: resCode, headers: {}, url: url };
   }
   // 规则 proxy 字段的改写行缓存：同一规则对象只解析一次。
   var proxyRewriteCache = { rule: null, list: [] };
@@ -1112,12 +1123,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     target = substituteTemplates(target);
     var res = rawHttpEx(options.method || 'GET', target, options);
-    return wrapFetchResult(res.body, res.code, res.headers, opt);
+    return wrapFetchResult(res.body, res.code, res.headers, opt, res.url);
   }
   // withHeaders/withStatusCode：按官方文档回 JSON 字符串，
   // 每个头的值都是数组：{body, headers:{'Set-Cookie':['a=b']}}。
-  function wrapFetchResult(body, code, headers, opt) {
-    if (opt.withHeaders || opt.withStatusCode) {
+  // onlyHeaders：只要响应头不取正文，同样回 JSON 字符串，带
+  // statusCode 与跟随重定向后的最终地址 url（包内 4 条规则取
+  // .url/.statusCode，旧实现回空串导致 JSON.parse 抛错）。
+  function wrapFetchResult(body, code, headers, opt, finalUrl) {
+    if (opt.withHeaders || opt.withStatusCode || opt.onlyHeaders) {
       var map = {};
       for (var k in headers) {
         if (!Object.prototype.hasOwnProperty.call(headers, k)) continue;
@@ -1125,7 +1139,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         map[k] = Array.isArray(v) ? v : [String(v)];
       }
       var obj = { body: body, headers: map };
-      if (opt.withStatusCode) obj.statusCode = code;
+      if (opt.withStatusCode || opt.onlyHeaders) obj.statusCode = code;
+      if (opt.onlyHeaders) obj.url = finalUrl || '';
       try { return JSON.stringify(obj); } catch (e) { return body; }
     }
     return body;
@@ -1354,20 +1369,21 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var nodes = chainSelect([docOf(html)], chain.selectors);
     return valueOf(nodes[0], chain.tail);
   }
-  // parseDom：pdfa + 相对地址按 baseUrl 补全（默认 MY_URL）。
-  // pd 是它的缩写；属性尾巴（href/src 等）才补全，文本不动。
+  // parseDom（缩写 pd）：按指南与 pdfh 功能一致（取第一个匹配
+  // 的值），区别只在属性尾巴（href/src 等）按 baseUrl 补全相对
+  // 地址（默认 MY_URL），文本不动。列表形态走 pdfa。
+  // 旧实现回数组：规则拿它当字符串用时，空数组恒真吞掉兜底、
+  // indexOf 永远 -1（AnySex 首页因此一条视频都出不来）。
   function parseDom(html, rule, baseUrl) {
     var chain = splitChain(rule);
     var nodes = chainSelect([docOf(html)], chain.selectors);
+    if (!nodes.length) return '';
     var tail = chain.tail || 'OuterHtml';
-    var base = baseUrl || MY_URL;
-    return nodes.map(function (node) {
-      var v = valueOf(node, tail);
-      if (tail && tail !== 'Text' && tail !== 'Html' && tail !== 'OuterHtml') {
-        return resolveUrl(v, base);
-      }
-      return v;
-    });
+    var v = valueOf(nodes[0], tail);
+    if (tail && tail !== 'Text' && tail !== 'Html' && tail !== 'OuterHtml') {
+      return resolveUrl(v, baseUrl || MY_URL);
+    }
+    return v;
   }
   function parseDomForHtml(html, rule) { return pdfh(html, rule); }
   function parseDomForArray(html, rule) { return pdfa(html, rule); }
@@ -1644,6 +1660,23 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       toast('解析失败');
       return;
     }
+    if (typeof result === 'object') {
+      // lazyRule 直接回对象：{urls:[...]} 多线路播放形态（胖大AV）。
+      if (Array.isArray(result.urls) && result.urls.length) {
+        var firstUrl = String(result.urls[0] || '');
+        if (firstUrl) {
+          sendPlay(stripFlags(firstUrl), item, fromDetail, {
+            headers: normalizePlayHeaders(result.headers),
+            names: result.names,
+            subtitle: result.subtitle,
+            lyric: result.lyric,
+            audioUrls: result.audioUrls
+          });
+          return;
+        }
+      }
+      return; // 其他对象形态：函数自己已处理（如内部调了 play）
+    }
     if (typeof result !== 'string') return; // 函数自己已处理（如内部调了 play）
     if (!result) { toast('解析失败'); return; }
     var clean = stripFlags(result);
@@ -1657,6 +1690,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return;
     }
     if (clean.indexOf('hiker://') === 0 || clean.indexOf('pics://') === 0 ||
+        clean.indexOf('novel://') === 0 ||
         clean.indexOf('video://') === 0 || clean.indexOf('webRule://') === 0 ||
         clean.indexOf('x5Rule://') === 0) {
       openItem({ url: clean, title: itemTitle(item), extra: item ? item.extra : null }, fromDetail);
@@ -1872,6 +1906,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 虚拟页结果渲染：JSON 数组按列表渲染（用子页自己的 col_type），
   // 否则当文本显示。
   function renderVirtual(text, url) {
+    preResultItems = [];
     var trimmed = String(text || '').trim();
     if (trimmed.charAt(0) === '[') {
       try {
@@ -1911,6 +1946,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     if (url.indexOf('pics://') === 0) {
       renderGallery(url.slice('pics://'.length).split('&&').filter(function (s) { return s; }));
+      return true;
+    }
+    if (url.indexOf('novel://') === 0) {
+      // 小说正文：走播放消息，原生侧按 novel:// 分流进阅读器
+      // （与视频同一入口，列表/详情/搜索结果点按一致）。
+      sendPlay(url, item, fromDetail);
       return true;
     }
     if (url.indexOf('download://') === 0) {
@@ -2347,14 +2388,30 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return wanted.length > 0;
     });
   }
+  // 前置结果（setPreResult）：先于主结果渲染的固定行（分类头、
+  // 搜索行、首屏 loading 占位），与随后 setResult 的主结果拼成
+  // 同一页；setPreResult([]) 清掉。每次 runSource 重置，详情页
+  // 不拼前置行。指南无此接口定义，语义按包内 10 条规则的实际
+  // 用法取最小可信集（见 COVERAGE_MATRIX）。
+  var preResultItems = [];
+  function setPreResult(items) {
+    if (Array.isArray(items)) preResultItems = items.slice();
+    else if (items) preResultItems = [items];
+    else preResultItems = [];
+    if (!resultCapture && !isDetail) render([]);
+  }
   function render(items, forcedColType) {
     if (!Array.isArray(items)) items = items ? [items] : [];
+    var mainItems = items;
     // 聚合搜索捕获模式：只收条目，不画页面、不动当前状态。
+    // 前置行一并捕获（搜索脚本清掉 loading 后前置为空，不污染）。
     if (resultCapture) {
-      for (var ci = 0; ci < items.length; ci++) resultCapture.push(items[ci]);
+      var cap = (!isDetail && preResultItems.length) ? preResultItems.concat(items) : items;
+      for (var ci = 0; ci < cap.length; ci++) resultCapture.push(cap[ci]);
       return;
     }
-    currentItems = items.slice();
+    currentItems = mainItems.slice();
+    if (!isDetail && preResultItems.length) items = preResultItems.concat(items);
     currentMode = isDetail ? 'detail' : 'list';
     currentEpisodes = [];
     detailTitle = '';
@@ -4058,6 +4115,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     });
   }
   function runSource(source) {
+    preResultItems = [];
     var text = String(source || '');
     if (text.indexOf('js:') === 0) text = text.slice(3);
     if (!text.trim()) return false;
@@ -5100,6 +5158,182 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     return { Data: Data, AES: AES };
   }
 
+  // ---------- Java 桥最小垫片（Rhino java.* / javax.* / android.*） ----------
+  // 官方海阔规则跑在 Rhino 上，可直接用 Java 类；WebView 里没有这
+  // 些全局，规则一碰就报 ReferenceError（绿帽社的签名/解密即此
+  // 形态：sha256 回空 → 签名无效 → 列表取不到）。这里只垫规则包
+  // 里实际用到的最小子集，全部基于已有 CryptoJS 子集与 Dart 摘
+  // 要接口实现；未覆盖的类/方法不在此列，碰到仍报原错，不编造。
+  // 字节一律用 JS 数字数组表示；对外（digest/getBytes/doFinal）
+  // 按 Java 语义回有符号字节（-128..127），内部一律掩码后运算。
+  function javaBytesFrom(x) {
+    if (x === undefined || x === null) return [];
+    if (typeof x === 'string') return utf8ToBytes(x);
+    var arr = dataToBytes(x);
+    var out = [];
+    for (var i = 0; i < arr.length; i++) out.push(arr[i] & 0xFF);
+    return out;
+  }
+  function javaSignedBytes(bytes) {
+    var out = [];
+    for (var i = 0; i < bytes.length; i++) {
+      var b = bytes[i] & 0xFF;
+      out.push(b > 127 ? b - 256 : b);
+    }
+    return out;
+  }
+  function javaDecodeBytes(bytes, charset) {
+    var clean = [];
+    for (var i = 0; i < bytes.length; i++) clean.push(bytes[i] & 0xFF);
+    try {
+      if (typeof TextDecoder !== 'undefined') {
+        return new TextDecoder(charset || 'utf-8').decode(new Uint8Array(clean));
+      }
+    } catch (e) { /* 无 TextDecoder 时走 latin1 兜底 */ }
+    return bytesToLatin1(clean);
+  }
+  function JavaString(value, charset) {
+    if (!(this instanceof JavaString)) return new JavaString(value, charset);
+    var str;
+    if (value === undefined || value === null) str = '';
+    else if (typeof value === 'string') str = value;
+    else if (typeof value === 'object' && typeof value.length === 'number') str = javaDecodeBytes(value, charset);
+    else str = String(value);
+    this.__str = str;
+  }
+  JavaString.prototype.toString = function () { return this.__str; };
+  JavaString.prototype.valueOf = function () { return this.__str; };
+  JavaString.prototype.getBytes = function (charset) {
+    return javaSignedBytes(utf8ToBytes(this.__str));
+  };
+  JavaString.prototype.toCharArray = function () { return this.__str.split(''); };
+  function JavaMessageDigest(algo) {
+    this.algo = algo;
+    this.chunks = [];
+  }
+  JavaMessageDigest.getInstance = function (algo) {
+    var a = String(algo || '').toUpperCase().replace(/-/g, '');
+    if (['MD5', 'SHA1', 'SHA256', 'SHA512'].indexOf(a) < 0) {
+      throw new Error('MessageDigest 不支持：' + algo);
+    }
+    return new JavaMessageDigest(a);
+  };
+  JavaMessageDigest.prototype.update = function (data) {
+    this.chunks.push(javaBytesFrom(data));
+  };
+  JavaMessageDigest.prototype.digest = function () {
+    var all = [];
+    for (var i = 0; i < this.chunks.length; i++) {
+      for (var j = 0; j < this.chunks[i].length; j++) all.push(this.chunks[i][j]);
+    }
+    var hex = cryptoRequest({ op: this.algo.toLowerCase(), hex: bytesToHex(all) });
+    return javaSignedBytes(hexToByteArray(hex || ''));
+  };
+  function JavaSecretKeySpec(keyBytes, algo) {
+    this.keyBytes = javaBytesFrom(keyBytes);
+    this.algo = algo;
+  }
+  function JavaIvParameterSpec(ivBytes) {
+    this.ivBytes = javaBytesFrom(ivBytes);
+  }
+  function javaCipherOpts(transformation) {
+    var modeStr = String(transformation || 'AES/CBC/PKCS5Padding');
+    var mode = CryptoJS.mode.CBC;
+    if (/ECB/i.test(modeStr)) mode = CryptoJS.mode.ECB;
+    else if (/CTR/i.test(modeStr)) mode = CryptoJS.mode.CTR;
+    var padding = CryptoJS.pad.Pkcs7;
+    if (/NoPadding/i.test(modeStr)) padding = CryptoJS.pad.NoPadding;
+    else if (/ZeroPadding/i.test(modeStr)) padding = CryptoJS.pad.ZeroPadding;
+    return { mode: mode, padding: padding };
+  }
+  function JavaCipher(transformation) {
+    this.opts = javaCipherOpts(transformation);
+    this.mode = 0;
+    this.keySpec = null;
+    this.ivSpec = null;
+  }
+  JavaCipher.getInstance = function (transformation) {
+    return new JavaCipher(transformation);
+  };
+  JavaCipher.ENCRYPT_MODE = 1;
+  JavaCipher.DECRYPT_MODE = 2;
+  JavaCipher.prototype.init = function (mode, keySpec, ivSpec) {
+    this.mode = mode;
+    this.keySpec = keySpec;
+    this.ivSpec = ivSpec || null;
+  };
+  JavaCipher.prototype.doFinal = function (data) {
+    var bytes = javaBytesFrom(data);
+    var keyWA = CryptoJS.enc.Hex.parse(bytesToHex(this.keySpec ? this.keySpec.keyBytes : []));
+    var cfg = { mode: this.opts.mode, padding: this.opts.padding };
+    if (this.ivSpec) cfg.iv = CryptoJS.enc.Hex.parse(bytesToHex(this.ivSpec.ivBytes));
+    var out;
+    if (this.mode === JavaCipher.ENCRYPT_MODE) {
+      var plainWA = CryptoJS.enc.Hex.parse(bytesToHex(bytes));
+      out = CryptoJS.AES.encrypt(plainWA, keyWA, cfg).ciphertext;
+    } else {
+      var cipherWA = CryptoJS.enc.Hex.parse(bytesToHex(bytes));
+      out = CryptoJS.AES.decrypt(
+        CryptoJS.lib.CipherParams.create({ ciphertext: cipherWA }), keyWA, cfg);
+    }
+    return javaSignedBytes(dataToBytes(out));
+  };
+  var java = {
+    lang: {
+      String: JavaString,
+      Byte: { TYPE: { __javaType: 'byte' } },
+      Thread: function (fn) {
+        this.__fn = (typeof fn === 'function') ? fn : (fn && typeof fn.run === 'function' ? fn.run : null);
+      },
+      reflect: {
+        Array: {
+          newInstance: function (type, len) {
+            var a = [];
+            for (var i = 0; i < (len || 0); i++) a.push(0);
+            return a;
+          }
+        }
+      }
+    },
+    security: { MessageDigest: JavaMessageDigest },
+    util: {
+      Arrays: {
+        copyOfRange: function (arr, from, to) {
+          return javaBytesFrom(arr).slice(from, to);
+        }
+      }
+    }
+  };
+  java.lang.Thread.sleep = function (ms) {
+    /* WebView 单线程，睡眠会冻住页面；Rhino 侧的等待语义在此无
+       后台线程可等，空操作（包内 3 条规则只拿它做更新后延时）。 */
+  };
+  java.lang.Thread.prototype.start = function () {
+    var fn = this.__fn;
+    if (fn) setTimeout(function () { try { fn(); } catch (e) { /* ignore */ } }, 0);
+  };
+  var javax = {
+    crypto: {
+      Cipher: JavaCipher,
+      spec: { SecretKeySpec: JavaSecretKeySpec, IvParameterSpec: JavaIvParameterSpec }
+    }
+  };
+  var android = {
+    util: {
+      Base64: {
+        DEFAULT: 0,
+        NO_WRAP: 2,
+        URL_SAFE: 8,
+        decode: function (b64, flags) {
+          return javaSignedBytes(base64ToByteArray(b64));
+        }
+      }
+    }
+  };
+  try { window.java = java; } catch (e) {}
+  try { window.javax = javax; } catch (e) {}
+  try { window.android = android; } catch (e) {}
+
   // 同步存文件（POST /__savefile，base64 正文）：图片解密与
   // writeHexFile 用，避开 saveFile 的异步通道竞态。
   function saveFileSync(name, base64Text) {
@@ -5898,6 +6132,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     parseDom: parseDom, parseDomForHtml: parseDomForHtml, parseDomForArray: parseDomForArray,
     xpath: xpath, xpathArray: xpathArray, xpa: xpathArray,
     setResult: setResult, setHomeResult: setResult, setSearchResult: setResult,
+    setPreResult: setPreResult,
     refreshPage: refreshPage, setPage: setPage, join: join, play: play, open: open,
     playVideo: playVideo, download: download,
     toast: toast, log: log, sleep: sleep,

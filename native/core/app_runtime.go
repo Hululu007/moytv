@@ -107,9 +107,9 @@ type nativeDrama struct {
 }
 
 type nativeInput struct {
-	LAN              json.RawMessage         `json:"lan"`
 	ExpectedVersions map[string]string       `json:"expectedVersions"`
 	SystemProxy      nativeSystemProxy       `json:"systemProxy"`
+	EgressProxy      string                  `json:"egressProxy"`
 	Settings         nativeResourceSettings  `json:"settings"`
 	JobIDs           []string                `json:"jobIds"`
 	PlaybackSession  string                  `json:"playbackSession"`
@@ -227,8 +227,6 @@ func nativeParseFallbackPlan(pageURL, referer string) nativePlan {
 }
 
 type nativeEngine struct {
-	lanMu            sync.Mutex
-	lan              *nativeLANServer
 	settingsMu       sync.Mutex
 	settings         nativeResourceSettings
 	readMu           sync.Mutex
@@ -498,7 +496,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
-	if input.Action == "danmaku" || input.Action == "comments" || input.Action == "hongguoDanmakuById" || input.Action == "hongguoCommentsById" || input.Action == "preload" || input.Action == "prepareHandoff" || input.Session != "" && (input.Action == "catalog" || input.Action == "categories" || input.Action == "suggestions" || input.Action == "recommendations" || input.Action == "metadata") {
+	if input.Action == "danmaku" || input.Action == "comments" || input.Action == "hongguoDanmakuById" || input.Action == "hongguoCommentsById" || input.Action == "preload" || input.Session != "" && (input.Action == "catalog" || input.Action == "categories" || input.Action == "suggestions" || input.Action == "recommendations" || input.Action == "metadata") {
 		work, finish, err := engine.beginRead(ctx, input)
 		if err != nil {
 			return nil, err
@@ -507,14 +505,14 @@ func nativeDispatch(input nativeInput) (any, error) {
 		ctx = work
 	}
 	switch input.Action {
-	case "lan":
-		return engine.nativeLAN(ctx, input.Command, input.LAN)
 	case "clearanceNeeded":
 		return map[string]any{"items": engine.downloader.pendingShieldChallenges(), "userAgent": shieldUserAgent}, nil
 	case "setClearance":
 		return true, engine.downloader.setShieldClearance(input.Host, input.Cookie, input.UA)
 	case "updateSystemProxy":
 		return true, engine.updateSystemProxy(input.SystemProxy)
+	case "setEgressProxy":
+		return true, engine.setEgressProxy(input.EgressProxy)
 	case "crackConfigSet":
 		removed, err := seku.CrackConfigSet(input.Content)
 		if err != nil {
@@ -537,8 +535,6 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.downloads.controlBatchExpected(ctx, input.JobIDs, input.Command, input.ExpectedVersions)
 	case "preload":
 		return engine.nativePreload(ctx, input)
-	case "prepareHandoff":
-		return engine.nativeResolve(ctx, input)
 	case "danmaku":
 		return engine.nativeDanmaku(ctx, input)
 	case "comments":
@@ -1131,9 +1127,7 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 	}
 	if !input.Force && engine.downloads != nil {
 		if plan, found, err := engine.downloads.localPlan(input.Drama.ID, input.Index); found || err != nil {
-			if input.Action != "prepareHandoff" || !errors.Is(err, errNativeLocalFile) {
-				return plan, err
-			}
+			return plan, err
 		}
 	}
 	task := Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index}

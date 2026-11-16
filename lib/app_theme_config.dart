@@ -7,12 +7,15 @@ import 'package:path_provider/path_provider.dart';
 
 import 'liquid_glass.dart';
 
-/// 全局主题：12 套固定主题（用户 2026-11-13 发来的代码定版 8 套，
-/// 2026-11-14 新增第 9 套“左侧分类”，同日新增霓虹三套；名与配色
-/// 均为暂定、用户可改；紫蓝霓虹配色取用户发的霓虹定义精确值）。
+/// 全局主题：13 套固定主题（用户 2026-11-13 发来的代码定版 8 套，
+/// 2026-11-14 新增第 9 套“左侧分类”，同日新增霓虹三套，2026-11-16
+/// 新增第 13 套 Win7；名与配色均为暂定、用户可改；紫蓝霓虹配色取
+/// 用户发的霓虹定义精确值）。
 ///
 /// 配色与名字与用户文件逐字一致；每套主题绑定一种分类侧边栏样式。
 /// 亮暗由各主题自身底色决定，不再跟随系统、不再套旧的 light/dark 两套。
+/// 默认主题是 Win7（用户 2026-11-16 令）：读不到已存偏好时回落 Win7，
+/// 已存偏好不受影响。
 enum AppThemeMode {
   purpleNeon,
   lightClean,
@@ -25,14 +28,15 @@ enum AppThemeMode {
   leftCategories,
   cyanCyberNeon,
   redBlackNeon,
-  pinkPurpleNeon;
+  pinkPurpleNeon,
+  win7;
 
   String get storageValue => name;
 
   static AppThemeMode fromStorageValue(String? value) =>
       AppThemeMode.values.firstWhere(
         (mode) => mode.name == value,
-        orElse: () => AppThemeMode.purpleNeon,
+        orElse: () => AppThemeMode.win7,
       );
 }
 
@@ -137,7 +141,7 @@ enum SiteListStyle {
   cube,
 }
 
-/// 列表样式固定映射：紫蓝霓虹主题（默认主题）= 3D 方块，其余主题 = 普通。
+/// 列表样式固定映射：紫蓝霓虹主题 = 3D 方块，其余主题 = 普通。
 /// 固定值只随主题切换一起变，不存偏好、不在主题设置里单设此项。
 SiteListStyle siteListStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.purpleNeon => SiteListStyle.cube,
@@ -152,9 +156,11 @@ SiteListStyle siteListStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.cyanCyberNeon => SiteListStyle.normal,
   AppThemeMode.redBlackNeon => SiteListStyle.normal,
   AppThemeMode.pinkPurpleNeon => SiteListStyle.normal,
+  AppThemeMode.win7 => SiteListStyle.normal,
 };
 
-/// 导航样式固定映射：全部 12 套主题一律底部标签栏（霓虹胶囊壳）。
+/// 导航样式固定映射：全部 13 套主题一律底部标签栏（霓虹胶囊壳；
+/// Win7 主题下首页外壳换成桌面 + 任务栏，胶囊栏不渲染，见 home_screen）。
 ///
 /// 用户 2026-11-15 21:14 令：模仿蚂蚁影视的抽屉那套不用了（小退总
 /// 丢首页），全部主题改底部标签栏，以霓虹那套 UI 为准先做；抽屉已拆，
@@ -174,6 +180,7 @@ NavStyle navStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.cyanCyberNeon => NavStyle.bottomTabs,
   AppThemeMode.redBlackNeon => NavStyle.bottomTabs,
   AppThemeMode.pinkPurpleNeon => NavStyle.bottomTabs,
+  AppThemeMode.win7 => NavStyle.bottomTabs,
 };
 
 enum CategoryNavStyle {
@@ -265,7 +272,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
 
   static AppThemeConfig of(BuildContext context) =>
       Theme.of(context).extension<AppThemeConfig>() ??
-      AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
+      AppThemeConfig.forTheme(AppThemeMode.win7);
 
   factory AppThemeConfig.forTheme(AppThemeMode mode) {
     switch (mode) {
@@ -671,6 +678,46 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           subtitleShadows: const [
             Shadow(color: Color(0xFFFF4081), blurRadius: 8),
           ],
+        );
+
+      // 第 13 套 Win7：配色取用户 2026-11-16 发来的桌面设计稿精确值
+      // （墙纸渐变 0F4C81→1E88E5→002147、开始钮蓝 0078D4、任务栏 /
+      // 菜单深灰）；桌面本身由 win7_desktop.dart 画，这里只定全应用
+      // 通用的 Material 配色（窗口内各区沿用各自界面，底色跟这套）。
+      case AppThemeMode.win7:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: 'Win7',
+          primaryColor: Color(0xFF0078D4),
+          secondaryColor: Color(0xFF1E88E5),
+          backgroundColor: Color(0xFF002147),
+          surfaceColor: Color(0xFF202020),
+          textPrimary: Colors.white,
+          textSecondary: Colors.white70,
+          dividerColor: Colors.white12,
+          selectedBg: Color(0xFF0078D4),
+          selectedText: Colors.white,
+          unselectedBg: Colors.white12,
+          unselectedText: Colors.white70,
+          backgroundGradient: LinearGradient(
+            colors: [
+              Color(0xFF0F4C81),
+              Color(0xFF1E88E5),
+              Color(0xFF002147),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFF0078D4), Color(0xFF1E88E5)],
+          ),
+          navStyle: CategoryNavStyle.darkSidebar,
+          accentColor: Color(0xFF0078D4),
+          cardBorderColor: Colors.white12,
+          glowColor: Color(0xFF0078D4),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
         );
     }
   }

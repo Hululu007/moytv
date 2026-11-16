@@ -30,9 +30,8 @@ import 'episode_preview_card.dart';
 import 'frame_extractor.dart';
 import 'nonvideo_content.dart';
 import 'follow_state.dart';
-import 'watchroom/controller.dart';
-import 'watchroom/models.dart';
-import 'watchroom/room_screen.dart';
+import 'hongguo_cloud_records.dart';
+import 'hongguo_danmaku.dart';
 import 'hongguo_series.dart';
 import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
@@ -119,6 +118,9 @@ class _DetailScreenState extends State<DetailScreen> {
 
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
+  // 站方相关接口返回的相关季：只作相关剧集区的优先数据，接口不可
+  // 用时该区回落标题规律；空时不额外占位。
+  List<HongguoRelatedWork> _apiRelated = const [];
   Widget? get _sourceDiagnostics => widget.repository.supportsSourceManagement
       ? SourceDiagnosticsButton(
           repository: widget.repository,
@@ -259,12 +261,37 @@ class _DetailScreenState extends State<DetailScreen> {
     setState(() => _recommended = picked);
   }
 
+  /// 相关剧集区站方数据：只对红果数字 id 的剧调相关接口；接口抛错
+  /// 或无数据时留空，相关区回落标题规律。代次守卫同推荐区。
+  Future<void> _loadSeriesApi(Drama drama, int generation) async {
+    var works = const <HongguoRelatedWork>[];
+    final seriesId = drama.source == SourceSite.hongguo.id
+        ? hongguoNumericId(drama.id)
+        : null;
+    if (seriesId != null) {
+      try {
+        works = await HongguoCloudRecords(
+          widget.repository,
+        ).fetchRelated(seriesId);
+      } catch (_) {
+        works = const [];
+      }
+    }
+    if (!mounted ||
+        generation != _generation ||
+        _profileEpoch != widget.store.profileEpoch) {
+      return;
+    }
+    setState(() => _apiRelated = works);
+  }
+
   Future<void> _load() async {
     final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = null;
       _recommended = const [];
+      _apiRelated = const [];
     });
     try {
       final detail = await widget.repository.detail(widget.drama);
@@ -290,6 +317,7 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_supplement(merged, generation));
       unawaited(_loadTmdb(merged));
       unawaited(_loadRecommended(merged, generation));
+      unawaited(_loadSeriesApi(merged, generation));
       await saveUserChange(context, () => widget.store.refreshDrama(merged));
       if (mounted &&
           generation == _generation &&
@@ -565,63 +593,6 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Future<void> _pushToWatchRoom() async {
-    final detail = _detail;
-    final episodes = detail?.episodes ?? <Episode>[];
-    if (detail == null || episodes.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('暂无可推送的剧集')));
-      }
-      return;
-    }
-    final drama = detail.drama;
-    if (widget.store.profileEpoch != _profileEpoch ||
-        !widget.store.allowsSource(drama.source)) {
-      return;
-    }
-    final watched = widget.store.watched(drama.id);
-    final index = resumeEpisodeIndex(
-      episodes,
-      watched,
-    ).clamp(0, episodes.length - 1);
-    final room = WatchRoomController.instance;
-    try {
-      if (room.inRoom && !room.isHost) {
-        throw StateError('只有房主可以更换房间视频');
-      }
-      if (!room.inRoom) {
-        await room.createRoom(preferences: widget.store.preferences);
-      }
-      room.setVideo(
-        RoomVideo(
-          source: drama.source,
-          dramaId: drama.id,
-          title: drama.title,
-          cover: drama.cover,
-          sourceId: drama.sourceId,
-          episodeIndex: index,
-          episodeTitle: episodes[index].title,
-        ),
-      );
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
-      }
-      return;
-    }
-    if (!mounted) return;
-    await Navigator.of(context).push<void>(
-      appPageRoute<void>(
-        builder: (_) =>
-            WatchRoomScreen(repository: widget.repository, store: widget.store),
-      ),
-    );
-  }
-
   Future<void> _openSeriesDrama(Drama drama) async {
     if (_profileEpoch != widget.store.profileEpoch ||
         drama.id == (_detail?.drama.id ?? widget.drama.id)) {
@@ -764,8 +735,6 @@ class _DetailScreenState extends State<DetailScreen> {
             toolbarHeight: television ? 64 : null,
             title: Text(drama.title, overflow: TextOverflow.ellipsis),
             actions: [
-              // 顶栏不放“推送到一起看”门图标：详情页已有粉色“加入房间
-              // 一起看”主入口，同一视野只留一个。
               RefreshAction(
                 loading: _loading,
                 tooltip: '更新剧集信息',
@@ -806,6 +775,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                   _magnetSection(),
                                   _crossSiteSection(drama),
                                   _tmdbEpisodeSection(),
+                                  _seriesSection(drama),
                                   _relatedSection(drama),
                                 ],
                               ),
@@ -987,6 +957,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                 ],
                               ],
                               if (!_loading) ...[
+                                SliverToBoxAdapter(
+                                  child: _seriesSection(drama),
+                                ),
                                 SliverToBoxAdapter(
                                   child: _recommendedSection(drama),
                                 ),
@@ -1334,6 +1307,70 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  /// 相关剧集区：同系列其它季按季号升序排卡，当前这季标“当前”且
+  /// 点按无动作；点其它季的卡进那一季详情页（与选季 chips 同一
+  /// 跳转，含新季提醒已读标记）。数据口径：站方相关接口优先（季号
+  /// 可信），接口没有/不可用时回落标题规律在站内候选里分组；合并
+  /// 与去重见 hongguoMergedSeasonEntries。无兄弟季时隐藏。
+  /// 落点：窄屏布局推荐视频区之前；宽屏/TV 左栏相关推荐之前。
+  Widget _seriesSection(Drama drama) {
+    final entries = hongguoMergedSeasonEntries(
+      anchor: drama,
+      apiSeasons: [
+        for (final work in _apiRelated)
+          if (!work.upcoming && work.seriesId.isNotEmpty)
+            (drama: work.toDrama(), seasonIndex: work.seasonIndex),
+      ],
+      candidates: {
+        ...?_detail?.related,
+        ...widget.store.seriesDramasFor(drama),
+      },
+    );
+    if (entries.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('相关剧集', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
+              final tileWidth =
+                  (constraints.maxWidth - (columns - 1) * 10) / columns;
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  mainAxisExtent: DramaTile.extentFor(context, tileWidth),
+                ),
+                itemCount: entries.length,
+                itemBuilder: (context, index) {
+                  final entry = entries[index];
+                  final isCurrent = entry.drama.id == drama.id;
+                  return DramaTile(
+                    key: ValueKey('series-card-${entry.drama.id}'),
+                    drama: entry.drama,
+                    repository: widget.repository,
+                    subtitle: entry.label,
+                    topBadge: isCurrent ? '当前' : null,
+                    onTap: isCurrent
+                        ? () {}
+                        : () => _openSeriesDrama(entry.drama),
+                  );
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 推荐视频区：选集区下方，取本站视频（同分类优先），卡片与相关
   /// 推荐同一套样式，点卡进详情页（不直接播）；无数据时隐藏。
   /// 落点：窄屏布局选集网格之后、跨站选线区之前（帧画面缩小后空出
@@ -1656,7 +1693,6 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        _followingControls(drama),
         _sourceSwitcher(drama),
         if (drama.onlineDate.isNotEmpty ||
             drama.heat.isNotEmpty ||
@@ -1757,20 +1793,4 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _followingControls(Drama drama) {
-    final ready = !_loading && (_detail?.episodes.isNotEmpty ?? false);
-    return Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        FilledButton.icon(
-          key: const ValueKey('join-watch-room'),
-          onPressed: ready ? () => unawaited(_pushToWatchRoom()) : null,
-          icon: const Icon(Icons.meeting_room_rounded, size: 20),
-          label: const Text('加入房间一起看'),
-        ),
-      ],
-    );
-  }
 }

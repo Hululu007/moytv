@@ -699,7 +699,15 @@ class HaikuoStore {
   /// v2：2026-11-16 合并批（35 条 → 164 条：3 条原地摘除、6 条替换、129 条新增），
   /// 同日用户令删没验过的 34 条、短剧one 恢复旧版（164 条 → 130 条），版本仍为 2
   ///（164 条包尚未随任何构建发出，v2 首次播种即 130 条）。
-  static const builtinBundleVersion = 2;
+  /// v3：2026-11-16 用户令新版另加，🔞91成人短剧(新) 追加，130 → 131 条。
+  /// v4：2026-11-16 用户令 26 条工具规则进包，实加 24 条（131 → 155 条；
+  /// JMComic2本地缺 erji 模块、规则生成器Pro 含 3 处正则内“立即播放”撞包
+  /// 测试，两条 HOLD 未进，原样未改、等定夺）。
+  /// v5：2026-11-16 两条同批追加（155 → 157 条）：🔞MissAV 修复版（用户手机
+  /// 实测可播）与规则生成器Pro（HOLD 解除：包测试已排除正则字面量内出现）。
+  /// v6：2026-11-16 JMComic2本地修复版追加（157 → 158 条；HOLD 解除：用户令
+  /// “会蹦就修”，搜索卡片 url 改用同页现成的 csdown.erji 写法，只动一处）。
+  static const builtinBundleVersion = 6;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 

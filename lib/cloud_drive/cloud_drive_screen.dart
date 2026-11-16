@@ -270,7 +270,7 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 const Text(
-                  '登录一次全局通用：登录后的网盘会作为站源出现在站源列表、搜索与局域网服务里。凭证只存本机，可随时清除。',
+                  '登录一次全局通用：登录后的网盘会作为站源出现在站源列表、搜索里。凭证只存本机，可随时清除。',
                 ),
                 const SizedBox(height: 16),
                 for (final provider in _providers)

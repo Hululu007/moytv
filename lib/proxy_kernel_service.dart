@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'proxy_kernel.dart';
+import 'proxy_egress.dart';
 
 abstract class ProxyKernelController {
   Future<Map<String, dynamic>> call(
@@ -86,23 +87,26 @@ class MemoryProxyKernelStore implements ProxyKernelStore {
   }
 }
 
+/// 兼容壳：历史入口，现统一读出口决策点（`proxy_egress.dart`）。
+/// [proxyAddress] 是当前决策的 HTTP 代理地址（直连时为 null），
+/// [findProxy] 是当前决策的路由判定（回环永远直连）；
+/// [enable]/[disable] 改的是决策点的内核档，由内核启停时调用。
+/// 三个取数客户端（推荐流探测、内容区、直播）仍经这里拿 findProxy，
+/// 随决策链自动跟内核/SOCKS5/手填/系统/直连切换。
 class ProxyKernelTraffic {
   ProxyKernelTraffic._();
 
-  static String? proxyAddress;
+  static String? get proxyAddress =>
+      ProxyEgressController.instance.decision.httpProxy;
 
-  static String findProxy(Uri uri) {
-    final address = proxyAddress;
-    if (address == null) return 'DIRECT';
-    if (uri.host == '127.0.0.1' || uri.host == 'localhost') {
-      return 'DIRECT';
-    }
-    return 'PROXY $address';
-  }
+  static String findProxy(Uri uri) =>
+      ProxyEgressController.instance.decision.findProxy(uri);
 
-  static void enable(String address) => proxyAddress = address;
+  static void enable(String address) =>
+      ProxyEgressController.instance.setKernelAddress(address);
 
-  static void disable() => proxyAddress = null;
+  static void disable() =>
+      ProxyEgressController.instance.setKernelAddress(null);
 }
 
 class ProxyKernelService {
@@ -122,6 +126,7 @@ class ProxyKernelService {
   static const String _autoStartKey = 'proxy_kernel_auto_start';
   static const String _nodesKey = 'proxy_kernel_nodes_json';
   static const String _selectedKey = 'proxy_kernel_selected_node';
+  static const String _rulesKey = 'proxy_kernel_subscription_rules_json';
 
   Future<String> subscriptionUrl() => _store.read(_subscriptionKey);
 
@@ -155,6 +160,23 @@ class ProxyKernelService {
     jsonEncode([for (final node in nodes) node.toJson()]),
   );
 
+  /// 上次订阅里提取出的可用规则（空表示订阅无可用规则，启动时用内置
+  /// 最小规则）。规则与节点同一批保存、同一批读取，不会张冠李戴。
+  Future<List<String>> savedRules() async {
+    final raw = await _store.read(_rulesKey);
+    if (raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return [for (final item in decoded) if (item is String) item];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _saveRules(List<String> rules) =>
+      _store.write(_rulesKey, jsonEncode(rules));
+
   Future<String> selectedNode() => _store.read(_selectedKey);
 
   Future<void> saveSelectedNode(String name) =>
@@ -184,8 +206,11 @@ class ProxyKernelService {
     }
     final gzFile = File(path.join(directory.path, 'mihomo.download.gz'));
     final staged = File(path.join(directory.path, 'mihomo.staged'));
+    // 控制面直连：内核/订阅拉取绝不走出口决策。节点死光时出口本身
+    // 就是坏的，走出口会连新节点都拉不回来（自举死锁）。
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..findProxy = (_) => 'DIRECT';
     try {
       final request = await client.getUrl(Uri.parse(url));
       request.headers.set(HttpHeaders.userAgentHeader, 'moyi-proxy-kernel');
@@ -235,8 +260,10 @@ class ProxyKernelService {
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw ProxyKernelFailure('订阅地址无效');
     }
+    // 控制面直连：理由同 updateKernel，订阅拉取不走出口决策。
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..findProxy = (_) => 'DIRECT';
     String body;
     try {
       final request = await client.getUrl(uri);
@@ -250,7 +277,12 @@ class ProxyKernelService {
       client.close(force: true);
     }
     final nodes = parseProxySubscription(body);
+    final rules = extractSubscriptionRules(
+      body,
+      {for (final node in nodes) node.name},
+    );
     await _saveNodes(nodes);
+    await _saveRules(rules);
     return nodes;
   }
 
@@ -276,11 +308,13 @@ class ProxyKernelService {
         (ports['controllerPort'] as num?)?.toInt() ??
         proxyKernelDefaultControllerPort;
     final secret = proxyKernelRandomSecret();
+    final rules = await savedRules();
     final config = buildProxyKernelConfig(
       nodes: effectiveNodes,
       mixedPort: mixedPort,
       controllerPort: controllerPort,
       secret: secret,
+      rules: rules,
     );
     final support = await _supportDirectory();
     final directory = Directory(path.join(support.path, 'proxy_kernel'));

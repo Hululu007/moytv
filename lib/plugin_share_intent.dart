@@ -9,6 +9,7 @@ import 'import_center.dart';
 import 'jar_import.dart';
 import 'local_store.dart';
 import 'plugin_manager.dart';
+import 'shared_json_import.dart';
 import 'zip_install.dart';
 import 'zip_pick_screen.dart';
 
@@ -25,16 +26,20 @@ const pluginShareChannelName = 'moyi/plugin_share';
 
 /// 原生侧排队的一个待安装文件：只有 URI 与显示名，没有文件路径，
 /// Flutter 侧一律经 [PluginShareChannel.readBytes] 读流。
+/// [kind] 是原生侧给的种类标记：JSON 文件为 'json'（走内容分流
+/// 导入，不走插件安装）；py/jar/zip 不带标记，留空。
 class PluginShareFile {
-  const PluginShareFile({required this.uri, required this.name});
+  const PluginShareFile({required this.uri, required this.name, this.kind = ''});
 
   final String uri;
   final String name;
+  final String kind;
 
   factory PluginShareFile.fromJson(Map<String, dynamic> json) =>
       PluginShareFile(
         uri: json['uri'] as String? ?? '',
         name: json['name'] as String? ?? '',
+        kind: json['kind'] as String? ?? '',
       );
 }
 
@@ -288,6 +293,7 @@ class PluginShareIntent {
     PluginShareChannel? channel,
     PluginShareInstallRunner? runner,
     ZipPickInstaller? zipInstaller,
+    SharedJsonImportHandler? jsonHandler,
   }) {
     if (_controller != null) return;
     final controller = _PluginShareController(
@@ -305,6 +311,8 @@ class PluginShareIntent {
       zipInstaller:
           zipInstaller ??
           ZipPickInstaller.forApp(store: store, repository: repository),
+      jsonHandler:
+          jsonHandler ?? SharedJsonImportHandler(repository: repository),
     );
     _controller = controller;
     controller.start();
@@ -324,6 +332,7 @@ class _PluginShareController with WidgetsBindingObserver {
     required this.channel,
     required this.runner,
     required this.zipInstaller,
+    required this.jsonHandler,
   });
 
   final LocalStore store;
@@ -331,6 +340,7 @@ class _PluginShareController with WidgetsBindingObserver {
   final PluginShareChannel channel;
   final PluginShareInstallRunner runner;
   final ZipPickInstaller zipInstaller;
+  final SharedJsonImportHandler jsonHandler;
   final _processing = <String>{};
   bool _draining = false;
 
@@ -372,6 +382,11 @@ class _PluginShareController with WidgetsBindingObserver {
   }
 
   Future<void> _handle(PluginShareFile file) async {
+    // JSON 文件不走插件安装：按内容分流到小程序/书源/配置导入。
+    if (file.kind == 'json') {
+      await _handleJson(file);
+      return;
+    }
     final decision = decidePluginShareRoute(file.uri, fileName: file.name);
     if (decision == PluginShareDecision.reject) {
       _showSnack('文件「${file.name}」不是插件文件');
@@ -410,6 +425,33 @@ class _PluginShareController with WidgetsBindingObserver {
     // 与市场屏 _afterRegistryChange 同款：通知全部站点列表立即刷新。
     store.refreshSiteRegistry();
     _showReport(report);
+  }
+
+  /// JSON 分享：读流后按内容分流，提示文案由分流器按各路
+  /// 应用内导入的口径返回。读流上限与插件文件同一条
+  /// （原生侧 32MB），这里不另设。
+  Future<void> _handleJson(PluginShareFile file) async {
+    final displayName = file.name.trim().isNotEmpty
+        ? file.name.trim()
+        : (_fileNameFromUri(file.uri).isNotEmpty
+              ? _fileNameFromUri(file.uri)
+              : 'import.json');
+    Uint8List bytes;
+    try {
+      bytes = await channel.readBytes(file.uri);
+    } on PlatformException catch (error) {
+      _showSnack('文件「$displayName」无法读取：${error.message ?? error.code}');
+      return;
+    } catch (_) {
+      _showSnack('文件「$displayName」无法读取');
+      return;
+    }
+    if (bytes.isEmpty) {
+      _showSnack('文件「$displayName」无法导入：文件为空');
+      return;
+    }
+    final message = await jsonHandler.handle(bytes, fileName: displayName);
+    _showSnack(message);
   }
 
   void _showSnack(String message) {

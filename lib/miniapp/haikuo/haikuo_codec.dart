@@ -400,6 +400,17 @@ abstract final class HaikuoCodec {
       '网址',
       'api',
     ]);
+    // 站点地址（只取规则自带的 host 类字段，不从脚本里猜）：瓦片
+    // 图标回落 favicon 时用；没有该字段的规则留空。
+    final host = _firstText(map, const [
+      'host',
+      'homeUrl',
+      'home_url',
+      'baseUrl',
+      'base_url',
+      'siteUrl',
+      'domain',
+    ]);
     final entries = _countEntries(map);
 
     if (name != null && script != null) {
@@ -429,6 +440,7 @@ abstract final class HaikuoCodec {
           description: description,
           script: script,
           url: url ?? '',
+          host: host ?? '',
           kind: isRule ? HaikuoKind.rule : HaikuoKind.script,
           origin: origin,
           rawJson: raw,
@@ -468,6 +480,7 @@ abstract final class HaikuoCodec {
           icon: icon ?? '',
           description: description,
           url: url ?? '',
+          host: host ?? '',
           kind: url != null && entries == 0 ? HaikuoKind.link : HaikuoKind.rule,
           origin: origin,
           // 只存本条目的对象 JSON：以前这里存整份文件文本，数组文件

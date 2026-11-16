@@ -60,6 +60,18 @@ String _foldMathBold(String text) {
 String _squash(String text) =>
     _foldMathBold(text).replaceAll(RegExp(r'[^A-Za-z0-9\u4e00-\u9fff]'), '');
 
+// 以 /^ 开头的正则字面量（/.../，可跟 gimsuy 标志）：内容不含未转义的 /，
+// 转义序列（\/、\\、\d 等）整体跳过，避免提前闭合。
+// 规则生成器Pro 的标题清洗正则用 /^(…|立即播放|…)$/ 剔除该词：
+// 出现在这里是清洗模式、与界面按钮无关，守卫统计时不计。
+// 只认 /^ 开头的才剥离：裸 /…/ 剥离会误吞防御式 indexOf 守卫
+// （前面的 / 与后面的 / 配对成段），/^ 锚定则不会。
+final _anchoredRegexLiteral = RegExp(r'/\^((?:[^/\\\n]|\\.)*)/[gimsuy]*');
+
+/// 去掉 [text] 里的 /^…/ 正则字面量片段，返回剩余文本。
+String _stripAnchoredRegexLiterals(String text) =>
+    text.replaceAll(_anchoredRegexLiteral, '');
+
 void main() {
   const flagged = ['萝莉', '幼女', '未成年', '初中生', '小学生', 'loli'];
   const categoryKeys = [
@@ -71,11 +83,11 @@ void main() {
     'year_url',
   ];
 
-  test('内置规则总数 130、标题唯一、每条都有标题与 fixlog', () {
+  test('内置规则总数 158、标题唯一、每条都有标题与 fixlog', () {
     final rules = _rules();
-    expect(rules, hasLength(130));
+    expect(rules, hasLength(158));
     final titles = rules.map((rule) => '${rule['title']}').toList();
-    expect(titles.toSet(), hasLength(130));
+    expect(titles.toSet(), hasLength(158));
     for (final rule in rules) {
       expect('${rule['title']}'.isNotEmpty, isTrue);
       expect(rule.containsKey('fixlog'), isTrue, reason: '${rule['title']}');
@@ -210,13 +222,48 @@ void main() {
     }
   });
 
-  test('立即播放只剩防御式改名，不再有播放行标题', () {
+  test('立即播放只剩防御式改名与清洗正则，不再有播放行标题', () {
     final text = File('assets/haikuo_builtin_rules.json').readAsStringSync();
-    final total = '立即播放'.allMatches(text).length;
-    final defensive = "indexOf('立即播放')".allMatches(text).length;
+    // 正则字面量内的出现不计：标题清洗正则剔除该词，与按钮无关。
+    final stripped = _stripAnchoredRegexLiterals(text);
+    final total = '立即播放'.allMatches(stripped).length;
+    final defensive = "indexOf('立即播放')".allMatches(stripped).length;
     expect(total, greaterThan(0));
     expect(total, defensive);
+    // 全文断言：剥离不能藏住真实按钮文案。
     expect(text.contains('▶ 立即播放'), isFalse);
+  });
+
+  test('正则剥离反向对照：真实按钮文案仍被守卫抓住', () {
+    // 清洗正则形应被剥离干净。
+    expect(
+      _stripAnchoredRegexLiterals(r'/^(播放|立即播放|分享)$/'),
+      isNot(contains('立即播放')),
+    );
+    expect(
+      _stripAnchoredRegexLiterals(r'/^(播放|立即播放|分享)$/i'),
+      isNot(contains('立即播放')),
+    );
+    // 真实按钮文案（带 ▶ 前缀、裸标题、与正则同段）必须留下来。
+    expect(
+      _stripAnchoredRegexLiterals("title: '▶ 立即播放'"),
+      contains('立即播放'),
+    );
+    expect(
+      _stripAnchoredRegexLiterals('{"title":"立即播放"}'),
+      contains('立即播放'),
+    );
+    expect(
+      _stripAnchoredRegexLiterals(r'/^(播放|立即播放)$/  ▶ 立即播放'),
+      contains('立即播放'),
+    );
+    // 防御式改名守卫本身不能被剥离吞掉。
+    expect(
+      _stripAnchoredRegexLiterals(
+        "if (label.indexOf('立即播放') >= 0) label = '第1集';",
+      ),
+      contains("indexOf('立即播放')"),
+    );
   });
 
   test('模块清单 16 条规则 26 个文件齐全，21 个已内联进 pages', () {

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
-import 'lan_models.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_queue.dart';
@@ -43,7 +42,6 @@ Route<T> buildPlayerRoute<T>(
   bool localOnly = false,
   bool allowOnlineFallback = true,
   String? mediaId,
-  LanIncomingPlayback? handoff,
   String searchKeyword = '',
   PlaybackQueue? queue,
   bool startFullscreen = false,
@@ -58,7 +56,6 @@ Route<T> buildPlayerRoute<T>(
             localOnly: localOnly,
             allowOnlineFallback: allowOnlineFallback,
             mediaId: mediaId,
-            handoff: handoff,
             repository: repository,
             store: store,
             searchKeyword: searchKeyword,
@@ -75,7 +72,6 @@ Route<T> buildPlayerRoute<T>(
           localOnly: localOnly,
           allowOnlineFallback: allowOnlineFallback,
           mediaId: mediaId,
-          handoff: handoff,
           repository: repository,
           store: store,
           queue: queue,
@@ -95,7 +91,6 @@ Future<T?> pushPlayer<T>(
   bool localOnly = false,
   bool allowOnlineFallback = true,
   String? mediaId,
-  LanIncomingPlayback? handoff,
   String searchKeyword = '',
   PlaybackQueue? queue,
   bool startFullscreen = false,
@@ -108,7 +103,6 @@ Future<T?> pushPlayer<T>(
     localOnly: localOnly,
     allowOnlineFallback: allowOnlineFallback,
     mediaId: mediaId,
-    handoff: handoff,
     repository: repository,
     store: store,
     searchKeyword: searchKeyword,

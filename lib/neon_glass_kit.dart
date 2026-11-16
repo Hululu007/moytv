@@ -110,8 +110,13 @@ class NeonSectionTitle extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  // 行高固定 1.3：手机系统字体的度量可能比默认行高
+                  // 更“高”，行盒不够会把字裁掉一半（13 版手机反馈
+                  // “帐户”标题只露下半截，测试环境复现不出，按此
+                  // 唯一代码内机制防御；视觉变化可忽略）。
                   style: TextStyle(
                     fontSize: 13,
+                    height: 1.3,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.4,
                     color: config.textPrimary,

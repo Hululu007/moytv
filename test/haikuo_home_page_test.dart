@@ -37,7 +37,7 @@ void main() {
     }
   }
 
-  testWidgets('带 http 图标的程序显示网络图片，无图标的显示字形', (tester) async {
+  testWidgets('图标链：自带图标走网络图，无图标走 favicon，都无走字形', (tester) async {
     await tester.runAsync(
       () => store.importText(
         jsonEncode([
@@ -46,13 +46,19 @@ void main() {
             'type': 'video',
             'url': 'hiker://empty##https://example.com',
             'icon': 'https://example.com/icon.png',
-            'find_rule': 'js:\\nsetResult([{title:"x"}]);',
+            'find_rule': 'js:\nsetResult([{title:"x"}]);',
           },
           {
-            'title': '无图标',
+            'title': '无图标有站',
             'type': 'video',
             'url': 'hiker://empty##https://example.com',
-            'find_rule': 'js:\\nsetResult([{title:"x"}]);',
+            'find_rule': 'js:\nsetResult([{title:"x"}]);',
+          },
+          {
+            'title': '无图标无站',
+            'type': 'video',
+            'url': 'hiker://empty##fypage',
+            'find_rule': 'js:\nsetResult([{title:"x"}]);',
           },
         ]),
         origin: '测试',
@@ -60,9 +66,33 @@ void main() {
     );
     await pumpPage(tester);
     expect(find.text('有图标'), findsOneWidget);
-    expect(find.text('无图标'), findsOneWidget);
-    // 有图标的那张瓦片挂 Image.network（测试里请求失败走
-    // errorBuilder 回字形，但 Image 部件本身在树里）。
+    expect(find.text('无图标有站'), findsOneWidget);
+    expect(find.text('无图标无站'), findsOneWidget);
+    // 前两张瓦片挂 Image（自带图标 / 站点 favicon；测试里请求
+    // 失败走 errorBuilder 回字形，但 Image 部件本身在树里）；
+    // 第三张无任何图标来源，只有字形、不挂 Image。
+    expect(find.byType(Image), findsNWidgets(2));
+  });
+
+  testWidgets('data: 图标解出内存图', (tester) async {
+    const tinyPngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    await tester.runAsync(
+      () => store.importText(
+        jsonEncode([
+          {
+            'title': '内嵌图标',
+            'type': 'video',
+            'url': 'hiker://empty##fypage',
+            'icon': 'data:image/png;base64,$tinyPngBase64',
+            'find_rule': 'js:\nsetResult([{title:"x"}]);',
+          },
+        ]),
+        origin: '测试',
+      ),
+    );
+    await pumpPage(tester);
+    expect(find.text('内嵌图标'), findsOneWidget);
     expect(find.byType(Image), findsOneWidget);
   });
 

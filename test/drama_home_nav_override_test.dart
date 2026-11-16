@@ -83,7 +83,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Future<LocalStore> makeStore() async {
-    SharedPreferences.setMockInitialValues({'hiddenSites': '[]'});
+    SharedPreferences.setMockInitialValues({
+      'hiddenSites': '[]',
+      // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+      'appThemeMode': 'purpleNeon',
+    });
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
     return store;
@@ -233,6 +237,8 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'source': source,
         'hiddenSites': '[]',
+        // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+        'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);

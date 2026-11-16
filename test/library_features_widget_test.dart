@@ -20,7 +20,8 @@ void main() {
   const second = LibraryFeatureRepository.second;
 
   Future<LocalStore> create() async {
-    SharedPreferences.setMockInitialValues({});
+    // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+    SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
     return store;

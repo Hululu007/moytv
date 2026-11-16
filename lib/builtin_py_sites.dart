@@ -622,6 +622,71 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const aijavSiteId = 'aijav';
+  static const aijavAssetPath = 'assets/py_spiders/aijav.py';
+  static const aijavFileId = 'builtin_aijav';
+
+  static const aijavSite = SourceSite(
+    aijavSiteId,
+    '🔞AiJav',
+    '内置 py · aijav',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const insavSiteId = 'insav';
+  static const insavAssetPath = 'assets/py_spiders/insav.py';
+  static const insavFileId = 'builtin_insav';
+
+  static const insavSite = SourceSite(
+    insavSiteId,
+    '🔞INSAV',
+    '内置 py · insav',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const sp91SiteId = 'sp91';
+  static const sp91AssetPath = 'assets/py_spiders/sp91.py';
+  static const sp91FileId = 'builtin_sp91';
+
+  static const sp91Site = SourceSite(
+    sp91SiteId,
+    '🔞91视频',
+    '内置 py · sp91',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const mmsqSiteId = 'mmsq';
+  static const mmsqAssetPath = 'assets/py_spiders/mmsq.py';
+  static const mmsqFileId = 'builtin_mmsq';
+
+  static const mmsqSite = SourceSite(
+    mmsqSiteId,
+    '🔞猫咪社区',
+    '内置 py · mmsq',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
+  static const xhsappSiteId = 'xhsapp';
+  static const xhsappAssetPath = 'assets/py_spiders/xhsapp.py';
+  static const xhsappFileId = 'builtin_xhsapp';
+
+  static const xhsappSite = SourceSite(
+    xhsappSiteId,
+    '🔞小红薯APP',
+    '内置 py · xhsapp',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
     BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
@@ -670,6 +735,11 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: avdbSiteId, site: avdbSite, assetPath: avdbAssetPath, fileId: avdbFileId),
     BuiltinPyEntry(siteId: memojavSiteId, site: memojavSite, assetPath: memojavAssetPath, fileId: memojavFileId),
     BuiltinPyEntry(siteId: chaoliuSiteId, site: chaoliuSite, assetPath: chaoliuAssetPath, fileId: chaoliuFileId),
+    BuiltinPyEntry(siteId: aijavSiteId, site: aijavSite, assetPath: aijavAssetPath, fileId: aijavFileId),
+    BuiltinPyEntry(siteId: insavSiteId, site: insavSite, assetPath: insavAssetPath, fileId: insavFileId),
+    BuiltinPyEntry(siteId: sp91SiteId, site: sp91Site, assetPath: sp91AssetPath, fileId: sp91FileId),
+    BuiltinPyEntry(siteId: mmsqSiteId, site: mmsqSite, assetPath: mmsqAssetPath, fileId: mmsqFileId),
+    BuiltinPyEntry(siteId: xhsappSiteId, site: xhsappSite, assetPath: xhsappAssetPath, fileId: xhsappFileId),
   ];
 
   static BuiltinPyEntry? entryFor(String siteId) {

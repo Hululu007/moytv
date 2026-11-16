@@ -57,6 +57,8 @@ class LocalSnapshot {
     // 视频区按区记忆的上次站点（每用户），必须列入受管字段，
     // 否则切站记盘会被 commit 判为「无效的本地配置字段」。
     'zoneSources',
+    // 旧快照兼容：以下三键不再写入，只为校验含旧数据的快照保留，
+    // 删掉会导致老用户本地配置加载失败。
     'lanRecords',
     'lanSettings',
     'lanReceipts',
@@ -80,6 +82,7 @@ class LocalSnapshot {
     'themeScheme_cyanCyberNeon',
     'themeScheme_redBlackNeon',
     'themeScheme_pinkPurpleNeon',
+    'themeScheme_win7',
     // 旧主题系统的键：不再被读取，只为校验旧快照保留，
     // migrateLegacyThemeSettings 会删掉它们。
     'themeMode',

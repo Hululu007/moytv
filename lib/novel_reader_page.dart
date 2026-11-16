@@ -39,6 +39,8 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
   bool _overlayVisible = false;
   bool _ttsPlaying = false;
   bool _ttsPaused = false;
+  // null = 还没查出来；false = 明确没有中文语音（点朗读时明说）。
+  bool? _ttsAvailable;
   double _ttsRate = 1.0;
   List<String> _ttsChunks = const [];
   int _ttsChunkIndex = 0;
@@ -136,7 +138,12 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
     try {
       await _tts.setLanguage('zh-CN');
       await _tts.setRate(_pluginRate);
-    } catch (_) {}
+      final available = await _tts.hasChineseVoice();
+      if (mounted) setState(() => _ttsAvailable = available);
+    } catch (_) {
+      // 引擎本身起不来：记为不可用，点朗读时明说，不静默。
+      if (mounted) setState(() => _ttsAvailable = false);
+    }
   }
 
   @override
@@ -253,11 +260,24 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
     }
     try {
       await _tts.setRate(_pluginRate);
-      await _tts.speak(_ttsChunks[_ttsChunkIndex], () {
-        if (!mounted || !_ttsPlaying) return;
-        _ttsChunkIndex++;
-        _speakChunk();
-      });
+      await _tts.speak(
+        _ttsChunks[_ttsChunkIndex],
+        () {
+          if (!mounted || !_ttsPlaying) return;
+          _ttsChunkIndex++;
+          _speakChunk();
+        },
+        onError: () {
+          if (!mounted || !_ttsPlaying) return;
+          setState(() {
+            _ttsPlaying = false;
+            _ttsPaused = false;
+          });
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('朗读失败')));
+        },
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -284,6 +304,14 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
 
   void _toggleTts() {
     if (_content == null || _error.isNotEmpty) return;
+    if (_ttsAvailable == false && !_ttsPlaying && !_ttsPaused) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('手机里没有中文语音，朗读不可用，请安装语音引擎后重试'),
+        ),
+      );
+      return;
+    }
     if (_ttsPlaying) {
       setState(() {
         _ttsPlaying = false;
@@ -444,6 +472,27 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                       ),
                     ],
                   ),
+                ),
+              ),
+            // 常驻朗读钮：覆盖层没打开时一眼能找到（原来朗读只
+            // 藏在点中央呼出的覆盖层里，用户找不到）；覆盖层打开
+            // 时隐藏，底部栏里已有同一套控件。图集内容不朗读。
+            if (_content != null &&
+                !_content!.isPics &&
+                _error.isEmpty &&
+                !_loading &&
+                !_overlayVisible)
+              Positioned(
+                right: 16,
+                bottom: 24,
+                child: FloatingActionButton.extended(
+                  key: const ValueKey('novel-tts-fab'),
+                  heroTag: 'novel-tts-fab',
+                  onPressed: _toggleTts,
+                  icon: Icon(
+                    _ttsPlaying ? Icons.pause : Icons.volume_up,
+                  ),
+                  label: Text(_ttsPlaying ? '暂停' : '朗读'),
                 ),
               ),
             if (showBottom)

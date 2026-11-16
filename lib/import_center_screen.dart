@@ -145,7 +145,7 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
       return;
     }
     final size = await File(filePath).length();
-    if (size > 8 * 1024 * 1024) {
+    if (size > TvBoxImporter.maxConfigFileBytes) {
       _showMessage('文件过大，无法导入');
       return;
     }

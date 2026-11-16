@@ -30,6 +30,7 @@ import 'package:moyi/jar_bridge.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/ijk_video_pane.dart';
 import 'package:moyi/models.dart';
+import 'package:moyi/mpv_egress.dart';
 import 'package:moyi/player_core.dart';
 import 'package:moyi/tvbox_video_pane.dart';
 import 'package:moyi/playback_launch_screen.dart';
@@ -51,8 +52,6 @@ import 'package:moyi/xigua/search_cache.dart';
 import 'package:moyi/xigua/television_controls.dart';
 import 'package:moyi/widgets.dart';
 import 'package:moyi/sources_screen.dart';
-import 'package:moyi/lan_controller.dart';
-import 'package:moyi/lan_screen.dart';
 import 'package:moyi/video_enhancement.dart';
 import 'package:moyi/viewing_experience_settings.dart';
 import 'package:moyi/picture_quality_applier.dart';
@@ -74,7 +73,6 @@ class XiguaPlayerScreen extends StatefulWidget {
     this.mediaId,
     this.playerFactory,
     this.videoBuilder,
-    this.handoff,
     this.searchKeyword = '',
     this.startFullscreen = false,
   });
@@ -86,7 +84,6 @@ class XiguaPlayerScreen extends StatefulWidget {
   final String? mediaId;
   final AppRepository repository;
   final LocalStore store;
-  final LanIncomingPlayback? handoff;
   final String searchKeyword;
   final bool startFullscreen;
   @visibleForTesting
@@ -123,9 +120,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   final _watchSession = WatchSession();
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final _recovery = PlaybackRecovery();
-  Object _lanIdentity = Object();
-  bool _handoffOwned = true;
-  double? _lanFirstPosition;
   String? _savedProgressKey;
   double? _savedProgressPosition;
   final _health = PlaybackHealth();
@@ -324,7 +318,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       ..addListener(_sleepTimerChanged);
     WidgetsBinding.instance.addObserver(this);
     _index = widget.initialIndex;
-    _profileEpoch = widget.handoff?.profileEpoch ?? widget.store.profileEpoch;
+    _profileEpoch = widget.store.profileEpoch;
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _core = PlayerCoreStorage.read(widget.store.preferences);
@@ -349,6 +343,8 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             logLevel: MPVLogLevel.error,
           ),
         );
+    // MPV 出口：按当前决策设 http-proxy，决策变化时自动重设。
+    bindMpvEgress(_player);
     _speedTracker = NetworkSpeedTracker(
       sample: () => fetchMpvNetworkSpeedSample(_player),
     );
@@ -500,26 +496,11 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         unawaited(_recover());
       }
     });
-    final handoff = widget.handoff;
-    if (handoff != null) {
-      handoff.consumed = true;
-      handoff.stop = () async {
-        if (_handoffOwned && !_closed) await _stopForLan();
-      };
-    }
-    if (_profileEpoch != widget.store.profileEpoch ||
-        handoff?.cancelled == true) {
-      handoff?.fail('接收用户已变更，推送已取消');
-      if (handoff != null)
-        unawaited(widget.repository.release(handoff.plan.session));
+    if (_profileEpoch != widget.store.profileEpoch) {
       _loading = false;
-      _error = '播放接收已取消';
+      _error = '当前用户已变更';
     } else {
-      _play(
-        _index,
-        position: widget.initialPosition,
-        handoffPlan: handoff?.plan,
-      );
+      _play(_index, position: widget.initialPosition);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_closed) {
@@ -577,9 +558,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       _watchSession.setPlaying(false);
       _preloader.clear();
       _enhancement.suspend();
-      _handoffOwned = false;
       _playIntent = false;
-      widget.handoff?.fail('接收端用户已变更');
       unawaited(_player.pause());
     }
     if (!_closed &&
@@ -811,111 +790,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     return {'left': left, 'top': top, 'right': right, 'bottom': bottom};
   }
 
-  void _attachLanPlayback() {
-    LanController.current?.attachPlayback(
-      LanPlaybackHost(
-        identity: _lanIdentity,
-        title:
-            widget.detail.drama.title +
-            ' · 第 ' +
-            widget.detail.episodes[_index].number.toString() +
-            ' 集',
-        stop: _stopForLan,
-      ),
-    );
-  }
-
-  void _acknowledgeHandoff() {
-    final handoff = widget.handoff;
-    if (!_handoffOwned ||
-        handoff == null ||
-        handoff.cancelled ||
-        handoff.started.isCompleted ||
-        _closed ||
-        _loading ||
-        _error != null ||
-        _openedIndex != _index ||
-        _index != widget.initialIndex ||
-        widget.store.profileEpoch != _profileEpoch)
-      return;
-    final state = _player.state;
-    final position = state.position.inMilliseconds / 1000;
-    final duration = state.duration.inMilliseconds / 1000;
-    if (duration > 0 && handoff.position > duration + 2) {
-      handoff.fail('续播位置超过接收端分集时长');
-      return;
-    }
-    if (!state.playing ||
-        state.buffering ||
-        (state.width ?? 0) <= 0 ||
-        position < handoff.position - .5 ||
-        position > handoff.position + 20)
-      return;
-    _lanFirstPosition ??= position;
-    if (position >= _lanFirstPosition! + .15) handoff.acknowledge(position);
-  }
-
-  Future<void> _stopForLan() async {
-    final generation = _generation;
-    await _serialize(() async {
-      if (_closed ||
-          generation != _generation ||
-          widget.store.profileEpoch != _profileEpoch)
-        return;
-      _playIntent = false;
-      _interactions.cancel();
-      _enhancement.suspend();
-      _health.reset();
-      await _player.pause();
-      await _saveProgress(flush: true);
-    });
-  }
-
-  Future<void> _pushToDevice() async {
-    final link = LanController.current;
-    if (link == null ||
-        _panelOpen ||
-        _closed ||
-        _loading ||
-        _error != null ||
-        widget.mediaId != null)
-      return;
-    final generation = _generation;
-    final index = _index;
-    bool current() =>
-        mounted &&
-        !_closed &&
-        generation == _generation &&
-        index == _index &&
-        widget.store.profileEpoch == _profileEpoch;
-    _interactions.cancel();
-    setState(() => _panelOpen = true);
-    try {
-      await showLanPush(
-        context,
-        link,
-        snapshot: () => LanPlaybackIntent(
-          drama: widget.detail.drama,
-          episodeID: widget.detail.episodes[index].id,
-          episode: widget.detail.episodes[index].number,
-          position: _currentPosition,
-        ),
-        stillCurrent: current,
-        onAccepted: () async {
-          if (!current()) throw StateError('本机播放内容已变更');
-          await _stopForLan();
-          if (!current()) throw StateError('本机播放内容已变更');
-        },
-      );
-    } catch (error) {
-      if (mounted && !_closed) {
-        AppNotice.show(context, error.toString());
-      }
-    } finally {
-      if (mounted && !_closed) setState(() => _panelOpen = false);
-    }
-  }
-
   void _syncPreload() {
     if (_closed) return;
     if (!_preloadEnabled ||
@@ -1032,7 +906,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     _syncDanmaku();
     _syncPreload();
     _syncScreenAwake();
-    _acknowledgeHandoff();
   }
 
   void _syncScreenAwake() {
@@ -1262,8 +1135,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
 
   void _togglePlayback() {
     if (_closed || _loading || _error != null) return;
-    _handoffOwned = false;
-    widget.handoff?.fail('接收端已操作播放');
     _interactions.cancel();
     if (_useNativeHandle) {
       _playIntent = !_tvboxHandle.playing;
@@ -1349,7 +1220,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
           completedEpisodes: sample.episodes,
         );
         RecommendationService.current?.observe(entry);
-        if (flush) LanController.current?.flush();
       } else {
         await store.saveMediaWatch(
           widget.mediaId!,
@@ -1382,7 +1252,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     double position = 0,
     PlaybackRecoveryAction? recoveryAction,
     bool playWhenReady = true,
-    PlaybackPlan? handoffPlan,
+    PlaybackPlan? preparedPlan,
     bool showControlsOnReady = true,
   }) async {
     if (_closed ||
@@ -1406,15 +1276,9 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     }
     _watchSession.setPlaying(false);
     _interactions.cancel();
-    if (widget.handoff != null &&
-        handoffPlan == null &&
-        recoveryAction == null) {
-      _handoffOwned = false;
-      widget.handoff?.fail('接收端已更换播放内容');
-    }
     if (index != _index) _forceOnline = false;
     final warmed =
-        handoffPlan ??
+        preparedPlan ??
         (recoveryAction == null && _preloadEnabled && !widget.localOnly
             ? _preloader.take(
                 widget.detail.drama,
@@ -1451,9 +1315,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         _ => '正在准备播放',
       };
     });
-    LanController.current?.detachPlayback(_lanIdentity);
-    _lanIdentity = Object();
-    _attachLanPlayback();
     PlaybackPlan? prepared;
     PlaybackPlan? retained;
     bool installed = false;
@@ -1505,12 +1366,12 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
           if (parsed != null && parsed != prepared.url) {
             prepared = prepared.withUrl(parsed);
           } else {
-            throw AppFailure('需要解析但未配置解析接口');
+            throw AppFailure('需要解析但未配置解析接口，请在解析设置中添加解析接口');
           }
         } else {
           final apis = await ParseInterfaceStore.loadEnabled();
           if (apis.isEmpty) {
-            throw AppFailure('需要解析但未配置解析接口');
+            throw AppFailure('需要解析但未配置解析接口，请在解析设置中添加解析接口');
           }
           if (prepared.session.isNotEmpty) {
             await widget.repository.release(prepared.session);
@@ -1543,7 +1404,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             }
           } else {
             throw AppFailure(
-              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl，请在解析设置中添加解析接口）',
+              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）',
             );
           }
         }
@@ -1634,7 +1495,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         if (!_playIntent || !_foreground) await _player.pause();
         _openedIndex = index;
         _enhancement.mediaReady();
-        _attachLanPlayback();
         _health.reset();
         await _interactions.applySpeed();
         if (mounted && !_closed && ticket == _generation) {
@@ -1644,7 +1504,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
           _danmaku.setPlan(plan);
           _syncWatchSession();
           _syncDanmaku();
-          _acknowledgeHandoff();
           _menuRevision.value++;
         }
       });
@@ -1673,7 +1532,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
                   (error is AppFailure && error.code == 'local_media') ||
                   (widget.localOnly && !_forceOnline);
               _error = error is AppFailure ? error.message : '无法播放这一集，请重试或换一集。';
-              widget.handoff?.fail(_error!);
             });
             if (needsSniffFallback) {
               _sniffFallbackTried = true;
@@ -1744,7 +1602,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     if (found == null || found.isEmpty || _closed || !mounted) return;
     await _play(
       _index,
-      handoffPlan: PlaybackPlan(
+      preparedPlan: PlaybackPlan(
         url: found,
         headers: _plan?.headers ?? const {},
       ),
@@ -1973,8 +1831,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
 
   Future<void> _seekTo(Duration target) async {
     if (_closed || _loading || _error != null) return;
-    _handoffOwned = false;
-    widget.handoff?.fail('接收端已调整播放位置');
     final ticket = ++_seekSequence;
     final generation = _generation;
     _danmaku.beginSeek();
@@ -2172,8 +2028,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatus);
     _routeAnimation = null;
     final enhancementClosed = _enhancement.close();
-    LanController.current?.detachPlayback(_lanIdentity);
-    widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
     _danmaku.dispose();
     _preloader.dispose();
@@ -2218,6 +2072,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             await _interactions.pendingRates.catchError((Object _) {});
             await enhancementClosed.catchError((Object _) {});
             await _pictureQuality.dispose().catchError((Object _) {});
+            unbindMpvEgress(_player);
             await _player.dispose();
           }),
     );
@@ -2446,7 +2301,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             onRetryDanmaku: _danmaku.canRetry
                 ? _retryDanmakuFromControls
                 : null,
-            onPush: widget.mediaId == null ? _pushToDevice : null,
             onPictureInPicture: _canUsePictureInPicture
                 ? _enterPictureInPicture
                 : null,

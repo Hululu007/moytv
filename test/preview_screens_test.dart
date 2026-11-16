@@ -37,7 +37,12 @@ import 'player_fixtures.dart';
 const previewDir = '/home/hatch/workspace/huoyi_new/previews';
 
 Future<LocalStore> previewStore(Map<String, Object> seeds) async {
-  SharedPreferences.setMockInitialValues(seeds);
+  // 默认主题已改 Win7：首页预览验通用外壳，默认钉住紫蓝霓虹，
+  // 调用方传了 appThemeMode 时以调用方为准。
+  SharedPreferences.setMockInitialValues({
+    'appThemeMode': 'purpleNeon',
+    ...seeds,
+  });
   return LocalStore(await SharedPreferences.getInstance());
 }
 

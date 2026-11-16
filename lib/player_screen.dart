@@ -24,7 +24,6 @@ import 'atmosphere_background.dart';
 import 'tv_theme.dart';
 import 'core_bridge.dart';
 import 'custom_headers.dart';
-import 'lan_web/stream_gateway.dart';
 import 'jar_bridge.dart';
 import 'jar_youtube_takeover.dart';
 import 'danmaku_controller.dart';
@@ -51,7 +50,6 @@ import 'player_core.dart';
 import 'player_route.dart';
 import 'ijk_video_pane.dart';
 import 'network_speed.dart';
-import 'watchroom/push_to_watch_room.dart';
 import 'tvbox_video_pane.dart';
 import 'tvbox_player_bridge.dart';
 import 'player_interactions.dart';
@@ -62,8 +60,6 @@ import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
-import 'lan_controller.dart';
-import 'lan_screen.dart';
 import 'video_enhancement.dart';
 import 'viewing_experience_settings.dart';
 import 'picture_quality_applier.dart';
@@ -83,7 +79,6 @@ class PlayerScreen extends StatefulWidget {
     this.mediaId,
     this.playerFactory,
     this.videoBuilder,
-    this.handoff,
     this.queue,
     this.startFullscreen = false,
     this.embedded = false,
@@ -100,7 +95,6 @@ class PlayerScreen extends StatefulWidget {
   final String? mediaId;
   final AppRepository repository;
   final LocalStore store;
-  final LanIncomingPlayback? handoff;
   final PlaybackQueue? queue;
   final bool startFullscreen;
   final bool embedded;
@@ -152,9 +146,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   final Set<String> _frameCaptureAttempted = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final _recovery = PlaybackRecovery();
-  Object _lanIdentity = Object();
-  bool _handoffOwned = true;
-  double? _lanFirstPosition;
   String? _savedProgressKey;
   final _health = PlaybackHealth();
   late final NetworkSpeedTracker _speedTracker;
@@ -290,7 +281,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                       onPressed: () {
                         if (_playIntent) _togglePlayback();
                         _removeAudioMiniBar();
-                        unawaited(_saveProgress(flush: true));
+                        unawaited(_saveProgress());
                       },
                       icon: const Icon(Icons.stop, color: Colors.white),
                     ),
@@ -410,7 +401,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _index = widget.initialIndex;
-    _profileEpoch = widget.handoff?.profileEpoch ?? widget.store.profileEpoch;
+    _profileEpoch = widget.store.profileEpoch;
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _tvboxHandle.speed = preferences.speed;
@@ -525,7 +516,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             _playIntent = false;
             _interactions.cancel();
             unawaited(_player.pause());
-            unawaited(_saveProgress(flush: true));
+            unawaited(_saveProgress());
           }
         }
       }),
@@ -537,7 +528,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         _syncDanmaku();
         _syncPreload();
-        _acknowledgeHandoff();
         _maybeCaptureEpisodeFrame(position);
         _claimOrReportExternalAudio();
       }),
@@ -554,7 +544,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         stream.listen((_) {
           _syncDanmaku();
           _syncPreload();
-          _acknowledgeHandoff();
         }),
       );
     }
@@ -604,26 +593,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         unawaited(_recover());
       }
     });
-    final handoff = widget.handoff;
-    if (handoff != null) {
-      handoff.consumed = true;
-      handoff.stop = () async {
-        if (_handoffOwned && !_closed) await _stopForLan();
-      };
-    }
-    if (_profileEpoch != widget.store.profileEpoch ||
-        handoff?.cancelled == true) {
-      handoff?.fail('接收用户已变更，推送已取消');
-      if (handoff != null)
-        unawaited(widget.repository.release(handoff.plan.session));
+    if (_profileEpoch != widget.store.profileEpoch) {
       _loading = false;
-      _error = '播放接收已取消';
+      _error = '当前用户已变更';
     } else {
-      _play(
-        _index,
-        position: widget.initialPosition,
-        handoffPlan: handoff?.plan,
-      );
+      _play(_index, position: widget.initialPosition);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_closed) {
@@ -641,9 +615,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         (widget.store.profileEpoch != _profileEpoch || widget.store.locked)) {
       _preloader.clear();
       _enhancement.suspend();
-      _handoffOwned = false;
       _playIntent = false;
-      widget.handoff?.fail('接收端用户已变更');
       unawaited(_player.pause());
     }
     if (!_closed &&
@@ -753,7 +725,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!visible &&
         (_lifecycleState == AppLifecycleState.paused ||
             _lifecycleState == AppLifecycleState.hidden)) {
-      unawaited(_saveProgress(flush: true));
+      unawaited(_saveProgress());
     }
     if (visible && _pendingError) {
       _queueRecovery();
@@ -838,113 +810,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     if (right <= left || bottom <= top) return null;
     return {'left': left, 'top': top, 'right': right, 'bottom': bottom};
-  }
-
-  void _attachLanPlayback() {
-    LanController.current?.attachPlayback(
-      LanPlaybackHost(
-        identity: _lanIdentity,
-        title:
-            widget.detail.drama.title +
-            ' · 第 ' +
-            widget.detail.episodes[_index].number.toString() +
-            ' 集',
-        stop: _stopForLan,
-      ),
-    );
-  }
-
-  void _acknowledgeHandoff() {
-    final handoff = widget.handoff;
-    if (!_handoffOwned ||
-        handoff == null ||
-        handoff.cancelled ||
-        handoff.started.isCompleted ||
-        _closed ||
-        _loading ||
-        _error != null ||
-        _openedIndex != _index ||
-        _index != widget.initialIndex ||
-        widget.store.profileEpoch != _profileEpoch)
-      return;
-    final state = _player.state;
-    final position = state.position.inMilliseconds / 1000;
-    final duration = state.duration.inMilliseconds / 1000;
-    if (duration > 0 && handoff.position > duration + 2) {
-      handoff.fail('续播位置超过接收端分集时长');
-      return;
-    }
-    if (!state.playing ||
-        state.buffering ||
-        (state.width ?? 0) <= 0 ||
-        position < handoff.position - .5 ||
-        position > handoff.position + 20)
-      return;
-    _lanFirstPosition ??= position;
-    if (position >= _lanFirstPosition! + .15) handoff.acknowledge(position);
-  }
-
-  Future<void> _stopForLan() async {
-    final generation = _generation;
-    await _serialize(() async {
-      if (_closed ||
-          generation != _generation ||
-          widget.store.profileEpoch != _profileEpoch)
-        return;
-      _playIntent = false;
-      _interactions.cancel();
-      _enhancement.suspend();
-      _health.reset();
-      await _player.pause();
-      await _saveProgress(flush: true);
-    });
-  }
-
-  Future<void> _pushToDevice() async {
-    final link = LanController.current;
-    if (link == null ||
-        _panelOpen ||
-        _closed ||
-        _loading ||
-        _error != null ||
-        widget.mediaId != null)
-      return;
-    final generation = _generation;
-    final index = _index;
-    bool current() =>
-        mounted &&
-        !_closed &&
-        generation == _generation &&
-        index == _index &&
-        widget.store.profileEpoch == _profileEpoch;
-    _interactions.cancel();
-    setState(() => _panelOpen = true);
-    try {
-      await showLanPush(
-        context,
-        link,
-        snapshot: () => LanPlaybackIntent(
-          drama: widget.detail.drama,
-          episodeID: widget.detail.episodes[index].id,
-          episode: widget.detail.episodes[index].number,
-          position: _currentPosition,
-        ),
-        stillCurrent: current,
-        onAccepted: () async {
-          if (!current()) throw StateError('本机播放内容已变更');
-          await _stopForLan();
-          if (!current()) throw StateError('本机播放内容已变更');
-        },
-      );
-    } catch (error) {
-      if (mounted && !_closed) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
-      }
-    } finally {
-      if (mounted && !_closed) setState(() => _panelOpen = false);
-    }
   }
 
   void _syncPreload() {
@@ -1164,7 +1029,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _playIntent = false;
       _interactions.cancel();
       unawaited(_tvboxHandle.pause());
-      unawaited(_saveProgress(flush: true));
+      unawaited(_saveProgress());
     }
   }
 
@@ -1185,7 +1050,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _playIntent = false;
       _interactions.cancel();
       unawaited(_ijkHandle.pause());
-      unawaited(_saveProgress(flush: true));
+      unawaited(_saveProgress());
     }
   }
 
@@ -1219,8 +1084,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _togglePlayback() {
     if (_closed || _loading || _error != null) return;
-    _handoffOwned = false;
-    widget.handoff?.fail('接收端已操作播放');
     _interactions.cancel();
     if (_useNativeHandle) {
       _playIntent = !_tvboxHandle.playing;
@@ -1234,7 +1097,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       } else {
         unawaited(_tvboxHandle.pause());
       }
-      if (!_playIntent) unawaited(_saveProgress(flush: true));
+      if (!_playIntent) unawaited(_saveProgress());
       _syncDanmaku();
       return;
     }
@@ -1250,7 +1113,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       } else {
         unawaited(_ijkHandle.pause());
       }
-      if (!_playIntent) unawaited(_saveProgress(flush: true));
+      if (!_playIntent) unawaited(_saveProgress());
       _syncDanmaku();
       return;
     }
@@ -1262,11 +1125,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     unawaited(_player.playOrPause());
-    if (!_playIntent) unawaited(_saveProgress(flush: true));
+    if (!_playIntent) unawaited(_saveProgress());
     _syncDanmaku();
   }
 
-  Future<void> _saveProgress({bool flush = false}) async {
+  Future<void> _saveProgress() async {
     if (_openedIndex < 0 || widget.store.profileEpoch != _profileEpoch) {
       return;
     }
@@ -1287,7 +1150,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     final progressKey =
         '${widget.mediaId ?? widget.detail.drama.id}:$_openedIndex:$position:$duration';
     if (_savedProgressKey == progressKey && _saveWarning == null) {
-      if (flush && widget.mediaId == null) LanController.current?.flush();
       return;
     }
     final entry = WatchEntry(
@@ -1302,7 +1164,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (store.profileEpoch != _profileEpoch) return;
       if (widget.mediaId == null) {
         await store.saveWatch(entry);
-        if (flush) LanController.current?.flush();
       } else {
         await store.saveMediaWatch(widget.mediaId!, entry);
       }
@@ -1466,7 +1327,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     } else {
       unawaited(_player.pause());
     }
-    unawaited(_saveProgress(flush: true));
+    unawaited(_saveProgress());
   }
 
   Future<void> _play(
@@ -1475,7 +1336,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     PlaybackRecoveryAction? recoveryAction,
     int? routeSelection,
     bool playWhenReady = true,
-    PlaybackPlan? handoffPlan,
+    PlaybackPlan? preparedPlan,
     bool showControlsOnReady = true,
     bool continueChain = false,
   }) async {
@@ -1517,14 +1378,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     _interactions.cancel();
-    if (widget.handoff != null &&
-        handoffPlan == null &&
-        recoveryAction == null &&
-        routeSelection == null &&
-        !continueChain) {
-      _handoffOwned = false;
-      widget.handoff?.fail('接收端已更换播放内容');
-    }
     if (index != _index) _forceOnline = false;
     final canPreload =
         recoveryAction == null &&
@@ -1532,7 +1385,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _preloadEnabled &&
         !widget.localOnly;
     final warmed =
-        handoffPlan ??
+        preparedPlan ??
         (canPreload
             ? _preloader.take(
                 widget.detail.drama,
@@ -1577,9 +1430,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (widget.embedded && previousIndex != index) {
       widget.onEmbeddedIndexChanged?.call(index);
     }
-    LanController.current?.detachPlayback(_lanIdentity);
-    _lanIdentity = Object();
-    _attachLanPlayback();
     PlaybackPlan? prepared;
     PlaybackPlan? retained;
     bool installed = false;
@@ -1588,7 +1438,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (_closed || ticket != _generation) {
           return;
         }
-        await _saveProgress(flush: true);
+        await _saveProgress();
         await _enhancement.beforeMedia();
         if (_closed || ticket != _generation) return;
         _openedIndex = -1;
@@ -1645,14 +1495,14 @@ class _PlayerScreenState extends State<PlayerScreen>
             prepared = prepared.withUrl(parsed);
           } else {
             throw AppFailure(
-              '需要解析但未配置解析接口（取流地址=${prepared.url}，请在解析设置中添加解析接口）',
+              '需要解析但未配置解析接口（取流地址=${prepared.url}），请在解析设置中添加解析接口',
             );
           }
         } else {
           final apis = await ParseInterfaceStore.loadEnabled();
           if (apis.isEmpty) {
             throw AppFailure(
-              '需要解析但未配置解析接口（取流地址=${prepared.url}，请在解析设置中添加解析接口）',
+              '需要解析但未配置解析接口（取流地址=${prepared.url}），请在解析设置中添加解析接口',
             );
           }
           if (prepared.session.isNotEmpty) {
@@ -1685,7 +1535,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             }
           } else {
             throw AppFailure(
-              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl，请在解析设置中添加解析接口）',
+              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）',
             );
           }
         }
@@ -1723,25 +1573,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
         return;
       }
-      // 302 预解析（非视频分流之后、网关改写之前）：会跳转的地址先
-      // 跟到最终地址，三条播放路径共用解析后的 plan，跳转行为一致；
-      // 解析失败时返回原地址，行为与原来一致（见 playback_redirect）。
+      // 302 预解析（非视频分流之后）：会跳转的地址先跟到最终地址，
+      // 三条播放路径共用解析后的 plan，跳转行为一致；解析失败时
+      // 返回原地址，行为与原来一致（见 playback_redirect）。
       if (shouldPreResolveRedirects(plan)) {
         final resolved = await resolvePlaybackRedirects(
           plan.url,
           plan.headers,
         );
         plan = plan.withUrl(resolved.url).withHeaders(resolved.headers);
-      }
-      // 流媒体网关（局域网服务开启时才改写，关闭时播放链路原样）：
-      // http(s) 直链改走本机网关，补 CORS/Referer/UA、m3u8 重写、
-      // Range 透传；解密计划与非视频协议不改写（见 shouldGatewayRewrite）。
-      // 位置在音频模式判定与非视频分流之后，避免改写后的网关地址
-      // 影响扩展名判定；三条播放路径（原生/ijk/media_kit）共用此 plan。
-      if (LanGatewayState.active && shouldGatewayRewrite(plan)) {
-        plan = plan.withUrl(
-          buildGatewayUrl(LanGatewayState.loopbackBase, plan.url, plan.headers),
-        );
       }
       await _serialize(() async {
         if (_closed || ticket != _generation) {
@@ -1865,7 +1705,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         _openedIndex = index;
         if (!_useNativeHandle && !_useIjkCore) _enhancement.mediaReady();
-        _attachLanPlayback();
         _health.reset();
         if (!_useNativeHandle && !_useIjkCore) {
           await _interactions.applySpeed();
@@ -1876,7 +1715,6 @@ class _PlayerScreenState extends State<PlayerScreen>
           });
           _danmaku.setPlan(plan);
           _syncDanmaku();
-          _acknowledgeHandoff();
           _menuRevision.value++;
           _applyLifecycleVisibility();
         }
@@ -1908,7 +1746,6 @@ class _PlayerScreenState extends State<PlayerScreen>
               _error = error is AppFailure
                   ? error.message
                   : '无法播放这一集，请重试或换一集。（$error）';
-              widget.handoff?.fail(_error!);
             });
             if (needsSniffFallback) {
               _sniffFallbackTried = true;
@@ -1988,7 +1825,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final position = _currentPosition;
     final playing = _playIntent && _enginePlaying;
     try {
-      await _saveProgress(flush: true);
+      await _saveProgress();
       setState(() => _routeIndex = route);
       await _play(
         _index,
@@ -2263,7 +2100,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() => _sniffEmbedded = false);
     await _play(
       _index,
-      handoffPlan: PlaybackPlan(url: url, headers: _plan?.headers ?? const {}),
+      preparedPlan: PlaybackPlan(url: url, headers: _plan?.headers ?? const {}),
     );
   }
 
@@ -2519,8 +2356,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _seekTo(Duration target) async {
     if (_closed || _loading || _error != null) return;
-    _handoffOwned = false;
-    widget.handoff?.fail('接收端已调整播放位置');
     final ticket = ++_seekSequence;
     final generation = _generation;
     _danmaku.beginSeek();
@@ -2800,8 +2635,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     unawaited(_resetScreenBrightness());
     final enhancementClosed = _enhancement.close();
-    LanController.current?.detachPlayback(_lanIdentity);
-    widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
     _danmaku.dispose();
     _preloader.dispose();
@@ -2819,7 +2652,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _playerFocus.dispose();
     _episodeStripController.dispose();
     _menuRevision.dispose();
-    unawaited(_saveProgress(flush: true));
+    unawaited(_saveProgress());
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
@@ -3027,23 +2860,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                     actions: [
-                      // 桌面独立播放页保留门图标；内嵌在详情页时详情页
-                      // 已有粉色主入口，这里不重复（与顶栏门图标同理）。
-                      if (!widget.embedded)
-                        IconButton(
-                          tooltip: '推送到一起看',
-                        onPressed: () => unawaited(
-                          pushDramaToWatchRoom(
-                            context,
-                            repository: widget.repository,
-                            store: widget.store,
-                            drama: widget.detail.drama,
-                            episodes: widget.detail.episodes,
-                            episodeIndex: _index,
-                          ),
-                        ),
-                        icon: const Icon(Icons.meeting_room_rounded),
-                      ),
                       PlayerCoreBadge(
                         core: _effectiveCore,
                         onTap: _openCoreDialog,
@@ -3474,22 +3290,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             onRetryDanmaku: _danmaku.canRetry
                 ? _retryDanmakuFromControls
                 : null,
-            onPush: widget.mediaId == null ? _pushToDevice : null,
-            // 内嵌在详情页时顶栏不给门图标：详情页已有粉色“加入房间
-            // 一起看”主入口，同一视野只留一个；独立播放页没有粉色
-            // 按钮，保留顶栏入口。
-            onPushToWatchRoom: widget.embedded
-                ? null
-                : () => unawaited(
-                    pushDramaToWatchRoom(
-                      context,
-                      repository: widget.repository,
-                      store: widget.store,
-                      drama: widget.detail.drama,
-                      episodes: widget.detail.episodes,
-                      episodeIndex: _index,
-                    ),
-                  ),
             // 控制层显隐变化时抬/落字幕：字幕是 media_kit 的 Flutter 层
             // SubtitleView，默认底边只留 24px，正好被控制行与进度条盖
             // 住；可见时抬到 96px（控制行+进度条之上），隐藏时落回
@@ -4303,17 +4103,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       tooltip: '追剧与观看状态',
       onSelected: (value) async {
         if (_profileEpoch != widget.store.profileEpoch) return;
-        if (value == 'room') {
-          await pushDramaToWatchRoom(
-            context,
-            repository: widget.repository,
-            store: widget.store,
-            drama: drama,
-            episodes: widget.detail.episodes,
-            episodeIndex: _index,
-          );
-          return;
-        }
         if (value == 'remove') {
           await saveUserChange(
             context,
@@ -4337,7 +4126,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             checked: state?.status == status,
             child: Text(status.label),
           ),
-        const CheckedPopupMenuItem(value: 'room', child: Text('房间')),
         if (state != null)
           const CheckedPopupMenuItem(value: 'remove', child: Text('取消追剧')),
       ],

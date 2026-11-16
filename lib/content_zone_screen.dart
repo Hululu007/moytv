@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -45,6 +47,36 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
   final _searchController = TextEditingController();
   final _scroll = ScrollController();
 
+  /// 自动补拉代次：切源/切区后旧的补拉自动作废，不会把旧源内容刷回来。
+  int _categoryGeneration = 0;
+
+  /// 可取消的补拉等待：页面销毁时取消计时器，测试的假时钟里不留挂起的 Timer。
+  Timer? _retryTimer;
+  Completer<void>? _retryCompleter;
+
+  Future<void> _cancellableRetryDelay() async {
+    final completer = Completer<void>();
+    _retryCompleter = completer;
+    _retryTimer = Timer(const Duration(milliseconds: 1500), () {
+      _retryTimer = null;
+      _retryCompleter = null;
+      if (!completer.isCompleted) completer.complete();
+    });
+    await completer.future;
+    if (_retryCompleter == completer) {
+      _retryTimer = null;
+      _retryCompleter = null;
+    }
+  }
+
+  void _cancelRetryDelay() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    final completer = _retryCompleter;
+    _retryCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -90,11 +122,47 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
     _error = '';
     _query = '';
     _searchController.clear();
-    if (_source != null) _loadCategories();
+    if (_source != null) unawaited(_loadCategoriesWithAutoRetry());
+  }
+
+  /// 进区 / 切源时的自动加载：分类或首屏落空/报错时自动补拉
+  /// （最多再补 2 次），不用用户手动点重试；补拉期间用户切源
+  /// 或手动加载优先，旧的补拉直接作废。
+  Future<void> _loadCategoriesWithAutoRetry() async {
+    final generation = ++_categoryGeneration;
+    final source = _source;
+    await _loadCategories();
+    // 首轮加载落定的分类：补拉期间用户已点别的分类就作废，
+    // 不能把用户的选类刷回首个分类。
+    final categoryId = _categoryId;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!mounted ||
+          generation != _categoryGeneration ||
+          !identical(_source, source) ||
+          _categoryId != categoryId ||
+          _loading) {
+        return;
+      }
+      if (_items.isNotEmpty || _error.isEmpty) return;
+      if (attempt > 0) {
+        await _cancellableRetryDelay();
+        if (!mounted ||
+            generation != _categoryGeneration ||
+            !identical(_source, source) ||
+            _categoryId != categoryId ||
+            _loading ||
+            _items.isNotEmpty ||
+            _error.isEmpty) {
+          return;
+        }
+      }
+      await _loadCategories();
+    }
   }
 
   @override
   void dispose() {
+    _cancelRetryDelay();
     _searchController.dispose();
     _scroll.dispose();
     super.dispose();
@@ -218,7 +286,7 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
       _items = const [];
       _categories = const [];
     });
-    _loadCategories();
+    unawaited(_loadCategoriesWithAutoRetry());
   }
 
   void _selectCategory(ContentCategory category) {

@@ -3,7 +3,21 @@ import 'package:flutter_tts/flutter_tts.dart';
 abstract class NovelTtsEngine {
   Future<void> setLanguage(String language);
   Future<void> setRate(double rate);
-  Future<void> speak(String text, void Function() onComplete);
+
+  /// 手机里有没有可用的中文语音。
+  ///
+  /// 返回 false 只在“明确查到没有”时（装机检查否 + 语言列表里
+  /// 也没有中文）；查不到/查出错时返回 true（放行去试，失败再
+  /// 由 speak 的抛错/错误回调明说），避免误判拦住能用的手机。
+  Future<bool> hasChineseVoice();
+
+  /// 朗读一段文本；读完调 [onComplete]，引擎报错调 [onError]。
+  /// 平台明确返回失败时抛错，调用方不要静默吞掉。
+  Future<void> speak(
+    String text,
+    void Function() onComplete, {
+    void Function()? onError,
+  });
   Future<void> stop();
 }
 
@@ -22,12 +36,51 @@ class FlutterTtsNovelTtsEngine implements NovelTtsEngine {
   }
 
   @override
-  Future<void> speak(String text, void Function() onComplete) async {
+  Future<bool> hasChineseVoice() async {
+    var installedChecked = false;
+    try {
+      final installed = await _tts.isLanguageInstalled('zh-CN');
+      installedChecked = installed == false;
+      if (installed == true) return true;
+    } catch (_) {}
+    try {
+      final languages = await _tts.getLanguages;
+      if (languages is Iterable) {
+        var sawAny = false;
+        for (final language in languages) {
+          sawAny = true;
+          final normalized = '$language'.toLowerCase().replaceAll('_', '-');
+          if (normalized == 'zh-cn' ||
+              normalized == 'zh-hans' ||
+              normalized == 'zh') {
+            return true;
+          }
+        }
+        // 装机检查明确否、且语言列表非空又无中文：明确没有。
+        if (installedChecked && sawAny) return false;
+      }
+    } catch (_) {}
+    // 查不到：放行，speak 失败时再明说。
+    return true;
+  }
+
+  @override
+  Future<void> speak(
+    String text,
+    void Function() onComplete, {
+    void Function()? onError,
+  }) async {
     final generation = ++_generation;
     _tts.setCompletionHandler(() {
       if (generation == _generation) onComplete();
     });
-    await _tts.speak(text);
+    _tts.setErrorHandler((_) {
+      if (generation == _generation) onError?.call();
+    });
+    final result = await _tts.speak(text);
+    if (result == 0 || result == false) {
+      throw StateError('flutter_tts speak 失败（平台返回 $result）');
+    }
   }
 
   @override

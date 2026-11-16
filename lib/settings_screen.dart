@@ -14,7 +14,6 @@ import 'package:path_provider/path_provider.dart';
 import 'core_bridge.dart';
 import 'app_update.dart';
 import 'cloud_drive/cloud_drive_screen.dart';
-import 'lan_web/lan_settings_screen.dart';
 import 'app_update_screen.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
@@ -38,7 +37,6 @@ import 'sources_screen.dart';
 import 'content_source_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
-import 'lan_screen.dart';
 import 'viewing_experience_screen.dart';
 import 'torrent/torrent_home_screen.dart';
 import 'proxy_kernel_screen.dart';
@@ -274,8 +272,8 @@ class _SettingsScreenState extends State<SettingsScreen>
     final admin = store.profile.admin;
     return [
       _SettingsGroup('播放与画面', [
-        // 原片库设置页五项并入通用设置（2026-11-14）：播放设置与未成年
-        // 保护新增于此；播放器选择、解析接口、内容源管理原已在本页。
+        // 原片库设置页五项并入通用设置（2026-11-14）：播放设置、解析接口
+        // 与未成年保护新增于此；播放器选择、内容源管理原已在本页。
         _SettingsItem(
           keyName: 'playback-settings-entry',
           icon: Icons.play_circle_rounded,
@@ -293,20 +291,20 @@ class _SettingsScreenState extends State<SettingsScreen>
           onTap: () => _push(PlayerPickerScreen(store: store)),
         ),
         _SettingsItem(
+          keyName: 'parse-settings-entry',
+          icon: Icons.link_rounded,
+          lucide: LucideIcons.link,
+          title: '解析接口',
+          detail: '解析线路列表增删改与默认选中',
+          onTap: () => _push(const ParseSettingsScreen()),
+        ),
+        _SettingsItem(
           keyName: 'viewing-experience-entry',
           icon: Icons.visibility_outlined,
           lucide: LucideIcons.sparkles,
           title: '观看体验',
           detail: '沉浸式详情 · TMDB 海报 · 弹幕与手势',
           onTap: () => _push(ViewingExperienceScreen(store: store)),
-        ),
-        _SettingsItem(
-          keyName: 'parse-settings-entry',
-          icon: Icons.alt_route_rounded,
-          lucide: LucideIcons.route,
-          title: '解析接口',
-          detail: '播放解析接口列表与默认选中',
-          onTap: () => _push(const ParseSettingsScreen()),
         ),
         if (Platform.isAndroid)
           _SettingsItem(
@@ -340,7 +338,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           lucide: LucideIcons.palette,
           title: '外观主题',
           detail:
-              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 12 套主题',
+              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 13 套主题',
           onTap: () => _push(
             ThemeSettingsScreen(
               store: store,
@@ -388,14 +386,6 @@ class _SettingsScreenState extends State<SettingsScreen>
           title: '站点验证',
           detail: '为被拦截的站点完成浏览器验证',
           onTap: () => openClearanceFlow(context, widget.repository),
-        ),
-        _SettingsItem(
-          keyName: 'lan-web-entry',
-          icon: Icons.wifi_outlined,
-          lucide: LucideIcons.wifi,
-          title: '局域网服务',
-          detail: '局域网浏览器看片 · 流媒体网关',
-          onTap: () => _push(LanWebSettingsScreen(store: store)),
         ),
       ]),
       _SettingsGroup('源与规则', [
@@ -517,14 +507,6 @@ class _SettingsScreenState extends State<SettingsScreen>
         ),
       ]),
       _SettingsGroup('设备', [
-        _SettingsItem(
-          keyName: 'lan-settings',
-          icon: Icons.devices_rounded,
-          lucide: LucideIcons.monitorSmartphone,
-          title: '设备互联',
-          detail: '局域网同步追剧与推送播放',
-          onTap: () => openLanSync(context),
-        ),
         _SettingsItem(
           keyName: 'hongguo-device-entry',
           icon: Icons.badge_outlined,

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'app_page_route.dart';
 import 'app_theme_config.dart';
 import 'core_bridge.dart';
 import 'hongguo_account.dart';
@@ -10,15 +9,14 @@ import 'hongguo_account_entry.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'neon_glass_kit.dart';
-import 'theme_settings_screen.dart';
 
 /// “我的”页：帐户 / 内容 / 外观与设置三组（设置页风格的分段标题 +
 /// 圆角分组卡片 + 渐变图标块，跟随主题）。
 ///
 /// 原是 HongguoDramaHome 的内层页签；抽屉拆除后，通用分支点底部栏
 /// “我的”也要进同一页，单立成共享页：短剧首页内层与通用分支共用，
-/// 条目、行为、key 一字不动。主题切换与设置入口都在这里（抽屉拆除
-/// 后这两项的去处）。
+/// 条目、行为、key 一字不动。主题切换只在设置页（这里不重复放
+/// 入口，设置页的“外观主题”是唯一入口）。
 class MinePage extends StatefulWidget {
   const MinePage({
     super.key,
@@ -143,27 +141,10 @@ class _MinePageState extends State<MinePage> {
           NeonRowGroup(
             children: [
               NeonRow(
-                key: const ValueKey('mine-theme-entry'),
-                icon: Icons.palette_outlined,
-                title: '主题切换',
-                detail:
-                    '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 12 套主题',
-                onTap: () => Navigator.of(context).push(
-                  appPageRoute<void>(
-                    builder: (_) => ThemeSettingsScreen(
-                      store: widget.store,
-                      repository: widget.repository,
-                      sourceId: widget.store.source,
-                    ),
-                  ),
-                ),
+                icon: Icons.settings_outlined,
+                title: '设置',
+                onTap: widget.onSettingsPressed,
               ),
-              if (widget.onSettingsPressed != null)
-                NeonRow(
-                  icon: Icons.settings_outlined,
-                  title: '设置',
-                  onTap: widget.onSettingsPressed,
-                ),
             ],
           ),
         ],

@@ -34,7 +34,7 @@ void main() {
     'theme survives restart',
     () async {
       final store = await localStore();
-      expect(store.appTheme, AppThemeMode.purpleNeon);
+      expect(store.appTheme, AppThemeMode.win7);
       await store.setAppTheme(AppThemeMode.lightClean);
       final restored = LocalStore(store.preferences);
       expect(restored.appTheme, AppThemeMode.lightClean);
@@ -91,6 +91,8 @@ void main() {
   ) async {
     phone(tester);
     final store = await localStore();
+    // 默认主题已改 Win7：本测试验“当前主题名回显”，显式钉住紫蓝霓虹。
+    await store.setAppTheme(AppThemeMode.purpleNeon);
     final repository = FixtureRepository();
     await tester.pumpWidget(
       MaterialApp(
@@ -116,7 +118,11 @@ void main() {
       const Offset(0, -200),
     );
     await tester.pumpAndSettle();
-    await tester.tap(themeCard);
+    // 点卡片的名字区切主题：卡片中心在窄屏预览布局下点选不到（封面区
+    // 盖住），点名字与点卡片其它区域走同一个卡片 InkWell，效果一致。
+    await tester.tap(
+      find.descendant(of: themeCard, matching: find.text('浅色清爽')),
+    );
     await tester.pumpAndSettle();
     expect(store.appTheme, AppThemeMode.lightClean);
     await tester.pageBack();

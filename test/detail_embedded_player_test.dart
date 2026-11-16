@@ -152,10 +152,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(PlayerScreen), findsNothing);
     expect(find.byKey(const ValueKey('detail-poster-play')), findsOneWidget);
-    // 重叠清理：顶栏无门图标（粉色按钮是唯一一起看入口），
     // 未开播时顶栏返回箭头正常画出。
-    expect(find.byTooltip('推送到一起看'), findsNothing);
-    expect(find.text('加入房间一起看'), findsOneWidget);
     expect(
       tester.widget<AppBar>(find.byType(AppBar)).automaticallyImplyLeading,
       isTrue,
@@ -180,7 +177,6 @@ void main() {
       tester.widget<AppBar>(find.byType(AppBar)).automaticallyImplyLeading,
       isFalse,
     );
-    expect(find.byTooltip('推送到一起看'), findsNothing);
     expect(find.byKey(const ValueKey('player-permanent-back')), findsOneWidget);
 
     // 全屏改走播放器内控制层：点控制层的“全屏”进全屏，全屏分支无 AppBar。

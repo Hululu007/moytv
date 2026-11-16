@@ -450,6 +450,10 @@ class TvBoxImporter {
   /// 界面一直转圈、超大响应直接撑爆内存。
   static const maxConfigTextBytes = 16 << 20;
   static const maxFetchBytes = 128 << 20;
+
+  /// 配置文件上限 8MB：导入中心选文件导入与系统分享 JSON
+  /// 共用，文件超过它直接拒收（与拉取的配置文本上限分开算）。
+  static const maxConfigFileBytes = 8 << 20;
   static const bodyTimeout = Duration(seconds: 60);
 
   static Future<String> fetchText(

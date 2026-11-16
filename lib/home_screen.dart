@@ -21,6 +21,8 @@ import 'miniapp/mini_app_home_page.dart';
 import 'mine_page.dart';
 import 'core_bridge.dart';
 import 'catalog_filters.dart';
+import 'center_feed_loader.dart';
+import 'listen_read_page.dart';
 import 'compact_chip.dart';
 import 'tv_filter_bar.dart';
 import 'catalog_browser.dart';
@@ -63,6 +65,11 @@ import 'library_updater.dart';
 import 'live_repository.dart';
 import 'live_screen.dart';
 import 'live_store.dart';
+import 'live_sources.dart';
+import 'content_registry.dart';
+import 'miniapp/mini_app_store.dart';
+import 'miniapp/mini_app_manifest.dart';
+import 'win7_desktop.dart';
 
 bool shouldSilentRefreshOnRestore(DateTime? fetchedAt, DateTime now) {
   if (fetchedAt == null) return true;
@@ -74,6 +81,36 @@ bool shouldSilentRefreshOnRestore(DateTime? fetchedAt, DateTime now) {
 /// 放进 navigatorObservers；没放时首页收不到事件，退化为无保护的旧行为。
 final RouteObserver<ModalRoute<dynamic>> homeRouteObserver =
     RouteObserver<ModalRoute<dynamic>>();
+
+/// Win7 窗口描述：窗口位一种区，只记“开的是哪个区的哪一站”。
+/// 直播窗口的界面实例 key 固定，换站靠 nonce 递进走 LiveScreen
+/// 自身的 didUpdateWidget 切站（实例不重建）；听读窗口的 key 取
+/// binding 当前选站，换站即 key 变、实例重建。片库/短剧窗口的
+/// 描述只作恢复时的换站依据，界面状态在首页自身。
+class _Win7Window {
+  const _Win7Window({
+    required this.kind,
+    this.sourceId,
+    this.allSources = false,
+    this.nonce = 0,
+  });
+
+  final Win7WindowKind kind;
+  final String? sourceId;
+  final bool allSources;
+
+  /// 换站递进号：只在显式换站（开始菜单点站）时 +1，桌面图标 /
+  /// 任务栏切前台不递进，窗口内手动换站不受干扰。
+  final int nonce;
+
+  _Win7Window copyWith({String? sourceId, bool? allSources, int? nonce}) =>
+      _Win7Window(
+        kind: kind,
+        sourceId: sourceId ?? this.sourceId,
+        allSources: allSources ?? this.allSources,
+        nonce: nonce ?? this.nonce,
+      );
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.repository, required this.store});
@@ -98,6 +135,33 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   final _gridKey = GlobalKey<RemoteGridState>();
   final _navKey = GlobalKey<RemoteListState>();
   Timer? _debounce;
+
+  /// 可取消的补拉等待：页面销毁时取消计时器，测试的假时钟里不留挂起的 Timer。
+  Timer? _retryTimer;
+  Completer<void>? _retryCompleter;
+
+  Future<void> _cancellableRetryDelay() async {
+    final completer = Completer<void>();
+    _retryCompleter = completer;
+    _retryTimer = Timer(const Duration(milliseconds: 1500), () {
+      _retryTimer = null;
+      _retryCompleter = null;
+      if (!completer.isCompleted) completer.complete();
+    });
+    await completer.future;
+    if (_retryCompleter == completer) {
+      _retryTimer = null;
+      _retryCompleter = null;
+    }
+  }
+
+  void _cancelRetryDelay() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    final completer = _retryCompleter;
+    _retryCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
   late SourceSite _source;
   bool _allSources = false;
   List<Drama> _items = [];
@@ -107,7 +171,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String? _error;
   int _generation = 0;
   HomeZone _zone = HomeZone.library;
+
+  /// 听读标签上次停的子区：点“听读”回到上次听/看的子区，默认听书。
+  HomeZone _lastListenReadZone = HomeZone.audio;
   final _zoneHistory = BackHistory<HomeZone>();
+
+  // ---- Win7 窗口管理器（仅 Win7 主题手机端生效）-----------------
+  // 一个窗口位一种区：同种区只开一个窗口，再点只是切到前台。
+  // 最小化的窗口留在树里（Offstage 包着），State 不销毁、状态保留；
+  // 关闭的窗口从树里摘掉，State 销毁、重开即全新。片库/短剧两窗
+  // 共用首页自身的目录状态（_source/_items 等），最小化时只记描述
+  // （站点 id），恢复时按描述换回该站、内容重拉，分类选择沿用
+  // _categorySelections 的既有持久化；其余窗口的界面状态完整保留。
+  final Map<Win7WindowKind, _Win7Window> _win7Windows = {};
+  Win7WindowKind? _win7Foreground;
+  bool _win7MenuOpen = false;
+
+  /// 开始菜单“小程序”组用的已安装清单缓存：菜单打开时刷新。
+  List<MiniAppManifest> _win7MiniApps = [];
 
   /// 底部 Tab 点了“我的”后为真：短剧首页分支据此把短剧首页内层
   /// 页签驱到“我的”页；离开片库区或点其它 Tab 时清掉。
@@ -189,8 +270,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String get _zoneTitle => switch (_zone) {
     HomeZone.library => '片库',
     HomeZone.live => '直播',
-    HomeZone.audio => '听书',
-    HomeZone.novel => '阅读',
+    // 听书/阅读已并为“听读”一个标签，顶栏标题同名，子区在页内切换。
+    HomeZone.audio => '听读',
+    HomeZone.novel => '听读',
   };
 
   /// 片库区容纳全部视频站源（短剧站与点播站），切站决定显示哪站内容，
@@ -848,6 +930,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void dispose() {
+    _cancelRetryDelay();
     _returnGraceTimer?.cancel();
     homeRouteObserver.unsubscribe(this);
     _updater.removeListener(_updateChanged);
@@ -933,21 +1016,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _autoLoadedOnce = false;
   }
 
-  /// 首屏 / 切板块时的自动加载。
+  /// 首屏 / 切站时的自动加载。
   ///
   /// 只读缓存的话，装完第一次打开、缓存为空、或者内核刚起来第一次请求落空时，
   /// 列表会一直是空的，得用户手动下拉才出内容。这里补成：
   /// 缓存读完还是空 → 立刻拉一次线上；还空 → 隔 1.5 秒再补一次。
+  /// 失败（_error 有值）也要补拉：刚装完第一次打开、内核刚起来、
+  /// 网络还没就绪时首次请求经常直接报错，以前一见 _error 就停，
+  /// 页面停在“暂时无法加载”上等用户手动点重试。补拉次数有上限
+  /// （最多再补 2 次），不会无限刷；补拉期间用户自己触发的加载
+  /// 优先，检测到正在加载就停。
   Future<void> _loadWithAutoRetry({bool useCache = false}) async {
     await (useCache ? _load(useCache: true) : _load(force: true));
     if (!mounted) return;
     for (var attempt = 0; attempt < 2; attempt++) {
       if (_loading || _loadingMore || _showRecommendations) return;
-      if (_items.isNotEmpty || _error != null) return;
+      if (_items.isNotEmpty) return;
       if (_librarySources.isEmpty) return;
       if (attempt > 0) {
-        await Future<void>.delayed(const Duration(milliseconds: 1500));
-        if (!mounted) return;
+        await _cancellableRetryDelay();
+        if (!mounted ||
+            _loading ||
+            _loadingMore ||
+            _showRecommendations ||
+            _items.isNotEmpty) {
+          return;
+        }
       }
       await _load(force: true);
       if (!mounted) return;
@@ -1096,8 +1190,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _scroll.jumpTo(0);
     }
     _resetScrollOnNextLoad = true;
-    _load(force: true);
+    // 切站自动加载：首次请求落空或报错时自动补拉，用户不用手动刷新。
+    unawaited(_loadWithAutoRetry());
     _loadCategories(force: true);
+    // Win7 片库/短剧窗口在前台时，目录内换站后同步窗口描述，
+    // 最小化恢复时换回同一站（描述只记站点，不碰界面状态）。
+    final foreground = _win7Foreground;
+    final window = foreground == null ? null : _win7Windows[foreground];
+    if (window != null &&
+        (window.kind == Win7WindowKind.library ||
+            window.kind == Win7WindowKind.drama)) {
+      _win7Windows[foreground!] = window.copyWith(
+        sourceId: source.id,
+        allSources: allSources,
+      );
+    }
   }
 
   void _changeCrossSource(bool value) {
@@ -1305,29 +1412,29 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
   }
 
-  /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听书、3 阅读、
-  /// 4 多媒体、5 小程序、6 我的。多媒体/小程序/我的只是片库区内的
-  /// 请求态，先于区判断（与 _onBottomTab 的递出顺序一致）。
+  /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听读、3 多媒体、
+  /// 4 小程序、5 我的（听书/阅读已并为“听读”，两子区同指下标 2）。
+  /// 多媒体/小程序/我的只是片库区内的请求态，先于区判断（与
+  /// _onBottomTab 的递出顺序一致）。
   int get _bottomTabIndex {
-    if (_zone == HomeZone.library && _multimediaRequested) return 4;
-    if (_zone == HomeZone.library && _miniAppRequested) return 5;
-    if (_zone == HomeZone.library && _mineRequested) return 6;
+    if (_zone == HomeZone.library && _multimediaRequested) return 3;
+    if (_zone == HomeZone.library && _miniAppRequested) return 4;
+    if (_zone == HomeZone.library && _mineRequested) return 5;
     return switch (_zone) {
       HomeZone.library => 0,
       HomeZone.live => 1,
       HomeZone.audio => 2,
-      HomeZone.novel => 3,
+      HomeZone.novel => 2,
     };
   }
 
   void _onBottomTab(int tabIndex) {
-    final wantMine = tabIndex == 6;
-    final wantMultimedia = tabIndex == 4;
-    final wantMiniApp = tabIndex == 5;
+    final wantMine = tabIndex == 5;
+    final wantMultimedia = tabIndex == 3;
+    final wantMiniApp = tabIndex == 4;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
-      2 => HomeZone.audio,
-      3 => HomeZone.novel,
+      2 => _lastListenReadZone,
       _ => HomeZone.library,
     };
     if (wantMine == _mineRequested &&
@@ -1356,8 +1463,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     const entries = <(Object, String)>[
       (LucideIcons.clapperboard, '片库'),
       (LucideIcons.tv, '直播'),
-      (LucideIcons.headphones, '听书'),
-      (LucideIcons.bookOpen, '阅读'),
+      (LucideIcons.bookHeadphones, '听读'),
       (LucideIcons.hardDrive, '多媒体'),
       (LucideIcons.layoutGrid, '小程序'),
       (LucideIcons.user, '我的'),
@@ -1368,7 +1474,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       onSelect: _onBottomTab,
       onCenter: _openFullscreenFeed,
       centerAfter: 3,
-      centerEnabled: _visible.isNotEmpty,
+      centerEnabled: _feedCenterEnabled,
       tabKeyPrefix: 'shell-tab',
       centerKey: 'shell-center',
     );
@@ -1377,6 +1483,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _applyZoneChange(HomeZone zone, {bool recordHistory = false}) {
     if (recordHistory && zone != _zone) _zoneHistory.push(_zone);
     _resetAutoLoad();
+    if (zone == HomeZone.audio || zone == HomeZone.novel) {
+      _lastListenReadZone = zone;
+    }
     setState(() {
       _zone = zone;
       if (zone != HomeZone.library) {
@@ -1453,7 +1562,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   /// 头像点按：抽屉拆除后，点头像进“我的”页（与底部栏“我的”
   /// 标签同一目的地）。
-  void _openMine() => _onBottomTab(6);
+  void _openMine() => _onBottomTab(5);
 
   Widget _mineAvatarButton() => IconButton(
     key: const ValueKey('open-mine-page'),
@@ -1547,16 +1656,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  /// 全屏流入口是否可用：流固定取红果短剧，不再依赖当前目录
+  /// 是否为空；红果是内置站恒可用，取不到时屏内显示重试。
+  bool get _feedCenterEnabled =>
+      SourceSite.isAvailable(CenterFeedLoader.hongguoSourceId);
+
   void _openFullscreenFeed() {
-    if (_visible.isEmpty) return;
+    if (!_feedCenterEnabled) return;
     _pauseCatalog();
+    // 加载器随屏新建：打开即取、刷新重取、每次重取都重新随机
+    // 混排；验播缓存随屏走，屏内切分类不重验。
+    final loader = CenterFeedLoader(
+      repository: widget.repository,
+      store: widget.store,
+    );
     unawaited(
       Navigator.of(context).push<void>(
         appPageRoute<void>(
           builder: (_) => FullscreenFeedScreen(
-            dramas: List.of(_visible),
+            dramas: const [],
             repository: widget.repository,
             store: widget.store,
+            onLoadFeed: loader.load,
           ),
         ),
       ),
@@ -1790,7 +1911,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       IconButton(
         key: const ValueKey('open-fullscreen-feed'),
         tooltip: '全屏流',
-        onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
+        onPressed: _feedCenterEnabled ? _openFullscreenFeed : null,
         icon: const Icon(Icons.play_arrow_rounded),
       ),
       // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
@@ -1928,7 +2049,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           key: const ValueKey('open-fullscreen-feed'),
           icon: LucideIcons.play,
           tooltip: '全屏流',
-          onPressed: _visible.isEmpty ? null : _openFullscreenFeed,
+          onPressed: _feedCenterEnabled ? _openFullscreenFeed : null,
         ),
         GlassGroupItem(
           key: const ValueKey('toggle-search'),
@@ -2010,6 +2131,615 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  // ---- Win7 窗口管理器 ----
+  //
+  // 状态保留机制：所有已开窗口的 Frame + 内容体以 kind 为 key 固定在
+  // _win7Shell 的 Stack 子列表同一位置，前台的正常显示、其余包在
+  // Offstage 里——key 稳定则 Element 不重建，State 与界面状态完整
+  // 保留；关闭只是把该 key 的子树从列表摘掉，State 随之销毁。
+  // 换站语义见 _Win7Window：直播窗靠 nonce 切站、实例不重建，
+  // 听读窗靠选站 key 换实例，片库/短剧窗靠共享目录状态换站。
+
+  /// 打开窗口（或切到前台）：该种窗口已开则只切前台；[sourceId]
+  /// 非空则换站（直播窗 nonce 切站、听读窗重建、片库/短剧窗换源）。
+  /// 桌面图标与开始菜单点站点走同一入口。
+  void _win7Open(
+    Win7WindowKind kind, {
+    String? sourceId,
+    bool allSources = false,
+  }) {
+    final existing = _win7Windows[kind];
+    final targetId =
+        sourceId ?? existing?.sourceId ?? _win7DefaultSourceId(kind);
+    final targetAll = sourceId != null
+        ? allSources
+        : (existing?.allSources ??
+              (kind == Win7WindowKind.library ? _allSources : false));
+    // 显式换站才递进 nonce（哪怕换回原记录的站也递进：窗口内可能
+    // 已手动换走，nonce 是让已挂载实例切站的唯一信号）。
+    final targetNonce = sourceId != null
+        ? (existing?.nonce ?? 0) + 1
+        : (existing?.nonce ?? 0);
+    setState(() {
+      _win7MenuOpen = false;
+      _win7Windows[kind] = _Win7Window(
+        kind: kind,
+        sourceId: targetId,
+        allSources: targetAll,
+        nonce: targetNonce,
+      );
+      _win7Foreground = kind;
+    });
+    _win7ApplyForeground(kind, targetId, targetAll);
+  }
+
+  /// 新开窗口的默认站点：取各区当前选中的站（没有则空，由各区
+  /// 自己的默认逻辑接手）。
+  String? _win7DefaultSourceId(Win7WindowKind kind) => switch (kind) {
+    Win7WindowKind.library => _source.id,
+    Win7WindowKind.drama => _hongguoSource()?.id ?? _source.id,
+    Win7WindowKind.live => _liveEntrySourceId.isEmpty
+        ? null
+        : _liveEntrySourceId,
+    Win7WindowKind.audio =>
+      _contentBinding.selectedIdFor(ContentSection.audio),
+    Win7WindowKind.novel =>
+      _contentBinding.selectedIdFor(ContentSection.novel),
+    Win7WindowKind.miniApp => null,
+    Win7WindowKind.multimedia => null,
+  };
+
+  SourceSite? _hongguoSource() {
+    for (final site in _librarySources) {
+      if (isHongguoDramaGroup(site.groupId)) return site;
+    }
+    return null;
+  }
+
+  SourceSite? _findLibrarySite(String id) {
+    for (final site in _librarySources) {
+      if (site.id == id) return site;
+    }
+    return null;
+  }
+
+  /// 把首页共享状态拨到前台窗口的描述：片库/短剧拨区与站点，
+  /// 听读拨 binding 选站，其余只拨区（内容体由窗口描述直供参数）。
+  /// 不记区历史：窗口层面的返回是最小化回桌面，不走区历史。
+  void _win7ApplyForeground(
+    Win7WindowKind kind,
+    String? sourceId,
+    bool allSources,
+  ) {
+    switch (kind) {
+      case Win7WindowKind.library:
+      case Win7WindowKind.drama:
+        _applyZoneChange(HomeZone.library);
+        final site = sourceId == null ? null : _findLibrarySite(sourceId);
+        if (site != null &&
+            (site.id != _source.id || allSources != _allSources)) {
+          _changeSource(site, allSources: allSources);
+        }
+        setState(() {
+          _mineRequested = false;
+          _multimediaRequested = false;
+          _miniAppRequested = false;
+          // _changeSource 遇红果组会钉住戏剧首页，这里以窗口种类为准
+          // 再拨一次：短剧窗钉住，片库窗不钉。
+          _dramaHomePinned = kind == Win7WindowKind.drama;
+        });
+      case Win7WindowKind.live:
+        _applyZoneChange(HomeZone.live);
+      case Win7WindowKind.audio:
+      case Win7WindowKind.novel:
+        final section = kind == Win7WindowKind.audio
+            ? ContentSection.audio
+            : ContentSection.novel;
+        if (sourceId != null &&
+            _contentBinding.selectedIdFor(section) != sourceId) {
+          for (final source in ContentRegistry.sourcesFor(section)) {
+            if (source.id == sourceId) {
+              _contentBinding.select(section, source);
+              break;
+            }
+          }
+        }
+        _applyZoneChange(
+          kind == Win7WindowKind.audio ? HomeZone.audio : HomeZone.novel,
+        );
+      case Win7WindowKind.miniApp:
+      case Win7WindowKind.multimedia:
+        _applyZoneChange(HomeZone.library);
+        setState(() {
+          _mineRequested = false;
+          _multimediaRequested = false;
+          _miniAppRequested = false;
+        });
+    }
+  }
+
+  /// 最小化：窗口退到任务栏，界面实例留在树里、状态保留。
+  void _win7Minimize(Win7WindowKind kind) {
+    setState(() {
+      if (_win7Foreground == kind) _win7Foreground = null;
+    });
+  }
+
+  /// 关闭：窗口从树里摘掉，界面状态丢弃，重开即全新。
+  /// 听书播放是应用级单例，关窗口不影响正在播的音频（既有行为）。
+  void _win7Close(Win7WindowKind kind) {
+    setState(() {
+      _win7Windows.remove(kind);
+      if (_win7Foreground == kind) _win7Foreground = null;
+    });
+  }
+
+  /// 任务栏条目点按：前台窗口点条目是最小化，其余是切到前台。
+  void _win7ToggleEntry(Win7WindowKind kind) {
+    if (_win7Foreground == kind) {
+      _win7Minimize(kind);
+    } else {
+      _win7Open(kind);
+    }
+  }
+
+  void _win7ToggleMenu() {
+    final opening = !_win7MenuOpen;
+    setState(() => _win7MenuOpen = opening);
+    if (opening) _win7RefreshMiniApps();
+  }
+
+  Future<void> _win7RefreshMiniApps() async {
+    try {
+      final installed = await MiniAppStore().listInstalled();
+      if (!mounted || !_win7MenuOpen) return;
+      setState(() => _win7MiniApps = installed);
+    } catch (_) {
+      // 小程序清单读不到时该组显示暂无，不挡主流程。
+    }
+  }
+
+  /// 窗口内听读子区切换（听书/阅读胶囊）= 切到另一个听读窗口，
+  /// 各窗口保留各自状态。
+  void _win7ListenReadSwitch(HomeZone zone) {
+    _win7Open(
+      zone == HomeZone.audio ? Win7WindowKind.audio : Win7WindowKind.novel,
+    );
+  }
+
+  /// 开始菜单树：按区（片库/直播/听读/短剧/小程序/多媒体）分组，
+  /// 组下挂该区真实站点，名全部取注册表。听读组下再分听书/阅读
+  /// 两层，演示任意层级展开。空组挂一行“暂无可用站点”（点按无动作）。
+  List<Win7TreeNode> _win7TreeGroups() {
+    List<Win7TreeNode> orEmpty(List<Win7TreeNode> children) =>
+        children.isEmpty
+            ? const [Win7TreeNode(label: '暂无可用站点')]
+            : children;
+    return [
+      Win7TreeNode(
+        label: '片库',
+        children: orEmpty([
+          for (final site in _librarySources)
+            Win7TreeNode(
+              label: site.name,
+              kind: Win7WindowKind.library,
+              siteId: site.id,
+            ),
+        ]),
+      ),
+      Win7TreeNode(
+        label: '直播',
+        children: orEmpty([
+          for (final source in LiveSource.visible(false))
+            Win7TreeNode(
+              label: source.name,
+              kind: Win7WindowKind.live,
+              siteId: source.id,
+            ),
+        ]),
+      ),
+      Win7TreeNode(
+        label: '听读',
+        children: [
+          Win7TreeNode(
+            label: '听书',
+            children: orEmpty([
+              for (final source in ContentRegistry.sourcesFor(
+                ContentSection.audio,
+              ))
+                Win7TreeNode(
+                  label: source.name,
+                  kind: Win7WindowKind.audio,
+                  siteId: source.id,
+                ),
+            ]),
+          ),
+          Win7TreeNode(
+            label: '阅读',
+            children: orEmpty([
+              for (final source in ContentRegistry.sourcesFor(
+                ContentSection.novel,
+              ))
+                Win7TreeNode(
+                  label: source.name,
+                  kind: Win7WindowKind.novel,
+                  siteId: source.id,
+                ),
+            ]),
+          ),
+        ],
+      ),
+      Win7TreeNode(
+        label: '短剧',
+        children: orEmpty([
+          for (final site in _librarySources)
+            if (isHongguoDramaGroup(site.groupId))
+              Win7TreeNode(
+                label: site.name,
+                kind: Win7WindowKind.drama,
+                siteId: site.id,
+              ),
+        ]),
+      ),
+      // 小程序/多媒体屏不接受直达某项的参数，树节点只开窗口。
+      Win7TreeNode(
+        label: '小程序',
+        children: orEmpty([
+          for (final app in _win7MiniApps)
+            Win7TreeNode(
+              label: app.name,
+              kind: Win7WindowKind.miniApp,
+              siteId: app.appId,
+            ),
+        ]),
+      ),
+      Win7TreeNode(
+        label: '多媒体',
+        children: orEmpty([
+          for (final site in _cloudDriveSites)
+            Win7TreeNode(
+              label: site.name,
+              kind: Win7WindowKind.multimedia,
+              siteId: site.id,
+            ),
+        ]),
+      ),
+    ];
+  }
+
+  /// 某窗口的内容体。直播体 key 固定、靠 nonce 换站；听读体 key 取
+  /// binding 选站；片库/短剧体读首页共享目录状态，不常驻（最小化
+  /// 时只留描述）。
+  Widget _win7WindowBody(
+    _Win7Window window, {
+    required bool glass,
+    required double maxWidth,
+  }) {
+    switch (window.kind) {
+      case Win7WindowKind.live:
+        // key 固定：实例常驻，换站靠 nonce 走 LiveScreen 自身切站。
+        return LiveScreen(
+          key: const ValueKey('win7-live'),
+          repository: _liveRepository,
+          store: _liveStore,
+          greenMode: false,
+          onExitLeft: () => _navKey.currentState?.focusCurrent(),
+          appStore: widget.store,
+          initialSourceId: window.sourceId ?? '',
+          initialSourceNonce: window.nonce,
+        );
+      case Win7WindowKind.audio:
+      case Win7WindowKind.novel:
+        final zone = window.kind == Win7WindowKind.audio
+            ? HomeZone.audio
+            : HomeZone.novel;
+        final section = zone == HomeZone.audio
+            ? ContentSection.audio
+            : ContentSection.novel;
+        // key 取 binding 当前选站：只切前台/最小化时选站不变、实例
+        // 保留；窗口内换站或树里换站都改选站、key 变、实例重建。
+        return ListenReadPage(
+          key: ValueKey(
+            'win7-listenread-${zone.name}-${_contentBinding.selectedIdFor(section) ?? ''}',
+          ),
+          zone: zone,
+          onZoneSelected: _win7ListenReadSwitch,
+          zoneBuilder: (z) => ContentZoneScreen(
+            section: z == HomeZone.audio
+                ? ContentSection.audio
+                : ContentSection.novel,
+            binding: _contentBinding,
+          ),
+        );
+      case Win7WindowKind.miniApp:
+        return const MiniAppHomePage(key: ValueKey('win7-miniapp'));
+      case Win7WindowKind.multimedia:
+        return MultimediaScreen(
+          key: const ValueKey('win7-multimedia'),
+          repository: widget.repository,
+          store: widget.store,
+          driveSites: _cloudDriveSites,
+          onOpenDrama: _openDrama,
+          onOpenCloudLogin: _openCloudLogin,
+        );
+      case Win7WindowKind.library:
+      case Win7WindowKind.drama:
+        return _win7LibraryBody(glass: glass, maxWidth: maxWidth);
+    }
+  }
+
+  /// 片库/短剧窗口体：与通用分支同口径（红果组/钉住且不在选片
+  /// 模式时走戏剧首页，否则走带顶栏的目录），窗口内不挂胶囊栏。
+  /// 直接调 _catalog，不走 _tabBody 的区派发，窗口内容不受区
+  /// 状态侧路影响。
+  Widget _win7LibraryBody({required bool glass, required double maxWidth}) {
+    if (!_selectionMode &&
+        (isHongguoDramaGroup(_group.id) || _dramaHomePinned)) {
+      return SafeArea(
+        bottom: !glass,
+        child: _dramaHome(hideCapsuleBar: true),
+      );
+    }
+    return Scaffold(
+      appBar: _homeAppBar(television: false, maxWidth: maxWidth),
+      body: SafeArea(
+        top: false,
+        bottom: !glass,
+        child: _librarySources.isEmpty
+            ? _noSourcesPanel()
+            : _catalog(selectionInBody: false),
+      ),
+    );
+  }
+
+  /// 窗口槽位：直播/听读/小程序/多媒体体常驻（Offstage 藏起），
+  /// 状态完整保留；片库/短剧体共用首页目录状态（同一 _scroll
+  /// 控制器挂两份滚动视图会崩），只在前台时建体，最小化时槽位
+  /// 只留一个空占位、描述留在 _win7Windows 里供恢复换站。
+  Widget _win7WindowSlot(
+    _Win7Window window, {
+    required bool isForeground,
+    required bool glass,
+    required double maxWidth,
+  }) {
+    final slotKey = ValueKey('win7-window-${window.kind.name}');
+    if ((window.kind == Win7WindowKind.library ||
+            window.kind == Win7WindowKind.drama) &&
+        !isForeground) {
+      return SizedBox.shrink(key: slotKey);
+    }
+    return Offstage(
+      key: slotKey,
+      offstage: !isForeground,
+      child: Win7WindowFrame(
+        kind: window.kind,
+        onMinimize: () => _win7Minimize(window.kind),
+        onClose: () => _win7Close(window.kind),
+        child: _win7WindowBody(window, glass: glass, maxWidth: maxWidth),
+      ),
+    );
+  }
+
+  /// Win7 外壳：桌面/窗口区 + 常驻任务栏。胶囊栏整个不出现。
+  /// 系统返回：先关菜单，再退选片/搜索，最后把前台窗口最小化
+  /// 回桌面；桌面上的返回才退出应用。
+  Widget _win7Shell({required bool glass, required double maxWidth}) {
+    final foregroundKind = _win7Foreground;
+    final foregroundWindow = foregroundKind == null
+        ? null
+        : _win7Windows[foregroundKind];
+    return PopScope(
+      canPop:
+          foregroundWindow == null &&
+          !_win7MenuOpen &&
+          !_selectionMode &&
+          !_searchVisible &&
+          _search.text.isEmpty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_win7MenuOpen) {
+          setState(() => _win7MenuOpen = false);
+        } else if (_selectionMode) {
+          _cancelSelection();
+        } else if (_searchVisible || _search.text.isNotEmpty) {
+          setState(() => _searchVisible = false);
+          _search.clear();
+          _searchChanged('');
+        } else if (foregroundWindow != null) {
+          _win7Minimize(foregroundWindow.kind);
+        }
+      },
+      child: Scaffold(
+        body: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  if (foregroundWindow == null)
+                    Win7Desktop(onIconTap: (kind) => _win7Open(kind)),
+                  // 已开窗口各占一个 key 固定的槽位：前台显示、其余
+                  // Offstage，状态保留靠 key 稳定 + 不换父级。
+                  for (final entry in _win7Windows.entries)
+                    _win7WindowSlot(
+                      entry.value,
+                      isForeground: entry.key == foregroundKind,
+                      glass: glass,
+                      maxWidth: maxWidth,
+                    ),
+                  if (_win7MenuOpen)
+                    Win7StartMenu(
+                      groups: _win7TreeGroups(),
+                      onLeafTap: (kind, siteId) =>
+                          _win7Open(kind, sourceId: siteId),
+                      onDismiss: () =>
+                          setState(() => _win7MenuOpen = false),
+                    ),
+                ],
+              ),
+            ),
+            Win7Taskbar(
+              openWindows: _win7Windows.keys.toList(),
+              foreground: foregroundKind,
+              onStartTap: _win7ToggleMenu,
+              onEntryTap: _win7ToggleEntry,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 戏剧首页体（通用分支与 Win7 短剧/片库窗口共用同一份构造，
+  /// 只差胶囊栏显隐：Win7 窗口内恒藏）。
+  Widget _dramaHome({required bool hideCapsuleBar}) {
+    return HongguoDramaHome(
+      dramas: List.of(_visible),
+      repository: widget.repository,
+      store: widget.store,
+      onOpenDrama: _openDrama,
+      onOpenFeed: _openFullscreenFeed,
+      onPickSource: () => unawaited(_pickSource()),
+      sourceLabel: '${_group.name} (${_group.sources.length})',
+      currentSourceLabel: _allSources ? '全部站源' : _source.name,
+      feedEnabled: _feedCenterEnabled,
+      categories: _displayCategories,
+      selectedCategory: _displayCategory,
+      onCategorySelected: _changeCategory,
+      contentTier: _contentTier,
+      tierEmpty: _tierMissing,
+      searchController: _search,
+      searchHint: _searchHint,
+      onSearchChanged: _searchChanged,
+      onSearchSubmitted: _submitSearch,
+      onOpenGlobalSearch: _openGlobalSearch,
+      onAvatarPressed: _openMine,
+      onFilterPressed: () => unawaited(_chooseCatalogView()),
+      onRankingsPressed: _openRankings,
+      onNewPressed: _toggleNewSort,
+      filtersActive:
+          widget.store.catalogView.sort != CatalogSort.source ||
+          widget.store.catalogView.release.isNotEmpty,
+      newActive: widget.store.catalogView.sort == CatalogSort.date,
+      onOpenSaved: _openSaved,
+      onSettingsPressed: _openZoneSettings,
+      onOpenFeatured: _openFeaturedDrama,
+      requestedTab: _multimediaRequested
+          ? HongguoDramaHome.multimediaTabIndex
+          : _miniAppRequested
+          ? HongguoDramaHome.miniAppTabIndex
+          : _mineRequested
+          ? HongguoDramaHome.mineTabIndex
+          : null,
+      hideCapsuleBar: hideCapsuleBar,
+      driveSites: _cloudDriveSites,
+      onOpenCloudLogin: _openCloudLogin,
+    );
+  }
+
+  /// 通用顶栏（通用分支与 Win7 片库/短剧窗口共用同一份构造）。
+  PreferredSizeWidget _homeAppBar({
+    required bool television,
+    required double maxWidth,
+  }) {
+    if (glassDesign(context)) return _glassAppBar();
+    return AppBar(
+      toolbarHeight: television ? 64 : null,
+      titleSpacing: 12,
+      automaticallyImplyLeading: false,
+      leading: _appBarLeading(),
+      title: _selectionMode
+          ? const Text(
+              '选择视频',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            )
+          : _multimediaRequested
+          ? const Text('多媒体')
+          : _miniAppRequested
+          ? const Text('小程序')
+          : _mineRequested
+          ? const Text('我的')
+          : _showCatalogHeader
+          ? InkWell(
+              key: const ValueKey('source-switch'),
+              onTap: _canSwitchSource
+                  ? () => unawaited(_pickSource())
+                  : null,
+              child: SizedBox(
+                height: 48,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        _group.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    if (_canSwitchSource)
+                      const Icon(Icons.expand_more_rounded),
+                  ],
+                ),
+              ),
+            )
+          : Text(_zoneTitle),
+      actions: [
+        if (_selectionMode) ...[
+          TextButton(
+            key: const ValueKey('clear-catalog-selection'),
+            onPressed: _selectedDramas.isEmpty
+                ? null
+                : () => setState(_selectedDramas.clear),
+            child: const Text('清空'),
+          ),
+          TextButton(
+            key: const ValueKey('cancel-catalog-selection'),
+            onPressed: _cancelSelection,
+            child: const Text('取消'),
+          ),
+        ] else ...[
+          if (_showCatalogHeader && maxWidth >= 840)
+            ..._materialCatalogActions(
+              television: television,
+              maxWidth: maxWidth,
+            ),
+        ],
+        const SizedBox(width: 8),
+      ],
+      // 窄屏第二行：目录操作组横排独占一行，不再盖住站源条。
+      bottom:
+          _showCatalogHeader && !_selectionMode && maxWidth < 840
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(56),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: _materialCatalogActions(
+                      television: television,
+                      maxWidth: maxWidth,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : null,
+    );
+  }
+
+  /// 无显示中站源的空态（通用 _tabBody 与 Win7 片库窗口共用）。
+  Widget _noSourcesPanel() {
+    return StatusPanel(
+      title: '暂无显示中的站源',
+      message: widget.store.sources.isEmpty
+          ? '请联系管理员为当前用户开放站源。'
+          : '所有站源已在「源显示列表」中关闭，请到站源管理中重新开启。',
+    );
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
@@ -2023,6 +2753,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           final desktop =
               Theme.of(context).platform != TargetPlatform.iOS &&
               constraints.maxWidth >= 840;
+          // Win7 主题手机端：首页外壳换成桌面 + 窗口管理器 + 任务栏，
+          // 霓虹胶囊栏整个不出现；电视与宽屏桌面布局不受影响。
+          if (!television &&
+              !desktop &&
+              widget.store.appTheme == AppThemeMode.win7) {
+            return _win7Shell(glass: glass, maxWidth: constraints.maxWidth);
+          }
           // 底部标签栏：两个分支共用同一份（戏剧首页分支挂外层
           // Scaffold，与通用分支同一结构，点按可命中；挂内层
           // Scaffold 时嵌套结构下点按会被 body 盖住）。
@@ -2042,49 +2779,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 bottomNavigationBar: bottomTabBar,
                 body: SafeArea(
                   bottom: !glass,
-                  child: HongguoDramaHome(
-                    dramas: List.of(_visible),
-                    repository: widget.repository,
-                    store: widget.store,
-                    onOpenDrama: _openDrama,
-                    onOpenFeed: _openFullscreenFeed,
-                    onPickSource: () => unawaited(_pickSource()),
-                    sourceLabel: '${_group.name} (${_group.sources.length})',
-                    currentSourceLabel: _allSources ? '全部站源' : _source.name,
-                    feedEnabled: _visible.isNotEmpty,
-                    categories: _displayCategories,
-                    selectedCategory: _displayCategory,
-                    onCategorySelected: _changeCategory,
-                    contentTier: _contentTier,
-                    tierEmpty: _tierMissing,
-                    searchController: _search,
-                    searchHint: _searchHint,
-                    onSearchChanged: _searchChanged,
-                    onSearchSubmitted: _submitSearch,
-                    onOpenGlobalSearch: _openGlobalSearch,
-                    onAvatarPressed: _openMine,
-                    onFilterPressed: () => unawaited(_chooseCatalogView()),
-                    onRankingsPressed: _openRankings,
-                    onNewPressed: _toggleNewSort,
-                    filtersActive:
-                        widget.store.catalogView.sort != CatalogSort.source ||
-                        widget.store.catalogView.release.isNotEmpty,
-                    newActive:
-                        widget.store.catalogView.sort == CatalogSort.date,
-                    onOpenSaved: _openSaved,
-                    onSettingsPressed: _openZoneSettings,
-                    onOpenFeatured: _openFeaturedDrama,
-                    requestedTab: _multimediaRequested
-                        ? HongguoDramaHome.multimediaTabIndex
-                        : _miniAppRequested
-                        ? HongguoDramaHome.miniAppTabIndex
-                        : _mineRequested
-                        ? HongguoDramaHome.mineTabIndex
-                        : null,
-                    hideCapsuleBar: bottomTabBar != null,
-                    driveSites: _cloudDriveSites,
-                    onOpenCloudLogin: _openCloudLogin,
-                  ),
+                  child: _dramaHome(hideCapsuleBar: bottomTabBar != null),
                 ),
               );
             }
@@ -2092,98 +2787,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           final scaffold = Scaffold(
             extendBody: glass && !desktop,
             bottomNavigationBar: bottomTabBar,
-            appBar: glass
-                ? _glassAppBar()
-                : AppBar(
-                    toolbarHeight: television ? 64 : null,
-                    titleSpacing: 12,
-                    automaticallyImplyLeading: false,
-                    leading: _appBarLeading(),
-                    title: _selectionMode
-                        ? const Text(
-                            '选择视频',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          )
-                        : _multimediaRequested
-                        ? const Text('多媒体')
-                        : _miniAppRequested
-                        ? const Text('小程序')
-                        : _mineRequested
-                        ? const Text('我的')
-                        : _showCatalogHeader
-                        ? InkWell(
-                            key: const ValueKey('source-switch'),
-                            onTap: _canSwitchSource
-                                ? () => unawaited(_pickSource())
-                                : null,
-                            child: SizedBox(
-                              height: 48,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      _group.name,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                  if (_canSwitchSource)
-                                    const Icon(Icons.expand_more_rounded),
-                                ],
-                              ),
-                            ),
-                          )
-                        : Text(_zoneTitle),
-                    actions: [
-                      if (_selectionMode) ...[
-                        TextButton(
-                          key: const ValueKey('clear-catalog-selection'),
-                          onPressed: _selectedDramas.isEmpty
-                              ? null
-                              : () => setState(_selectedDramas.clear),
-                          child: const Text('清空'),
-                        ),
-                        TextButton(
-                          key: const ValueKey('cancel-catalog-selection'),
-                          onPressed: _cancelSelection,
-                          child: const Text('取消'),
-                        ),
-                      ] else ...[
-                        if (_showCatalogHeader &&
-                            constraints.maxWidth >= 840)
-                          ..._materialCatalogActions(
-                            television: television,
-                            maxWidth: constraints.maxWidth,
-                          ),
-                      ],
-                      const SizedBox(width: 8),
-                    ],
-                    // 窄屏第二行：目录操作组横排独占一行，不再盖住站源条。
-                    bottom: _showCatalogHeader &&
-                            !_selectionMode &&
-                            constraints.maxWidth < 840
-                        ? PreferredSize(
-                            preferredSize: const Size.fromHeight(56),
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: _materialCatalogActions(
-                                    television: television,
-                                    maxWidth: constraints.maxWidth,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          )
-                        : null,
-                  ),
+            appBar: _homeAppBar(
+              television: television,
+              maxWidth: constraints.maxWidth,
+            ),
             body: SafeArea(
               top: false,
               bottom: !glass || desktop,
@@ -2352,16 +2959,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         initialSourceNonce: _liveEntryNonce,
       );
     }
-    if (_zone == HomeZone.audio) {
-      return ContentZoneScreen(
-        section: ContentSection.audio,
-        binding: _contentBinding,
-      );
-    }
-    if (_zone == HomeZone.novel) {
-      return ContentZoneScreen(
-        section: ContentSection.novel,
-        binding: _contentBinding,
+    if (_zone == HomeZone.audio || _zone == HomeZone.novel) {
+      return ListenReadPage(
+        zone: _zone,
+        onZoneSelected: _setZone,
+        zoneBuilder: (zone) => ContentZoneScreen(
+          section: zone == HomeZone.audio
+              ? ContentSection.audio
+              : ContentSection.novel,
+          binding: _contentBinding,
+        ),
       );
     }
     // 多媒体：与短剧首页内层页签是同一个屏；网盘数据不依赖
@@ -2392,12 +2999,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       );
     }
     if (_librarySources.isEmpty) {
-      return StatusPanel(
-        title: '暂无显示中的站源',
-        message: widget.store.sources.isEmpty
-            ? '请联系管理员为当前用户开放站源。'
-            : '所有站源已在「源显示列表」中关闭，请到站源管理中重新开启。',
-      );
+      return _noSourcesPanel();
     }
     final catalog = _catalog(selectionInBody: desktop || television);
     if (!neonStyleActive || television) return catalog;

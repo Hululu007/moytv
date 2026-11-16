@@ -14,7 +14,6 @@ void main() {
   Future<PlayerControls> pumpControls(
     WidgetTester tester, {
     ValueChanged<bool>? onVisibility,
-    VoidCallback? onPushToWatchRoom,
   }) async {
     // 按手机形态测；必须在测试体末尾复位（_verifyInvariants 在
     // 测试体返回后立即跑，tearDown/addTearDown 都赶不上）。
@@ -49,7 +48,6 @@ void main() {
       swipeEnabled: true,
       orientationMode: PlaybackOrientationMode.auto,
       onOrientationMode: (_) {},
-      onPushToWatchRoom: onPushToWatchRoom,
       onControlsVisibilityChanged: onVisibility,
     );
     await tester.pumpWidget(
@@ -63,12 +61,11 @@ void main() {
     return controls;
   }
 
-  testWidgets('顶栏按钮两两不重叠（含门图标）', (tester) async {
-    await pumpControls(tester, onPushToWatchRoom: () {});
+  testWidgets('顶栏按钮两两不重叠', (tester) async {
+    await pumpControls(tester);
     final buttons = [
       find.byTooltip('返回'),
       find.byTooltip('方向控制'),
-      find.byTooltip('推送到一起看'),
       find.byTooltip('旋转与全屏'),
     ];
     for (final button in buttons) {
@@ -82,26 +79,6 @@ void main() {
           isFalse,
           reason: '顶栏按钮 $i 与 $j 重叠：${rects[i]} vs ${rects[j]}',
         );
-      }
-    }
-    debugDefaultTargetPlatformOverride = null;
-  });
-
-  testWidgets('内嵌形态无门图标时剩余顶栏按钮不重叠', (tester) async {
-    await pumpControls(tester);
-    expect(find.byTooltip('推送到一起看'), findsNothing);
-    final buttons = [
-      find.byTooltip('返回'),
-      find.byTooltip('方向控制'),
-      find.byTooltip('旋转与全屏'),
-    ];
-    for (final button in buttons) {
-      expect(button, findsOneWidget);
-    }
-    final rects = buttons.map(tester.getRect).toList();
-    for (var i = 0; i < rects.length; i++) {
-      for (var j = i + 1; j < rects.length; j++) {
-        expect(rects[i].overlaps(rects[j]), isFalse);
       }
     }
     debugDefaultTargetPlatformOverride = null;

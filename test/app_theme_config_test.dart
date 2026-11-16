@@ -5,7 +5,7 @@ import 'package:moyi/app_theme_config.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('12 套主题配置', () {
+  group('13 套主题配置', () {
     test('名字与关键配色与用户文件一致', () {
       final expected = {
         AppThemeMode.purpleNeon: (
@@ -80,6 +80,12 @@ void main() {
           const Color(0xFFE040FB),
           const Color(0xFF1A0033),
         ),
+        AppThemeMode.win7: (
+          'Win7',
+          const Color(0xFF0078D4),
+          const Color(0xFF1E88E5),
+          const Color(0xFF002147),
+        ),
       };
       for (final entry in expected.entries) {
         final config = AppThemeConfig.forTheme(entry.key);
@@ -104,6 +110,7 @@ void main() {
         AppThemeMode.cyanCyberNeon: CategoryNavStyle.cyberSidebar,
         AppThemeMode.redBlackNeon: CategoryNavStyle.darkSidebar,
         AppThemeMode.pinkPurpleNeon: CategoryNavStyle.colorBlockSidebar,
+        AppThemeMode.win7: CategoryNavStyle.darkSidebar,
       };
       for (final entry in expected.entries) {
         expect(
@@ -136,11 +143,12 @@ void main() {
         AppThemeConfig.forTheme(AppThemeMode.pinkPurpleNeon).isDark,
         isTrue,
       );
+      expect(AppThemeConfig.forTheme(AppThemeMode.win7).isDark, isTrue);
     });
   });
 
   group('存储值', () {
-    test('12 套主题存储值往返', () {
+    test('13 套主题存储值往返', () {
       for (final mode in AppThemeMode.values) {
         expect(
           AppThemeMode.fromStorageValue(mode.storageValue),
@@ -150,13 +158,19 @@ void main() {
       }
     });
 
-    test('未知或空存储值回落默认紫蓝霓虹', () {
-      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.purpleNeon);
-      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.purpleNeon);
-      expect(AppThemeMode.fromStorageValue('neon'), AppThemeMode.purpleNeon);
+    test('未知或空存储值回落默认 Win7，已存偏好优先', () {
+      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.win7);
+      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.win7);
+      expect(AppThemeMode.fromStorageValue('neon'), AppThemeMode.win7);
+      expect(AppThemeMode.fromStorageValue('bogus'), AppThemeMode.win7);
+      // 已存偏好不受默认影响：读到哪套就是哪套。
       expect(
-        AppThemeMode.fromStorageValue('bogus'),
+        AppThemeMode.fromStorageValue('purpleNeon'),
         AppThemeMode.purpleNeon,
+      );
+      expect(
+        AppThemeMode.fromStorageValue('goldVip'),
+        AppThemeMode.goldVip,
       );
     });
   });
@@ -189,7 +203,7 @@ void main() {
     });
   });
 
-  testWidgets('AppThemeConfig.of 在没有配置时回落紫蓝霓虹', (tester) async {
+  testWidgets('AppThemeConfig.of 在没有配置时回落 Win7', (tester) async {
     AppThemeConfig? seen;
     await tester.pumpWidget(
       MaterialApp(
@@ -201,6 +215,6 @@ void main() {
         ),
       ),
     );
-    expect(seen?.mode, AppThemeMode.purpleNeon);
+    expect(seen?.mode, AppThemeMode.win7);
   });
 }

@@ -183,7 +183,8 @@ void main() {
 
   group('主题卡显示内容选择', () {
     Future<LocalStore> pumpThemeScreen(WidgetTester tester) async {
-      SharedPreferences.setMockInitialValues({});
+      // 默认主题已改 Win7：本测试验主题卡，显式钉住紫蓝霓虹。
+      SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
       await tester.pumpWidget(
@@ -197,9 +198,9 @@ void main() {
       return store;
     }
 
-    testWidgets('新装 12 张卡默认全部内容', (tester) async {
+    testWidgets('新装 13 张卡默认全部内容', (tester) async {
       await pumpThemeScreen(tester);
-      expect(find.text('显示内容：全部内容'), findsNWidgets(12));
+      expect(find.text('显示内容：全部内容'), findsNWidgets(13));
     });
 
     testWidgets('点档行改档不切主题', (tester) async {
@@ -226,7 +227,8 @@ void main() {
     });
 
     testWidgets('每套主题的档独立存放', (tester) async {
-      SharedPreferences.setMockInitialValues({});
+      // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+      SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
       await store.setDisplayScheme(
@@ -289,6 +291,8 @@ void main() {
     }) async {
       SharedPreferences.setMockInitialValues({
         'hiddenSites': '[${hidden.map((id) => '"$id"').join(',')}]',
+        // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+        'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
@@ -413,7 +417,11 @@ void main() {
       // 成人流只抽样少数几个可见成人站：注册表很大时目标站不一定
       // 被抽中，断言会抖。先把注册表里其它成人站全部藏起来，只留
       // adult1 可见，抽样必中，测试才稳定（藏站本身不影响断言口径）。
-      SharedPreferences.setMockInitialValues({'hiddenSites': '[]'});
+      SharedPreferences.setMockInitialValues({
+        'hiddenSites': '[]',
+        // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+        'appThemeMode': 'purpleNeon',
+      });
       final probe = LocalStore(await SharedPreferences.getInstance());
       final hideIds = probe.sources
           .where((site) => isAdultSourceName(site.name))
@@ -450,6 +458,8 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'source': 'hongguo',
         'hiddenSites': '[]',
+        // 默认主题已改 Win7：本组验通用外壳（底栏标签），显式钉住紫蓝霓虹。
+        'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);

@@ -24,6 +24,8 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'source': 'missav',
       'hiddenSites': '[]',
+      // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+      'appThemeMode': 'purpleNeon',
     });
     store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
@@ -54,7 +56,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
   }
 
-  /// 切区全走底部标签栏：0=片库 / 1=直播 / 4=多媒体。
+  /// 切区全走底部标签栏：0=片库 / 1=直播 / 3=多媒体。
   Future<void> tapShellTab(WidgetTester tester, int index) async {
     await tester.tap(find.byKey(ValueKey('shell-tab-$index')));
     await tester.pump();
@@ -105,7 +107,7 @@ void main() {
     tester,
   ) async {
     await pumpHome(tester, const Size(390, 844));
-    await tapShellTab(tester, 4);
+    await tapShellTab(tester, 3);
     expect(find.byType(MultimediaScreen), findsOneWidget);
     expect(find.byKey(const ValueKey('source-switch')), findsNothing);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
@@ -125,7 +127,7 @@ void main() {
 
   testWidgets('back to library: single selector returns', (tester) async {
     await pumpHome(tester, const Size(390, 844));
-    await tapShellTab(tester, 4);
+    await tapShellTab(tester, 3);
     expect(find.byKey(const ValueKey('source-switch')), findsNothing);
     await tapShellTab(tester, 0);
     expect(find.byKey(const ValueKey('source-switch')), findsOneWidget);

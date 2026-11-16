@@ -94,6 +94,33 @@ class _LiveScreenState extends State<LiveScreen> {
   String? _error;
   int _page = 1;
   int _generation = 0;
+
+  /// 可取消的补拉等待：页面销毁时取消计时器，测试的假时钟里不留挂起的 Timer。
+  Timer? _retryTimer;
+  Completer<void>? _retryCompleter;
+
+  Future<void> _cancellableRetryDelay() async {
+    final completer = Completer<void>();
+    _retryCompleter = completer;
+    _retryTimer = Timer(const Duration(milliseconds: 1500), () {
+      _retryTimer = null;
+      _retryCompleter = null;
+      if (!completer.isCompleted) completer.complete();
+    });
+    await completer.future;
+    if (_retryCompleter == completer) {
+      _retryTimer = null;
+      _retryCompleter = null;
+    }
+  }
+
+  void _cancelRetryDelay() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    final completer = _retryCompleter;
+    _retryCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
   int _consumedEntryNonce = 0;
   final _groupTileKeys = <String, GlobalKey>{};
   late final LivePlaybackController _playback;
@@ -146,6 +173,7 @@ class _LiveScreenState extends State<LiveScreen> {
 
   @override
   void dispose() {
+    _cancelRetryDelay();
     _rememberChannelOffset();
     widget.store.removeListener(_storeChanged);
     widget.appStore?.removeListener(_appStoreChanged);
@@ -180,7 +208,7 @@ class _LiveScreenState extends State<LiveScreen> {
         _lastGood = null;
         _error = null;
       });
-      if (_source != null) unawaited(_loadPlatforms());
+      if (_source != null) unawaited(_loadPlatformsWithAutoRetry());
     }
   }
 
@@ -226,7 +254,7 @@ class _LiveScreenState extends State<LiveScreen> {
               .firstOrNull ??
           visible.first
         : visible.first;
-    unawaited(_loadPlatforms());
+    unawaited(_loadPlatformsWithAutoRetry());
   }
 
   List<({String id, String name, int count})> get _entries => [
@@ -247,6 +275,37 @@ class _LiveScreenState extends State<LiveScreen> {
     _channels = channels;
     if (source == null) return;
     unawaited(_playback.load(source, channels, autoplay: channels.isNotEmpty));
+  }
+
+  /// 进直播页 / 切直播源时的自动加载：分类首次请求落空或报错时
+  /// 自动补拉（最多再补 2 次），不用用户手动下拉刷新；切源后旧的
+  /// 补拉自动作废。分类已取到时不补（频道失败走分组内兜底）。
+  Future<void> _loadPlatformsWithAutoRetry({
+    bool force = false,
+    String keepGroup = '',
+  }) async {
+    final sourceId = _source?.id;
+    await _loadPlatforms(force: force, keepGroup: keepGroup);
+    // 首轮加载落定的分组：补拉期间用户已点别的分组就作废，
+    // 不能把用户的选组刷回去。
+    final group = _group;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!mounted || _loading || _source?.id != sourceId || _group != group) {
+        return;
+      }
+      if (_platforms.isNotEmpty || _error == null) return;
+      if (attempt > 0) {
+        await _cancellableRetryDelay();
+        if (!mounted ||
+            _loading ||
+            _source?.id != sourceId ||
+            _group != group) {
+          return;
+        }
+        if (_platforms.isNotEmpty || _error == null) return;
+      }
+      await _loadPlatforms(force: true, keepGroup: keepGroup);
+    }
   }
 
   Future<void> _loadPlatforms({
@@ -406,7 +465,7 @@ class _LiveScreenState extends State<LiveScreen> {
     if (source.id == _source?.id) return;
     _rememberChannelOffset();
     setState(() => _source = source);
-    _loadPlatforms();
+    unawaited(_loadPlatformsWithAutoRetry());
   }
 
   /// 记下当前分组的频道列表滚动位置（换台/切分组/切源/离页时调）。

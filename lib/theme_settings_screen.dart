@@ -6,7 +6,7 @@ import 'local_store.dart';
 import 'models.dart';
 import 'widgets.dart';
 
-/// 外观主题：12 套固定主题，点选即时生效（不重启）。
+/// 外观主题：13 套固定主题，点选即时生效（不重启）。
 ///
 /// 每张主题卡片带一块真实内容小预览：当前站源拉回的分类名与视频卡
 /// （标题 + 封面），用该主题自身的配色画。没有仓库或拉不到数据时只显示
@@ -75,7 +75,7 @@ class _ThemeSettingsScreenState extends State<ThemeSettingsScreen> {
   }
 
   Future<void> _reset() async {
-    await widget.store.setAppTheme(AppThemeMode.purpleNeon);
+    await widget.store.setAppTheme(AppThemeMode.win7);
     if (mounted) setState(() {});
   }
 
@@ -90,7 +90,7 @@ class _ThemeSettingsScreenState extends State<ThemeSettingsScreen> {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           Text(
-            '12 套主题，点选即时生效；分类侧边栏样式随主题自动切换。',
+            '13 套主题，点选即时生效；分类侧边栏样式随主题自动切换。',
             style: TextStyle(color: colors.onSurfaceVariant, fontSize: 13),
           ),
           const SizedBox(height: 12),

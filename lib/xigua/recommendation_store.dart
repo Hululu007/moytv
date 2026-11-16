@@ -76,7 +76,7 @@ class RecommendationWatch {
   }
 }
 
-/// 动态的本机记录按用户隔离保存，与剧库快照分开，避免影响备份与设备互联格式。
+/// 动态的本机记录按用户隔离保存，与剧库快照分开，避免影响备份格式。
 class RecommendationStore {
   RecommendationStore(this.preferences);
 
