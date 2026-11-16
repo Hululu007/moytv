@@ -655,6 +655,163 @@ class NeonIconButton extends StatelessWidget {
 }
 
 /// 底部浮动胶囊导航（首页 / 频道 / ＋ / 多媒体 / 我的）。
+/// 霓虹胶囊栏（通用壳）：胶囊容器 + 若干页签 + 中间一个渐变圆钮。
+///
+/// 唯一的底部栏实现：首页外层壳（7 个标签）与短剧首页内层胶囊栏
+/// （4 个页签）共用这一份绘制，只差传入的条目与圆钮位置；配色一律
+/// 取当前主题的 AppThemeConfig，各主题只换色、不换结构。圆钮点按
+/// 走 [onCenter]（外层壳是打开全屏推荐流，内层是进全屏流页签）。
+/// [centerAfter] 是圆钮前面放几个页签；[centerEnabled] 为假时圆钮
+/// 变暗且不响应（外层无可播内容时用，与工具胶囊的全屏流键同口径）。
+/// [tabKeyPrefix]/[centerKey] 供测试按 key 点按，不传则不挂 key。
+class NeonCapsuleBar extends StatelessWidget {
+  const NeonCapsuleBar({
+    super.key,
+    required this.entries,
+    required this.index,
+    required this.onSelect,
+    required this.onCenter,
+    this.centerAfter = 2,
+    this.centerEnabled = true,
+    this.tabKeyPrefix,
+    this.centerKey,
+  });
+
+  /// 页签条目：（图标或 emoji 字符，文字）。emoji 字符（如 🎞️）直接
+  /// 显示、自带彩色，选中态只靠文字着色与加粗区分；其余用图标。
+  final List<(Object, String)> entries;
+
+  /// 当前选中页签在 [entries] 里的下标；-1 表示都不选中。
+  final int index;
+  final ValueChanged<int> onSelect;
+  final VoidCallback onCenter;
+  final int centerAfter;
+  final bool centerEnabled;
+  final String? tabKeyPrefix;
+  final String? centerKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final config = AppThemeConfig.of(context);
+    final before = entries.take(centerAfter.clamp(0, entries.length)).toList();
+    final after = entries.skip(before.length).toList();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: SafeArea(
+        top: false,
+        bottom: true,
+        // 底部至少留 10：无系统手势区时与旧胶囊栏同一观感，
+        // 有手势区时栏体不被系统条盖住。
+        minimum: const EdgeInsets.only(bottom: 10),
+        child: Container(
+          height: 62,
+          decoration: BoxDecoration(
+            color: config.surfaceColor.withValues(alpha: .94),
+            borderRadius: BorderRadius.circular(31),
+            border: Border.all(color: config.dividerColor),
+            boxShadow: [
+              BoxShadow(
+                color: config.primaryColor.withValues(alpha: .22),
+                blurRadius: 26,
+                spreadRadius: -6,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              for (var i = 0; i < before.length; i++)
+                _item(before[i], i, config),
+              SizedBox(width: 52, child: _center(config)),
+              for (var i = 0; i < after.length; i++)
+                _item(after[i], before.length + i, config),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _item((Object, String) entry, int entryIndex, AppThemeConfig config) {
+    final selected = index == entryIndex;
+    final glyph = entry.$1;
+    return Expanded(
+      child: GestureDetector(
+        key: tabKeyPrefix == null
+            ? null
+            : ValueKey('$tabKeyPrefix-$entryIndex'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onSelect(entryIndex),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (glyph is String)
+              Text(glyph, style: const TextStyle(fontSize: 19, height: 1.0))
+            else
+              Icon(
+                glyph as IconData,
+                size: 19,
+                color: selected ? config.primaryColor : config.textSecondary,
+              ),
+            const SizedBox(height: 3),
+            Text(
+              entry.$2,
+              style: TextStyle(
+                fontSize: 9.5,
+                height: 1.0,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? config.primaryColor : config.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _center(AppThemeConfig config) {
+    final circle = Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient:
+            config.selectedGradient ??
+            LinearGradient(
+              colors: [config.primaryColor, config.secondaryColor],
+            ),
+        boxShadow: [
+          BoxShadow(
+            color: config.accentColor.withValues(alpha: .55),
+            blurRadius: 20,
+            spreadRadius: -2,
+          ),
+          BoxShadow(
+            color: config.primaryColor.withValues(alpha: .45),
+            blurRadius: 28,
+            spreadRadius: -6,
+          ),
+        ],
+      ),
+      // 中间按钮：播放三角图标，白色与渐变圆钮的霓虹主题一致；
+      // 点按行为不变，仍是 onCenter（进全屏推荐流）。
+      child: const Icon(LucideIcons.play, size: 24, color: Colors.white),
+    );
+    return Center(
+      child: GestureDetector(
+        key: centerKey == null ? null : ValueKey(centerKey!),
+        behavior: HitTestBehavior.opaque,
+        onTap: centerEnabled ? onCenter : null,
+        child: centerEnabled ? circle : Opacity(opacity: .45, child: circle),
+      ),
+    );
+  }
+}
+
+/// 短剧首页内层胶囊栏：首页 / 频道 / 多媒体 / 我的 + 中间播放键。
+///
+/// 霓虹胶囊壳的 4 页签配置（见 [NeonCapsuleBar]）；外层壳统一为底部
+/// 标签栏后，内层栏只在 hideCapsuleBar 为假时出现（直接用
+/// HongguoDramaHome 的场合），首页主链路上由外层壳代替。
 class NeonBottomBar extends StatelessWidget {
   const NeonBottomBar({
     super.key,
@@ -670,111 +827,18 @@ class NeonBottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const entries = <(int, Object, String)>[
-      (0, LucideIcons.house, '首页'),
-      (1, '🎞️', '频道'),
-      (2, LucideIcons.hardDrive, '多媒体'),
-      (3, LucideIcons.user, '我的'),
+    const entries = <(Object, String)>[
+      (LucideIcons.house, '首页'),
+      ('🎞️', '频道'),
+      (LucideIcons.hardDrive, '多媒体'),
+      (LucideIcons.user, '我的'),
     ];
-    final config = AppThemeConfig.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-      child: Container(
-        height: 62,
-        decoration: BoxDecoration(
-          color: config.surfaceColor.withValues(alpha: .94),
-          borderRadius: BorderRadius.circular(31),
-          border: Border.all(color: config.dividerColor),
-          boxShadow: [
-            BoxShadow(
-              color: config.primaryColor.withValues(alpha: .22),
-              blurRadius: 26,
-              spreadRadius: -6,
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            _item(entries[0], config),
-            _item(entries[1], config),
-            Expanded(child: _center(config)),
-            _item(entries[2], config),
-            _item(entries[3], config),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _item((int, Object, String) entry, AppThemeConfig config) {
-    final selected = index == entry.$1;
-    final glyph = entry.$2;
-    return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onSelect(entry.$1),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // 频道页签用 🎞️ emoji 字符直接显示，其余页签用 Lucide 图标；
-            // emoji 自带彩色，选中态只靠下方文字着色与加粗区分。
-            if (glyph is String)
-              Text(glyph, style: const TextStyle(fontSize: 19, height: 1.0))
-            else
-              Icon(
-                glyph as IconData,
-                size: 19,
-                color: selected ? config.primaryColor : config.textSecondary,
-              ),
-            const SizedBox(height: 3),
-            Text(
-              entry.$3,
-              style: TextStyle(
-                fontSize: 9.5,
-                height: 1.0,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? config.primaryColor : config.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _center(AppThemeConfig config) {
-    return Center(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onCenter,
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient:
-                config.selectedGradient ??
-                LinearGradient(
-                  colors: [config.primaryColor, config.secondaryColor],
-                ),
-            boxShadow: [
-              BoxShadow(
-                color: config.accentColor.withValues(alpha: .55),
-                blurRadius: 20,
-                spreadRadius: -2,
-              ),
-              BoxShadow(
-                color: config.primaryColor.withValues(alpha: .45),
-                blurRadius: 28,
-                spreadRadius: -6,
-              ),
-            ],
-          ),
-          // 中间按钮：播放三角图标，白色与渐变圆钮的霓虹主题一致；
-          // 点按行为不变，仍是 onCenter（进全屏推荐流）。
-          child: const Icon(LucideIcons.play, size: 24, color: Colors.white),
-        ),
-      ),
+    return NeonCapsuleBar(
+      entries: entries,
+      index: index,
+      onSelect: onSelect,
+      onCenter: onCenter,
+      centerAfter: 2,
     );
   }
 }

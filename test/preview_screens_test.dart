@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/mine_page.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/app_theme.dart';
 import 'package:moyi/content_source_screen.dart';
 import 'package:moyi/detail_screen.dart';
@@ -194,7 +196,7 @@ void main() {
       HomeScreen(repository: FixtureRepository(), store: store),
     );
     try {
-      await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
+      await tester.tap(find.byKey(const ValueKey('shell-tab-0')));
       await settlePreview(tester);
       await tester.tap(find.text('片库'));
       await settlePreview(tester);
@@ -220,7 +222,7 @@ void main() {
       HomeScreen(repository: FixtureRepository(), store: store),
     );
     try {
-      await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
+      await tester.tap(find.byKey(const ValueKey('shell-tab-0')));
       await settlePreview(tester);
       await tester.tap(find.text('片库'));
       await settlePreview(tester);
@@ -425,24 +427,29 @@ void main() {
     );
   });
 
-  testWidgets('preview drawer', (tester) async {
-    final scaffoldKey = GlobalKey<ScaffoldState>();
+  testWidgets('preview shell bar', (tester) async {
     final key = await pumpPreview(
       tester,
       Scaffold(
-        key: scaffoldKey,
-        drawer: AppDrawer(
-          zone: HomeZone.library,
-          currentVersion: '1.0.0',
-          onZoneSelected: (_) {},
-          onWatchRoom: () {},
-          onTool: (_) {},
-          onMinorProtectionChanged: (_) {},
+        appBar: AppBar(title: const Text('片库')),
+        body: const Center(child: Text('预览·假数据')),
+        bottomNavigationBar: NeonCapsuleBar(
+          entries: const [
+            (LucideIcons.clapperboard, '片库'),
+            (LucideIcons.tv, '直播'),
+            (LucideIcons.headphones, '听书'),
+            (LucideIcons.bookOpen, '阅读'),
+            (LucideIcons.hardDrive, '多媒体'),
+            (LucideIcons.layoutGrid, '小程序'),
+            (LucideIcons.user, '我的'),
+          ],
+          index: 0,
+          onSelect: (_) {},
+          onCenter: () {},
+          centerAfter: 3,
         ),
-        body: const SizedBox.shrink(),
       ),
     );
-    scaffoldKey.currentState!.openDrawer();
     await settlePreview(tester);
     final boundary =
         key.currentContext!.findRenderObject() as RenderRepaintBoundary;
@@ -453,16 +460,16 @@ void main() {
       data.lengthInBytes,
     );
     Directory(previewDir).createSync(recursive: true);
-    File('$previewDir/preview_drawer.png').writeAsBytesSync(bytes);
-    print('preview landed: preview_drawer');
+    File('$previewDir/preview_shell_bar.png').writeAsBytesSync(bytes);
+    print('preview landed: preview_shell_bar');
   });
 
-  testWidgets('preview drawer grouped real', (tester) async {
+  testWidgets('preview mine page', (tester) async {
     tester.view.physicalSize = const Size(390, 1700);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final scaffoldKey = GlobalKey<ScaffoldState>();
+    final store = await previewStore({});
     final boundaryKey = GlobalKey();
     await tester.pumpWidget(
       RepaintBoundary(
@@ -472,23 +479,18 @@ void main() {
           theme: previewTheme(),
           home: DefaultTextStyle(
             style: const TextStyle(fontFamily: 'PreviewCJK'),
-            child: Scaffold(
-              key: scaffoldKey,
-              drawer: AppDrawer(
-                zone: HomeZone.library,
-                currentVersion: '1.0.0',
-                onZoneSelected: (_) {},
-                onWatchRoom: () {},
-                onTool: (_) {},
-                onMinorProtectionChanged: (_) {},
-              ),
-              body: const SizedBox.shrink(),
+            child: MinePage(
+              repository: FixtureRepository(),
+              store: store,
+              sourceLabel: '红果 (1)',
+              onOpenDrama: (_) {},
+              onOpenSaved: ({required bool history}) {},
+              onSettingsPressed: () {},
             ),
           ),
         ),
       ),
     );
-    scaffoldKey.currentState!.openDrawer();
     await settlePreview(tester);
     final boundary =
         boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
@@ -499,8 +501,8 @@ void main() {
       data.lengthInBytes,
     );
     Directory(previewDir).createSync(recursive: true);
-    File('$previewDir/preview_drawer_grouped_real.png').writeAsBytesSync(bytes);
-    print('preview landed: preview_drawer_grouped_real');
+    File('$previewDir/preview_mine_page.png').writeAsBytesSync(bytes);
+    print('preview landed: preview_mine_page');
   });
 
   testWidgets('preview content sources', (tester) async {

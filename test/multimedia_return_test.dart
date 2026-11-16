@@ -94,21 +94,8 @@ void main() {
     }
 
     Future<void> openMultimedia(WidgetTester tester) async {
-      // 导航固定抽屉：走抽屉顶 Tab“多媒体”（短剧分支的开抽屉键
-      // 是 neon-avatar，通用分支是 open-app-drawer，哪个在就用哪个）。
-      final opener =
-          find.byKey(const ValueKey('open-app-drawer')).evaluate().isNotEmpty
-          ? const ValueKey('open-app-drawer')
-          : const ValueKey('neon-avatar');
-      await tester.tap(find.byKey(opener));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      final chip = find.descendant(
-        of: find.byType(Drawer),
-        matching: find.text('多媒体'),
-      );
-      expect(chip, findsOneWidget);
-      await tester.tap(chip);
+      // 底部标签栏第 4 位是多媒体。
+      await tester.tap(find.byKey(const ValueKey('shell-tab-4')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.byType(MultimediaScreen), findsOneWidget);

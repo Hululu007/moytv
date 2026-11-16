@@ -10,22 +10,20 @@ import 'core_bridge.dart';
 import 'feed_adult_mix.dart';
 import 'feed_playability.dart';
 import 'hero_mix.dart';
-import 'hongguo_account.dart';
-import 'hongguo_account_entry.dart';
 import 'hongguo_comment.dart';
 import 'hongguo_danmaku.dart';
 import 'hongguo_playback_page.dart';
 import 'hongguo_preload.dart';
 import 'local_store.dart';
 import 'midnight_zone.dart';
+import 'miniapp/mini_app_home_page.dart';
+import 'mine_page.dart';
 import 'models.dart';
 import 'multimedia_screen.dart';
 import 'neon/neon_channel_view.dart';
 import 'neon/neon_home_view.dart';
 import 'neon/neon_ui.dart';
-import 'neon_glass_kit.dart';
 import 'playback_foreground.dart';
-import 'theme_settings_screen.dart';
 import 'tvbox_player_bridge.dart';
 import 'watchroom/player.dart';
 import 'widgets.dart';
@@ -61,11 +59,16 @@ Future<int?> hongguoFirstPlayableEpisode({
 }
 
 class HongguoDramaHome extends StatefulWidget {
-  /// “我的”页的内层页签下标（0 全屏流 / 1 多媒体 / 2 我的 / 3 霓虹首页 / 4 频道）。
+  /// “我的”页的内层页签下标（0 全屏流 / 1 多媒体 / 2 我的 / 3 霓虹首页 /
+  /// 4 频道 / 5 小程序）。
   static const mineTabIndex = 2;
 
   /// 多媒体页的内层页签下标（原片单位置）。
   static const multimediaTabIndex = 1;
+
+  /// 小程序页的内层页签下标（底部标签栏“小程序”由此进入，与抽屉里
+  /// 的小程序入口同一页）。
+  static const miniAppTabIndex = 5;
 
   const HongguoDramaHome({
     super.key,
@@ -85,7 +88,7 @@ class HongguoDramaHome extends StatefulWidget {
     required this.onSearchChanged,
     required this.onSearchSubmitted,
     required this.onOpenGlobalSearch,
-    required this.onMenuPressed,
+    required this.onAvatarPressed,
     required this.onFilterPressed,
     required this.onRankingsPressed,
     required this.onNewPressed,
@@ -124,7 +127,8 @@ class HongguoDramaHome extends StatefulWidget {
   /// 霓虹首页/频道页放大镜的动作：那两处没有输入框，点放大镜直接
   /// 打开全站全局搜索（多媒体屏自带网盘搜索框，不走这里）。
   final VoidCallback onOpenGlobalSearch;
-  final VoidCallback onMenuPressed;
+  /// 霓虹首页头像的动作：抽屉拆除后，点头像进“我的”页。
+  final VoidCallback onAvatarPressed;
   final VoidCallback onFilterPressed;
   final VoidCallback onRankingsPressed;
   final VoidCallback onNewPressed;
@@ -191,11 +195,6 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   bool _synopsisExpanded = false;
   late final PageController _pages;
   final RoomPlayerHandle _player = RoomPlayerHandle();
-  late final HongguoAccountController _accountController =
-      HongguoAccountController.withTransport(
-        GoHongguoAccountTransport(widget.repository),
-        repository: widget.repository,
-      );
   late final HongguoPreloadWindow _preloadWindow = HongguoPreloadWindow(
     widget.repository,
     detailOf: (drama) async {
@@ -452,7 +451,6 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         unawaited(_prefetch(_index + 1));
       });
     }
-    unawaited(_accountController.load());
     _maybeRefreshHeroMix();
     _maybeRefreshAdultFeed();
   }
@@ -512,7 +510,6 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     _pages.dispose();
     _player.dispose();
     _preloadWindow.dispose();
-    _accountController.dispose();
     if (_playbackServiceHeld) {
       _playbackServiceHeld = false;
       unawaited(PlaybackForeground.release());
@@ -984,14 +981,17 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   Widget build(BuildContext context) {
     final config = AppThemeConfig.of(context);
-    final neonTab = _tab >= 3;
+    // 只有 3=霓虹首页 / 4=频道是霓虹页；5=小程序是工具页，走下
+    // 面 switch 的独立分支（不能用 >= 3，否则小程序页被当成频道页）。
+    final neonTab = _tab == _neonHomeTab || _tab == _neonChannelTab;
     // 内容档锁定的分类不存在：除“我的”页外，所有内容页签都显示诚实空态。
-    // 档位空态只拦站源内容页签：我的页与多媒体页（用户自己的
-    // 网盘库，不参与内容档位过滤）不受档位限制。
+    // 档位空态只拦站源内容页签：我的页、多媒体页（用户自己的
+    // 网盘库，不参与内容档位过滤）与小程序页（工具页）不受档位限制。
     final tierGated =
         widget.tierEmpty &&
         _tab != HongguoDramaHome.mineTabIndex &&
-        _tab != HongguoDramaHome.multimediaTabIndex;
+        _tab != HongguoDramaHome.multimediaTabIndex &&
+        _tab != HongguoDramaHome.miniAppTabIndex;
     final hideCapsuleBar = widget.hideCapsuleBar;
     final body = tierGated
         ? _tierEmptyView()
@@ -1016,15 +1016,17 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         : switch (_tab) {
             1 => _multimedia(context),
             2 => _mine(context),
+            5 => const MiniAppHomePage(),
             _ => _feed(context),
           };
     return Scaffold(
       backgroundColor: _tab == 0 ? Colors.black : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
-      // 我的页不显示内部导航芯片行：回其它页走外层底栏。
+      // 我的页与小程序页不显示内部导航芯片行：回其它页走外层底栏。
       body: hideCapsuleBar &&
               _tab != 0 &&
-              _tab != HongguoDramaHome.mineTabIndex
+              _tab != HongguoDramaHome.mineTabIndex &&
+              _tab != HongguoDramaHome.miniAppTabIndex
           ? Column(
               children: [
                 _internalNavRow(),
@@ -1081,7 +1083,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onSearch: widget.onOpenGlobalSearch,
       onSourceTap: widget.onPickSource,
       onLongPress: widget.onOpenDrama,
-      onMenu: widget.onMenuPressed,
+      onAvatar: widget.onAvatarPressed,
       onRankings: widget.onRankingsPressed,
       onFeaturedPlay: widget.onOpenFeatured ?? widget.onOpenDrama,
       featuredItems: _heroMixed,
@@ -1626,116 +1628,16 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
-  /// 我的页：设置页同款视觉语言——分段标题 + 圆角分组卡片 + 渐变
-  /// 图标块 + 右侧箭头，复用设置页的共享组件、跟随当前主题。
-  /// 分组：帐户（登录行 + 云端 4 项）/ 内容（追剧、最近观看）/
-  /// 外观与设置（主题切换、设置）。条目、文字、计数、点击行为
-  /// 与旧版一致；页顶不显示内部导航芯片行（见 build）。
+  /// 我的页：共享的 [MinePage]（通用分支点“我的”进的是同一页）；
+  /// 页顶不显示内部导航芯片行（见 build）。
   Widget _mine(BuildContext context) {
-    final config = AppThemeConfig.of(context);
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 6, 4, 14),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 26,
-                  backgroundColor: config.primaryColor.withValues(alpha: 0.16),
-                  child: Icon(
-                    Icons.person,
-                    size: 30,
-                    color: config.primaryColor,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '我的',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: config.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.sourceLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: config.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const NeonSectionTitle('帐户'),
-          NeonRowGroup(
-            children: [
-              HongguoAccountEntry(
-                controller: _accountController,
-                repository: widget.repository,
-              ),
-              HongguoAccountCloudSection(
-                controller: _accountController,
-                onOpenDrama: widget.onOpenDrama,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const NeonSectionTitle('内容'),
-          NeonRowGroup(
-            children: [
-              NeonRow(
-                icon: Icons.bookmark_outline,
-                title: '追剧',
-                onTap: () => widget.onOpenSaved(history: false),
-              ),
-              NeonRow(
-                icon: Icons.history_outlined,
-                title: '最近观看',
-                onTap: () => widget.onOpenSaved(history: true),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const NeonSectionTitle('外观与设置'),
-          NeonRowGroup(
-            children: [
-              NeonRow(
-                key: const ValueKey('mine-theme-entry'),
-                icon: Icons.palette_outlined,
-                title: '主题切换',
-                detail:
-                    '当前：${AppThemeConfig.forTheme(widget.store.appTheme).themeName} · 12 套主题',
-                onTap: () => Navigator.of(context).push(
-                  appPageRoute<void>(
-                    builder: (_) => ThemeSettingsScreen(
-                      store: widget.store,
-                      repository: widget.repository,
-                      sourceId: widget.store.source,
-                    ),
-                  ),
-                ),
-              ),
-              if (widget.onSettingsPressed != null)
-                NeonRow(
-                  icon: Icons.settings_outlined,
-                  title: '设置',
-                  onTap: widget.onSettingsPressed,
-                ),
-            ],
-          ),
-        ],
-      ),
+    return MinePage(
+      repository: widget.repository,
+      store: widget.store,
+      sourceLabel: widget.sourceLabel,
+      onOpenDrama: widget.onOpenDrama,
+      onOpenSaved: widget.onOpenSaved,
+      onSettingsPressed: widget.onSettingsPressed,
     );
   }
 }

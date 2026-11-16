@@ -15,7 +15,7 @@ import 'package:moyi/miniapp/haikuo/haikuo_runtime_html.dart';
 /// Unexpected token 'v'。行为级复现与修复验证在 Node 桩 harness
 /// 里做（跑真实 haikuo_runtime_html 脚本，见回报）；这里钉住
 /// Dart 侧能验的部分：两种导入形态的解析、子页结构不被导入
-/// 弄丢、内置规则文件 md5 不变、运行时修复点位仍在。
+/// 弄丢、内置规则文件 md5 与条数钉住、运行时修复点位仍在。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -33,7 +33,7 @@ void main() {
               'path': 'data',
               'rule':
                   'var d = []; d.push({title: "X", url: "https://example.com/1"}); '
-                      'return JSON.stringify(d);',
+                  'return JSON.stringify(d);',
             },
           ],
         }),
@@ -77,7 +77,8 @@ void main() {
         jsonEncode({
           'title': '字符串子页',
           'url': 'hiker://empty##fyclass##fypage',
-          'find_rule': 'js:var m = \$.require("hiker://page/mod"); setResult(m.items());',
+          'find_rule':
+              'js:var m = \$.require("hiker://page/mod"); setResult(m.items());',
           'pages': jsonEncode([
             {
               'path': 'mod',
@@ -96,24 +97,19 @@ void main() {
   });
 
   group('内置规则不受影响', () {
-    test('内置规则文件 md5 不变、35 条、含鉴黄师', () {
+    test('内置规则文件 md5 钉住、130 条、含鉴黄师', () {
       final file = File('assets/haikuo_builtin_rules.json');
       expect(file.existsSync(), isTrue);
       final bytes = file.readAsBytesSync();
-      expect(
-        md5.convert(bytes).toString(),
-        '3e0130b20cb954f842d28eba07315e53',
-      );
+      expect(md5.convert(bytes).toString(), '9e000ae22ea3d5f05686a3a2324813e5');
       final decoded = jsonDecode(utf8.decode(bytes)) as List;
-      expect(decoded, hasLength(35));
-      final titles = [
-        for (final item in decoded) (item as Map)['title'],
-      ];
+      expect(decoded, hasLength(130));
+      final titles = [for (final item in decoded) (item as Map)['title']];
       expect(titles, contains('🔞鉴黄师'));
       // 鉴黄师仍是 js: 首页脚本 + hiker://empty 入口，修复没动过它。
-      final jhs = decoded.firstWhere(
-        (item) => (item as Map)['title'] == '🔞鉴黄师',
-      ) as Map;
+      final jhs =
+          decoded.firstWhere((item) => (item as Map)['title'] == '🔞鉴黄师')
+              as Map;
       expect('${jhs['find_rule']}', startsWith('js:'));
       expect(jhs['url'], 'hiker://empty##fyclass##fypage');
     });

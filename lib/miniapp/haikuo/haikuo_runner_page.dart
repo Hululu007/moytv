@@ -3,12 +3,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:enough_convert/enough_convert.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../app_build.dart';
 import '../../app_orientation.dart';
 import '../../app_theme.dart';
 import '../../network_speed.dart';
@@ -17,8 +21,10 @@ import '../../player_controls.dart';
 import '../../player_interactions.dart';
 import '../../video_output_size.dart';
 import 'haikuo_codec.dart';
+import 'haikuo_helpers.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runtime_html.dart';
+import 'haikuo_store.dart';
 
 /// 海阔小程序运行页。
 ///
@@ -26,9 +32,20 @@ import 'haikuo_runtime_html.dart';
 /// 页面同源，脚本里的同步 `fetch()` 才能打到 `/__fetch` 由 Dart 侧代理，
 /// 绕开 WebView 的跨域限制；点条目时用通道回到原生，媒体地址直接进播放器。
 class HaikuoRunnerPage extends StatefulWidget {
-  const HaikuoRunnerPage({super.key, required this.program});
+  const HaikuoRunnerPage({
+    super.key,
+    required this.program,
+    this.initialSearchKeyword,
+    this.initialDetailUrl,
+  });
 
   final HaikuoProgram program;
+
+  /// 打开后自动跑一次搜索（跨规则 hiker://search 的 rule 参数用）。
+  final String? initialSearchKeyword;
+
+  /// 打开后自动进详情（跨规则打开条目用）。
+  final String? initialDetailUrl;
 
   @override
   State<HaikuoRunnerPage> createState() => _HaikuoRunnerPageState();
@@ -43,6 +60,8 @@ class HaikuoPlayerController {
     required String url,
     required String title,
     required int index,
+    String subtitleUrl,
+    Map<String, String> headers,
   })?
   onDeliver;
 
@@ -55,9 +74,17 @@ class HaikuoPlayerController {
     required String url,
     required String title,
     required int index,
+    String subtitleUrl = '',
+    Map<String, String> headers = const {},
   }) {
     currentIndex = index;
-    onDeliver?.call(url: url, title: title, index: index);
+    onDeliver?.call(
+      url: url,
+      title: title,
+      index: index,
+      subtitleUrl: subtitleUrl,
+      headers: headers,
+    );
   }
 
   void requestEpisode(int index) {
@@ -101,6 +128,8 @@ class _InlinePlay {
     required this.series,
     required this.episodes,
     required this.index,
+    this.subtitleUrl = '',
+    this.headers = const {},
   });
 
   final String url;
@@ -108,6 +137,54 @@ class _InlinePlay {
   final String series;
   final List<String> episodes;
   final int index;
+
+  /// 条目自带的字幕地址（没有就是空串，播放器不加载字幕）。
+  final String subtitleUrl;
+
+  /// 取流请求头（播放 JSON / lazy 结果里带的 headers 原样传播放器）。
+  final Map<String, String> headers;
+}
+
+/// 一次排队中的原生对话框请求：JS 同步 XHR 等着 completer 的结果。
+class _PendingDialog {
+  const _PendingDialog(this.params, this.completer);
+
+  final Map<String, String> params;
+  final Completer<Map<String, dynamic>> completer;
+}
+
+/// 一次嗅探会话的参数与状态。
+class _SniffSession {
+  _SniffSession({
+    required this.id,
+    required this.url,
+    required this.js,
+    required this.mode,
+    required this.videoRules,
+    required this.excludeRules,
+    required this.blockRules,
+    required this.ua,
+    required this.referer,
+    required this.deadline,
+    this.pageJs = '',
+  });
+
+  final String id;
+  final String url;
+  final String js;
+  final String mode;
+  final List<String> videoRules;
+  final List<String> excludeRules;
+  final List<String> blockRules;
+  final String ua;
+  final String referer;
+  final DateTime deadline;
+
+  /// video 模式下页面加载完跑一次的注入脚本（extra.js 形态）。
+  final String pageJs;
+
+  bool done = false;
+  bool pageJsDone = false;
 }
 
 class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
@@ -115,8 +192,26 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   WebViewController? _controller;
   String? _error;
   bool _loading = true;
-  // 规则去广告后存下的本地 m3u8（saveFile 发来的内容），由 /__files/<名> 提供给播放器。
-  final Map<String, String> _savedFiles = {};
+  // 规则存下的本地文件（saveFile 发来的内容），由 /__files/<名> 提供
+  // 给播放器与运行时。字节存，内容类型按扩展名定。
+  final Map<String, Uint8List> _savedFiles = {};
+  // 本次运行页的 Cookie 罐：代理取数时自动带上同主机 Cookie，
+  // 响应里的 Set-Cookie 也存进来；规则的 getCookie/setCookie 读写它。
+  final HaikuoCookieJar _cookieJar = HaikuoCookieJar();
+  // 规则 proxy 字段归一后的代理地址（没有就是 null）。
+  String? _ruleProxy;
+  // 搜索栏：显示与否 + 预填关键词；nonce 让每次打开都重建输入框。
+  bool _showSearch = false;
+  String _searchKeyword = '';
+  int _searchNonce = 0;
+  // 原生对话框排队：JS 同步 XHR 一次只放一个对话框，用户点完才
+  // 处理下一个；页面关了，排队的按默认结果回掉。
+  final List<_PendingDialog> _dialogQueue = [];
+  bool _dialogBusy = false;
+  // 嗅探会话：隐藏 WebView + 轮询定时器，同一时间只跑一个。
+  _SniffSession? _sniffSession;
+  WebViewController? _sniffController;
+  Timer? _sniffTimer;
   // 播放器在栈顶时非空：play 消息改为经它递送（切集），不再新开一页。
   HaikuoPlayerController? _playerController;
   // 正在等待切集解析结果：pending 完成（或超时）前收到的 play 消息按此核对。
@@ -132,6 +227,15 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   // 代理请求共用一个 HttpClient：连接复用（keep-alive），反复取数
   // 不再每次重建 TCP+TLS；页面关闭时才关掉。
   HttpClient? _httpClient;
+  // 规则库（跨规则取页/收藏/历史/导入用，默认自给自足）。
+  final HaikuoStore _store = HaikuoStore();
+  // 初始搜索/详情只触发一次（页面加载完成时）。
+  bool _initialActionDone = false;
+  // 预置模块清单缓存（/__files/ 回退用）与文件字节缓存。
+  Map<String, List<String>>? _presetManifest;
+  final Map<String, Uint8List> _presetModuleCache = {};
+  // fetchCodeByWebView 用的隐藏 WebView：独立槽位，请求结束卸载。
+  WebViewController? _webviewFetchController;
 
   @override
   void initState() {
@@ -141,6 +245,16 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
 
   @override
   void dispose() {
+    _sniffTimer?.cancel();
+    _sniffTimer = null;
+    _sniffSession = null;
+    _sniffController = null;
+    for (final pending in _dialogQueue) {
+      if (!pending.completer.isCompleted) {
+        pending.completer.complete(_dialogDefault(pending.params));
+      }
+    }
+    _dialogQueue.clear();
     final server = _server;
     _server = null;
     unawaited(server?.close(force: true));
@@ -151,13 +265,37 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
 
   Future<void> _start() async {
     try {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      // 固定端口优先：WebView 的源（origin）稳定，localStorage 里的
+      // 规则变量/存储/远程模块缓存才能跨重启留下来；端口被占时顺延，
+      // 都占了才回落随机端口（那次会话里存储只活当次）。
+      HttpServer? server;
+      for (var port = 18081; port <= 18090; port++) {
+        try {
+          server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+          break;
+        } catch (_) {
+          // 被占了，试下一个
+        }
+      }
+      server ??= await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _server = server;
+      // fileSelect:// 挑过的文件副本（_fileSelect_ 前缀）：下次启动清理。
+      unawaited(_cleanupFileSelectCopies());
+      final payload = _programPayload();
+      final ruleMap = payload['rule'];
+      _ruleProxy = parseHaikuoProxy(
+        ruleMap is Map ? ruleMap['proxy']?.toString() : null,
+      );
       server.listen(_handleRequest);
       if (!mounted) return;
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFF120B20))
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onPageFinished: (_) => _runInitialAction(),
+          ),
+        )
         ..addJavaScriptChannel(
           'HaikuoNative',
           onMessageReceived: _onNativeMessage,
@@ -176,6 +314,51 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     }
   }
 
+  /// 初始动作（跨规则打开时带进来的搜索/详情）：页面加载完成
+  /// 后只跑一次，详情优先于搜索。
+  Future<void> _runInitialAction() async {
+    if (_initialActionDone) return;
+    _initialActionDone = true;
+    final detailUrl = widget.initialDetailUrl;
+    final keyword = widget.initialSearchKeyword;
+    if ((detailUrl == null || detailUrl.isEmpty) &&
+        (keyword == null || keyword.isEmpty)) {
+      return;
+    }
+    // 等运行时 boot 完成（规则首页已跑起来）再触发。
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+    try {
+      if (detailUrl != null && detailUrl.isNotEmpty) {
+        await _controller?.runJavaScript(
+          'window.__haikuoOpenDetail && window.__haikuoOpenDetail('
+          '${jsonEncode(detailUrl)});',
+        );
+      } else if (keyword != null && keyword.isNotEmpty) {
+        await _runSearch(keyword);
+      }
+    } catch (_) {
+      // 页面已不在，忽略
+    }
+  }
+
+  /// 清理上次 fileSelect:// 挑文件时留下的 _fileSelect_ 副本。
+  Future<void> _cleanupFileSelectCopies() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/haikuo/fileSelect');
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list()) {
+        final name = entity.path.split('/').last;
+        if (name.startsWith('_fileSelect_') && entity is File) {
+          await entity.delete();
+        }
+      }
+    } catch (_) {
+      // 清理失败不影响运行
+    }
+  }
+
   void _onNativeMessage(JavaScriptMessage message) {
     Map<String, dynamic> payload;
     try {
@@ -190,16 +373,91 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     switch ('${payload['type']}') {
       case 'toast':
         _snack('${payload['text'] ?? ''}');
+      case 'copy':
+        unawaited(
+          Clipboard.setData(ClipboardData(text: '${payload['text'] ?? ''}')),
+        );
+        _snack('已复制');
       case 'saveFile':
         final name = '${payload['name'] ?? ''}';
         if (name.isNotEmpty) {
-          _savedFiles[name] = '${payload['content'] ?? ''}';
+          _savedFiles[name] = Uint8List.fromList(
+            utf8.encode('${payload['content'] ?? ''}'),
+          );
         }
+      case 'deleteFile':
+        final name = '${payload['name'] ?? ''}';
+        if (name.isNotEmpty) {
+          _savedFiles.remove(name);
+          _savedFiles.remove(name.split('/').last);
+        }
+      case 'download':
+      case 'downloadFile':
+        final url = '${payload['url'] ?? ''}';
+        if (url.isNotEmpty) {
+          unawaited(_downloadToDocs(url, '${payload['name'] ?? ''}'));
+        }
+      case 'saveImage':
+        // 按 urls 顺序逐个尝试，存下一个就停（回退链）。
+        final urls = switch (payload['urls']) {
+          final List list => <String>[for (final e in list) '$e'],
+          _ => <String>[],
+        };
+        final single = '${payload['url'] ?? ''}';
+        final candidates = [
+          ...urls.where((u) => u.isNotEmpty),
+          if (single.isNotEmpty) single,
+        ];
+        if (candidates.isNotEmpty) {
+          unawaited(_saveImageWithFallback(candidates));
+        }
+      case 'openSearch':
+        final rule = '${payload['rule'] ?? ''}';
+        if (rule.isNotEmpty &&
+            matchRuleTitle(rule, [widget.program.name]) == null) {
+          // 搜别的规则：切规则再搜（auto 时自动跑）。
+          unawaited(
+            _openRule(
+              rule,
+              searchKeyword: '${payload['keyword'] ?? ''}',
+              auto: payload['auto'] == true,
+            ),
+          );
+        } else {
+          _showSearchBar(
+            keyword: '${payload['keyword'] ?? ''}',
+            auto: payload['auto'] == true,
+          );
+        }
+      case 'openRule':
+        unawaited(
+          _openRule(
+            '${payload['rule'] ?? ''}',
+            detailUrl: '${payload['url'] ?? ''}',
+          ),
+        );
+      case 'importCode':
+        final code = '${payload['code'] ?? ''}';
+        if (code.isNotEmpty) unawaited(_importRuleCode(code));
+      case 'pickFile':
+        unawaited(_pickFile('${payload['code'] ?? ''}'));
+      case 'sniff':
+        _startSniff(payload);
+      case 'pop':
+        if (mounted) Navigator.of(context).maybePop();
       case 'play':
         final url = '${payload['url'] ?? ''}';
         if (url.isEmpty) return;
         final title = '${payload['title'] ?? widget.program.name}';
         final series = '${payload['series'] ?? ''}';
+        final subtitleUrl = '${payload['subtitle'] ?? ''}';
+        final headers = switch (payload['headers']) {
+          final Map map => <String, String>{
+            for (final entry in map.entries)
+              '${entry.key}': '${entry.value}',
+          },
+          _ => const <String, String>{},
+        };
         final episodes = switch (payload['episodes']) {
           final List list => <String>[
             for (final e in list) '$e',
@@ -240,6 +498,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
             url: url,
             title: title,
             index: index ?? pendingIndex ?? controller.currentIndex,
+            subtitleUrl: subtitleUrl,
+            headers: headers,
           );
           if (pending != null && !pending.isCompleted) pending.complete(true);
           return;
@@ -251,6 +511,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
             episodes: episodes,
             index: index ?? 0,
             series: series,
+            subtitleUrl: subtitleUrl,
+            headers: headers,
           );
           return;
         }
@@ -260,6 +522,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
           episodes: episodes,
           index: index ?? 0,
           series: series,
+          subtitleUrl: subtitleUrl,
+          headers: headers,
         );
       case 'open':
         final url = '${payload['url'] ?? ''}';
@@ -281,6 +545,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     List<String> episodes = const [],
     int index = 0,
     String series = '',
+    String subtitleUrl = '',
+    Map<String, String> headers = const {},
   }) async {
     final controller = HaikuoPlayerController()..currentIndex = index;
     _playerController = controller;
@@ -294,6 +560,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
           initialIndex: index,
           controller: controller,
           onSelectEpisode: _selectEpisode,
+          subtitleUrl: subtitleUrl,
+          headers: headers,
         ),
       ),
     );
@@ -316,6 +584,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     List<String> episodes = const [],
     int index = 0,
     String series = '',
+    String subtitleUrl = '',
+    Map<String, String> headers = const {},
   }) {
     final controller = HaikuoPlayerController()..currentIndex = index;
     _playerController = controller;
@@ -326,6 +596,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         series: series,
         episodes: episodes,
         index: index,
+        subtitleUrl: subtitleUrl,
+        headers: headers,
       );
       _inlineFullscreen = false;
       // 新视频的宽高比未知：先回 16:9，videoParams 到达后再按实调。
@@ -402,6 +674,1224 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     );
   }
 
+  /// 打开顶栏搜索栏：预填关键词；auto（hiker://search 的
+  /// simple=false 形态）时有词就直接跑搜索。
+  void _showSearchBar({required String keyword, required bool auto}) {
+    if (!mounted) return;
+    setState(() {
+      _showSearch = true;
+      _searchKeyword = keyword;
+      _searchNonce++;
+    });
+    if (auto && keyword.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _runSearch(keyword),
+      );
+    }
+  }
+
+  /// 执行一次搜索：关键词交给运行时的 __haikuoSearch（第 1 页）。
+  Future<void> _runSearch(String keyword) async {
+    final word = keyword.trim();
+    if (word.isEmpty) return;
+    try {
+      await _controller?.runJavaScript(
+        'window.__haikuoSearch && window.__haikuoSearch('
+        '${jsonEncode(word)}, 1);',
+      );
+    } catch (_) {
+      // 页面还没准备好，忽略
+    }
+  }
+
+  /// fileSelect://：让用户挑一个文件，拷一份带 _fileSelect_ 前缀
+  /// 的副本到 haikuo/fileSelect/，把副本路径当 input 交回规则代码。
+  /// 副本在下次启动时清理（见 _cleanupFileSelectCopies）。
+  Future<void> _pickFile(String code) async {
+    String? path;
+    try {
+      final files = await FilePicker.pickFiles();
+      path = files.isEmpty ? null : files.first.path;
+    } catch (_) {
+      path = null;
+    }
+    if (path == null || path.isEmpty) return;
+    var deliverPath = path;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/haikuo/fileSelect');
+      await dir.create(recursive: true);
+      final baseName = path.split('/').last;
+      final copy = File('${dir.path}/_fileSelect_$baseName');
+      await File(path).copy(copy.path);
+      deliverPath = copy.path;
+    } catch (_) {
+      // 拷贝失败时回原路径，不耽误规则
+    }
+    try {
+      await _controller?.runJavaScript(
+        'window.__haikuoFileSelected && window.__haikuoFileSelected('
+        '${jsonEncode(deliverPath)}, ${jsonEncode(code)});',
+      );
+    } catch (_) {
+      // 页面已不在，忽略
+    }
+  }
+
+  /// download/downloadFile/saveImage：把文件存到应用文档目录下的
+  /// haikuo_downloads/，存完提示路径；失败也如实提示。
+  Future<void> _downloadToDocs(String url, String name) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      _snack('下载地址不对，存不了');
+      return;
+    }
+    var fileName = name.trim();
+    if (fileName.isEmpty && uri.pathSegments.isNotEmpty) {
+      fileName = uri.pathSegments.last;
+    }
+    if (fileName.isEmpty) fileName = 'download';
+    fileName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    try {
+      final client = _httpClient ??= HttpClient()
+        ..connectionTimeout = const Duration(seconds: 20)
+        ..idleTimeout = const Duration(seconds: 15);
+      final req = await client.getUrl(uri);
+      final resp = await req.close().timeout(const Duration(seconds: 60));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        _snack('下载失败：HTTP ${resp.statusCode}');
+        return;
+      }
+      final bytes = await resp.fold<BytesBuilder>(
+        BytesBuilder(copy: false),
+        (builder, chunk) => builder..add(chunk),
+      );
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/haikuo_downloads');
+      await dir.create(recursive: true);
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes.takeBytes());
+      _snack('已保存：${file.path}');
+    } catch (error) {
+      _snack('下载失败：$error');
+    }
+  }
+
+  /// saveImage：按顺序逐个下载，存下一个就停；全失败才提示。
+  Future<void> _saveImageWithFallback(List<String> urls) async {
+    for (final url in urls) {
+      if (await _tryDownloadToDocs(url)) return;
+    }
+    _snack('图片保存失败');
+  }
+
+  /// 下载一个地址到 haikuo_downloads/，成功回 true。saveImage 回退链用。
+  Future<bool> _tryDownloadToDocs(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      return false;
+    }
+    var fileName = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+    if (fileName.isEmpty) fileName = 'image';
+    fileName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    try {
+      final client = _httpClient ??= HttpClient()
+        ..connectionTimeout = const Duration(seconds: 20)
+        ..idleTimeout = const Duration(seconds: 15);
+      final req = await client.getUrl(uri);
+      final resp = await req.close().timeout(const Duration(seconds: 60));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return false;
+      final bytes = await resp.fold<BytesBuilder>(
+        BytesBuilder(copy: false),
+        (builder, chunk) => builder..add(chunk),
+      );
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/haikuo_downloads');
+      await dir.create(recursive: true);
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes.takeBytes());
+      _snack('已保存：${file.path}');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 跨规则打开：按标题在规则库里找（精确 → 去 🔞 → 归一化），
+  /// 找到就推一个新运行页，带上详情地址或搜索关键词。
+  Future<void> _openRule(
+    String title, {
+    String detailUrl = '',
+    String searchKeyword = '',
+    bool auto = false,
+  }) async {
+    if (title.isEmpty) return;
+    final programs = await _store.list();
+    final matched = matchRuleTitle(
+      title,
+      [for (final program in programs) program.name],
+    );
+    HaikuoProgram? found;
+    if (matched != null) {
+      for (final program in programs) {
+        if (program.name == matched) {
+          found = program;
+          break;
+        }
+      }
+    }
+    if (found == null) {
+      _snack('没找到规则：$title');
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => HaikuoRunnerPage(
+          program: found!,
+          initialDetailUrl: detailUrl.isEmpty ? null : detailUrl,
+          // 非 auto 时只开搜索栏不自动跑：交给运行页的初始搜索
+          // （auto 才带关键词自动跑，否则只打开规则首页）。
+          initialSearchKeyword: auto && searchKeyword.isNotEmpty
+              ? searchKeyword
+              : null,
+        ),
+      ),
+    );
+  }
+
+  /// rule:// 点击导入：口令/JSON 文本经仓库导入，报结果。
+  Future<void> _importRuleCode(String code) async {
+    try {
+      final result = await _store.importText(code, origin: 'rule:// 导入');
+      if (result.cancelled) {
+        _snack('导入已取消');
+      } else if (result.added.isEmpty && result.updated.isEmpty) {
+        _snack('没有可导入的规则');
+      } else {
+        _snack(
+          '已导入 ${result.added.length} 个，更新 ${result.updated.length} 个',
+        );
+      }
+    } catch (error) {
+      _snack('导入失败：$error');
+    }
+  }
+
+  /// 顶栏收藏按钮：取当前页信息，开关收藏，报结果。
+  Future<void> _toggleFavorite() async {
+    try {
+      final raw = await _controller?.runJavaScriptReturningResult(
+        'window.__haikuoCurrentPage ? window.__haikuoCurrentPage() : "{}";',
+      );
+      var text = _sniffResultText(raw);
+      if (text.isEmpty) text = '{}';
+      final info = jsonDecode(text);
+      if (info is! Map) return;
+      final url = '${info['url'] ?? ''}';
+      if (url.isEmpty) {
+        _snack('当前页面没有可收藏的内容');
+        return;
+      }
+      final added = await _store.toggleFavorite({
+        'rule': '${info['rule'] ?? widget.program.name}',
+        'url': url,
+        'title': '${info['title'] ?? ''}',
+        'pic': '${info['pic'] ?? ''}',
+      });
+      _snack(added ? '已收藏' : '已取消收藏');
+    } catch (_) {
+      _snack('收藏失败');
+    }
+  }
+
+  // ---------- 嗅探（隐藏 WebView + 250ms 轮询，最长 30 秒） ----------
+
+  void _startSniff(Map<String, dynamic> payload) {
+    final id = '${payload['id'] ?? ''}';
+    final url = '${payload['url'] ?? ''}';
+    if (id.isEmpty) return;
+    // 上一个还没跑完：先按失败回掉，再开新的。
+    final previous = _sniffSession;
+    if (previous != null) _finishSniff(previous, '');
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      unawaited(_deliverSniffResult(id, ''));
+      return;
+    }
+    List<String> asList(Object? value) => switch (value) {
+      final List list => <String>[for (final e in list) '$e'],
+      _ => <String>[],
+    };
+    final session = _SniffSession(
+      id: id,
+      url: url,
+      js: '${payload['js'] ?? ''}',
+      mode: '${payload['mode'] ?? 'video'}',
+      videoRules: asList(payload['videoRules']),
+      excludeRules: asList(payload['videoExcludeRules']),
+      blockRules: asList(payload['blockRules']),
+      ua: '${payload['ua'] ?? ''}',
+      referer: '${payload['referer'] ?? ''}',
+      deadline: DateTime.now().add(const Duration(seconds: 30)),
+      pageJs: '${payload['pageJs'] ?? ''}',
+    );
+    final controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF120B20));
+    controller.setNavigationDelegate(
+      NavigationDelegate(
+        // blockRules 只拦主框架导航（子资源请求 WebView 拦不了）。
+        onNavigationRequest: (request) {
+          final blocked = session.blockRules.any(
+            (rule) => wildcardContains(request.url, rule),
+          );
+          return blocked
+              ? NavigationDecision.prevent
+              : NavigationDecision.navigate;
+        },
+        onPageFinished: (_) {
+          // video 模式的 extra.js：页面加载完跑一次。
+          if (session.pageJs.isNotEmpty && !session.pageJsDone) {
+            session.pageJsDone = true;
+            unawaited(controller.runJavaScript(session.pageJs));
+          }
+        },
+      ),
+    );
+    if (session.ua.isNotEmpty) {
+      unawaited(controller.setUserAgent(session.ua));
+    }
+    final headers = <String, String>{};
+    if (session.referer.isNotEmpty) headers['Referer'] = session.referer;
+    unawaited(controller.loadRequest(Uri.parse(url), headers: headers));
+    _sniffSession = session;
+    _sniffController = controller;
+    setState(() {});
+    _sniffTimer = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) => unawaited(_sniffTick(session)),
+    );
+  }
+
+  /// 嗅探轮询一拍：webRule 形态跑规则 JS 取结果；video 形态从
+  /// 资源加载记录里挑可播地址；超时按失败回掉。
+  Future<void> _sniffTick(_SniffSession session) async {
+    if (!identical(_sniffSession, session) || session.done) return;
+    final controller = _sniffController;
+    if (controller == null) return;
+    if (DateTime.now().isAfter(session.deadline)) {
+      _finishSniff(session, '');
+      return;
+    }
+    try {
+      if (session.mode == 'webRule' && session.js.isNotEmpty) {
+        final script =
+            '(function(){try{window._getUrls=function(){try{return '
+            'performance.getEntriesByType("resource").map(function(e){return '
+            'e.name;});}catch(e){return [];}};window.fy_bridge_app={getUrls:'
+            'window._getUrls};}catch(e){}var __r="";try{__r=(0,eval)('
+            '${jsonEncode(session.js)});}catch(e){__r="";}return typeof __r==='
+            '"string"?__r:(__r==null?"":String(__r));})()';
+        final raw = await controller.runJavaScriptReturningResult(script);
+        final text = _sniffResultText(raw);
+        if (text.isNotEmpty) {
+          _finishSniff(session, text);
+          return;
+        }
+      } else {
+        final script =
+            '(function(){try{return performance.getEntriesByType("resource")'
+            '.map(function(e){return e.name;});}catch(e){return [];}})()';
+        final raw = await controller.runJavaScriptReturningResult(script);
+        final entries = _sniffUrlList(raw);
+        final picked = pickSniffedVideoUrl(
+          entries,
+          includeRules: session.videoRules,
+          excludeRules: [...session.excludeRules, ...session.blockRules],
+        );
+        if (picked.isNotEmpty) {
+          _finishSniff(session, picked);
+          return;
+        }
+      }
+    } catch (_) {
+      // 页面还没加载完，这一拍跳过
+    }
+  }
+
+  /// runJavaScriptReturningResult 的返回值归一：Android 侧字符串
+  /// 结果带一层 JSON 引号，这里剥掉；null/undefined/空都当没结果。
+  String _sniffResultText(Object? raw) {
+    if (raw == null) return '';
+    var text = '$raw'.trim();
+    if (text.isEmpty || text == 'null' || text == 'undefined') return '';
+    if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is String) text = decoded;
+      } catch (_) {
+        // 不是 JSON 串，原样用
+      }
+    }
+    return text == 'null' || text == 'undefined' ? '' : text;
+  }
+
+  List<String> _sniffUrlList(Object? raw) {
+    if (raw == null) return const [];
+    final text = '$raw'.trim();
+    if (text.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is List) return <String>[for (final e in decoded) '$e'];
+    } catch (_) {
+      // 不是 JSON 数组，忽略
+    }
+    return const [];
+  }
+
+  void _finishSniff(_SniffSession session, String result) {
+    if (session.done) return;
+    session.done = true;
+    if (identical(_sniffSession, session)) {
+      _sniffSession = null;
+      _sniffController = null;
+      _sniffTimer?.cancel();
+      _sniffTimer = null;
+      if (mounted) setState(() {});
+    }
+    unawaited(_deliverSniffResult(session.id, result));
+  }
+
+  Future<void> _deliverSniffResult(String id, String result) async {
+    try {
+      await _controller?.runJavaScript(
+        'window.__haikuoSniffResult && window.__haikuoSniffResult('
+        '${jsonEncode(id)}, ${jsonEncode(result)});',
+      );
+    } catch (_) {
+      // 页面已不在，忽略
+    }
+  }
+
+  // ---------- 原生对话框（/__dialog 的排队与展示） ----------
+
+  Future<void> _handleDialog(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final completer = Completer<Map<String, dynamic>>();
+    _dialogQueue.add(_PendingDialog(params, completer));
+    unawaited(_pumpDialogs());
+    final result = await completer.future;
+    try {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+      await request.response.close();
+    } catch (_) {
+      // 连接已断（页面关了），忽略
+    }
+  }
+
+  Future<void> _pumpDialogs() async {
+    if (_dialogBusy) return;
+    _dialogBusy = true;
+    try {
+      while (_dialogQueue.isNotEmpty) {
+        if (!mounted) {
+          for (final pending in _dialogQueue) {
+            if (!pending.completer.isCompleted) {
+              pending.completer.complete(_dialogDefault(pending.params));
+            }
+          }
+          _dialogQueue.clear();
+          break;
+        }
+        final pending = _dialogQueue.removeAt(0);
+        final result = await _showNativeDialog(pending.params);
+        if (!pending.completer.isCompleted) {
+          pending.completer.complete(result);
+        }
+      }
+    } finally {
+      _dialogBusy = false;
+    }
+  }
+
+  Map<String, dynamic> _dialogDefault(Map<String, String> params) {
+    return switch (params['type']) {
+      'confirm' => {'result': false},
+      'input' => {'result': null},
+      'select' => {'result': null},
+      _ => {'result': true},
+    };
+  }
+
+  Future<Map<String, dynamic>> _showNativeDialog(
+    Map<String, String> params,
+  ) async {
+    final type = params['type'] ?? '';
+    final title = params['title'] ?? '';
+    final content = params['content'] ?? '';
+    switch (type) {
+      case 'confirm':
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: title.isEmpty ? null : Text(title),
+            content: Text(content),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('确定'),
+              ),
+            ],
+          ),
+        );
+        return {'result': ok ?? false};
+      case 'alert':
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: title.isEmpty ? null : Text(title),
+            content: Text(content),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('知道了'),
+              ),
+            ],
+          ),
+        );
+        return {'result': true};
+      case 'input':
+        final controller = TextEditingController(text: params['value'] ?? '');
+        final value = await showDialog<String?>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: title.isEmpty ? null : Text(title),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: InputDecoration(hintText: params['hint'] ?? ''),
+              onSubmitted: (text) =>
+                  Navigator.of(dialogContext).pop(text),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(null),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop(controller.text),
+                child: const Text('确定'),
+              ),
+            ],
+          ),
+        );
+        controller.dispose();
+        return {'result': value};
+      case 'select':
+        List<String> options = const [];
+        try {
+          final decoded = jsonDecode(params['options'] ?? '[]');
+          if (decoded is List) {
+            options = <String>[for (final e in decoded) '$e'];
+          }
+        } catch (_) {
+          options = const [];
+        }
+        final cols = (int.tryParse(params['col'] ?? '') ?? 1).clamp(1, 6);
+        final index = await showDialog<int?>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: title.isEmpty ? null : Text(title),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: cols > 1
+                  ? ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 400),
+                      child: GridView.builder(
+                        shrinkWrap: true,
+                        gridDelegate:
+                            SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: cols,
+                              childAspectRatio: 2.6,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8,
+                            ),
+                        itemCount: options.length,
+                        itemBuilder: (itemContext, i) => OutlinedButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(i),
+                          child: Text(
+                            options[i],
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (var i = 0; i < options.length; i++)
+                            ListTile(
+                              title: Text(options[i]),
+                              onTap: () =>
+                                  Navigator.of(dialogContext).pop(i),
+                            ),
+                        ],
+                      ),
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(null),
+                child: const Text('取消'),
+              ),
+            ],
+          ),
+        );
+        return {'result': index};
+      default:
+        return {'result': null};
+    }
+  }
+
+  // ---------- 摘要与 Cookie 端点 ----------
+
+  /// /__crypto：摘要与 HMAC。q 参数是 JSON：{op, text?, hex?,
+  /// keyHex?, msgHex?}。op 为 md5/sha1/sha256/sha512 或
+  /// hmac-md5/hmac-sha1/hmac-sha256/hmac-sha512，
+  /// 或 pbkdf2（passwordHex/saltHex/iterations/keyBytes/hash）
+  /// 或 md5file（name：已存文件的 MD5）。
+  Future<void> _handleCrypto(HttpRequest request) async {
+    String result = '';
+    try {
+      final payload = jsonDecode(request.uri.queryParameters['q'] ?? '{}');
+      if (payload is Map) {
+        final op = '${payload['op'] ?? ''}';
+        if (op == 'pbkdf2') {
+          final iterations =
+              ((payload['iterations'] as num?)?.toInt() ?? 1).clamp(1, 10000).toInt();
+          final keyBytes =
+              ((payload['keyBytes'] as num?)?.toInt() ?? 16).clamp(1, 1024).toInt();
+          final derived = haikuoPbkdf2(
+            password: haikuoHexToBytes('${payload['passwordHex'] ?? ''}'),
+            salt: haikuoHexToBytes('${payload['saltHex'] ?? ''}'),
+            iterations: iterations,
+            keyBytes: keyBytes,
+            hash: '${payload['hash'] ?? 'sha1'}',
+          );
+          result = derived
+              .map((b) => b.toRadixString(16).padLeft(2, '0'))
+              .join();
+        } else if (op == 'md5file') {
+          final name = '${payload['name'] ?? ''}';
+          final bytes =
+              _savedFiles[name] ?? await _presetModuleBytes(name, null);
+          if (bytes != null) result = haikuoHashHex('md5', bytes);
+        } else if (op.startsWith('hmac-')) {
+          result = haikuoHmacHex(
+            op.substring('hmac-'.length),
+            haikuoHexToBytes('${payload['keyHex'] ?? ''}'),
+            haikuoHexToBytes('${payload['msgHex'] ?? ''}'),
+          );
+        } else {
+          final hex = payload['hex'];
+          final bytes = hex is String
+              ? haikuoHexToBytes(hex)
+              : utf8.encode('${payload['text'] ?? ''}');
+          result = haikuoHashHex(op, bytes);
+        }
+      }
+    } catch (_) {
+      result = '';
+    }
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'result': result}));
+    await request.response.close();
+  }
+
+  /// /__cookie：规则的 getCookie/setCookie。op=get 时回罐子里的
+  /// Cookie 头；op=set 时把 c 写进该主机的罐子。
+  Future<void> _handleCookie(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final host = Uri.tryParse(params['u'] ?? '')?.host ?? '';
+    if (params['op'] == 'set') {
+      _cookieJar.setCookie(host, params['c'] ?? '');
+    }
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(
+      jsonEncode({'cookie': _cookieJar.headerFor(host)}),
+    );
+    await request.response.close();
+  }
+
+  // ---------- 新增端点（图片/存文件/跨规则/设备信息/收藏历史） ----------
+
+  /// /__img：图片代理。u=原地址，h=请求头 JSON（JS 侧已合并默认头）。
+  /// 字节原样回，Content-Type 透传；失败回 404。
+  Future<void> _handleImage(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final target = params['u'] ?? '';
+    final response = request.response;
+    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+      response.statusCode = HttpStatus.notFound;
+      await response.close();
+      return;
+    }
+    Map<String, String> headers = const {};
+    final rawHeaders = params['h'];
+    if (rawHeaders != null && rawHeaders.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawHeaders);
+        if (decoded is Map) {
+          headers = {
+            for (final entry in decoded.entries)
+              '${entry.key}': '${entry.value}',
+          };
+        }
+      } catch (_) {
+        headers = const {};
+      }
+    }
+    try {
+      final uri = Uri.parse(target);
+      final merged = <String, String>{...headers};
+      final hasCookieHeader = merged.keys.any(
+        (key) => key.toLowerCase() == 'cookie',
+      );
+      if (!hasCookieHeader) {
+        final jarCookie = _cookieJar.headerFor(uri.host);
+        if (jarCookie.isNotEmpty) merged['Cookie'] = jarCookie;
+      }
+      final client = _httpClient ??= HttpClient()
+        ..connectionTimeout = const Duration(seconds: 20)
+        ..idleTimeout = const Duration(seconds: 15);
+      final req = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 30));
+      merged.forEach((key, value) {
+        if (value.isEmpty) return;
+        try {
+          req.headers.set(key, value);
+        } catch (_) {}
+      });
+      final resp = await req.close().timeout(const Duration(seconds: 30));
+      final setCookies = resp.headers['set-cookie'];
+      if (setCookies != null && setCookies.isNotEmpty) {
+        _cookieJar.store(uri.host, setCookies);
+      }
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        response.statusCode = HttpStatus.notFound;
+        await resp.drain<void>();
+        await response.close();
+        return;
+      }
+      final contentType = resp.headers.contentType;
+      if (contentType != null) response.headers.contentType = contentType;
+      await response.addStream(resp);
+      await response.close();
+    } catch (_) {
+      try {
+        response.statusCode = HttpStatus.notFound;
+        await response.close();
+      } catch (_) {}
+    }
+  }
+
+  /// /__savefile：同步存文件。POST 正文是 base64 文本，n=文件名。
+  /// 存进 _savedFiles 供 /__files/ 与播放器取用。
+  Future<void> _handleSaveFile(HttpRequest request) async {
+    final name = request.uri.queryParameters['n'] ?? '';
+    final response = request.response;
+    response.headers.contentType = ContentType.json;
+    if (name.isEmpty) {
+      response.statusCode = HttpStatus.badRequest;
+      response.write(jsonEncode({'ok': false}));
+      await response.close();
+      return;
+    }
+    try {
+      final bytes = await request.fold<BytesBuilder>(
+        BytesBuilder(copy: false),
+        (builder, chunk) => builder..add(chunk),
+      );
+      final text = utf8.decode(bytes.takeBytes()).trim();
+      _savedFiles[name] = Uint8List.fromList(base64Decode(text));
+      response.write(jsonEncode({'ok': true}));
+    } catch (_) {
+      response.statusCode = HttpStatus.badRequest;
+      response.write(jsonEncode({'ok': false}));
+    }
+    await response.close();
+  }
+
+  /// /__rulepage/：跨规则取子页。rule=规则标题（归一匹配），
+  /// path=子页名/路径。回 {rule, page:{name,path,rule}}，找不到 404。
+  Future<void> _handleRulePage(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final title = params['rule'] ?? '';
+    final path = params['path'] ?? '';
+    final response = request.response;
+    response.headers.contentType = ContentType.json;
+    try {
+      final programs = await _store.list();
+      final matched = matchRuleTitle(
+        title,
+        [for (final program in programs) program.name],
+      );
+      HaikuoProgram? found;
+      if (matched != null) {
+        for (final program in programs) {
+          if (program.name == matched) {
+            found = program;
+            break;
+          }
+        }
+      }
+      if (found == null) {
+        response.statusCode = HttpStatus.notFound;
+        response.write(jsonEncode({}));
+        await response.close();
+        return;
+      }
+      Map<String, dynamic> rule = const {};
+      if (found.rawJson.trim().startsWith('{')) {
+        final decoded = jsonDecode(found.rawJson);
+        if (decoded is Map) {
+          rule = {
+            for (final entry in decoded.entries) '${entry.key}': entry.value,
+          };
+        }
+      }
+      final pages = rule['pages'];
+      Map<String, dynamic>? page;
+      if (pages is List) {
+        final wanted = Uri.decodeComponent(path);
+        for (final item in pages) {
+          if (item is! Map) continue;
+          final name = '${item['name'] ?? ''}';
+          final itemPath = '${item['path'] ?? ''}';
+          if (name == wanted ||
+              itemPath == wanted ||
+              Uri.decodeComponent(name) == wanted ||
+              Uri.decodeComponent(itemPath) == wanted) {
+            page = {
+              for (final entry in item.entries) '${entry.key}': entry.value,
+            };
+            break;
+          }
+        }
+      }
+      if (page == null) {
+        response.statusCode = HttpStatus.notFound;
+        response.write(jsonEncode({}));
+        await response.close();
+        return;
+      }
+      response.write(
+        jsonEncode({
+          'rule': rule,
+          'page': {
+            'name': '${page['name'] ?? ''}',
+            'path': '${page['path'] ?? path}',
+            'rule': page['rule'] ?? '',
+          },
+        }),
+      );
+    } catch (_) {
+      response.statusCode = HttpStatus.notFound;
+      response.write(jsonEncode({}));
+    }
+    await response.close();
+  }
+
+  /// /__findrule：规则是否存在。title=标题（归一匹配），
+  /// 回 {name: 匹配到的标题}，找不到 404。
+  Future<void> _handleFindRule(HttpRequest request) async {
+    final title = request.uri.queryParameters['title'] ?? '';
+    final response = request.response;
+    response.headers.contentType = ContentType.json;
+    try {
+      final programs = await _store.list();
+      final matched = matchRuleTitle(
+        title,
+        [for (final program in programs) program.name],
+      );
+      if (matched != null) {
+        response.write(jsonEncode({'name': matched}));
+        await response.close();
+        return;
+      }
+    } catch (_) {}
+    response.statusCode = HttpStatus.notFound;
+    response.write(jsonEncode({}));
+    await response.close();
+  }
+
+  /// /__ip：本机首个非 loopback IPv4，纯文本；取不到回空串。
+  Future<void> _handleIp(HttpRequest request) async {
+    var ip = '';
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      for (final interface in interfaces) {
+        for (final address in interface.addresses) {
+          if (!address.isLoopback) {
+            ip = address.address;
+            break;
+          }
+        }
+        if (ip.isNotEmpty) break;
+      }
+    } catch (_) {
+      ip = '';
+    }
+    request.response.headers.contentType = ContentType.text;
+    request.response.write(ip);
+    await request.response.close();
+  }
+
+  /// /__appinfo：{version, ruleCount}。version 取 appBuild 固定整数
+  /// （无 package_info_plus 依赖，按规格用固定常量并注明）。
+  Future<void> _handleAppInfo(HttpRequest request) async {
+    var count = 0;
+    try {
+      count = (await _store.list()).length;
+    } catch (_) {}
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'version': appBuild, 'ruleCount': count}));
+    await request.response.close();
+  }
+
+  /// /__lastrules：最近的规则标题数组（JSON 数组串）。n=条数。
+  Future<void> _handleLastRules(HttpRequest request) async {
+    final n = (int.tryParse(request.uri.queryParameters['n'] ?? '') ?? 10)
+        .clamp(1, 100)
+        .toInt();
+    List<String> titles = const [];
+    try {
+      final programs = await _store.list();
+      titles = [for (final p in programs.take(n)) p.name];
+    } catch (_) {}
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(titles));
+    await request.response.close();
+  }
+
+  /// /__clipboard：剪贴板纯文本（input 对话框的初始值用）。
+  Future<void> _handleClipboard(HttpRequest request) async {
+    var text = '';
+    try {
+      final data = await Clipboard.getData('text/plain');
+      text = data?.text ?? '';
+    } catch (_) {}
+    request.response.headers.contentType = ContentType.text;
+    request.response.write(text);
+    await request.response.close();
+  }
+
+  /// `__proxyserver` 路径：本地代理服务。把查询串交运行时里的
+  /// 代理代码求值；结果是 {statusCode, body, headers} 信封就按信封
+  /// 响应，否则当正文回（m3u8 类型）。30 秒超时回 502。
+  /// 注：运行时正卡在同步对话框 XHR 里时，求值会等对话框先处理完。
+  Future<void> _handleProxyServer(HttpRequest request) async {
+    final id = parseProxyServerId(request.uri.path) ?? '';
+    final response = request.response;
+    if (id.isEmpty || _controller == null) {
+      response.statusCode = HttpStatus.notFound;
+      await response.close();
+      return;
+    }
+    try {
+      final queryObj = <String, dynamic>{};
+      request.uri.queryParameters.forEach((key, value) {
+        queryObj[key] = value;
+      });
+      final raw = await _controller!
+          .runJavaScriptReturningResult(
+            'window.__haikuoProxyServe(${jsonEncode(id)}, '
+            '${jsonEncode(jsonEncode(queryObj))});',
+          )
+          .timeout(const Duration(seconds: 30));
+      final text = _sniffResultText(raw);
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map && decoded.containsKey('statusCode')) {
+          response.statusCode =
+              (decoded['statusCode'] as num?)?.toInt() ?? 200;
+          final headers = decoded['headers'];
+          if (headers is Map) {
+            headers.forEach((key, value) {
+              try {
+                response.headers.set('$key', '$value');
+              } catch (_) {}
+            });
+          }
+          response.write('${decoded['body'] ?? ''}');
+          await response.close();
+          return;
+        }
+      } catch (_) {
+        // 不是信封，当正文回
+      }
+      response.headers.contentType = ContentType(
+        'application',
+        'vnd.apple.mpegurl',
+        charset: 'utf-8',
+      );
+      response.write(text);
+      await response.close();
+    } catch (_) {
+      try {
+        response.statusCode = HttpStatus.badGateway;
+        await response.close();
+      } catch (_) {}
+    }
+  }
+
+  /// /__webview：fetchCodeByWebView。POST JSON {url, headers,
+  /// timeout, checkJs, blockRules}，回 {html}。
+  Future<void> _handleWebviewFetch(HttpRequest request) async {
+    final response = request.response;
+    response.headers.contentType = ContentType.json;
+    String html = '';
+    try {
+      final bytes = await request.fold<BytesBuilder>(
+        BytesBuilder(copy: false),
+        (builder, chunk) => builder..add(chunk),
+      );
+      final payload = jsonDecode(utf8.decode(bytes.takeBytes()));
+      if (payload is Map) {
+        html = await _fetchHtmlByWebView(payload);
+      }
+    } catch (_) {
+      html = '';
+    }
+    response.write(jsonEncode({'html': html}));
+    await response.close();
+  }
+
+  /// 隐藏 WebView 取码：加载页面，checkJs 轮询通过（或无 checkJs
+  /// 时加载完成 + 宽限）后取 outerHTML；超时回空。
+  Future<String> _fetchHtmlByWebView(Map payload) async {
+    final url = '${payload['url'] ?? ''}';
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return '';
+    if (!mounted) return '';
+    final timeoutMs = (payload['timeout'] as num?)?.toInt() ?? 30000;
+    final timeout = Duration(milliseconds: timeoutMs.clamp(1000, 120000));
+    final checkJs = '${payload['checkJs'] ?? ''}';
+    final blockRules = switch (payload['blockRules']) {
+      final List list => <String>[for (final e in list) '$e'],
+      _ => <String>[],
+    };
+    final headers = <String, String>{};
+    final rawHeaders = payload['headers'];
+    if (rawHeaders is Map) {
+      rawHeaders.forEach((key, value) {
+        headers['$key'] = '$value';
+      });
+    }
+    final loaded = Completer<void>();
+    final controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF120B20))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onNavigationRequest: (navRequest) {
+            final blocked = blockRules.any(
+              (rule) => wildcardContains(navRequest.url, rule),
+            );
+            return blocked
+                ? NavigationDecision.prevent
+                : NavigationDecision.navigate;
+          },
+          onPageFinished: (_) {
+            if (!loaded.isCompleted) loaded.complete();
+          },
+        ),
+      );
+    if (!mounted) return '';
+    setState(() => _webviewFetchController = controller);
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await controller.loadRequest(Uri.parse(url), headers: headers);
+      final deadline = DateTime.now().add(timeout);
+      var passed = checkJs.isEmpty;
+      while (DateTime.now().isBefore(deadline)) {
+        if (checkJs.isNotEmpty) {
+          try {
+            final script =
+                '(function(){try{window._getUrls=function(){try{return '
+                'performance.getEntriesByType("resource").map(function(e){'
+                'return e.name;});}catch(e){return [];}};'
+                'window.fy_bridge_app={getUrls:window._getUrls};'
+                'window.fba=window.fy_bridge_app;}catch(e){}'
+                'try{var __r=(0,eval)(${jsonEncode(checkJs)});'
+                'return (__r===null||__r===undefined||__r===false||__r==="")'
+                '?"":String(__r);}catch(e){return "";}})()';
+            final raw = await controller.runJavaScriptReturningResult(script);
+            if (_sniffResultText(raw).isNotEmpty) {
+              passed = true;
+              break;
+            }
+          } catch (_) {
+            // 页面还没好，这一拍跳过
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        } else {
+          await loaded.future.timeout(
+            deadline.difference(DateTime.now()),
+            onTimeout: () {},
+          );
+          // 加载完成后再宽限一会，让动态内容渲染出来。
+          await Future<void>.delayed(const Duration(milliseconds: 800));
+          passed = true;
+          break;
+        }
+      }
+      if (!passed) return '';
+      final raw = await controller.runJavaScriptReturningResult(
+        'document.documentElement.outerHTML',
+      );
+      return _sniffResultText(raw);
+    } catch (_) {
+      return '';
+    } finally {
+      if (mounted) {
+        setState(() {
+          if (identical(_webviewFetchController, controller)) {
+            _webviewFetchController = null;
+          }
+        });
+      }
+    }
+  }
+
+  /// 收藏/历史/书签端点：GET 取列表（?rule=&group=），
+  /// POST 写（action=add/toggle）。
+  Future<void> _handleCollections(HttpRequest request) async {
+    final path = request.uri.path;
+    final response = request.response;
+    response.headers.contentType = ContentType.json;
+    try {
+      if (request.method == 'POST') {
+        final bytes = await request.fold<BytesBuilder>(
+          BytesBuilder(copy: false),
+          (builder, chunk) => builder..add(chunk),
+        );
+        final payload = jsonDecode(utf8.decode(bytes.takeBytes()));
+        if (payload is Map) {
+          final entry = <String, dynamic>{
+            'rule': '${payload['rule'] ?? ''}',
+            'url': '${payload['url'] ?? ''}',
+            'title': '${payload['title'] ?? ''}',
+            'pic': '${payload['pic'] ?? ''}',
+          };
+          if (path == '/__history') {
+            await _store.recordHistory(
+              rule: entry['rule'] as String,
+              url: entry['url'] as String,
+              title: entry['title'] as String,
+              pic: entry['pic'] as String,
+            );
+            response.write(jsonEncode({'ok': true}));
+          } else if (path == '/__favorite') {
+            final favorite = await _store.toggleFavorite(entry);
+            response.write(jsonEncode({'favorite': favorite}));
+          } else {
+            response.write(jsonEncode({'ok': true}));
+          }
+        } else {
+          response.write(jsonEncode({'ok': false}));
+        }
+        await response.close();
+        return;
+      }
+      final params = request.uri.queryParameters;
+      final rule = params['rule'];
+      List<Map<String, dynamic>> entries;
+      if (path == '/__history') {
+        entries = await _store.listHistory(
+          rule: rule == null || rule.isEmpty ? null : rule,
+        );
+      } else if (path == '/__bookmark') {
+        entries = await _store.listBookmarks(
+          rule: rule == null || rule.isEmpty ? null : rule,
+        );
+      } else {
+        final group = params['group'];
+        entries = await _store.listFavorites(
+          rule: rule == null || rule.isEmpty ? null : rule,
+          group: group == null || group.isEmpty ? null : group,
+        );
+      }
+      response.write(jsonEncode({'entries': entries}));
+    } catch (_) {
+      response.write(jsonEncode({'entries': []}));
+    }
+    await response.close();
+  }
+
+  /// /__files/ 的预置模块回退：_savedFiles 里没有时，按清单
+  /// （当前规则映射 → __ 后缀 → 精确文件名 → 归一化）找 assets
+  /// 里的预置模块文件。找不到回 null（调用方回 404）。
+  Future<Uint8List?> _presetModuleBytes(String name, String? ruleTitle) async {
+    try {
+      final cached = _presetModuleCache[name];
+      if (cached != null) return cached;
+      _presetManifest ??= await _loadPresetManifest();
+      final manifest = _presetManifest!;
+      final resolved = resolvePresetModule(
+        requestBasename: name,
+        ruleTitle: ruleTitle ?? '',
+        manifest: manifest,
+      );
+      if (resolved == null) return null;
+      final data = await rootBundle.load(
+        'assets/haikuo_modules/$resolved',
+      );
+      final bytes = data.buffer.asUint8List();
+      _presetModuleCache[name] = bytes;
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, List<String>>> _loadPresetManifest() async {
+    try {
+      final text = await rootBundle.loadString(
+        'assets/haikuo_modules_manifest.json',
+      );
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        final rules = decoded['rules'];
+        if (rules is Map) {
+          return {
+            for (final entry in rules.entries)
+              '${entry.key}': <String>[
+                if (entry.value is List)
+                  for (final file in entry.value as List) '$file',
+              ],
+          };
+        }
+      }
+    } catch (_) {
+      // 清单读不到（widget 测试下无 assets），回空清单
+    }
+    return const {};
+  }
+
   Future<void> _handleRequest(HttpRequest request) async {
     try {
       if (request.uri.path == '/') {
@@ -422,20 +1912,80 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         await _proxy(request);
         return;
       }
+      if (request.uri.path == '/__crypto') {
+        await _handleCrypto(request);
+        return;
+      }
+      if (request.uri.path == '/__cookie') {
+        await _handleCookie(request);
+        return;
+      }
+      if (request.uri.path == '/__dialog') {
+        await _handleDialog(request);
+        return;
+      }
+      if (request.uri.path == '/__img') {
+        await _handleImage(request);
+        return;
+      }
+      if (request.uri.path == '/__savefile') {
+        await _handleSaveFile(request);
+        return;
+      }
+      if (request.uri.path == '/__rulepage/' ||
+          request.uri.path == '/__rulepage') {
+        await _handleRulePage(request);
+        return;
+      }
+      if (request.uri.path == '/__findrule') {
+        await _handleFindRule(request);
+        return;
+      }
+      if (request.uri.path == '/__ip') {
+        await _handleIp(request);
+        return;
+      }
+      if (request.uri.path == '/__appinfo') {
+        await _handleAppInfo(request);
+        return;
+      }
+      if (request.uri.path == '/__lastrules') {
+        await _handleLastRules(request);
+        return;
+      }
+      if (request.uri.path == '/__clipboard') {
+        await _handleClipboard(request);
+        return;
+      }
+      if (request.uri.path.startsWith('/__proxyserver/')) {
+        await _handleProxyServer(request);
+        return;
+      }
+      if (request.uri.path == '/__webview') {
+        await _handleWebviewFetch(request);
+        return;
+      }
+      if (request.uri.path == '/__history' ||
+          request.uri.path == '/__collection' ||
+          request.uri.path == '/__bookmark' ||
+          request.uri.path == '/__favorite') {
+        await _handleCollections(request);
+        return;
+      }
       if (request.uri.path.startsWith('/__files/')) {
         final name = Uri.decodeComponent(
           request.uri.path.substring('/__files/'.length),
         );
-        final content = _savedFiles[name];
+        // ?rule= 标题供预置模块回退按当前规则映射。
+        final ruleTitle = request.uri.queryParameters['rule'];
+        final content =
+            _savedFiles[name] ??
+            await _presetModuleBytes(name, ruleTitle);
         if (content == null) {
           request.response.statusCode = HttpStatus.notFound;
         } else {
-          request.response.headers.contentType = ContentType(
-            'application',
-            'vnd.apple.mpegurl',
-            charset: 'utf-8',
-          );
-          request.response.write(content);
+          request.response.headers.contentType = _savedFileContentType(name);
+          request.response.add(content);
         }
         await request.response.close();
         return;
@@ -450,6 +2000,33 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         // 连接已经断了，忽略
       }
     }
+  }
+
+  /// saveFile 存下的文件按扩展名给内容类型：m3u8 给播放器、
+  /// 字幕给文本、图片给图片，其余按字节流。
+  ContentType _savedFileContentType(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.m3u8')) {
+      return ContentType('application', 'vnd.apple.mpegurl', charset: 'utf-8');
+    }
+    if (lower.endsWith('.json')) {
+      return ContentType.json;
+    }
+    if (lower.endsWith('.srt') || lower.endsWith('.vtt') ||
+        lower.endsWith('.txt') || lower.endsWith('.lrc')) {
+      return ContentType('text', 'plain', charset: 'utf-8');
+    }
+    if (lower.endsWith('.png')) return ContentType('image', 'png');
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      return ContentType('image', 'jpeg');
+    }
+    if (lower.endsWith('.gif')) return ContentType('image', 'gif');
+    if (lower.endsWith('.webp')) return ContentType('image', 'webp');
+    if (lower.endsWith('.mp4')) return ContentType('video', 'mp4');
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+      return ContentType.html;
+    }
+    return ContentType.binary;
   }
 
   Map<String, dynamic> _programPayload() {
@@ -496,56 +2073,133 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         headers = const {};
       }
     }
+    // 规则 fetch() 的选项：t=超时毫秒，r=0 不跟重定向，
+    // o=1 只要响应头，hex=1 正文按 base64 回（规则再转十六进制）。
+    final timeoutMs = int.tryParse(params['t'] ?? '') ?? 30000;
+    final timeout = Duration(
+      milliseconds: timeoutMs.clamp(5000, 120000),
+    );
+    final followRedirects = params['r'] != '0';
+    final onlyHeaders = params['o'] == '1';
+    final hexBody = params['hex'] == '1';
+    // cs= 显式字符集（规则请求头 Content-Type 的 charset 或 opt.charset）：
+    // 按它解码正文，否则走自动探测。
+    final charset = (params['cs'] ?? '').trim().toLowerCase();
     final response = request.response;
     response.headers.contentType = ContentType.json;
     if (!target.startsWith('http://') && !target.startsWith('https://')) {
-      response.write(jsonEncode({'code': 0, 'body': ''}));
+      response.write(jsonEncode({'code': 0, 'body': '', 'headers': {}}));
       await response.close();
       return;
     }
+    final uri = Uri.parse(target);
     final merged = <String, String>{
       'User-Agent':
           'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
       ...headers,
     };
+    // 脚本没带 Cookie 时，带上罐子里同主机的 Cookie。
+    final hasCookieHeader = merged.keys.any(
+      (key) => key.toLowerCase() == 'cookie',
+    );
+    if (!hasCookieHeader) {
+      final jarCookie = _cookieJar.headerFor(uri.host);
+      if (jarCookie.isNotEmpty) merged['Cookie'] = jarCookie;
+    }
     try {
       // 共用客户端：同一主机的连接复用，不再每次取数都重建 TCP+TLS。
       // UA 走下面逐请求的头设置，不再写客户端默认值（多请求会互相串）。
       final client = _httpClient ??= HttpClient()
         ..connectionTimeout = const Duration(seconds: 20)
         ..idleTimeout = const Duration(seconds: 15);
-      final uri = Uri.parse(target);
-      final req = await client.openUrl(method, uri).timeout(
-        const Duration(seconds: 25),
-      );
+      // 规则 proxy 字段：本页一个规则，代理固定写在共用客户端上。
+      final proxy = _ruleProxy;
+      if (proxy != null) {
+        client.findProxy = (_) => 'PROXY $proxy';
+      }
+      // 只要响应头且是 GET：发 HEAD，省得拉正文。
+      final effectiveMethod = onlyHeaders && method == 'GET'
+          ? 'HEAD'
+          : method;
+      final req = await client
+          .openUrl(effectiveMethod, uri)
+          .timeout(timeout);
+      req.followRedirects = followRedirects;
       merged.forEach((key, value) {
         if (value.isEmpty) return;
         if (key.toLowerCase() == 'content-length') return;
         try {
           req.headers.set(key, value);
         } catch (_) {
-          // 个别头 WebView 设置不进去，跳过
+          // 个别头设置不进去，跳过
         }
       });
       if (method != 'GET' && method != 'HEAD' && body.isNotEmpty) {
         req.add(utf8.encode(body));
       }
-      final resp = await req.close().timeout(const Duration(seconds: 30));
-      final bytes = await resp.fold<BytesBuilder>(
-        BytesBuilder(copy: false),
-        (builder, chunk) => builder..add(chunk),
-      );
+      final resp = await req.close().timeout(timeout);
+      // 响应头按官方形态回：每个头名对应一个值数组。
+      final headerMap = <String, List<String>>{};
+      resp.headers.forEach((name, values) {
+        headerMap[name] = values;
+      });
+      // Set-Cookie 存进罐子，下次同主机请求自动带上。
+      final setCookies = resp.headers['set-cookie'];
+      if (setCookies != null && setCookies.isNotEmpty) {
+        _cookieJar.store(uri.host, setCookies);
+      }
+      String bodyText;
+      if (onlyHeaders) {
+        await resp.drain<void>();
+        bodyText = '';
+      } else {
+        final bytes = await resp.fold<BytesBuilder>(
+          BytesBuilder(copy: false),
+          (builder, chunk) => builder..add(chunk),
+        );
+        final raw = bytes.takeBytes();
+        bodyText = hexBody
+            ? base64Encode(raw)
+            : _decodeWithCharset(raw, charset);
+      }
       response.write(
         jsonEncode({
           'code': resp.statusCode,
-          'body': HaikuoCodec.decodeText(bytes.takeBytes()),
+          'body': bodyText,
+          'headers': headerMap,
         }),
       );
       await response.close();
     } catch (error) {
-      response.write(jsonEncode({'code': 0, 'body': '', 'error': '$error'}));
+      response.write(
+        jsonEncode({'code': 0, 'body': '', 'headers': {}, 'error': '$error'}),
+      );
       await response.close();
+    }
+  }
+
+  /// 按显式字符集解码响应正文：gbk 系走 GbkCodec，utf-8 走宽容
+  /// 解码，其余/空走自动探测（decodeText）。
+  String _decodeWithCharset(List<int> bytes, String charset) {
+    switch (charset) {
+      case 'gbk':
+      case 'gb2312':
+      case 'gb18030':
+      case 'gb_2312':
+        try {
+          return const GbkCodec(allowInvalid: true).decode(bytes);
+        } catch (_) {
+          return HaikuoCodec.decodeText(bytes);
+        }
+      case 'utf-8':
+      case 'utf8':
+        return utf8.decode(bytes, allowMalformed: true);
+      case 'iso-8859-1':
+      case 'latin1':
+        return latin1.decode(bytes, allowInvalid: true);
+      default:
+        return HaikuoCodec.decodeText(bytes);
     }
   }
 
@@ -571,11 +2225,35 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                 title: Text(widget.program.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                 actions: [
                   IconButton(
+                    tooltip: '收藏',
+                    icon: const Icon(Icons.star_border_rounded),
+                    onPressed: _toggleFavorite,
+                  ),
+                  IconButton(
+                    tooltip: '搜索',
+                    icon: const Icon(Icons.search_rounded),
+                    onPressed: () => setState(() {
+                      _showSearch = !_showSearch;
+                      if (_showSearch) _searchNonce++;
+                    }),
+                  ),
+                  IconButton(
                     tooltip: '刷新',
                     icon: const Icon(Icons.refresh_rounded),
                     onPressed: () => _controller?.reload(),
                   ),
                 ],
+                bottom: _showSearch
+                    ? PreferredSize(
+                        preferredSize: const Size.fromHeight(52),
+                        child: HaikuoSearchBar(
+                          key: ValueKey<int>(_searchNonce),
+                          initialKeyword: _searchKeyword,
+                          onSubmitted: _runSearch,
+                          onClosed: () => setState(() => _showSearch = false),
+                        ),
+                      )
+                    : null,
               ),
         body: _error != null
             ? _RunnerError(message: _error!)
@@ -608,6 +2286,8 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                                 initialIndex: inline.index,
                                 controller: _playerController,
                                 onSelectEpisode: _selectEpisode,
+                                subtitleUrl: inline.subtitleUrl,
+                                headers: inline.headers,
                                 fullscreen: _inlineFullscreen,
                                 onFullscreenChanged: (value) => setState(
                                   () => _inlineFullscreen = value,
@@ -619,10 +2299,105 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                               ),
                       ),
                       Expanded(child: WebViewWidget(controller: _controller!)),
+                      // 嗅探用的隐藏 WebView：1 像素占位，进树才能加载页面。
+                      if (_sniffController != null)
+                        SizedBox(
+                          width: 1,
+                          height: 1,
+                          child: WebViewWidget(controller: _sniffController!),
+                        ),
+                      // fetchCodeByWebView 用的隐藏 WebView：同上，请求结束卸载。
+                      if (_webviewFetchController != null)
+                        SizedBox(
+                          width: 1,
+                          height: 1,
+                          child: WebViewWidget(
+                            controller: _webviewFetchController!,
+                          ),
+                        ),
                     ],
                   );
                 },
               ),
+      ),
+    );
+  }
+}
+
+/// 海阔搜索栏：顶栏下的一行输入框，输完按搜索或回车提交，
+/// 关键词交给运行时的 searchFind/search_url 执行。
+class HaikuoSearchBar extends StatefulWidget {
+  const HaikuoSearchBar({
+    super.key,
+    this.initialKeyword = '',
+    required this.onSubmitted,
+    required this.onClosed,
+  });
+
+  final String initialKeyword;
+  final ValueChanged<String> onSubmitted;
+  final VoidCallback onClosed;
+
+  @override
+  State<HaikuoSearchBar> createState() => _HaikuoSearchBarState();
+}
+
+class _HaikuoSearchBarState extends State<HaikuoSearchBar> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialKeyword);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final word = _controller.text.trim();
+    if (word.isEmpty) return;
+    widget.onSubmitted(word);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      color: scheme.surface,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _submit(),
+              decoration: const InputDecoration(
+                hintText: '搜索…',
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '搜索',
+            icon: const Icon(Icons.search_rounded),
+            onPressed: _submit,
+          ),
+          IconButton(
+            tooltip: '清除',
+            icon: const Icon(Icons.clear_rounded),
+            onPressed: () => _controller.clear(),
+          ),
+          IconButton(
+            tooltip: '关闭搜索栏',
+            icon: const Icon(Icons.close_rounded),
+            onPressed: widget.onClosed,
+          ),
+        ],
       ),
     );
   }
@@ -697,6 +2472,7 @@ class HaikuoPlayerView extends StatefulWidget {
     this.onSelectEpisode,
     this.headers = const {},
     this.onStateChange,
+    this.subtitleUrl = '',
     required this.fullscreen,
     required this.onFullscreenChanged,
     this.onClose,
@@ -729,6 +2505,10 @@ class HaikuoPlayerView extends StatefulWidget {
   /// 进度变化时上报 {opened, url, title, playing, positionMs,
   /// durationMs}；不传则不上报。
   final ValueChanged<Map<String, dynamic>>? onStateChange;
+
+  /// 条目自带的字幕地址：非空时打开媒体后加载为外挂字幕；
+  /// 字幕加载失败不影响播放本身。
+  final String subtitleUrl;
 
   /// 是否全屏：宿主持有并据此布局。
   final bool fullscreen;
@@ -778,6 +2558,7 @@ class HaikuoPlayPage extends StatefulWidget {
     this.onSelectEpisode,
     this.headers = const {},
     this.onStateChange,
+    this.subtitleUrl = '',
     this.orientationMode = PlaybackOrientationMode.auto,
     this.playerFactory,
     this.videoBuilder,
@@ -805,6 +2586,9 @@ class HaikuoPlayPage extends StatefulWidget {
   /// 进度变化时上报 {opened, url, title, playing, positionMs,
   /// durationMs}；不传则不上报。
   final ValueChanged<Map<String, dynamic>>? onStateChange;
+
+  /// 条目自带的字幕地址：透传给播放器视图加载为外挂字幕。
+  final String subtitleUrl;
 
   /// 全屏方向模式：与主播放器同一套设置，默认自动跟视频方向。
   final PlaybackOrientationMode orientationMode;
@@ -858,6 +2642,9 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
   late String _url = widget.url;
   late String _title = widget.title;
   late int _index = widget.initialIndex;
+  late String _subtitleUrl = widget.subtitleUrl;
+  // 切集递送的请求头：初始取 widget.headers，切集后取递送值。
+  late Map<String, String> _headers = widget.headers;
   // 视频宽高比：videoParams 到达前默认 16:9（与旧槽位一致），
   // 到达后按真实尺寸算，竖屏视频全屏进竖屏、槽位按比例加高。
   double _aspectRatio = 16 / 9;
@@ -969,8 +2756,16 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
 
   Future<void> _open() async {
     try {
-      await _player.open(Media(_url, httpHeaders: widget.headers));
+      await _player.open(Media(_url, httpHeaders: _headers));
       await _player.setRate(_speed);
+      // 条目自带字幕：加载为外挂字幕，失败不影响播放。
+      if (_subtitleUrl.isNotEmpty) {
+        try {
+          await _player.setSubtitleTrack(SubtitleTrack.uri(_subtitleUrl));
+        } catch (_) {
+          // 字幕加载失败，忽略
+        }
+      }
       _reportState();
     } catch (error) {
       if (!mounted) return;
@@ -982,12 +2777,16 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     required String url,
     required String title,
     required int index,
+    String subtitleUrl = '',
+    Map<String, String> headers = const {},
   }) {
     if (!mounted) return;
     setState(() {
       _url = url;
       _title = title;
       _index = index;
+      _subtitleUrl = subtitleUrl;
+      _headers = headers;
       _resolving = false;
       _error = null;
     });
@@ -1330,6 +3129,7 @@ class _HaikuoPlayPageState extends State<HaikuoPlayPage> {
       onSelectEpisode: widget.onSelectEpisode,
       headers: widget.headers,
       onStateChange: widget.onStateChange,
+      subtitleUrl: widget.subtitleUrl,
       fullscreen: _fullscreen,
       onFullscreenChanged: (value) => setState(() => _fullscreen = value),
       onCurrentChanged: (index, title) => setState(() {

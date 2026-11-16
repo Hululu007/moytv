@@ -54,85 +54,83 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
   }
 
-  /// 抽屉里点一行/一枚顶 Tab（导航固定抽屉，切区全走抽屉）。
-  Future<void> tapDrawerLabel(WidgetTester tester, String label) async {
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
+  /// 切区全走底部标签栏：0=片库 / 1=直播 / 4=多媒体。
+  Future<void> tapShellTab(WidgetTester tester, int index) async {
+    await tester.tap(find.byKey(ValueKey('shell-tab-$index')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    final item = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text(label),
-    );
-    expect(item, findsOneWidget);
-    await tester.tap(item);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
   }
 
-  testWidgets('narrow library: capsule sits below the site box', (
+  testWidgets('narrow library: single source selector, capsule below title', (
     tester,
   ) async {
     await pumpHome(tester, const Size(390, 844));
-    final siteBox = find.byKey(const ValueKey('drawer-site-box'));
-    expect(siteBox, findsOneWidget);
+    // 只留标题上的一个站源选择器；旧的站源胶囊与下拉盒已删。
+    final selector = find.byKey(const ValueKey('source-switch'));
+    expect(selector, findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
+    expect(find.byKey(const ValueKey('source-dropdown')), findsNothing);
     final capsules = find.byType(GlassButtonGroup);
     expect(capsules, findsWidgets);
-    final siteRect = tester.getRect(siteBox);
+    final titleRect = tester.getRect(selector);
     for (final capsule in capsules.evaluate()) {
       final rect = tester.getRect(find.byWidget(capsule.widget));
-      expect(rect.overlaps(siteRect), isFalse);
+      expect(rect.overlaps(titleRect), isFalse);
     }
-    // 至少一个胶囊在第二行（顶在站源条下方）。
+    // 至少一个胶囊在第二行（顶在标题下方）。
     final tops = capsules.evaluate().map(
       (e) => tester.getRect(find.byWidget(e.widget)).top,
     );
-    expect(tops.any((top) => top >= siteRect.bottom), isTrue);
+    expect(tops.any((top) => top >= titleRect.bottom), isTrue);
     debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('wide library: capsule shares the actions row', (tester) async {
     await pumpHome(tester, const Size(900, 844));
-    final siteBox = find.byKey(const ValueKey('drawer-site-box'));
-    expect(siteBox, findsOneWidget);
+    final selector = find.byKey(const ValueKey('source-switch'));
+    expect(selector, findsOneWidget);
+    expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
+    expect(find.byKey(const ValueKey('source-dropdown')), findsNothing);
     final capsules = find.byType(GlassButtonGroup);
     expect(capsules, findsWidgets);
-    final siteRect = tester.getRect(siteBox);
+    final titleRect = tester.getRect(selector);
     for (final capsule in capsules.evaluate()) {
       final rect = tester.getRect(find.byWidget(capsule.widget));
-      expect(rect.overlaps(siteRect), isFalse);
+      expect(rect.overlaps(titleRect), isFalse);
     }
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('multimedia: no site box, no capsule, own title', (
+  testWidgets('multimedia: no selector, no capsule, own title', (
     tester,
   ) async {
     await pumpHome(tester, const Size(390, 844));
-    await tapDrawerLabel(tester, '多媒体');
+    await tapShellTab(tester, 4);
     expect(find.byType(MultimediaScreen), findsOneWidget);
+    expect(find.byKey(const ValueKey('source-switch')), findsNothing);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
     expect(find.byType(GlassButtonGroup), findsNothing);
     expect(find.text('多媒体'), findsWidgets);
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('live: no site box, no capsule', (tester) async {
+  testWidgets('live: no selector, no capsule', (tester) async {
     await pumpHome(tester, const Size(390, 844));
-    await tapDrawerLabel(tester, '直播');
+    await tapShellTab(tester, 1);
+    expect(find.byKey(const ValueKey('source-switch')), findsNothing);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
     expect(find.byType(GlassButtonGroup), findsNothing);
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('back to library: site box returns', (tester) async {
+  testWidgets('back to library: single selector returns', (tester) async {
     await pumpHome(tester, const Size(390, 844));
-    await tapDrawerLabel(tester, '多媒体');
+    await tapShellTab(tester, 4);
+    expect(find.byKey(const ValueKey('source-switch')), findsNothing);
+    await tapShellTab(tester, 0);
+    expect(find.byKey(const ValueKey('source-switch')), findsOneWidget);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
-    await tapDrawerLabel(tester, '影视');
-    expect(
-      find.byKey(const ValueKey('drawer-site-box')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('source-dropdown')), findsNothing);
     debugDefaultTargetPlatformOverride = null;
   });
 }

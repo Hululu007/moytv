@@ -116,7 +116,7 @@ void main() {
           onSearchChanged: (_) {},
           onSearchSubmitted: (_) {},
           onOpenGlobalSearch: () {},
-          onMenuPressed: () {},
+          onAvatarPressed: () {},
           onFilterPressed: () {},
           onRankingsPressed: () {},
           onNewPressed: () {},
@@ -209,7 +209,7 @@ void main() {
       expect(find.byType(NeonHomeView), findsOneWidget);
     });
 
-    testWidgets('抽屉样式下全屏流无返回键', (tester) async {
+    testWidgets('胶囊栏样式下全屏流无返回键', (tester) async {
       await pumpDramaHome(tester);
       await tester.tap(
         find.descendant(
@@ -250,22 +250,9 @@ void main() {
       return store;
     }
 
-    /// 抽屉里切区：短剧分支用 neon-avatar 开抽屉，通用分支用
-    /// open-app-drawer；点行后等关闭动画跑完。
-    Future<void> switchZoneViaDrawer(
-      WidgetTester tester,
-      String label, {
-      String drawerKey = 'neon-avatar',
-    }) async {
-      await tester.tap(find.byKey(ValueKey(drawerKey)));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      final row = find.descendant(
-        of: find.byType(Drawer),
-        matching: find.text(label),
-      );
-      expect(row, findsOneWidget);
-      await tester.tap(row);
+    /// 底部标签栏切区：0=片库 / 1=直播。
+    Future<void> switchZoneViaTab(WidgetTester tester, int index) async {
+      await tester.tap(find.byKey(ValueKey('shell-tab-$index')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
     }
@@ -295,12 +282,8 @@ void main() {
     testWidgets('频道内切站后仍停在频道视图', (tester) async {
       await pumpHome(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NeonBottomBar),
-          matching: find.text('频道'),
-        ),
-      );
+      // 外层底栏挂出时内层胶囊栏藏起，频道走芯片行。
+      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(NeonChannelView), findsOneWidget);
@@ -317,12 +300,8 @@ void main() {
     testWidgets('切到直播区再回片库后钉住解除', (tester) async {
       await pumpHome(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NeonBottomBar),
-          matching: find.text('频道'),
-        ),
-      );
+      // 外层底栏挂出时内层胶囊栏藏起，频道走芯片行。
+      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       await tester.tap(find.byKey(const ValueKey('neon-filter-all')));
@@ -331,13 +310,9 @@ void main() {
       await pickAllSources(tester);
       expect(find.byType(HongguoDramaHome), findsOneWidget);
       expect(find.text('全部站源'), findsOneWidget);
-      await switchZoneViaDrawer(tester, '直播');
+      await switchZoneViaTab(tester, 1);
       expect(find.byType(HongguoDramaHome), findsNothing);
-      await switchZoneViaDrawer(
-        tester,
-        '片库',
-        drawerKey: 'open-app-drawer',
-      );
+      await switchZoneViaTab(tester, 0);
       // 钉住已解除：非红果分组回通用分支。
       expect(find.byType(HongguoDramaHome), findsNothing);
     }, skip: !allSourcesEnabled);
@@ -348,19 +323,18 @@ void main() {
       final target = store.visibleSources.firstWhere(
         (site) => site.id != 'hongguo',
       );
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NeonBottomBar),
-          matching: find.text('频道'),
-        ),
-      );
+      // 外层底栏挂出时内层胶囊栏藏起，频道走芯片行。
+      await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(NeonChannelView), findsOneWidget);
-      repository.requests.clear();
       await tester.tap(find.byKey(const ValueKey('neon-filter-all')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      // 站源弹窗打开时会预加载部分站的目录（__all__/当前站等），
+      // 与切站后的频道加载无关：清掉弹窗预加载的记录，只看选站
+      // 之后发出的请求，频道是否只向新站要数据才判得准。
+      repository.requests.clear();
       await tester.enterText(
         find.byKey(const ValueKey('site-picker-search')),
         target.name,
@@ -374,16 +348,18 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
-      // 数据层：频道目录加载只向新站请求（首个请求即新站）；其后
-      // 若有请求，只能是推荐流成人混排的取样（只打 🔞 站），绝不
-      // 能是其它普通站的目录聚合——那才是频道混站的泄漏。
+      // 数据层：选站之后发出的请求，只能是新站自己的目录，或
+      // 推荐流成人混排的取样（只打 🔞 站）；绝不能是其它普通站
+      // 的目录聚合——那才是频道混站的泄漏。
       expect(repository.requests, isNotEmpty);
-      expect(repository.requests.first, target.id);
+      expect(repository.requests, contains(target.id));
       final namesById = {for (final site in store.sources) site.id: site.name};
       expect(
-        repository.requests
-            .skip(1)
-            .every((id) => (namesById[id] ?? '').startsWith('🔞')),
+        repository.requests.every(
+          (id) =>
+              id == target.id ||
+              (namesById[id] ?? '').startsWith('🔞'),
+        ),
         isTrue,
       );
       // 界面层：频道只显示新站的条目与分类，旧站内容已消失。

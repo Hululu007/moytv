@@ -7,9 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/mine_page.dart';
 import 'package:moyi/app_theme_config.dart';
-import 'package:moyi/bottom_tab_bar.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/import_center_screen.dart';
 import 'package:moyi/local_store.dart';
@@ -20,6 +21,7 @@ import 'package:moyi/theme_settings_screen.dart';
 import 'package:moyi/ui_style.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'fixtures.dart';
 import 'real_fixture.dart';
 
 const _previewDir = '/home/hatch/workspace/moyi_previews';
@@ -254,21 +256,21 @@ void main() {
       );
     });
 
-    testWidgets('预览 抽屉 $themeName', (tester) async {
+    testWidgets('预览 我的页 $themeName', (tester) async {
+      final store = await _previewStore();
       await _capture(
         tester,
         mode: mode,
-        screen: AppDrawer(
-          zone: HomeZone.library,
-          currentVersion: '1.0.0+1',
-          onZoneSelected: (_) {},
-          onWatchRoom: () {},
-          onTool: (_) {},
-          onMinorProtectionChanged: (_) {},
-          appTheme: mode,
+        screen: MinePage(
+          repository: FixtureRepository(),
+          store: store,
+          sourceLabel: '红果 (1)',
+          onOpenDrama: (_) {},
+          onOpenSaved: ({required bool history}) {},
+          onSettingsPressed: () {},
         ),
-        name: 'preview_drawer_$suffix',
-        label: '抽屉导航 · 当前主题：$themeName',
+        name: 'preview_mine_$suffix',
+        label: '我的页 · 当前主题：$themeName',
       );
     });
 
@@ -317,7 +319,21 @@ void main() {
             onSwitchSource: () {},
             sourceLabel: data.stationName,
           ),
-          bottomNavigationBar: MoyiBottomTabBar(index: 0, onSelect: (_) {}),
+          bottomNavigationBar: NeonCapsuleBar(
+            entries: const [
+              (LucideIcons.clapperboard, '片库'),
+              (LucideIcons.tv, '直播'),
+              (LucideIcons.headphones, '听书'),
+              (LucideIcons.bookOpen, '阅读'),
+              (LucideIcons.hardDrive, '多媒体'),
+              (LucideIcons.layoutGrid, '小程序'),
+              (LucideIcons.user, '我的'),
+            ],
+            index: 0,
+            onSelect: (_) {},
+            onCenter: () {},
+            centerAfter: 3,
+          ),
         ),
         name: 'preview_bottomtab_$suffix',
         label: '${data.sourceLabel} · 底栏为新导航 · 片库选中 · 玻璃效果',
@@ -351,7 +367,7 @@ void main() {
           onSearchChanged: (_) {},
           onSearchSubmitted: (_) {},
           onOpenGlobalSearch: () {},
-          onMenuPressed: () {},
+          onAvatarPressed: () {},
           onFilterPressed: () {},
           onRankingsPressed: () {},
           onNewPressed: () {},
@@ -384,21 +400,21 @@ void main() {
       );
     });
 
-    testWidgets('预览 抽屉主题行 $themeName', (tester) async {
+    testWidgets('预览 我的页主题行 $themeName', (tester) async {
+      final store = await _previewStore();
       await _capture(
         tester,
         mode: mode,
-        screen: AppDrawer(
-          zone: HomeZone.library,
-          currentVersion: '1.0.0+1',
-          onZoneSelected: (_) {},
-          onWatchRoom: () {},
-          onTool: (_) {},
-          onMinorProtectionChanged: (_) {},
-          appTheme: mode,
+        screen: MinePage(
+          repository: FixtureRepository(),
+          store: store,
+          sourceLabel: '红果 (1)',
+          onOpenDrama: (_) {},
+          onOpenSaved: ({required bool history}) {},
+          onSettingsPressed: () {},
         ),
-        name: 'preview_drawer_theme_$suffix',
-        label: '抽屉导航已向下滚动 · 主题切换行可见 · 当前主题：$themeName',
+        name: 'preview_mine_theme_$suffix',
+        label: '我的页已向下滚动 · 主题切换行可见 · 当前主题：$themeName',
         beforeCapture: () async {
           await tester.drag(find.byType(ListView), const Offset(0, -520));
         },

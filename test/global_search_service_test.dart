@@ -96,7 +96,7 @@ class _CountingSource extends _FakeSource {
 }
 
 void main() {
-  test('收齐两区：听书 9 个 + 阅读 19 个，id 唯一，成人源也在列', () {
+  test('收齐两区：听书 9 个 + 阅读 71 个（19 py + 52 内置书源），id 唯一，成人源也在列', () {
     addTearDown(() => ContentRegistry.setNovelImports([]));
     ContentRegistry.setNovelImports([]);
     final targets = globalSearchBookTargets(
@@ -122,13 +122,17 @@ void main() {
       'asmrmoon',
       'jar_tingshu',
     ]);
-    expect(novel.length, 19);
+    expect(novel.length, 71);
     expect(
       novel,
       containsAll(['aabook', 'buliang', 'mhbl', 'ho5ho', 'kxmanhua']),
     );
+    expect(
+      novel,
+      containsAll(ContentRegistry.novelJsonBuiltins.map((s) => s.id)),
+    );
     // 无门禁：成人源 id 都在列；全表 id 不重复。
-    expect(targets.map((t) => t.source.id).toSet().length, 28);
+    expect(targets.map((t) => t.source.id).toSet().length, 80);
   });
 
   test('去重：同 id 两区都出现只留一个，听书优先', () {
@@ -310,10 +314,9 @@ void main() {
     ];
     final groups = await searchReadingTargets('神瞳', targets);
     expect(peak, 6);
-    expect(
-      groups.map((g) => g.source.id),
-      [for (var i = 0; i < 12; i++) 's$i'],
-    );
+    expect(groups.map((g) => g.source.id), [
+      for (var i = 0; i < 12; i++) 's$i',
+    ]);
   });
 
   test('concurrency 参数可覆盖上限', () async {

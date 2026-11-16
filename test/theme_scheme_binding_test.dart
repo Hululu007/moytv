@@ -43,15 +43,9 @@ void main() {
     }
   });
 
-  test('导航样式固定映射：紫蓝霓虹底部标签、其余抽屉', () {
+  test('导航样式固定映射：全部主题一律底部标签', () {
     for (final mode in AppThemeMode.values) {
-      expect(
-        navStyleForTheme(mode),
-        mode == AppThemeMode.purpleNeon
-            ? NavStyle.bottomTabs
-            : NavStyle.drawer,
-        reason: mode.name,
-      );
+      expect(navStyleForTheme(mode), NavStyle.bottomTabs, reason: mode.name);
     }
   });
 
@@ -84,7 +78,7 @@ void main() {
     expect(
       store.displayScheme(AppThemeMode.cyberBlue),
       const ThemeDisplayScheme(
-        navStyle: NavStyle.drawer,
+        navStyle: NavStyle.bottomTabs,
         contentTier: ContentTier.adult,
       ),
     );
@@ -95,7 +89,7 @@ void main() {
     expect(
       store.displayScheme(AppThemeMode.minimalCard),
       const ThemeDisplayScheme(
-        navStyle: NavStyle.drawer,
+        navStyle: NavStyle.bottomTabs,
         contentTier: ContentTier.adult,
       ),
     );

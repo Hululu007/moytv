@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/ui_style.dart';
@@ -17,7 +17,8 @@ void main() {
       expect(theme.colorScheme.secondary, config.secondaryColor);
       expect(theme.colorScheme.surface, config.surfaceColor);
       expect(theme.colorScheme.onSurface, config.textPrimary);
-      // 顶栏跟主题底色，抽屉跟主题同色，而不是另一块纯色板
+      // 顶栏跟主题底色，抽屉主题（历史遗留配置项）跟主题同色，
+      // 而不是另一块纯色板
       expect(theme.appBarTheme.backgroundColor, config.backgroundColor);
       expect(theme.drawerTheme.backgroundColor, config.surfaceColor);
       expect(theme.colorScheme.surfaceContainerHighest, isNot(Colors.white));
@@ -53,51 +54,70 @@ void main() {
     });
   });
 
-  group('抽屉跟着主题走', () {
-    Future<void> pumpDrawer(WidgetTester tester, AppThemeMode mode) async {
-      tester.view.physicalSize = const Size(800, 2400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  group('胶囊栏跟着主题走', () {
+    Future<void> pumpBar(WidgetTester tester, AppThemeMode mode) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppThemeConfig.forTheme(mode).toThemeData(),
-          home: AppDrawer(
-            zone: HomeZone.library,
-            currentVersion: '1.0.0',
-            onZoneSelected: (_) {},
-            onWatchRoom: () {},
-            onTool: (_) {},
-            onMinorProtectionChanged: (_) {},
+          home: Scaffold(
+            body: const SizedBox.shrink(),
+            bottomNavigationBar: NeonCapsuleBar(
+              entries: const [
+                (LucideIcons.clapperboard, '片库'),
+                (LucideIcons.tv, '直播'),
+                (LucideIcons.headphones, '听书'),
+                (LucideIcons.bookOpen, '阅读'),
+                (LucideIcons.hardDrive, '多媒体'),
+                (LucideIcons.layoutGrid, '小程序'),
+                (LucideIcons.user, '我的'),
+              ],
+              index: 0,
+              onSelect: (_) {},
+              onCenter: () {},
+              centerAfter: 3,
+            ),
           ),
         ),
       );
       await tester.pumpAndSettle();
     }
 
-    testWidgets('紫蓝霓虹下抽屉铺氛围光背景，底色透明', (tester) async {
+    testWidgets('紫蓝霓虹下选中项用霓虹主色、未选中用次要文字色', (tester) async {
       appThemeNotifier.value = AppThemeMode.purpleNeon;
-      addTearDown(
-        () => appThemeNotifier.value = AppThemeMode.purpleNeon,
+      addTearDown(() => appThemeNotifier.value = AppThemeMode.purpleNeon);
+      await pumpBar(tester, AppThemeMode.purpleNeon);
+      final config = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
+      expect(find.byType(NeonCapsuleBar), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('片库')).style?.color,
+        config.primaryColor,
       );
-      await pumpDrawer(tester, AppThemeMode.purpleNeon);
-      expect(find.byType(AppDrawer), findsOneWidget);
-      expect(find.byKey(const ValueKey('drawer-neon')), findsOneWidget);
-      expect(find.byType(NeonBackdrop), findsOneWidget);
-      final drawer = tester.widget<Drawer>(
-        find.byKey(const ValueKey('drawer-neon')),
+      expect(
+        tester.widget<Text>(find.text('直播')).style?.color,
+        config.textSecondary,
       );
-      expect(drawer.backgroundColor, Colors.transparent);
     });
 
-    testWidgets('非霓虹主题仍是普通抽屉', (tester) async {
+    testWidgets('非霓虹主题用各自配色、同一胶囊结构', (tester) async {
       appThemeNotifier.value = AppThemeMode.goldVip;
-      addTearDown(
-        () => appThemeNotifier.value = AppThemeMode.purpleNeon,
+      addTearDown(() => appThemeNotifier.value = AppThemeMode.purpleNeon);
+      await pumpBar(tester, AppThemeMode.goldVip);
+      final config = AppThemeConfig.forTheme(AppThemeMode.goldVip);
+      expect(find.byType(NeonCapsuleBar), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('片库')).style?.color,
+        config.primaryColor,
       );
-      await pumpDrawer(tester, AppThemeMode.goldVip);
-      expect(find.byKey(const ValueKey('drawer-neon')), findsNothing);
-      expect(find.byType(NeonBackdrop), findsNothing);
+      expect(
+        tester.widget<Text>(find.text('直播')).style?.color,
+        config.textSecondary,
+      );
+      expect(
+        config.primaryColor,
+        isNot(
+          AppThemeConfig.forTheme(AppThemeMode.purpleNeon).primaryColor,
+        ),
+      );
     });
   });
 }

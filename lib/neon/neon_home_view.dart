@@ -25,7 +25,7 @@ class NeonHomeView extends StatefulWidget {
     required this.onSourceTap,
     required this.onLongPress,
     this.onRefresh,
-    this.onMenu,
+    this.onAvatar,
     this.onRankings,
     this.onFeaturedPlay,
     this.featuredItems,
@@ -46,7 +46,7 @@ class NeonHomeView extends StatefulWidget {
   final VoidCallback onSourceTap;
   final void Function(Drama drama) onLongPress;
   final Future<void> Function()? onRefresh;
-  final VoidCallback? onMenu;
+  final VoidCallback? onAvatar;
   final VoidCallback? onRankings;
   final ValueChanged<Drama>? onFeaturedPlay;
 
@@ -148,11 +148,11 @@ class _NeonHomeViewState extends State<NeonHomeView> {
             child: NeonTopBar(
               brand: widget.brand,
               subtitle: widget.sourceLabel,
-              leading: widget.onMenu == null
+              leading: widget.onAvatar == null
                   ? null
                   : GestureDetector(
                       key: const ValueKey('neon-avatar'),
-                      onTap: widget.onMenu,
+                      onTap: widget.onAvatar,
                       child: Container(
                         width: 38,
                         height: 38,

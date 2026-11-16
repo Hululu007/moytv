@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/app_build.dart';
-import 'package:moyi/app_drawer.dart';
 import 'package:moyi/home_screen.dart';
+import 'package:moyi/home_zone.dart';
+import 'package:moyi/live_screen.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/player_back.dart';
 import 'package:moyi/player_route.dart';
@@ -33,30 +34,14 @@ class _StubPlayer extends StatelessWidget {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  Future<HomeZone> currentZone(WidgetTester tester) async {
-    // 等抽屉开关动画跑完，避免点到未落定的遮罩。
-    await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    final drawer = tester.widget<AppDrawer>(find.byType(AppDrawer));
-    // 点右侧遮罩关抽屉（测试面默认 800 宽，抽屉在左侧约 304 宽）。
-    await tester.tapAt(const Offset(700, 300));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    return drawer.zone;
-  }
+  /// 当前区探针：直播屏在树里就是直播区，否则是片库区。
+  HomeZone currentZone(WidgetTester tester) =>
+      find.byType(LiveScreen).evaluate().isNotEmpty
+      ? HomeZone.live
+      : HomeZone.library;
 
   Future<void> switchToLive(WidgetTester tester) async {
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    final live = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text('直播'),
-    );
-    expect(live, findsOneWidget);
-    await tester.tap(live);
+    await tester.tap(find.byKey(const ValueKey('shell-tab-1')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }
@@ -117,7 +102,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(await currentZone(tester), HomeZone.live);
 
-    // 首页再按一次返回：按现有区历史语义退回片库区。
+    // 首页再按一次返回：先熬过返回保护期（400ms），否则这次返回
+    // 会被当成同一手势的重复投递而吞掉、不退区历史。
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.binding.handlePopRoute();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));

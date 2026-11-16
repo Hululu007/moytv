@@ -19,8 +19,8 @@ void main() {
     if (emptyShellBuild) {
       expect(plugins, isEmpty);
     } else {
-      // 1 个 jar 插件 + 44 个 py 插件（jinguo 一文件双站并为一组）。
-      expect(plugins.length, 45);
+      // 1 个 jar 插件 + 45 个 py 插件（jinguo 一文件双站并为一组）。
+      expect(plugins.length, 46);
       expect(plugins.first.id, PluginManager.jarPluginId);
     }
   });

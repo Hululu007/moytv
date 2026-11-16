@@ -694,6 +694,88 @@ String searchAcrossFailureWarning(List<String> failedSources) {
   return '${labels.first} 等 ${labels.length} 个站源未返回结果';
 }
 
+/// 封面字节归一：有些站的封面地址回的不是图片本身，而是一段
+/// base64 文本（河马AV 的 .dat 封面就是 base64 编码的 WebP）。
+/// 原样存盘后 Image 解不出来、手机上不出图。
+///
+/// 判定很严：只有“全文都是 base64 字符、能解、解出来是已知图片
+/// 格式（JPEG/PNG/GIF/WebP/BMP）”才返回解码后的字节；其它一律
+/// 原样返回同一份字节（调用方用 identical 判断是否改写缓存）。
+/// 解码失败、截断、普通图片、HTML 报错页都不会误伤。
+List<int> normalizeCoverBytes(List<int> bytes) {
+  if (bytes.length < 32) return bytes;
+  // 先看是不是已经是图片：是就直接回，避免对正常封面做无用功。
+  if (_looksLikeImage(bytes)) return bytes;
+  final cleaned = <int>[];
+  for (final byte in bytes) {
+    // 只容忍 base64 字母表与空白（换行/空格）；其它字节一律否决。
+    if (byte == 0x20 || byte == 0x09 || byte == 0x0a || byte == 0x0d) {
+      continue;
+    }
+    final isAlpha =
+        (byte >= 0x41 && byte <= 0x5a) ||
+        (byte >= 0x61 && byte <= 0x7a) ||
+        (byte >= 0x30 && byte <= 0x39) ||
+        byte == 0x2b ||
+        byte == 0x2f ||
+        byte == 0x3d;
+    if (!isAlpha) return bytes;
+    cleaned.add(byte);
+  }
+  if (cleaned.isEmpty || cleaned.length % 4 != 0) return bytes;
+  // 填充符只许在末尾、最多两个。
+  var padding = 0;
+  for (var i = cleaned.length - 1; i >= 0 && cleaned[i] == 0x3d; i--) {
+    padding++;
+  }
+  if (padding > 2) return bytes;
+  for (var i = 0; i < cleaned.length - padding; i++) {
+    if (cleaned[i] == 0x3d) return bytes;
+  }
+  List<int> decoded;
+  try {
+    decoded = base64Decode(String.fromCharCodes(cleaned));
+  } catch (_) {
+    return bytes;
+  }
+  if (!_looksLikeImage(decoded)) return bytes;
+  return decoded;
+}
+
+bool _looksLikeImage(List<int> bytes) {
+  if (bytes.length < 12) {
+    return bytes.length >= 3 &&
+        bytes[0] == 0xff &&
+        bytes[1] == 0xd8 &&
+        bytes[2] == 0xff;
+  }
+  // JPEG
+  if (bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) return true;
+  // PNG
+  if (bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4e &&
+      bytes[3] == 0x47) {
+    return true;
+  }
+  // GIF
+  if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46) return true;
+  // BMP
+  if (bytes[0] == 0x42 && bytes[1] == 0x4d) return true;
+  // WebP: RIFF....WEBP
+  if (bytes[0] == 0x52 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x46 &&
+      bytes[8] == 0x57 &&
+      bytes[9] == 0x45 &&
+      bytes[10] == 0x42 &&
+      bytes[11] == 0x50) {
+    return true;
+  }
+  return false;
+}
+
 class NativeRepository extends AppRepository {
   static final _coverDecoder = CoverDecoder();
   NativeRepository({
@@ -2389,6 +2471,13 @@ class NativeRepository extends AppRepository {
       path.join(cacheDir.path, '${sha1.convert(utf8.encode(url))}.img'),
     );
     if (!force && await file.exists() && await file.length() > 0) {
+      // 命中磁盘缓存：先过一遍 base64 归一（旧版把 base64 文本原样
+      // 存盘，Image 解不出来；归一后改写文件自愈，不用用户手动清缓存）。
+      final cached = await file.readAsBytes();
+      final normalized = normalizeCoverBytes(cached);
+      if (!identical(normalized, cached)) {
+        await file.writeAsBytes(normalized, flush: true);
+      }
       return file.path;
     }
     final client = HttpClient()
@@ -2405,7 +2494,7 @@ class NativeRepository extends AppRepository {
         (buffer, chunk) => buffer..addAll(chunk),
       );
       if (bytes.isEmpty) throw AppFailure('海报暂不可用');
-      await file.writeAsBytes(bytes, flush: true);
+      await file.writeAsBytes(normalizeCoverBytes(bytes), flush: true);
       return file.path;
     } finally {
       client.close(force: true);

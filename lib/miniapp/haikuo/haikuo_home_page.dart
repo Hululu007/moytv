@@ -388,8 +388,8 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
     if (_busy) return;
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['json', 'txt', 'zip', 'hiker', 'hk'],
-      dialogTitle: '选择海阔小程序 JSON',
+      allowedExtensions: const ['json', 'txt', 'zip', 'hiker', 'hk', 'db'],
+      dialogTitle: '选择海阔小程序 JSON / 备份数据库',
     );
     if (files.isEmpty) return;
     final picked = files.first;
@@ -544,7 +544,13 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
       final result = await action();
       await _load();
       if (!mounted) return;
-      _snack(result.summary);
+      // 导入 notes（zip 里跳过的损坏条目等）一起报出来，用户才知道丢了哪条。
+      final notes = result.notes.where((note) => note.isNotEmpty).toList();
+      final message = notes.isEmpty
+          ? result.summary
+          : '${result.summary}；${notes.take(3).join('；')}'
+                '${notes.length > 3 ? '，还有 ${notes.length - 3} 条' : ''}';
+      _snack(message);
     } on HaikuoFormatException catch (error) {
       _snack(error.message);
     } catch (error) {
@@ -580,6 +586,8 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('类型：${haikuoKindLabel(program.kind)}'),
+              if (program.group.isNotEmpty) Text('分组：${program.group}'),
+              if (program.ruleType.isNotEmpty) Text('规则类型：${program.ruleType}'),
               if (program.author.isNotEmpty) Text('作者：${program.author}'),
               if (program.version.isNotEmpty) Text('版本：${program.version}'),
               if (program.origin.isNotEmpty) Text('来源：${program.origin}'),
@@ -883,6 +891,9 @@ class _ProgramTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final color = _haikuoIconColor(program.id);
+    final iconUrl = program.icon.trim();
+    final hasIconImage =
+        iconUrl.startsWith('http://') || iconUrl.startsWith('https://');
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -909,14 +920,16 @@ class _ProgramTile extends StatelessWidget {
               ],
             ),
             alignment: Alignment.center,
-            child: Text(
-              _haikuoIconGlyph(program.name),
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            clipBehavior: Clip.antiAlias,
+            child: hasIconImage
+                ? Image.network(
+                    iconUrl,
+                    width: 58,
+                    height: 58,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => _glyph(color),
+                  )
+                : _glyph(color),
           ),
           const SizedBox(height: 7),
           Text(
@@ -942,6 +955,16 @@ class _ProgramTile extends StatelessWidget {
       ),
     );
   }
+
+  /// 图标字形（无图或图片加载失败时的 fallback）。
+  Widget _glyph(Color color) => Text(
+    _haikuoIconGlyph(program.name),
+    style: const TextStyle(
+      color: Colors.white,
+      fontSize: 24,
+      fontWeight: FontWeight.w700,
+    ),
+  );
 }
 
 // 与 mini_app_home_page.dart 的色板/取色保持一致（那文件反向依赖本页，

@@ -609,6 +609,19 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const chaoliuSiteId = 'chaoliu';
+  static const chaoliuAssetPath = 'assets/py_spiders/chaoliu.py';
+  static const chaoliuFileId = 'builtin_chaoliu';
+
+  static const chaoliuSite = SourceSite(
+    chaoliuSiteId,
+    '🔞潮流AV',
+    '内置 py · chaoliu',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
     BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
@@ -656,6 +669,7 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: javmenuSiteId, site: javmenuSite, assetPath: javmenuAssetPath, fileId: javmenuFileId),
     BuiltinPyEntry(siteId: avdbSiteId, site: avdbSite, assetPath: avdbAssetPath, fileId: avdbFileId),
     BuiltinPyEntry(siteId: memojavSiteId, site: memojavSite, assetPath: memojavAssetPath, fileId: memojavFileId),
+    BuiltinPyEntry(siteId: chaoliuSiteId, site: chaoliuSite, assetPath: chaoliuAssetPath, fileId: chaoliuFileId),
   ];
 
   static BuiltinPyEntry? entryFor(String siteId) {

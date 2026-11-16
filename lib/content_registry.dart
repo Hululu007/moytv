@@ -1,3 +1,4 @@
+import 'builtin_legado_sources.dart';
 import 'content_audio.dart';
 import 'content_http.dart';
 import 'content_jar_audio.dart';
@@ -168,6 +169,29 @@ class ContentRegistry {
 
   static final List<ContentSource> _novelImports = [];
 
+  /// 用户关掉的内置书源 id（开关可再开回来）。
+  static Set<String> _hiddenLegadoIds = const {};
+
+  /// 用户删掉的内置书源 id（记删除态，重启不复活；只能在管理里恢复）。
+  static Set<String> _removedLegadoIds = const {};
+
+  /// 全部内置 JSON 书源（不过滤，管理界面与测试用）。
+  static List<ContentSource> get novelJsonBuiltins =>
+      List.unmodifiable(builtinLegadoSources);
+
+  static Set<String> get hiddenLegadoIds => Set.unmodifiable(_hiddenLegadoIds);
+
+  static Set<String> get removedLegadoIds =>
+      Set.unmodifiable(_removedLegadoIds);
+
+  static void setNovelJsonVisibility({
+    Set<String> hidden = const {},
+    Set<String> removed = const {},
+  }) {
+    _hiddenLegadoIds = Set.of(hidden);
+    _removedLegadoIds = Set.of(removed);
+  }
+
   static void setNovelImports(List<ContentSource> sources) {
     _novelImports
       ..clear()
@@ -176,7 +200,14 @@ class ContentRegistry {
 
   static List<ContentSource> _baseFor(ContentSection section) {
     return section == ContentSection.novel
-        ? [..._novelBuiltins, ..._novelImports]
+        ? [
+            ..._novelBuiltins,
+            for (final source in builtinLegadoSources)
+              if (!_hiddenLegadoIds.contains(source.id) &&
+                  !_removedLegadoIds.contains(source.id))
+                source,
+            ..._novelImports,
+          ]
         : [
             for (final source in _sources)
               if (source.section == section) source,

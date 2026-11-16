@@ -88,7 +88,7 @@ enum ContentTier {
 /// 导航样式的旧值（如 `drawer`）内容档回落全部内容；非法值整体回默认。
 class ThemeDisplayScheme {
   const ThemeDisplayScheme({
-    this.navStyle = NavStyle.drawer,
+    this.navStyle = NavStyle.bottomTabs,
     this.contentTier = ContentTier.all,
   });
 
@@ -154,25 +154,26 @@ SiteListStyle siteListStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.pinkPurpleNeon => SiteListStyle.normal,
 };
 
-/// 导航样式固定映射：紫蓝霓虹 = 底部标签，其余 11 套 = 抽屉。
+/// 导航样式固定映射：全部 12 套主题一律底部标签栏（霓虹胶囊壳）。
 ///
-/// 用户 2026-11-14 23:59 定：底部标签要，绑在紫蓝霓虹（当前默认主题）
-/// 上；要换绑哪套用户再说。导航只随主题变、不另设开关。用户已存的
-/// 各主题导航偏好（存值里的导航段）自此被固定值覆盖，只剩内容档
-/// 继续按存值走。
+/// 用户 2026-11-15 21:14 令：模仿蚂蚁影视的抽屉那套不用了（小退总
+/// 丢首页），全部主题改底部标签栏，以霓虹那套 UI 为准先做；抽屉已拆，
+/// 导航只随主题变、不另设开关。用户已存的各主题导航偏好（存值里的
+/// 导航段）自此被固定值覆盖，只剩内容档继续按存值走。NavStyle.drawer
+/// 只剩解析旧存值的占位作用，不再对应任何界面。
 NavStyle navStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.purpleNeon => NavStyle.bottomTabs,
-  AppThemeMode.lightClean => NavStyle.drawer,
-  AppThemeMode.goldVip => NavStyle.drawer,
-  AppThemeMode.cyberBlue => NavStyle.drawer,
-  AppThemeMode.kidFamily => NavStyle.drawer,
-  AppThemeMode.minimalCard => NavStyle.drawer,
-  AppThemeMode.retroFilm => NavStyle.drawer,
-  AppThemeMode.tvBigScreen => NavStyle.drawer,
-  AppThemeMode.leftCategories => NavStyle.drawer,
-  AppThemeMode.cyanCyberNeon => NavStyle.drawer,
-  AppThemeMode.redBlackNeon => NavStyle.drawer,
-  AppThemeMode.pinkPurpleNeon => NavStyle.drawer,
+  AppThemeMode.lightClean => NavStyle.bottomTabs,
+  AppThemeMode.goldVip => NavStyle.bottomTabs,
+  AppThemeMode.cyberBlue => NavStyle.bottomTabs,
+  AppThemeMode.kidFamily => NavStyle.bottomTabs,
+  AppThemeMode.minimalCard => NavStyle.bottomTabs,
+  AppThemeMode.retroFilm => NavStyle.bottomTabs,
+  AppThemeMode.tvBigScreen => NavStyle.bottomTabs,
+  AppThemeMode.leftCategories => NavStyle.bottomTabs,
+  AppThemeMode.cyanCyberNeon => NavStyle.bottomTabs,
+  AppThemeMode.redBlackNeon => NavStyle.bottomTabs,
+  AppThemeMode.pinkPurpleNeon => NavStyle.bottomTabs,
 };
 
 enum CategoryNavStyle {

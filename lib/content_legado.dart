@@ -110,9 +110,7 @@ List<ContentCategory> legadoCategories(dynamic result) {
     final title = _text(map['title']);
     final url = _text(map['url']);
     if (title.isEmpty && url.isEmpty) continue;
-    categories.add(
-      ContentCategory(id: url, name: title.isEmpty ? url : title),
-    );
+    categories.add(ContentCategory(id: url, name: title.isEmpty ? url : title));
   }
   return categories;
 }
@@ -188,7 +186,11 @@ class JsonContentSource extends ContentSource {
   bool get isComic => sourceType == 2;
 
   @override
-  String get note => importedFileName.isNotEmpty ? '导入 JSON 书源' : '';
+  String get note => importedFileName.isNotEmpty
+      ? '导入 JSON 书源'
+      : assetPath.isNotEmpty
+      ? '内置书源'
+      : '';
 
   static final _repository = NativeRepository();
 

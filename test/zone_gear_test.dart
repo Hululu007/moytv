@@ -28,15 +28,7 @@ void main() {
   }
 
   Future<void> switchToLive(WidgetTester tester) async {
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    final live = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text('直播'),
-    );
-    expect(live, findsOneWidget);
-    await tester.tap(live);
+    await tester.tap(find.byKey(const ValueKey('shell-tab-1')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }

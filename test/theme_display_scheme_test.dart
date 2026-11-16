@@ -9,6 +9,7 @@ import 'package:moyi/feed_playability.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/hongguo_drama_home.dart';
 import 'package:moyi/local_store.dart';
+import 'package:moyi/midnight_zone.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/theme_settings_screen.dart';
@@ -328,7 +329,7 @@ void main() {
             onSearchChanged: (_) {},
             onSearchSubmitted: (_) {},
             onOpenGlobalSearch: () {},
-            onMenuPressed: () {},
+            onAvatarPressed: () {},
             onFilterPressed: () {},
             onRankingsPressed: () {},
             onNewPressed: () {},
@@ -409,16 +410,28 @@ void main() {
     });
 
     testWidgets('成人档锁定且藏起来的站不出现', (tester) async {
+      // 成人流只抽样少数几个可见成人站：注册表很大时目标站不一定
+      // 被抽中，断言会抖。先把注册表里其它成人站全部藏起来，只留
+      // adult1 可见，抽样必中，测试才稳定（藏站本身不影响断言口径）。
+      SharedPreferences.setMockInitialValues({'hiddenSites': '[]'});
+      final probe = LocalStore(await SharedPreferences.getInstance());
+      final hideIds = probe.sources
+          .where((site) => isAdultSourceName(site.name))
+          .map((site) => site.id)
+          .toSet()
+        ..add('adult-hidden');
+      probe.dispose();
       await pumpDramaHome(
         tester,
         contentTier: ContentTier.adult,
         repository: _AdultTierRepository(),
-        hidden: {'adult-hidden'},
+        hidden: hideIds,
         withAdultSites: true,
       );
       await openFeed(tester);
       // 成人流未取回前 feed 只显示转圈，频道行随内容一起出现。
-      for (var i = 0; i < 10; i++) {
+      // 异步取流赶不上固定泵帧时多等几轮（共享 CPU 下 10 轮会抖）。
+      for (var i = 0; i < 20; i++) {
         if (find.text('可见成人片一').evaluate().isNotEmpty) break;
         await tester.pump(const Duration(milliseconds: 300));
       }
@@ -455,57 +468,41 @@ void main() {
     }
 
     Future<void> switchToLive(WidgetTester tester) async {
-      await tester.tap(find.byKey(const ValueKey('neon-avatar')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      final live = find.descendant(
-        of: find.byType(Drawer),
-        matching: find.text('直播'),
-      );
-      expect(live, findsOneWidget);
-      await tester.tap(live);
+      await tester.tap(find.byKey(const ValueKey('shell-tab-1')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
     }
 
-    testWidgets('切主题后导航固定抽屉、内容档一起变', (tester) async {
+    testWidgets('切主题后导航固定底部标签、内容档一起变', (tester) async {
       final store = await pumpHome(tester);
       expect(find.text('暂无漫剧'), findsNothing);
-      // 先切到直播区：空态门住后短剧首页没有抽屉入口。
+      // 先切到直播区：空态门住后短剧首页没有底栏入口可点。
       await switchToLive(tester);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
+      expect(find.byKey(const ValueKey('shell-tab-0')), findsOneWidget);
       await store.setDisplayScheme(
         AppThemeMode.goldVip,
         const ThemeDisplayScheme(
-          navStyle: NavStyle.bottomTabs,
+          navStyle: NavStyle.drawer,
           contentTier: ContentTier.manhua,
         ),
       );
       await store.setAppTheme(AppThemeMode.goldVip);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      // 导航：固定抽屉，存值里的底部标签作废，底栏始终不出现。
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
+      // 导航：固定底部标签，存值里的抽屉作废，底栏始终在。
+      expect(find.byKey(const ValueKey('shell-tab-0')), findsOneWidget);
       // 内容档：回片库后本站无漫剧分类，显示诚实空态。
-      await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      final library = find.descendant(
-        of: find.byType(Drawer),
-        matching: find.text('片库'),
-      );
-      expect(library, findsOneWidget);
-      await tester.tap(library);
+      await tester.tap(find.byKey(const ValueKey('shell-tab-0')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('暂无漫剧'), findsOneWidget);
-      // 切回默认主题：内容档复原，导航仍是抽屉。
+      // 切回默认主题：内容档复原，导航仍是底部标签。
       await store.setAppTheme(AppThemeMode.purpleNeon);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('暂无漫剧'), findsNothing);
       await switchToLive(tester);
-      expect(find.byKey(const ValueKey('moyi-bottom-tab-0')), findsNothing);
+      expect(find.byKey(const ValueKey('shell-tab-0')), findsOneWidget);
     }, skip: !allSourcesEnabled);
 
     testWidgets('漫剧档驱动选类后内容只剩漫剧', (tester) async {

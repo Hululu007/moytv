@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:moyi/app_drawer.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/detail_screen.dart';
 import 'package:moyi/local_store.dart';
@@ -147,46 +147,61 @@ void main() {
     expect(opened.map((d) => d.id).toList(), ['s1:3']);
   });
 
-  testWidgets('抽屉底色跟主题变', (tester) async {
-    final previousMode = appThemeNotifier.value;
-    addTearDown(() => appThemeNotifier.value = previousMode);
-    Future<Color?> drawerBg(AppThemeMode mode) async {
-      // 抽屉霓虹分支读全局 appThemeNotifier，只换 ThemeData 不够。
-      appThemeNotifier.value = mode;
-      tester.view.physicalSize = const Size(800, 2400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('胶囊栏底色跟主题变', (tester) async {
+    Future<Color?> barBg(AppThemeMode mode) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppThemeConfig.forTheme(mode).toThemeData(),
           home: Scaffold(
-            body: AppDrawer(
-              zone: HomeZone.library,
-              currentVersion: '1.0.1',
-              appTheme: mode,
-              onZoneSelected: (_) {},
-              onWatchRoom: () {},
-              onTool: (_) {},
-              onMinorProtectionChanged: (_) {},
+            body: const SizedBox.shrink(),
+            bottomNavigationBar: NeonCapsuleBar(
+              entries: const [
+                (LucideIcons.clapperboard, '片库'),
+                (LucideIcons.tv, '直播'),
+                (LucideIcons.headphones, '听书'),
+                (LucideIcons.bookOpen, '阅读'),
+                (LucideIcons.hardDrive, '多媒体'),
+                (LucideIcons.layoutGrid, '小程序'),
+                (LucideIcons.user, '我的'),
+              ],
+              index: 0,
+              onSelect: (_) {},
+              onCenter: () {},
+              centerAfter: 3,
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      return tester.widget<Drawer>(find.byType(Drawer)).backgroundColor;
+      for (final element in find
+          .descendant(
+            of: find.byType(NeonCapsuleBar),
+            matching: find.byType(Container),
+          )
+          .evaluate()) {
+        final decoration = (element.widget as Container).decoration;
+        if (decoration is BoxDecoration &&
+            decoration.borderRadius == BorderRadius.circular(31)) {
+          return decoration.color;
+        }
+      }
+      return null;
     }
 
-    // 非霓虹主题：抽屉底 = 主题背景色，两套主题值不同。
-    final lightBg = await drawerBg(AppThemeMode.lightClean);
+    // 胶囊栏底 = 主题表面色 94% 不透明，两套主题值不同。
+    final lightBg = await barBg(AppThemeMode.lightClean);
     expect(
       lightBg,
-      AppThemeConfig.forTheme(AppThemeMode.lightClean).backgroundColor,
+      AppThemeConfig.forTheme(
+        AppThemeMode.lightClean,
+      ).surfaceColor.withValues(alpha: .94),
     );
-    final goldBg = await drawerBg(AppThemeMode.goldVip);
+    final goldBg = await barBg(AppThemeMode.goldVip);
     expect(
       goldBg,
-      AppThemeConfig.forTheme(AppThemeMode.goldVip).backgroundColor,
+      AppThemeConfig.forTheme(
+        AppThemeMode.goldVip,
+      ).surfaceColor.withValues(alpha: .94),
     );
     expect(goldBg, isNot(lightBg));
   });

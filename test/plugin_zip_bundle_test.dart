@@ -30,16 +30,16 @@ void main() {
     return ZipEncoder().encode(archive);
   }
 
-  test('bundle expands to the whole jar plus 44 py plugins', () {
+  test('bundle expands to the whole jar plus 45 py plugins', () {
     final entries = expandPluginZip(buildBundleZip());
-    expect(entries.length, 45);
+    expect(entries.length, 46);
     final jars = entries.where((e) => e.isJar).toList();
     expect(jars.length, 1);
     expect(jars.single.name, 'zakatv.jar');
     final pyNames = entries.where((e) => e.isPy).map((e) => e.name).toList();
-    expect(pyNames.length, 44);
-    expect(pyNames.toSet().length, 44);
-    // jinguo 一文件双站：注册表 45 条、文件 44 个，包里只应出现一次。
+    expect(pyNames.length, 45);
+    expect(pyNames.toSet().length, 45);
+    // jinguo 一文件双站：注册表 46 条、文件 45 个，包里只应出现一次。
     expect(pyNames.where((n) => n == 'jinguo.py').length, 1);
     // 未注册的 4 个文件不得进包。
     for (final excluded in ['hghub.py', 'roshy.py', 'javtiful.py', 'youtube.py']) {
@@ -52,7 +52,7 @@ void main() {
       for (final entry in BuiltinPySites.entries)
         entry.assetPath.split('/').last,
     };
-    expect(pyNames.length, 44);
-    expect(BuiltinPySites.entries.length, 45);
+    expect(pyNames.length, 45);
+    expect(BuiltinPySites.entries.length, 46);
   });
 }

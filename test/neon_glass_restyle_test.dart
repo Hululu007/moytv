@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/app_build.dart';
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/mine_page.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/category_sidebar.dart';
 import 'package:moyi/home_screen.dart';
@@ -248,50 +250,52 @@ void main() {
     });
   });
 
-  group('抽屉', () {
-    Future<List<AppDrawerTool>> pumpDrawer(
+  group('我的页（原抽屉主题入口的去处）', () {
+    Future<void> pumpMine(
       WidgetTester tester, {
       AppThemeMode appTheme = AppThemeMode.purpleNeon,
     }) async {
-      final tools = <AppDrawerTool>[];
       tester.view.physicalSize = const Size(800, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
+      SharedPreferences.setMockInitialValues({'appThemeMode': appTheme.name});
+      final store = LocalStore(await SharedPreferences.getInstance());
+      addTearDown(store.dispose);
       await tester.pumpWidget(
         MaterialApp(
           theme: AppThemeConfig.forTheme(appTheme).toThemeData(),
           home: Scaffold(
-            body: AppDrawer(
-              zone: HomeZone.library,
-              currentVersion: '1.0.1',
-              appTheme: appTheme,
-              onZoneSelected: (_) {},
-              onWatchRoom: () {},
-              onTool: tools.add,
-              onMinorProtectionChanged: (_) {},
+            body: MinePage(
+              repository: FixtureRepository(),
+              store: store,
+              sourceLabel: '测试 (1)',
+              onOpenDrama: (_) {},
+              onOpenSaved: ({required bool history}) {},
+              onSettingsPressed: () {},
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      return tools;
     }
 
-    testWidgets('主题切换入口显示当前主题名，点按上报工具', (tester) async {
-      final tools = await pumpDrawer(tester, appTheme: AppThemeMode.lightClean);
+    testWidgets('主题切换入口显示当前主题名，点按进主题设置页', (tester) async {
+      await pumpMine(tester, appTheme: AppThemeMode.lightClean);
       expect(find.text('主题切换'), findsOneWidget);
       expect(find.text('当前：浅色清爽 · 12 套主题'), findsOneWidget);
       await tester.tap(find.text('主题切换'));
-      expect(tools, [AppDrawerTool.themeSettings]);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(ThemeSettingsScreen), findsOneWidget);
     });
 
-    testWidgets('抽屉内文字一律不截断', (tester) async {
-      await pumpDrawer(tester);
+    testWidgets('我的页内文字一律不截断', (tester) async {
+      await pumpMine(tester);
       for (final element
           in find
               .descendant(
-                of: find.byType(AppDrawer),
+                of: find.byType(MinePage),
                 matching: find.byType(Text),
               )
               .evaluate()) {
@@ -304,30 +308,48 @@ void main() {
       }
     });
 
-    testWidgets('架签选中态用主题渐变，未选中用玻璃底', (tester) async {
-      await pumpDrawer(tester);
+    testWidgets('胶囊栏中间播放键用主题渐变圆', (tester) async {
       final config = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
-      final containers = find.descendant(
-        of: find.byKey(const ValueKey('drawer-shelf-tabs')),
-        matching: find.byType(AnimatedContainer),
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: config.toThemeData(),
+          home: Scaffold(
+            body: const SizedBox.shrink(),
+            bottomNavigationBar: NeonCapsuleBar(
+              entries: const [
+                (LucideIcons.clapperboard, '片库'),
+                (LucideIcons.tv, '直播'),
+                (LucideIcons.headphones, '听书'),
+                (LucideIcons.bookOpen, '阅读'),
+                (LucideIcons.hardDrive, '多媒体'),
+                (LucideIcons.layoutGrid, '小程序'),
+                (LucideIcons.user, '我的'),
+              ],
+              index: 0,
+              onSelect: (_) {},
+              onCenter: () {},
+              centerAfter: 3,
+              centerKey: 'shell-center',
+            ),
+          ),
+        ),
       );
-      // 架签 4 个：影视/阅读/小程序三枚分区胶囊 + 多媒体胶囊
-      // （音乐架已在反馈批中删除，多媒体 Tab 后加）。
-      expect(containers, findsNWidgets(4));
-      var gradientCount = 0;
-      var glassCount = 0;
+      await tester.pump();
+      final center = find.byKey(const ValueKey('shell-center'));
+      expect(center, findsOneWidget);
+      final containers = find.descendant(
+        of: center,
+        matching: find.byType(Container),
+      );
+      var gradientFound = false;
       for (final element in containers.evaluate()) {
-        final decoration =
-            (element.widget as AnimatedContainer).decoration as BoxDecoration?;
-        if (decoration?.gradient != null) {
-          gradientCount++;
-          expect(decoration?.gradient, neonSelectedGradient(config));
-        } else if (decoration?.color == config.unselectedBg) {
-          glassCount++;
+        final decoration = (element.widget as Container).decoration;
+        if (decoration is BoxDecoration && decoration.gradient != null) {
+          gradientFound = true;
+          expect(decoration.shape, BoxShape.circle);
         }
       }
-      expect(gradientCount, 1);
-      expect(glassCount, 3);
+      expect(gradientFound, isTrue);
     });
   });
 
@@ -435,7 +457,7 @@ void main() {
     });
   });
 
-  testWidgets('抽屉主题入口打开主题选择界面', (tester) async {
+  testWidgets('头像进我的页，主题入口打开主题选择界面', (tester) async {
     SharedPreferences.setMockInitialValues({
       'source': 'huangdou',
       'hiddenSites': '[]',
@@ -450,13 +472,22 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
+    await tester.tap(find.byKey(const ValueKey('open-mine-page')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    final entry = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text('主题切换'),
-    );
+    expect(find.text('最近观看'), findsOneWidget);
+    for (var i = 0; i < 12; i++) {
+      if (find
+          .byKey(const ValueKey('mine-theme-entry'))
+          .evaluate()
+          .isNotEmpty) {
+        break;
+      }
+      await tester.drag(find.byType(ListView), const Offset(0, -200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+    final entry = find.byKey(const ValueKey('mine-theme-entry'));
     expect(entry, findsOneWidget);
     await tester.ensureVisible(entry);
     await tester.pump(const Duration(milliseconds: 200));

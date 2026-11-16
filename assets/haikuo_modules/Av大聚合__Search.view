@@ -1,0 +1,58 @@
+js:
+let keyword = getParam("searchTerms") || "";
+let index = Number(getParam("index") || "0");
+let urlMap = $.require("hiker://page/urlSet.js?rule=" + MY_RULE._title);
+let tUrl = urlMap[index].url;;
+let data;
+let img = [];
+try {
+    data = JSON.parse(fetch(tUrl + "api/videosort/0?serach=" + keyword + "&page=" + MY_PAGE)).rescont.data;
+} catch (e) {
+    data = [];
+}
+let layout = [];
+data.forEach(item => {
+    let desc = "";
+    if (item.authername) {
+        desc += "类型：" + item.authername;
+    }
+    if (item.playtimes) {
+        desc += (desc ? "\n" : "") + "播放时长：" + item.playtimes;
+    }
+    if (item.updated_at) {
+        desc += (desc ? "\n" : "") + "更新时间：" + item.updated_at;
+    }
+    let pic = "";
+    if (item.coverpath) {
+        pic = item.coverpath;
+    } else if (item.coverbase64 && item.coverbase64.url) {
+        pic = 'https://www.helloimg.com/images/2022/08/29/ZzbcFr.gif'
+        const DesDecode = (pic_url, id) => {
+            let img = "data:image/png;base64,/9j" + request(pic_url).split("/9j")[1]
+            updateItem({
+                img: img,
+                extra: {
+                    id: id
+                }
+            })
+        }
+    }
+    layout.push({
+        title: item.title,
+        pic_url: pic,
+        desc: desc,
+        url: $(tUrl + "api/videoplay/" + item.id + "?uuid=724b9c9fdd5e7b6f").lazyRule(() => {
+            var url = JSON.parse(fetch(input)).rescont.videopath;
+            return url.replace('https://yuanqiplay.com', 'https://liulianshipin102.com/api/index.m3u8?m3u8=https://sz-weiteng.com').replace('https://yunyi668.com', 'http://8.210.59.216/api/index.m3u8?m3u8=https://yunyi668.com') + ";get;UTF-8;{User-Agent@PostmanRuntime/7.29.0}"
+        }),
+        extra: {
+            id: item.id
+        }
+    });
+    img.push({
+        func: () => DesDecode(item.coverbase64.url, item.id)
+    })
+});
+
+setResult(layout);
+be(img)

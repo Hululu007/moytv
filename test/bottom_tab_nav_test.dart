@@ -2,15 +2,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/app_build.dart';
-import 'package:moyi/app_drawer.dart';
 import 'package:moyi/app_theme_config.dart';
-import 'package:moyi/bottom_tab_bar.dart';
+import 'package:moyi/content_models.dart';
+import 'package:moyi/content_zone_screen.dart';
 import 'package:moyi/home_screen.dart';
+import 'package:moyi/home_zone.dart';
 import 'package:moyi/hongguo_drama_home.dart';
+import 'package:moyi/live_screen.dart';
 import 'package:moyi/local_store.dart';
+import 'package:moyi/miniapp/mini_app_home_page.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
+
+/// 壳子底部栏的 7 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
+/// 定义）：片库/直播/听书/阅读/多媒体/小程序/我的，中间播放键在
+/// 听书之后（centerAfter: 3）。
+const _shellEntries = [
+  (LucideIcons.clapperboard, '片库'),
+  (LucideIcons.tv, '直播'),
+  (LucideIcons.headphones, '听书'),
+  (LucideIcons.bookOpen, '阅读'),
+  (LucideIcons.hardDrive, '多媒体'),
+  (LucideIcons.layoutGrid, '小程序'),
+  (LucideIcons.user, '我的'),
+];
 
 Future<LocalStore> _makeStore([Map<String, Object> seeds = const {}]) async {
   SharedPreferences.setMockInitialValues(seeds);
@@ -24,13 +41,22 @@ Future<void> _pumpBar(
   required AppThemeMode mode,
   required int index,
   required ValueChanged<int> onSelect,
+  VoidCallback? onCenter,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: AppThemeConfig.forTheme(mode).toThemeData(),
       home: Scaffold(
         body: const SizedBox.shrink(),
-        bottomNavigationBar: MoyiBottomTabBar(index: index, onSelect: onSelect),
+        bottomNavigationBar: NeonCapsuleBar(
+          entries: _shellEntries,
+          index: index,
+          onSelect: onSelect,
+          onCenter: onCenter ?? () {},
+          centerAfter: 3,
+          tabKeyPrefix: 'shell-tab',
+          centerKey: 'shell-center',
+        ),
       ),
     ),
   );
@@ -53,20 +79,18 @@ void main() {
     expect(find.byIcon(LucideIcons.film), findsNothing);
   });
 
-  testWidgets('显示方案默认：紫蓝霓虹底部标签、其余抽屉，全部内容', (tester) async {
+  testWidgets('显示方案默认：全部主题底部标签，全部内容', (tester) async {
     final store = await _makeStore();
     for (final mode in AppThemeMode.values) {
       expect(
         store.displayScheme(mode),
-        mode == AppThemeMode.purpleNeon
-            ? const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs)
-            : const ThemeDisplayScheme.defaults(),
+        const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
       );
     }
   });
 
-  // 导航样式是主题固定值（紫蓝霓虹固定底部标签）：写抽屉也读回
-  // 底部标签；内容档仍按主题分别存取。
+  // 导航样式是固定值（全部主题底部标签）：写抽屉也读回底部标签；
+  // 内容档仍按主题分别存取。
   testWidgets('显示方案按主题分别存取（导航固定值覆盖写值）', (tester) async {
     final store = await _makeStore();
     await store.setDisplayScheme(
@@ -85,7 +109,7 @@ void main() {
     );
     expect(
       store.displayScheme(AppThemeMode.lightClean),
-      const ThemeDisplayScheme.defaults(),
+      const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
     );
   });
 
@@ -95,19 +119,19 @@ void main() {
       'themeScheme_lightClean': 'bogus:xx',
       'themeScheme_goldVip': 'bottomTabs:adult',
     });
-    // 旧值里的导航段一律作废、读回固定值；内容档照旧解析。
+    // 旧值里的导航段一律作废、读回固定值（底部标签）；内容档照旧解析。
     expect(
       store.displayScheme(AppThemeMode.purpleNeon),
       const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
     );
     expect(
       store.displayScheme(AppThemeMode.lightClean),
-      const ThemeDisplayScheme.defaults(),
+      const ThemeDisplayScheme(navStyle: NavStyle.bottomTabs),
     );
     expect(
       store.displayScheme(AppThemeMode.goldVip),
       const ThemeDisplayScheme(
-        navStyle: NavStyle.drawer,
+        navStyle: NavStyle.bottomTabs,
         contentTier: ContentTier.adult,
       ),
     );
@@ -117,62 +141,51 @@ void main() {
     final config = AppThemeConfig.forTheme(mode);
     testWidgets('底栏颜色随主题走 ${config.themeName}', (tester) async {
       await _pumpBar(tester, mode: mode, index: 1, onSelect: (_) {});
-      expect(find.text('片库'), findsOneWidget);
-      expect(find.text('直播'), findsOneWidget);
-      expect(find.text('听书'), findsOneWidget);
-      expect(find.text('阅读'), findsOneWidget);
-      expect(find.text('我的'), findsOneWidget);
+      for (final label in ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      // 霓虹胶囊栏：选中 = primaryColor，无选中胶囊/圆点。
       final selectedLabel = tester.widget<Text>(find.text('直播'));
-      expect(selectedLabel.style?.color, config.selectedText);
+      expect(selectedLabel.style?.color, config.primaryColor);
       final unselectedLabel = tester.widget<Text>(find.text('片库'));
       expect(unselectedLabel.style?.color, config.textSecondary);
-      final pill = find.ancestor(
-        of: find.text('直播'),
-        matching: find.byWidgetPredicate(
-          (widget) =>
-              widget is Container &&
-              widget.decoration is BoxDecoration &&
-              (widget.decoration as BoxDecoration).color == config.selectedBg,
-        ),
-      );
-      expect(pill, findsOneWidget);
-      final dots = find.byWidgetPredicate(
-        (widget) =>
-            widget is Container &&
-            widget.decoration is BoxDecoration &&
-            (widget.decoration as BoxDecoration).shape == BoxShape.circle &&
-            (widget.decoration as BoxDecoration).color == config.primaryColor,
-      );
-      expect(dots, findsOneWidget);
+      final selectedIcon = tester.widget<Icon>(find.byIcon(LucideIcons.tv));
+      expect(selectedIcon.color, config.primaryColor);
       for (final element in find.byType(Text).evaluate()) {
         expect((element.widget as Text).overflow, isNot(TextOverflow.ellipsis));
       }
     });
   }
 
-  testWidgets('底栏 6 个 Tab 点按回传下标', (tester) async {
+  testWidgets('底栏 7 个 Tab 点按回传下标，中间播放键另回', (tester) async {
     final tapped = <int>[];
+    var centerTapped = 0;
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: tapped.add,
+      onCenter: () => centerTapped++,
     );
-    for (var i = 0; i < 6; i++) {
-      await tester.tap(find.byKey(ValueKey('moyi-bottom-tab-$i')));
+    for (var i = 0; i < 7; i++) {
+      await tester.tap(find.byKey(ValueKey('shell-tab-$i')));
       await tester.pump();
     }
-    expect(tapped, [0, 1, 2, 3, 4, 5]);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
+    await tester.tap(find.byKey(const ValueKey('shell-center')));
+    await tester.pump();
+    expect(centerTapped, 1);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
   });
 
-  testWidgets('底栏顺序为片库/直播/听书/阅读/多媒体/我的，图标跟标签走', (tester) async {
+  testWidgets('底栏顺序为片库/直播/听书/[播放键]/阅读/多媒体/小程序/我的', (tester) async {
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: (_) {},
     );
-    const order = ['片库', '直播', '听书', '阅读', '多媒体', '我的'];
+    const order = ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的'];
     var previousX = -1.0;
     for (final label in order) {
       expect(find.text(label), findsOneWidget);
@@ -180,6 +193,12 @@ void main() {
       expect(x, greaterThan(previousX));
       previousX = x;
     }
+    // 中间播放键在听书与阅读之间。
+    final centerX = tester.getCenter(find.byKey(const ValueKey('shell-center'))).dx;
+    final audioX = tester.getCenter(find.text('听书')).dx;
+    final novelX = tester.getCenter(find.text('阅读')).dx;
+    expect(centerX, greaterThan(audioX));
+    expect(centerX, lessThan(novelX));
     // 多媒体（硬盘）在我的（人形）左边。
     final driveX = tester.getTopLeft(find.byIcon(LucideIcons.hardDrive)).dx;
     final userX = tester.getTopLeft(find.byIcon(LucideIcons.user)).dx;
@@ -196,7 +215,7 @@ void main() {
     final neonLabel = tester.widget<Text>(find.text('片库'));
     expect(
       neonLabel.style?.color,
-      AppThemeConfig.forTheme(AppThemeMode.purpleNeon).selectedText,
+      AppThemeConfig.forTheme(AppThemeMode.purpleNeon).primaryColor,
     );
     await _pumpBar(
       tester,
@@ -207,20 +226,19 @@ void main() {
     final lightLabel = tester.widget<Text>(find.text('片库'));
     expect(
       lightLabel.style?.color,
-      AppThemeConfig.forTheme(AppThemeMode.lightClean).selectedText,
+      AppThemeConfig.forTheme(AppThemeMode.lightClean).primaryColor,
     );
   });
 
-  // 设置里的导航样式项已随主题绑定收掉（见 theme_scheme_binding_test
-  // 的缺席断言），原弹窗切换测试删除。
-
-  Future<LocalStore> pumpHome(
+  Future<void> pumpHome(
     WidgetTester tester, {
     String source = 'huangdou',
+    String theme = 'lightClean',
   }) async {
     SharedPreferences.setMockInitialValues({
       'source': source,
       'hiddenSites': '[]',
+      'appThemeMode': theme,
     });
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
@@ -232,123 +250,78 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    return store;
   }
 
-  Future<void> switchToLive(
-    WidgetTester tester, {
-    String drawerKey = 'open-app-drawer',
-  }) async {
-    await tester.tap(find.byKey(ValueKey(drawerKey)));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    final live = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text('直播'),
-    );
-    expect(live, findsOneWidget);
-    await tester.tap(live);
-    await tester.pump();
-    // 等抽屉关闭动画（250ms）跑完再点底栏，否则点落在关闭中的遮罩上。
-    await tester.pump(const Duration(milliseconds: 400));
-  }
-
-  /// 在抽屉里点一行/一枚顶 Tab：先开抽屉（短剧分支用 neon-avatar，
-  /// 通用分支用 open-app-drawer），点后等关闭动画跑完。
-  Future<void> tapDrawerLabel(
-    WidgetTester tester,
-    String label, {
-    String drawerKey = 'open-app-drawer',
-  }) async {
-    await tester.tap(find.byKey(ValueKey(drawerKey)));
+  Future<void> tapShellTab(WidgetTester tester, int index) async {
+    await tester.tap(find.byKey(ValueKey('shell-tab-$index')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    final item = find.descendant(
-      of: find.byType(Drawer),
-      matching: find.text(label),
-    );
-    expect(item, findsOneWidget);
-    await tester.tap(item);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// 把 [finder] 拖进视口：懒加载 ListView 折叠下的行未构建，
-  /// ensureVisible/scrollUntilVisible 在此不可靠，直接拖动并按存在性校验。
-  Future<void> dragIntoView(
-    WidgetTester tester,
-    Finder finder,
-    Finder scrollable,
-  ) async {
+  /// 当前区探针：看 body 里挂的是哪个屏（不走抽屉）。
+  HomeZone? currentZone(WidgetTester tester) {
+    if (find.byType(LiveScreen).evaluate().isNotEmpty) return HomeZone.live;
+    final zones = find.byType(ContentZoneScreen).evaluate();
+    if (zones.isNotEmpty) {
+      final section = (zones.first.widget as ContentZoneScreen).section;
+      return switch (section) {
+        ContentSection.audio => HomeZone.audio,
+        ContentSection.novel => HomeZone.novel,
+        _ => HomeZone.library,
+      };
+    }
+    return null;
+  }
+
+  bool multimediaShown(WidgetTester tester) =>
+      find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
+      find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
+
+  testWidgets('底栏多媒体进多媒体屏、切其它区能离开、点片库能回', (tester) async {
+    await pumpHome(tester);
+    await tapShellTab(tester, 4);
+    expect(multimediaShown(tester), isTrue);
+    await tapShellTab(tester, 1);
+    expect(currentZone(tester), HomeZone.live);
+    expect(multimediaShown(tester), isFalse);
+    await tapShellTab(tester, 4);
+    expect(multimediaShown(tester), isTrue);
+    await tapShellTab(tester, 0);
+    expect(multimediaShown(tester), isFalse);
+  }, skip: !allSourcesEnabled);
+
+  testWidgets('底栏切区：直播→阅读', (tester) async {
+    await pumpHome(tester, source: 'hongguo');
+    await tapShellTab(tester, 1);
+    expect(currentZone(tester), HomeZone.live);
+    await tapShellTab(tester, 3);
+    expect(currentZone(tester), HomeZone.novel);
+  }, skip: !allSourcesEnabled);
+
+  testWidgets('我的页里主题切换可达', (tester) async {
+    await pumpHome(tester);
+    await tapShellTab(tester, 6);
+    expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
-      if (finder.evaluate().isNotEmpty) return;
-      await tester.drag(scrollable, const Offset(0, -200));
+      if (find
+          .byKey(const ValueKey('mine-theme-entry'))
+          .evaluate()
+          .isNotEmpty) {
+        break;
+      }
+      await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
     }
-    throw StateError('widget 拖 12 次仍未出现');
-  }
-
-  Future<HomeZone> currentZone(
-    WidgetTester tester, {
-    String drawerKey = 'open-app-drawer',
-  }) async {
-    await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.byKey(ValueKey(drawerKey)));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    final drawer = tester.widget<AppDrawer>(find.byType(AppDrawer));
-    await tester.tapAt(const Offset(700, 300));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    return drawer.zone;
-  }
-
-  // 导航只随主题变、固定抽屉：首页不再挂底部标签栏，
-  // 原“短剧分支显示底栏”测试删除。
-
-  testWidgets('抽屉多媒体进多媒体屏、切其它区能离开、点影视能回', (tester) async {
-    // 通用分支（黄豆源）：抽屉入口在各区常在，往返全走抽屉。
-    await pumpHome(tester);
-    await tapDrawerLabel(tester, '多媒体');
-    // 未登录网盘显示未登录提示；若环境里已有网盘站则显示屏本体。
-    final shown =
-        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
-        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
-    expect(shown, isTrue);
-    // 切直播区离开多媒体，再点回多媒体仍能进。
-    await tapDrawerLabel(tester, '直播');
-    expect(await currentZone(tester), HomeZone.live);
-    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
-    await tapDrawerLabel(tester, '多媒体');
-    final shownAgain =
-        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
-        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
-    expect(shownAgain, isTrue);
-    // 点回影视，多媒体屏消失（抽屉 Tab 回片库清请求）。
-    await tapDrawerLabel(tester, '影视');
-    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
-    expect(find.byKey(const ValueKey('multimedia-screen')), findsNothing);
+    expect(find.byKey(const ValueKey('mine-theme-entry')), findsOneWidget);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('抽屉切区：直播→阅读', (tester) async {
-    await pumpHome(tester, source: 'hongguo');
-    await switchToLive(tester, drawerKey: 'neon-avatar');
-    await tapDrawerLabel(tester, '阅读');
-    expect(await currentZone(tester), HomeZone.novel);
-  }, skip: !allSourcesEnabled);
-
-  testWidgets('抽屉里主题切换可达', (tester) async {
+  testWidgets('底栏小程序进小程序首页', (tester) async {
     await pumpHome(tester);
-    await tester.tap(find.byKey(const ValueKey('open-app-drawer')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await dragIntoView(
-      tester,
-      find.text('主题切换'),
-      find.descendant(of: find.byType(Drawer), matching: find.byType(ListView)),
-    );
-    expect(find.text('主题切换'), findsOneWidget);
+    await tapShellTab(tester, 5);
+    expect(find.byType(MiniAppHomePage), findsOneWidget);
+    await tapShellTab(tester, 0);
+    expect(find.byType(MiniAppHomePage), findsNothing);
   }, skip: !allSourcesEnabled);
 
   testWidgets('短剧首页默认页签不是我的页', (tester) async {
@@ -374,7 +347,7 @@ void main() {
           onSearchChanged: (_) {},
           onSearchSubmitted: (_) {},
           onOpenGlobalSearch: () {},
-          onMenuPressed: () {},
+          onAvatarPressed: () {},
           onFilterPressed: () {},
           onRankingsPressed: () {},
           onNewPressed: () {},
@@ -389,51 +362,28 @@ void main() {
     expect(find.text('最近观看'), findsNothing);
   });
 
-  // 底部标签样式下 6 个 Tab 逐个点、各进各的页：多媒体在第 4 位、
-  // 我的在第 5 位（换位后）。紫蓝霓虹主题固定底部标签样式；用红果源，
-  // 因为“我的”页只在红果组分支渲染（requestedTab 落在红果首页里）。
-  testWidgets('底部标签 6 个 Tab 逐个点各进各的页', (tester) async {
-    SharedPreferences.setMockInitialValues({
-      'source': 'hongguo',
-      'hiddenSites': '[]',
-      'appThemeMode': 'purpleNeon',
-    });
-    final store = LocalStore(await SharedPreferences.getInstance());
-    addTearDown(store.dispose);
-    await tester.pumpWidget(
-      MaterialApp(
-        navigatorObservers: [homeRouteObserver],
-        home: HomeScreen(repository: FixtureRepository(), store: store),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byType(MoyiBottomTabBar), findsOneWidget);
+  // 底部标签 7 个 Tab 逐个点、各进各的页：多媒体在第 4 位、
+  // 小程序在第 5 位、我的在第 6 位。红果源走短剧分支。
+  testWidgets('底部标签 7 个 Tab 逐个点各进各的页', (tester) async {
+    await pumpHome(tester, source: 'hongguo', theme: 'purpleNeon');
+    expect(find.byType(NeonCapsuleBar), findsOneWidget);
 
-    Future<void> tapTab(int i) async {
-      await tester.tap(find.byKey(ValueKey('moyi-bottom-tab-$i')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-    }
-
-    await tapTab(1);
-    expect(await currentZone(tester), HomeZone.live);
-    await tapTab(2);
-    expect(await currentZone(tester), HomeZone.audio);
-    await tapTab(3);
-    expect(await currentZone(tester), HomeZone.novel);
-    await tapTab(4);
-    final multimediaShown =
-        find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
-        find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
-    expect(multimediaShown, isTrue);
-    await tapTab(5);
+    await tapShellTab(tester, 1);
+    expect(currentZone(tester), HomeZone.live);
+    await tapShellTab(tester, 2);
+    expect(currentZone(tester), HomeZone.audio);
+    await tapShellTab(tester, 3);
+    expect(currentZone(tester), HomeZone.novel);
+    await tapShellTab(tester, 4);
+    expect(multimediaShown(tester), isTrue);
+    await tapShellTab(tester, 5);
+    expect(find.byType(MiniAppHomePage), findsOneWidget);
+    await tapShellTab(tester, 6);
     expect(find.text('最近观看'), findsOneWidget);
-    await tapTab(0);
-    // 片库区走红果分支，抽屉按钮是 neon-avatar。
-    expect(await currentZone(tester, drawerKey: 'neon-avatar'), HomeZone.library);
-    expect(find.byKey(const ValueKey('multimedia-empty')), findsNothing);
-    expect(find.byKey(const ValueKey('multimedia-screen')), findsNothing);
+    await tapShellTab(tester, 0);
+    expect(currentZone(tester), isNull);
+    expect(multimediaShown(tester), isFalse);
+    expect(find.byType(MiniAppHomePage), findsNothing);
     expect(find.text('最近观看'), findsNothing);
   }, skip: !allSourcesEnabled);
 
@@ -460,7 +410,7 @@ void main() {
           onSearchChanged: (_) {},
           onSearchSubmitted: (_) {},
           onOpenGlobalSearch: () {},
-          onMenuPressed: () {},
+          onAvatarPressed: () {},
           onFilterPressed: () {},
           onRankingsPressed: () {},
           onNewPressed: () {},
@@ -486,5 +436,44 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
     expect(find.byKey(const ValueKey('mine-theme-entry')), findsOneWidget);
+  });
+
+  testWidgets('短剧首页 requestedTab 直达小程序页', (tester) async {
+    final store = await _makeStore();
+    final searchController = TextEditingController();
+    addTearDown(searchController.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HongguoDramaHome(
+          dramas: const [],
+          repository: FixtureRepository(),
+          store: store,
+          onOpenDrama: (_) {},
+          onOpenFeed: () {},
+          onPickSource: () {},
+          sourceLabel: '测试',
+          feedEnabled: false,
+          categories: const [],
+          selectedCategory: '',
+          onCategorySelected: (_) {},
+          searchController: searchController,
+          searchHint: '',
+          onSearchChanged: (_) {},
+          onSearchSubmitted: (_) {},
+          onOpenGlobalSearch: () {},
+          onAvatarPressed: () {},
+          onFilterPressed: () {},
+          onRankingsPressed: () {},
+          onNewPressed: () {},
+          filtersActive: false,
+          newActive: false,
+          onOpenSaved: ({required bool history}) {},
+          requestedTab: HongguoDramaHome.miniAppTabIndex,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byType(MiniAppHomePage), findsOneWidget);
   });
 }

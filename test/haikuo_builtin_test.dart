@@ -32,7 +32,10 @@ void main() {
   });
 
   test('首次播种：内置规则进库，来源标为内置规则', () async {
-    final bundle = jsonEncode([_builtinRule('甲', 'v1'), _builtinRule('乙', 'v1')]);
+    final bundle = jsonEncode([
+      _builtinRule('甲', 'v1'),
+      _builtinRule('乙', 'v1'),
+    ]);
     final seeded = await store.ensureBuiltinRules(bundleText: bundle);
     expect(seeded, 2);
     final programs = await store.list();
@@ -64,10 +67,7 @@ void main() {
     );
     final programs = await store.list();
     expect(programs.map((p) => p.name).toSet(), {'用户自带', '甲'});
-    expect(
-      programs.firstWhere((p) => p.name == '用户自带').origin,
-      '文件',
-    );
+    expect(programs.firstWhere((p) => p.name == '用户自带').origin, '文件');
   });
 
   test('用户删掉内置规则后不再自动补回，强制恢复才补回', () async {
@@ -78,10 +78,7 @@ void main() {
     expect(await store.list(), isEmpty);
     expect(await store.ensureBuiltinRules(bundleText: bundle), 0);
     expect(await store.list(), isEmpty);
-    expect(
-      await store.ensureBuiltinRules(bundleText: bundle, force: true),
-      1,
-    );
+    expect(await store.ensureBuiltinRules(bundleText: bundle, force: true), 1);
     expect(await store.list(), hasLength(1));
   });
 
@@ -104,17 +101,14 @@ void main() {
 
   test('空包不播种、不写标记', () async {
     expect(await store.ensureBuiltinRules(bundleText: '[]'), 0);
-    expect(
-      await File('${temp.path}/builtin_seeded.json').exists(),
-      isFalse,
-    );
+    expect(await File('${temp.path}/builtin_seeded.json').exists(), isFalse);
   });
 
-  test('真实内置包能播种 35 条（读 asset 文件本身）', () async {
+  test('真实内置包能播种 130 条（读 asset 文件本身）', () async {
     final seeded = await store.ensureBuiltinRules();
-    expect(seeded, 35);
+    expect(seeded, 130);
     final programs = await store.list();
-    expect(programs, hasLength(35));
+    expect(programs, hasLength(130));
     expect(programs.map((p) => p.origin).toSet(), {'内置规则'});
     expect(
       programs.map((p) => p.name).toSet(),

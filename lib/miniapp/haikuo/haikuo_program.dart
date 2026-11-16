@@ -31,6 +31,8 @@ class HaikuoProgram {
     this.rawJson = '',
     this.entries = 0,
     this.importedAt,
+    this.group = '',
+    this.ruleType = '',
   });
 
   final String id;
@@ -59,10 +61,17 @@ class HaikuoProgram {
 
   final DateTime? importedAt;
 
+  /// 规则自带的分组（数据库列 `group_lpcolumn` / JSON 键 `group`）。
+  final String group;
+
+  /// 规则自带的类型（`type` 键，如 video/live/read）。
+  final String ruleType;
+
   bool get runnable => kind == HaikuoKind.script && script.trim().isNotEmpty;
 
   String get subtitle {
     final parts = <String>[
+      if (group.isNotEmpty) group,
       if (author.isNotEmpty) author,
       if (version.isNotEmpty) 'v$version',
       if (!runnable && entries > 0) '$entries 条',
@@ -85,6 +94,8 @@ class HaikuoProgram {
     'raw': rawJson,
     'entries': entries,
     'importedAt': (importedAt ?? DateTime.now()).toIso8601String(),
+    'group': group,
+    'ruleType': ruleType,
   };
 
   static HaikuoProgram fromJson(Map<String, dynamic> json) {
@@ -106,6 +117,8 @@ class HaikuoProgram {
       rawJson: '${json['raw'] ?? ''}',
       entries: int.tryParse('${json['entries'] ?? 0}') ?? 0,
       importedAt: DateTime.tryParse('${json['importedAt'] ?? ''}'),
+      group: '${json['group'] ?? ''}',
+      ruleType: '${json['ruleType'] ?? ''}',
     );
   }
 
@@ -136,6 +149,8 @@ class HaikuoProgram {
       rawJson: rawJson,
       entries: entries ?? this.entries,
       importedAt: importedAt ?? DateTime.now(),
+      group: group,
+      ruleType: ruleType,
     );
   }
 }

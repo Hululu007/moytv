@@ -61,6 +61,7 @@ flutter:
     - assets/torrserver_chunks/
     - assets/audio_spiders/
     - assets/novel_spiders/
+    - assets/legado_sources/
     - assets/py_spiders/
     - assets/jars/zakatv.jar
     - assets/jars/youtube.jar
@@ -68,6 +69,8 @@ flutter:
     - assets/jar_site_configs.json
     - assets/haikuo_samples.json
     - assets/haikuo_builtin_rules.json
+    - assets/haikuo_modules/
+    - assets/haikuo_modules_manifest.json
     - assets/miniapps/builtin/
     - assets/novel_covers/
     - assets/ant_logo.png

@@ -1,0 +1,81 @@
+{
+  "dir": "assets/haikuo_modules/",
+  "rules": {
+    "91网址(关梯)": [
+      "91网址(关梯)__wz91.js",
+      "91网址(关梯)__uiwz91.js"
+    ],
+    "AnySex": [
+      "AnySex__aslist.js"
+    ],
+    "AVbebe": [
+      "AVbebe__detail.js"
+    ],
+    "AVE影片": [
+      "AVE影片__aveyp.js",
+      "AVE影片__uiaveyp.js"
+    ],
+    "AvJoy": [
+      "AvJoy__AvJoy.js"
+    ],
+    "Av大聚合": [
+      "Av大聚合__by.js",
+      "Av大聚合__urlSet.js",
+      "Av大聚合__Search.view"
+    ],
+    "AV星球": [
+      "AV星球__avxq.js",
+      "AV星球__uiavxq.js"
+    ],
+    "Chaturbate": [
+      "Chaturbate__cbl.js",
+      "Chaturbate__uil.js"
+    ],
+    "FoFo影院": [
+      "FoFo影院__er.js",
+      "FoFo影院__剧情简介.js"
+    ],
+    "FullEroticMovies怀旧经典": [
+      "FullEroticMovies怀旧经典__fem.js",
+      "FullEroticMovies怀旧经典__uiq16.js",
+      "FullEroticMovies怀旧经典__fypage.js"
+    ],
+    "Hanime1（镜像）": [
+      "Hanime1（镜像）__lazy.js",
+      "Hanime1（镜像）__sy.js"
+    ],
+    "Jav精品": [
+      "Jav精品__𝟕𝐌𝐌𝐓𝐕.js"
+    ],
+    "Tnaflix": [
+      "Tnaflix__Apollo.js"
+    ],
+    "Xvideos": [
+      "Xvideos__Apollo.js"
+    ],
+    "YouPorn": [
+      "YouPorn__Apollo.js"
+    ],
+    "聚BT": [
+      "聚BT__dataCache.json"
+    ]
+  },
+  "notInlined": {
+    "Jav精品": [
+      "Jav精品__𝟕𝐌𝐌𝐓𝐕.js"
+    ],
+    "Tnaflix": [
+      "Tnaflix__Apollo.js"
+    ],
+    "Xvideos": [
+      "Xvideos__Apollo.js"
+    ],
+    "YouPorn": [
+      "YouPorn__Apollo.js"
+    ],
+    "聚BT": [
+      "聚BT__dataCache.json"
+    ]
+  },
+  "notes": "21/26 模块内容已内联在各自规则的 pages 里，$.require 经 pages 解析；5 个未内联（4 个 Apollo 引擎明文 + 1 个数据文件）需壳子对齐批接线后才能加载，本批只随规则一起进树保存。"
+}

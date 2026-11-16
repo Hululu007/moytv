@@ -245,6 +245,12 @@ void main() {
             BuiltinPySites.memojavAssetPath,
             'assets/py_spiders/memojav.py',
           );
+        } else if (siteId == BuiltinPySites.chaoliuSiteId) {
+          expect(BuiltinPySites.chaoliuSite.importType, 'py');
+          expect(
+            BuiltinPySites.chaoliuAssetPath,
+            'assets/py_spiders/chaoliu.py',
+          );
         } else {
           expect(siteId.startsWith('jar:zakatv:'), isTrue);
           final key = siteId.substring('jar:zakatv:'.length);

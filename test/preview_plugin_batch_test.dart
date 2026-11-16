@@ -14,7 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/custom_sources_screen.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/detail_screen.dart';
@@ -648,23 +649,31 @@ void main() {
     );
   });
 
-  // 6. 抽屉顶 Tab：影视 / 阅读 / 小程序 / 多媒体 四个。
-  testWidgets('预览 抽屉多媒体Tab', (tester) async {
+  // 6. 底部胶囊栏：多媒体选中（抽屉顶 Tab 已由底栏代替）。
+  testWidgets('预览 胶囊栏多媒体选中', (tester) async {
     await _capture(
       tester,
       mode: AppThemeMode.purpleNeon,
-      screen: AppDrawer(
-        zone: HomeZone.library,
-        currentVersion: '1.0.0+1',
-        onZoneSelected: (_) {},
-        onWatchRoom: () {},
-        onTool: (_) {},
-        onMinorProtectionChanged: (_) {},
-        onMultimediaRequested: () {},
-        appTheme: AppThemeMode.purpleNeon,
+      screen: Scaffold(
+        body: const Center(child: Text('多媒体页占位 · 底栏为本次预览主体')),
+        bottomNavigationBar: NeonCapsuleBar(
+          entries: const [
+            (LucideIcons.clapperboard, '片库'),
+            (LucideIcons.tv, '直播'),
+            (LucideIcons.headphones, '听书'),
+            (LucideIcons.bookOpen, '阅读'),
+            (LucideIcons.hardDrive, '多媒体'),
+            (LucideIcons.layoutGrid, '小程序'),
+            (LucideIcons.user, '我的'),
+          ],
+          index: 4,
+          onSelect: (_) {},
+          onCenter: () {},
+          centerAfter: 3,
+        ),
       ),
-      name: 'drawer_multimedia_tab',
-      label: '预览 · 假数据 · 抽屉顶 Tab 四个：影视 / 阅读 / 小程序 / 多媒体',
+      name: 'capsule_multimedia_tab',
+      label: '预览 · 假数据 · 底部胶囊栏 7 个：多媒体选中',
     );
   });
 

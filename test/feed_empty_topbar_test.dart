@@ -56,7 +56,7 @@ void main() {
           onSearchChanged: (_) {},
           onSearchSubmitted: (_) {},
           onOpenGlobalSearch: () {},
-          onMenuPressed: () {},
+          onAvatarPressed: () {},
           onFilterPressed: () {},
           onRankingsPressed: () {},
           onNewPressed: () {},

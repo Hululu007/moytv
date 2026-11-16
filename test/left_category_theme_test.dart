@@ -309,13 +309,7 @@ void main() {
   test('12 套主题导航与列表样式固定映射', () {
     expect(AppThemeMode.values.length, 12);
     for (final mode in AppThemeMode.values) {
-      expect(
-        navStyleForTheme(mode),
-        mode == AppThemeMode.purpleNeon
-            ? NavStyle.bottomTabs
-            : NavStyle.drawer,
-        reason: '$mode 导航',
-      );
+      expect(navStyleForTheme(mode), NavStyle.bottomTabs, reason: '$mode 导航');
       expect(
         siteListStyleForTheme(mode),
         mode == AppThemeMode.purpleNeon
@@ -324,7 +318,10 @@ void main() {
         reason: '$mode 列表样式',
       );
     }
-    expect(navStyleForTheme(AppThemeMode.leftCategories), NavStyle.drawer);
+    expect(
+      navStyleForTheme(AppThemeMode.leftCategories),
+      NavStyle.bottomTabs,
+    );
     expect(
       siteListStyleForTheme(AppThemeMode.leftCategories),
       SiteListStyle.normal,

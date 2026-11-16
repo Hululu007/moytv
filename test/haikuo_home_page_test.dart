@@ -37,6 +37,35 @@ void main() {
     }
   }
 
+  testWidgets('带 http 图标的程序显示网络图片，无图标的显示字形', (tester) async {
+    await tester.runAsync(
+      () => store.importText(
+        jsonEncode([
+          {
+            'title': '有图标',
+            'type': 'video',
+            'url': 'hiker://empty##https://example.com',
+            'icon': 'https://example.com/icon.png',
+            'find_rule': 'js:\\nsetResult([{title:"x"}]);',
+          },
+          {
+            'title': '无图标',
+            'type': 'video',
+            'url': 'hiker://empty##https://example.com',
+            'find_rule': 'js:\\nsetResult([{title:"x"}]);',
+          },
+        ]),
+        origin: '测试',
+      ),
+    );
+    await pumpPage(tester);
+    expect(find.text('有图标'), findsOneWidget);
+    expect(find.text('无图标'), findsOneWidget);
+    // 有图标的那张瓦片挂 Image.network（测试里请求失败走
+    // errorBuilder 回字形，但 Image 部件本身在树里）。
+    expect(find.byType(Image), findsOneWidget);
+  });
+
   testWidgets('空库时给出三种导入入口，不报错', (tester) async {
     await pumpPage(tester);
     expect(find.text('还没有导入海阔小程序'), findsOneWidget);

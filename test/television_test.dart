@@ -91,7 +91,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('tv-nav-0')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('tv-nav-3')));
+      // 电视导航只有 3 项（片库/直播/设置），设置是第 3 项 tv-nav-2。
+      await tester.tap(find.byKey(const ValueKey('tv-nav-2')));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('界面模式'),

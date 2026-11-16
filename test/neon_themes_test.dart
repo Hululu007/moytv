@@ -155,7 +155,7 @@ void main() {
     }
   });
 
-  test('新主题显示方案默认全部内容+抽屉+普通列表', () async {
+  test('新主题显示方案默认全部内容+底部标签+普通列表', () async {
     SharedPreferences.setMockInitialValues({});
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
@@ -166,8 +166,8 @@ void main() {
     ]) {
       final scheme = store.displayScheme(mode);
       expect(scheme.contentTier, ContentTier.all);
-      expect(scheme.navStyle, NavStyle.drawer);
-      expect(navStyleForTheme(mode), NavStyle.drawer);
+      expect(scheme.navStyle, NavStyle.bottomTabs);
+      expect(navStyleForTheme(mode), NavStyle.bottomTabs);
       expect(siteListStyleForTheme(mode), SiteListStyle.normal);
     }
   });

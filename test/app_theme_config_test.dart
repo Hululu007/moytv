@@ -181,7 +181,7 @@ void main() {
       }
     });
 
-    test('顶栏与抽屉跟主题配色', () {
+    test('顶栏与抽屉主题配置跟主题配色', () {
       final config = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
       final theme = config.toThemeData();
       expect(theme.appBarTheme.backgroundColor, config.backgroundColor);

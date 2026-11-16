@@ -44,20 +44,31 @@ abstract final class HaikuoCodec {
   );
 
   /// 把一段文本（JSON / base64 / gzip / zip 的文本形态）解析成小程序列表。
-  static List<HaikuoProgram> parseText(String text, {String origin = ''}) {
-    final trimmed = text.trim();
+  ///
+  /// [dropped] 收到 zip 内被跳过的损坏条目说明（条目名 + 原因），
+  /// 调用方展示给用户，不再静默丢条。
+  static List<HaikuoProgram> parseText(
+    String text, {
+    String origin = '',
+    List<String>? dropped,
+  }) {
+    final trimmed = _stripBom(text.trim());
     if (trimmed.isEmpty) {
       throw const HaikuoFormatException('内容为空，没有可导入的小程序');
     }
     final bytes = Uint8List.fromList(utf8.encode(trimmed));
-    return parseBytes(bytes, origin: origin);
+    return parseBytes(bytes, origin: origin, dropped: dropped);
   }
 
   /// 二进制解析：自动识别 zip / gzip / 纯文本 / base64。
+  ///
+  /// zip 内再套一层 zip 会递归解一层（受 [depth] 上限保护）；
+  /// 个别损坏条目不再静默跳过，原因记进 [dropped]。
   static List<HaikuoProgram> parseBytes(
     List<int> bytes, {
     String origin = '',
     int depth = 0,
+    List<String>? dropped,
   }) {
     if (bytes.isEmpty) {
       throw const HaikuoFormatException('内容为空，没有可导入的小程序');
@@ -65,29 +76,36 @@ abstract final class HaikuoCodec {
     if (depth > 4) {
       throw const HaikuoFormatException('小程序包嵌套层级过深，已停止解析');
     }
-    // zip：把里面的 json / txt 全试一遍
+    // zip：把里面的 json / txt / 嵌套 zip 全试一遍
     if (bytes.length > 4 && bytes[0] == 0x50 && bytes[1] == 0x4B) {
       final archive = ZipDecoder().decodeBytes(bytes);
       final programs = <HaikuoProgram>[];
       for (final entry in archive.files) {
         if (!entry.isFile) continue;
         final name = entry.name.toLowerCase();
-        if (!(name.endsWith('.json') ||
-            name.endsWith('.txt') ||
-            name.endsWith('.js'))) {
-          continue;
-        }
         final content = entry.content as List<int>?;
         if (content == null || content.isEmpty) continue;
+        if (name.endsWith('.db')) {
+          dropped?.add('跳过数据库条目 ${entry.name}：请单独导入 .db 文件');
+          continue;
+        }
+        if (!(name.endsWith('.json') ||
+            name.endsWith('.txt') ||
+            name.endsWith('.js') ||
+            name.endsWith('.zip'))) {
+          continue;
+        }
         try {
           programs.addAll(
             parseBytes(
               content,
               origin: origin,
               depth: depth + 1,
+              dropped: dropped,
             ).map((item) => item.copyWith(origin: origin)),
           );
-        } on HaikuoFormatException {
+        } on HaikuoFormatException catch (error) {
+          dropped?.add('跳过损坏条目 ${entry.name}：${error.message}');
           continue;
         }
       }
@@ -99,7 +117,7 @@ abstract final class HaikuoCodec {
     // gzip
     if (bytes.length > 2 && bytes[0] == 0x1F && bytes[1] == 0x8B) {
       final raw = GZipDecoder().decodeBytes(bytes);
-      return parseBytes(raw, origin: origin, depth: depth + 1);
+      return parseBytes(raw, origin: origin, depth: depth + 1, dropped: dropped);
     }
     final text = decodeText(bytes).trim();
     final head = text.isEmpty ? '' : text.codeUnitAt(0);
@@ -110,7 +128,7 @@ abstract final class HaikuoCodec {
     final decoded = tryBase64(text);
     if (decoded != null && decoded.isNotEmpty) {
       try {
-        return parseBytes(decoded, origin: origin, depth: depth + 1);
+        return parseBytes(decoded, origin: origin, depth: depth + 1, dropped: dropped);
       } on HaikuoFormatException {
         // 落到下面按口令再试一次
       }
@@ -120,17 +138,59 @@ abstract final class HaikuoCodec {
     );
   }
 
-  /// 解码字节为文本：优先 UTF-8，不行退回 GBK。
-  static String decodeText(List<int> bytes) {
+  /// 剥掉开头的 UTF-8 BOM（U+FEFF），可能有多个时一并剥掉。
+  static String _stripBom(String text) {
+    var result = text;
+    while (result.startsWith('\uFEFF')) {
+      result = result.substring(1);
+    }
+    return result;
+  }
+
+  /// 从 zip 包（含一层嵌套 zip）里抽出全部 `.db` 条目（名 + 字节），
+  /// 供仓库层走数据库导入；不是 zip 或没有 .db 条目时返回空表。
+  static List<({String name, List<int> bytes})> zipDbEntries(
+    List<int> bytes, {
+    int depth = 0,
+  }) {
+    final out = <({String name, List<int> bytes})>[];
+    if (depth > 4) return out;
+    if (bytes.length <= 4 || bytes[0] != 0x50 || bytes[1] != 0x4B) {
+      return out;
+    }
     try {
-      return utf8.decode(bytes);
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final entry in archive.files) {
+        if (!entry.isFile) continue;
+        final content = entry.content as List<int>?;
+        if (content == null || content.isEmpty) continue;
+        final name = entry.name.toLowerCase();
+        if (name.endsWith('.db')) {
+          out.add((name: entry.name, bytes: content));
+        } else if (name.endsWith('.zip')) {
+          out.addAll(zipDbEntries(content, depth: depth + 1));
+        }
+      }
+    } catch (_) {
+      // zip 损坏时当没有数据库条目，交给正常解析路径报错。
+    }
+    return out;
+  }
+
+  /// 解码字节为文本：优先 UTF-8，不行退回 GBK。开头的 BOM 一律剥掉，
+  /// 否则带 BOM 的 JSON 首字符不是 `{`/`[`，会被判成“没认出格式”。
+  static String decodeText(List<int> bytes) {
+    String decoded;
+    try {
+      decoded = utf8.decode(bytes);
     } on FormatException {
       try {
-        return const GbkCodec(allowInvalid: true).decode(bytes);
+        decoded = const GbkCodec(allowInvalid: true).decode(bytes);
       } catch (_) {
-        return latin1.decode(bytes, allowInvalid: true);
+        decoded = latin1.decode(bytes, allowInvalid: true);
       }
     }
+    return _stripBom(decoded);
   }
 
   static Uint8List? tryBase64(String text) {
@@ -159,17 +219,85 @@ abstract final class HaikuoCodec {
   }
 
   static List<HaikuoProgram> parseJsonText(String text, {String origin = ''}) {
+    final cleaned = _stripBom(text.trim());
     dynamic decoded;
     try {
-      decoded = jsonDecode(text);
+      decoded = jsonDecode(cleaned);
     } on FormatException {
-      throw const HaikuoFormatException('JSON 格式有误，检查一下括号和引号');
+      // 严格解析失败时再试一次宽容解析：只去掉字符串外的注释与
+      // 尾随逗号（手写/导出的 JSON 常见毛病）；宽容解析也失败
+      // 时保留原来的诚实报错，不编一个“成功”。
+      try {
+        decoded = jsonDecode(_lenientJson(cleaned));
+      } on FormatException {
+        throw const HaikuoFormatException('JSON 格式有误，检查一下括号和引号');
+      }
     }
-    final programs = parseDecoded(decoded, origin: origin, rawText: text);
+    final programs = parseDecoded(decoded, origin: origin, rawText: cleaned);
     if (programs.isEmpty) {
       throw const HaikuoFormatException('JSON 里没有识别到海阔小程序条目');
     }
     return programs;
+  }
+
+  /// 宽容 JSON 预处理：去掉字符串之外的 `//`、`/* */` 注释与
+  /// `}`/`]` 之前的尾随逗号。字符串内的 `//`、逗号原样保留。
+  static String _lenientJson(String text) {
+    final out = StringBuffer();
+    var i = 0;
+    var inString = false;
+    var escaped = false;
+    while (i < text.length) {
+      final ch = text[i];
+      if (inString) {
+        out.write(ch);
+        if (escaped) {
+          escaped = false;
+        } else if (ch == '\\') {
+          escaped = true;
+        } else if (ch == '"') {
+          inString = false;
+        }
+        i++;
+        continue;
+      }
+      if (ch == '"') {
+        inString = true;
+        out.write(ch);
+        i++;
+        continue;
+      }
+      if (ch == '/' && i + 1 < text.length && text[i + 1] == '/') {
+        // 行注释：跳到行尾（换行符保留，行号不乱）。
+        while (i < text.length && text[i] != '\n') {
+          i++;
+        }
+        continue;
+      }
+      if (ch == '/' && i + 1 < text.length && text[i + 1] == '*') {
+        final end = text.indexOf('*/', i + 2);
+        if (end < 0) break;
+        i = end + 2;
+        continue;
+      }
+      if (ch == ',') {
+        // 尾随逗号：逗号后只有空白，接着就是 } 或 ] 时去掉。
+        var j = i + 1;
+        while (j < text.length && text[j].trim().isEmpty) {
+          j++;
+        }
+        if (j < text.length && (text[j] == '}' || text[j] == ']')) {
+          i++;
+          continue;
+        }
+        out.write(ch);
+        i++;
+        continue;
+      }
+      out.write(ch);
+      i++;
+    }
+    return out.toString();
   }
 
   /// 结构归一：单对象、数组、包一层的 `{data: [...]}` 都能吃。
@@ -198,6 +326,25 @@ abstract final class HaikuoCodec {
     required int depth,
   }) {
     if (depth > 6) return;
+    if (node is String) {
+      // data 字段里套着 JSON 字符串：二次解码后再归一，否则
+      // 整个包裹会被判成“没有识别到条目”。
+      final trimmed = _stripBom(node.trim());
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          _collect(
+            jsonDecode(trimmed),
+            out,
+            origin: origin,
+            rawText: trimmed,
+            depth: depth + 1,
+          );
+        } catch (_) {
+          // 不是合法 JSON 就当普通字符串，忽略。
+        }
+      }
+      return;
+    }
     if (node is List) {
       for (final item in node) {
         _collect(
@@ -236,6 +383,8 @@ abstract final class HaikuoCodec {
       'sourceCode',
       'scriptCode',
       'searchFind',
+      'chapter_find',
+      'movie_find',
       'main',
       'content',
       'body',
@@ -260,6 +409,9 @@ abstract final class HaikuoCodec {
       final description =
           _firstText(map, const ['desc', 'description', 'intro', '简介', 'remark']) ??
           '';
+      final group =
+          _firstText(map, const ['group', 'group_lpcolumn', '分组']) ?? '';
+      final ruleType = _firstText(map, const ['type', '类型']) ?? '';
       final isRule =
           map.containsKey('find_rule') ||
           map.containsKey('findRule') ||
@@ -282,6 +434,8 @@ abstract final class HaikuoCodec {
           rawJson: raw,
           entries: entries,
           importedAt: DateTime.now(),
+          group: group,
+          ruleType: ruleType,
         ),
       );
       return;
@@ -302,6 +456,9 @@ abstract final class HaikuoCodec {
       final description =
           _firstText(map, const ['desc', 'description', 'intro', '简介', 'remark']) ??
           '';
+      final group =
+          _firstText(map, const ['group', 'group_lpcolumn', '分组']) ?? '';
+      final ruleType = _firstText(map, const ['type', '类型']) ?? '';
       final body = url ?? jsonEncode(map);
       out.add(
         HaikuoProgram(
@@ -313,9 +470,14 @@ abstract final class HaikuoCodec {
           url: url ?? '',
           kind: url != null && entries == 0 ? HaikuoKind.link : HaikuoKind.rule,
           origin: origin,
-          rawJson: rawText.isEmpty ? jsonEncode(map) : rawText,
+          // 只存本条目的对象 JSON：以前这里存整份文件文本，数组文件
+          // 的 rawJson 以 `[` 开头，运行页会把 rule 置空，子页/详情/
+          // 分类全丢，只剩一张链接卡。
+          rawJson: jsonEncode(map),
           entries: entries,
           importedAt: DateTime.now(),
+          group: group,
+          ruleType: ruleType,
         ),
       );
       return;

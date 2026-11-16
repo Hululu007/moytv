@@ -170,6 +170,7 @@ const crossSitePrioritySiteIds = <String>[
   'javmenu',
   'avdb',
   'memojav',
+  'chaoliu',
   'jar:zakatv:zakav01',
   'jar:zakatv:ZakaMissav',
   'jar:zakatv:ZakaMissavOff',

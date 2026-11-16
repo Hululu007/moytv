@@ -9,31 +9,16 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'app_layout.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
-import 'app_drawer.dart';
+import 'home_zone.dart';
 import 'app_theme_config.dart';
-import 'bottom_tab_bar.dart';
 import 'content_tier_filter.dart';
 import 'neon/neon_ui.dart';
 import 'ui_style.dart';
 import 'content_zone_binding.dart';
 import 'content_zone_screen.dart';
 import 'content_models.dart';
-import 'player_picker.dart';
-import 'app_update_screen.dart';
-import 'content_source_screen.dart';
-import 'import_center_screen.dart';
-import 'parse_settings_screen.dart';
-import 'proxy_kernel_screen.dart';
-import 'lan_screen.dart';
-import 'clearance_bridge.dart';
 import 'miniapp/mini_app_home_page.dart';
-import 'viewing_experience_screen.dart';
-import 'torrent/torrent_home_screen.dart';
-import 'theme_settings_screen.dart';
-import 'rule_editor_screen.dart';
-
-import 'watchroom/room_screen.dart';
-import 'app_update.dart';
+import 'mine_page.dart';
 import 'core_bridge.dart';
 import 'catalog_filters.dart';
 import 'compact_chip.dart';
@@ -133,12 +118,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// Tab 时清掉（与 _mineRequested 同一口径）。
   bool _multimediaRequested = false;
 
+  /// 底部 Tab 点了“小程序”后为真：短剧首页分支据此把内层页签驱
+  /// 到小程序页，通用分支改渲染小程序首页；离开片库区或点其它
+  /// Tab 时清掉（与 _mineRequested 同一口径）。
+  bool _miniAppRequested = false;
+
   /// 戏剧首页钉住标记：频道/戏剧首页内切站时为真，换站后仍渲染
   /// 戏剧首页分支（分组 id 随站源变化，单凭分组判断会跳到通用
   /// 分支）；离开片库区时清掉，切回片库后按分组重新判断。
   bool _dramaHomePinned = false;
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
-  String _currentVersion = '';
   final _lastZoneSource = <String, String>{};
   late final ContentZoneBinding _contentBinding;
   List<Drama>? _visibleCache;
@@ -189,9 +177,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   bool get _isCatalogZone => _zone == HomeZone.library;
 
-  /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：多媒体页虽在片库区内，
-  /// 但自有网盘切换与搜索顶栏，片库顶栏元素不该出现在它上面。
-  bool get _showCatalogHeader => _isCatalogZone && !_multimediaRequested;
+  /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：多媒体/小程序/
+  /// 我的页虽在片库区内，但各有自己的顶栏，片库顶栏元素不该
+  /// 出现在它们上面。
+  bool get _showCatalogHeader =>
+      _isCatalogZone &&
+      !_multimediaRequested &&
+      !_miniAppRequested &&
+      !_mineRequested;
 
   String get _zoneTitle => switch (_zone) {
     HomeZone.library => '片库',
@@ -477,22 +470,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       repository: widget.repository,
     );
     if (picked == null || !mounted) return;
-    _applySourcePick(picked);
-  }
-
-  Future<void> _pickSourceCentered() async {
-    final picked = await showSitePickerDialog(
-      context,
-      sectionName: _sourcePickerSectionName(),
-      currentId: _allSources ? _allSourcesEntryId : _source.id,
-      groups: _sourcePickerGroups(),
-      onDeleteSite: _deleteSourceEntry,
-      repository: widget.repository,
-    );
-    if (picked == null || !mounted) return;
-    if (_scaffoldKey.currentState?.isDrawerOpen == true) {
-      Navigator.of(context).pop();
-    }
     _applySourcePick(picked);
   }
 
@@ -866,7 +843,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } else {
       _loading = false;
     }
-    unawaited(_loadCurrentVersion());
     unawaited(ensureDramaUiStyleLoaded());
   }
 
@@ -1295,10 +1271,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _applyZoneChange(zone, recordHistory: true);
   }
 
-  /// 当前主题绑定的导航样式：主题固定值（见 navStyleForTheme），
-  /// 只随主题切换一起变，不再读存值里的导航段。
-  NavStyle get _navStyle => navStyleForTheme(widget.store.appTheme);
-
   /// 当前主题绑定的内容档（存于显示方案，切主题即变）。
   ContentTier get _contentTier =>
       widget.store.displayScheme(widget.store.appTheme).contentTier;
@@ -1333,8 +1305,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
   }
 
+  /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听书、3 阅读、
+  /// 4 多媒体、5 小程序、6 我的。多媒体/小程序/我的只是片库区内的
+  /// 请求态，先于区判断（与 _onBottomTab 的递出顺序一致）。
   int get _bottomTabIndex {
     if (_zone == HomeZone.library && _multimediaRequested) return 4;
+    if (_zone == HomeZone.library && _miniAppRequested) return 5;
+    if (_zone == HomeZone.library && _mineRequested) return 6;
     return switch (_zone) {
       HomeZone.library => 0,
       HomeZone.live => 1,
@@ -1344,8 +1321,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _onBottomTab(int tabIndex) {
-    final wantMine = tabIndex == 5;
+    final wantMine = tabIndex == 6;
     final wantMultimedia = tabIndex == 4;
+    final wantMiniApp = tabIndex == 5;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
       2 => HomeZone.audio,
@@ -1354,30 +1332,46 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     };
     if (wantMine == _mineRequested &&
         wantMultimedia == _multimediaRequested &&
+        wantMiniApp == _miniAppRequested &&
         zone == _zone) {
       return;
     }
-    // 同区点“我的”/“多媒体”时 _setZone 会提前返回，必须先 setState
-    // 递出请求。
+    // 同区点“我的”/“多媒体”/“小程序”时 _setZone 会提前返回，必须先
+    // setState 递出请求。
     setState(() {
       _mineRequested = wantMine;
       _multimediaRequested = wantMultimedia;
+      _miniAppRequested = wantMiniApp;
     });
     _setZone(zone);
   }
 
-  /// 底部标签样式的底栏：只在手机端显示；电视/桌面走各自导航，
-  /// 选片模式下隐藏。两个分支都挂在外层 Scaffold 上（戏剧首页
-  /// 分支的胶囊栏随之藏起，内层去向由芯片行保住）；抽屉样式下
-  /// 返回 null，胶囊栏原样。
+  /// 底部标签样式的霓虹胶囊壳：只在手机端显示；电视/桌面走各自导航，
+  /// 选片模式下隐藏。全部主题共用同一壳子（见 NeonCapsuleBar），只换
+  /// 主题配色。中间播放键点开全屏推荐流，无内容时变暗不响应。
   Widget? _bottomTabBar({required bool television, required bool desktop}) {
-    if (_navStyle != NavStyle.bottomTabs ||
-        television ||
-        desktop ||
-        _selectionMode) {
+    if (television || desktop || _selectionMode) {
       return null;
     }
-    return MoyiBottomTabBar(index: _bottomTabIndex, onSelect: _onBottomTab);
+    const entries = <(Object, String)>[
+      (LucideIcons.clapperboard, '片库'),
+      (LucideIcons.tv, '直播'),
+      (LucideIcons.headphones, '听书'),
+      (LucideIcons.bookOpen, '阅读'),
+      (LucideIcons.hardDrive, '多媒体'),
+      (LucideIcons.layoutGrid, '小程序'),
+      (LucideIcons.user, '我的'),
+    ];
+    return NeonCapsuleBar(
+      entries: entries,
+      index: _bottomTabIndex,
+      onSelect: _onBottomTab,
+      onCenter: _openFullscreenFeed,
+      centerAfter: 3,
+      centerEnabled: _visible.isNotEmpty,
+      tabKeyPrefix: 'shell-tab',
+      centerKey: 'shell-center',
+    );
   }
 
   void _applyZoneChange(HomeZone zone, {bool recordHistory = false}) {
@@ -1388,6 +1382,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (zone != HomeZone.library) {
         _mineRequested = false;
         _multimediaRequested = false;
+        _miniAppRequested = false;
         _dramaHomePinned = false;
       }
       _selectionMode = false;
@@ -1456,14 +1451,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   bool get _settlingAfterPop => _justReturned;
 
-  void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
+  /// 头像点按：抽屉拆除后，点头像进“我的”页（与底部栏“我的”
+  /// 标签同一目的地）。
+  void _openMine() => _onBottomTab(6);
 
-  Widget _drawerAvatarButton() => IconButton(
-    key: const ValueKey('open-app-drawer'),
-    tooltip: '导航',
+  Widget _mineAvatarButton() => IconButton(
+    key: const ValueKey('open-mine-page'),
+    tooltip: '我的',
     iconSize: 32,
     padding: const EdgeInsets.all(8),
-    onPressed: _openDrawer,
+    onPressed: _openMine,
     icon: ClipOval(
       child: Image.asset(
         'assets/ant_logo.png',
@@ -1474,41 +1471,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     ),
   );
 
-  Widget _appBarLeading() {
-    final button = _drawerAvatarButton();
-    if (!_showCatalogHeader || _selectionMode) return button;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        button,
-        const SizedBox(width: 4),
-        Flexible(
-          child: SiteSourceBox(
-            key: const ValueKey('drawer-site-box'),
-            label: '${_group.name} (${_group.sources.length})',
-            onTap: () => unawaited(_pickSourceCentered()),
-          ),
-        ),
-      ],
-    );
-  }
-
-  AppDrawer _drawer() => AppDrawer(
-    zone: _zone,
-    currentVersion: _currentVersion,
-    appTheme: widget.store.appTheme,
-    onZoneSelected: _onZoneSelected,
-    onWatchRoom: _onWatchRoom,
-    onTool: _onTool,
-    onMinorProtectionChanged: _onMinorProtectionChanged,
-    onMultimediaRequested: () {
-      // 关抽屉在回调里，与 _onZoneSelected / _onTool 的口径一致；
-      // _onBottomTab(4) 本身不关抽屉，且与底部导航“多媒体”同一目的地。
-      Navigator.of(context).pop();
-      _onBottomTab(4);
-    },
-    multimediaActive: _multimediaRequested,
-  );
+  /// 顶栏左侧：只有头像。站源选择只留标题上的一个（source-switch），
+  /// 原头像旁的站源胶囊与标题选择器重复（同一站显示两遍），已删。
+  Widget _appBarLeading() => _mineAvatarButton();
 
   void _openZoneSettings() {
     // 片库设置页已废弃（2026-11-14）：片库区直接进通用设置（五项已并入），
@@ -1577,37 +1542,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       case 1:
         _setZone(HomeZone.live);
       default:
-        _openDrawer();
+        // 桌面导航轨第三项是“设置”：抽屉拆除后直接进设置页。
+        _openSettings();
     }
-  }
-
-  void _onZoneSelected(HomeZone zone) {
-    Navigator.of(context).pop();
-    if (zone == HomeZone.library &&
-        (_mineRequested || _multimediaRequested)) {
-      // 同区时 _setZone 会提前返回：先清掉“我的/多媒体”请求，
-      // 否则从多媒体区点“影视”回不到片库目录（与 _onBottomTab
-      // 先 setState 递出请求的口径一致）。
-      setState(() {
-        _mineRequested = false;
-        _multimediaRequested = false;
-      });
-    }
-    _setZone(zone);
-  }
-
-  void _onWatchRoom() {
-    Navigator.of(context).pop();
-    unawaited(
-      Navigator.of(context).push<void>(
-        appPageRoute<void>(
-          builder: (_) => WatchRoomScreen(
-            repository: widget.repository,
-            store: widget.store,
-          ),
-        ),
-      ),
-    );
   }
 
   void _openFullscreenFeed() {
@@ -1624,62 +1561,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ),
       ),
     );
-  }
-
-  void _onTool(AppDrawerTool tool) {
-    Navigator.of(context).pop();
-    switch (tool) {
-      case AppDrawerTool.clearance:
-        unawaited(openClearanceFlow(context, widget.repository));
-      case AppDrawerTool.lanSync:
-        openLanSync(context);
-      case AppDrawerTool.sources:
-        _pushTool(
-          SourcesScreen(repository: widget.repository, store: widget.store),
-        );
-      case AppDrawerTool.settings:
-        _openSettings();
-      case AppDrawerTool.player:
-        _pushTool(PlayerPickerScreen(store: widget.store));
-      case AppDrawerTool.appUpdate:
-        _pushTool(const AppUpdateScreen());
-      case AppDrawerTool.importCenter:
-        _pushTool(
-          ImportCenterScreen(
-            repository: widget.repository,
-            store: widget.store,
-          ),
-        );
-      case AppDrawerTool.contentSources:
-        _pushTool(
-          ContentSourceScreen(
-            repository: widget.repository,
-            store: widget.store,
-          ),
-        );
-      case AppDrawerTool.parse:
-        _pushTool(const ParseSettingsScreen());
-      case AppDrawerTool.proxyKernel:
-        _pushTool(ProxyKernelScreen(repository: widget.repository));
-      case AppDrawerTool.ruleEditor:
-        _pushTool(RuleEditorScreen(repository: widget.repository));
-      case AppDrawerTool.miniApp:
-        _pushTool(const MiniAppHomePage());
-      case AppDrawerTool.viewingExperience:
-        _pushTool(ViewingExperienceScreen(store: widget.store));
-      case AppDrawerTool.torrent:
-        _pushTool(
-          TorrentHomePage(repository: widget.repository, store: widget.store),
-        );
-      case AppDrawerTool.themeSettings:
-        _pushTool(
-          ThemeSettingsScreen(
-            store: widget.store,
-            repository: widget.repository,
-            sourceId: widget.store.source,
-          ),
-        );
-    }
   }
 
   void _pushTool(Widget screen) {
@@ -1700,13 +1581,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         .where((site) => site.isDramaSection)
         .firstOrNull;
     if (drama != null && drama.id != _source.id) _changeSource(drama);
-  }
-
-  Future<void> _loadCurrentVersion() async {
-    try {
-      final current = await AppUpdateChecker.currentVersion();
-      if (mounted) setState(() => _currentVersion = current.toString());
-    } catch (_) {}
   }
 
   void _cancelSelection() => setState(() {
@@ -1887,52 +1761,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _categoriesLoading ||
       _group.sources.any((source) => _updater.busy(source.id));
 
-  Widget _sourceDropdownBox() {
-    final colors = Theme.of(context).colorScheme;
-    return GlassTapTarget(
-      key: const ValueKey('source-dropdown'),
-      onTap: _canSwitchSource ? () => unawaited(_pickSource()) : null,
-      onLongPress: _canSwitchSource
-          ? () => unawaited(_pickSource(editMode: true))
-          : null,
-      child: SizedBox(
-        height: 44,
-        child: LiquidGlass(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    '${_group.name} (${_group.sources.length})',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.onSurface,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (_canSwitchSource) ...[
-                  const SizedBox(width: 4),
-                  Icon(
-                    LucideIcons.chevronDown,
-                    size: 16,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// Material 顶栏的片库目录操作组（排序/榜单/全屏流/搜索/网页爬取/
-  /// 刷新/站源下拉）：宽屏放 actions 行，窄屏放顶栏第二行，
+  /// 刷新）：宽屏放 actions 行，窄屏放顶栏第二行，
   /// 与玻璃顶栏的胶囊第二行同一道理，避免盖住站源条。
+  /// 站源选择只留标题上的一个，这里不放下拉按钮。
   List<Widget> _materialCatalogActions({
     required bool television,
     required double maxWidth,
@@ -1998,12 +1830,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               widget.store.visibleSources.isEmpty ? null : _refreshCatalog,
           icon: const Icon(Icons.refresh_rounded),
         ),
-      OutlinedButton.icon(
-        key: const ValueKey('source-dropdown'),
-        onPressed: _canSwitchSource ? () => unawaited(_pickSource()) : null,
-        icon: const Icon(Icons.expand_more_rounded, size: 18),
-        label: Text('${_group.name} (${_group.sources.length})'),
-      ),
+      // 站源选择只留标题上的一个（source-switch）：原这里的下拉按钮
+      // 与标题选择器重复（同一站显示两遍），已删。
     ];
   }
 
@@ -2027,6 +1855,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       title = Text('选择视频', style: largeTitle);
     } else if (_multimediaRequested) {
       title = Text('多媒体', style: largeTitle);
+    } else if (_miniAppRequested) {
+      title = Text('小程序', style: largeTitle);
+    } else if (_mineRequested) {
+      title = Text('我的', style: largeTitle);
     } else if (_showCatalogHeader) {
       title = GlassTapTarget(
         key: const ValueKey('source-switch'),
@@ -2063,8 +1895,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } else {
       title = Text(_zoneTitle, style: largeTitle);
     }
-    // 工具胶囊：窄屏（手机）时顶栏一行放不下 192 宽站源条 + 六项胶囊，
-    // 胶囊会盖住站源名；窄屏改放顶栏第二行（bottom），宽屏仍放 actions 行。
+    // 工具胶囊：窄屏（手机）时顶栏一行放不下头像 + 标题 + 六项胶囊，
+    // 胶囊会盖住标题；窄屏改放顶栏第二行（bottom），宽屏仍放 actions 行。
     final capsule = GlassButtonGroup(
       children: [
         if (updating || _loading && _items.isNotEmpty)
@@ -2126,7 +1958,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       centerTitle: false,
       titleSpacing: 20,
       automaticallyImplyLeading: false,
-      leadingWidth: _showCatalogHeader && !_selectionMode ? 192 : null,
       leading: _appBarLeading(),
       title: title,
       actions: [
@@ -2147,7 +1978,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
         ] else ...[
           if (catalog) ...[
-            if (wide) ...[_sourceDropdownBox(), const SizedBox(width: 8)],
+            // 宽屏工具胶囊放 actions 行；站源选择只留标题上的一个，
+            // 原 actions 里的下拉盒与标题选择器重复，已删。
             if (wide) capsule,
             if (wide) const SizedBox(width: 8),
           ],
@@ -2204,11 +2036,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               _zone == HomeZone.library) {
             if (isHongguoDramaGroup(_group.id) || _dramaHomePinned) {
               return Scaffold(
-                key: _scaffoldKey,
-                drawer: _drawer(),
-                // 抽屉不许边缘滑动打开：手势导航的边缘滑动（系统返回手势）会误触
-                // 把抽屉拖出来，小退回来首页就被抽屉盖住了；点左上角头像照样能开。
-                drawerEnableOpenDragGesture: false,
+                // 无抽屉：抽屉拆除后首页不再有可盖住首页的抽屉状态，
+                // 小退回前台也不会再丢首页。
                 extendBody: glass,
                 bottomNavigationBar: bottomTabBar,
                 body: SafeArea(
@@ -2233,7 +2062,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onSearchChanged: _searchChanged,
                     onSearchSubmitted: _submitSearch,
                     onOpenGlobalSearch: _openGlobalSearch,
-                    onMenuPressed: _openDrawer,
+                    onAvatarPressed: _openMine,
                     onFilterPressed: () => unawaited(_chooseCatalogView()),
                     onRankingsPressed: _openRankings,
                     onNewPressed: _toggleNewSort,
@@ -2247,6 +2076,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     onOpenFeatured: _openFeaturedDrama,
                     requestedTab: _multimediaRequested
                         ? HongguoDramaHome.multimediaTabIndex
+                        : _miniAppRequested
+                        ? HongguoDramaHome.miniAppTabIndex
                         : _mineRequested
                         ? HongguoDramaHome.mineTabIndex
                         : null,
@@ -2259,10 +2090,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             }
           }
           final scaffold = Scaffold(
-            key: _scaffoldKey,
-            drawer: _drawer(),
-            // 同上：禁边缘滑动打开抽屉，防手势误触。
-            drawerEnableOpenDragGesture: false,
             extendBody: glass && !desktop,
             bottomNavigationBar: bottomTabBar,
             appBar: glass
@@ -2271,9 +2098,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     toolbarHeight: television ? 64 : null,
                     titleSpacing: 12,
                     automaticallyImplyLeading: false,
-                    leadingWidth: _showCatalogHeader && !_selectionMode
-                        ? 192
-                        : null,
                     leading: _appBarLeading(),
                     title: _selectionMode
                         ? const Text(
@@ -2283,6 +2107,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           )
                         : _multimediaRequested
                         ? const Text('多媒体')
+                        : _miniAppRequested
+                        ? const Text('小程序')
+                        : _mineRequested
+                        ? const Text('我的')
                         : _showCatalogHeader
                         ? InkWell(
                             key: const ValueKey('source-switch'),
@@ -2397,7 +2225,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 case 1:
                                   _setZone(HomeZone.live);
                                 default:
-                                  _openDrawer();
+                                  // 电视导航第三项是“设置”：抽屉拆除后直接进设置页。
+                                  _openSettings();
                               }
                             },
                           );
@@ -2544,6 +2373,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         driveSites: _cloudDriveSites,
         onOpenDrama: _openDrama,
         onOpenCloudLogin: _openCloudLogin,
+      );
+    }
+    // 小程序：与短剧首页内层页签是同一个首页（抽屉里的小程序
+    // 入口已移到这里），不依赖片库站源，同样放空态判断之前。
+    if (_miniAppRequested) {
+      return const MiniAppHomePage();
+    }
+    // 我的：与短剧首页内层页签是同一个共享页。
+    if (_mineRequested) {
+      return MinePage(
+        repository: widget.repository,
+        store: widget.store,
+        sourceLabel: '${_group.name} (${_group.sources.length})',
+        onOpenDrama: _openDrama,
+        onOpenSaved: _openSaved,
+        onSettingsPressed: _openZoneSettings,
       );
     }
     if (_librarySources.isEmpty) {

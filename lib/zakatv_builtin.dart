@@ -18,7 +18,7 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = '57c4ef722ba76693c033fa6eed085c0c';
+const String zakatvJarMd5 = '0f12066a46abdae305534d565eead660';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';

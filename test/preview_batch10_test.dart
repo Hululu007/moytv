@@ -11,9 +11,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/app_drawer.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/mine_page.dart';
 import 'package:moyi/app_theme_config.dart';
-import 'package:moyi/bottom_tab_bar.dart';
 import 'package:moyi/crosssite_probe_section.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
@@ -466,35 +466,49 @@ void main() {
     );
   });
 
-  // 4. 抽屉导航：分区键只剩影视/阅读/小程序（音乐已删）。
-  testWidgets('预览 抽屉三分区', (tester) async {
+  // 4. 我的页：抽屉拆除后主题切换与设置的去处。
+  testWidgets('预览 我的页', (tester) async {
+    final store = await _previewStore();
     await _capture(
       tester,
-      name: 'drawer_shelves_v2',
-      label: '预览 · 抽屉导航 · 分区键只剩影视/阅读/小程序',
-      screen: AppDrawer(
-        zone: HomeZone.library,
-        currentVersion: '1.0.0+1',
-        onZoneSelected: (_) {},
-        onWatchRoom: () {},
-        onTool: (_) {},
-        onMinorProtectionChanged: (_) {},
-        appTheme: AppThemeMode.purpleNeon,
+      name: 'mine_page_v2',
+      label: '预览 · 我的页 · 主题切换与设置入口在此',
+      screen: MinePage(
+        repository: FixtureRepository(),
+        store: store,
+        sourceLabel: '红果 (1)',
+        onOpenDrama: (_) {},
+        onOpenSaved: ({required bool history}) {},
+        onSettingsPressed: () {},
       ),
     );
   });
 
-  // 5. 底部 Tab 栏 6 个：多媒体选中、硬盘图标。
-  testWidgets('预览 底部Tab六个', (tester) async {
+  // 5. 底部胶囊栏 7 个：多媒体选中、硬盘图标。
+  testWidgets('预览 底部胶囊栏七个', (tester) async {
     await _capture(
       tester,
-      name: 'bottomtab_6_v2',
-      label: '预览 · 底部 Tab 6 个 · 多媒体选中（硬盘图标）· 图标在测试环境渲染为方块',
+      name: 'bottomtab_7_v2',
+      label: '预览 · 底部胶囊栏 7 个 · 多媒体选中（硬盘图标）· 图标在测试环境渲染为方块',
       screen: Scaffold(
         body: const Center(
           child: Text('多媒体页占位 · 底栏为本次预览主体'),
         ),
-        bottomNavigationBar: MoyiBottomTabBar(index: 5, onSelect: (_) {}),
+        bottomNavigationBar: NeonCapsuleBar(
+          entries: const [
+            (LucideIcons.clapperboard, '片库'),
+            (LucideIcons.tv, '直播'),
+            (LucideIcons.headphones, '听书'),
+            (LucideIcons.bookOpen, '阅读'),
+            (LucideIcons.hardDrive, '多媒体'),
+            (LucideIcons.layoutGrid, '小程序'),
+            (LucideIcons.user, '我的'),
+          ],
+          index: 4,
+          onSelect: (_) {},
+          onCenter: () {},
+          centerAfter: 3,
+        ),
       ),
     );
   });

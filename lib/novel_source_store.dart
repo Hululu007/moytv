@@ -93,6 +93,58 @@ class NovelSourceStore {
 
   static const prefsKey = 'novel_py_imports';
 
+  /// 内置 JSON 书源的开关态（关掉可再开）与删除态（删了不复活）。
+  static const hiddenBuiltinKey = 'novel_builtin_json_hidden';
+  static const removedBuiltinKey = 'novel_builtin_json_removed';
+
+  static Future<Set<String>> _loadIdSet(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(key);
+    if (raw == null || raw.isEmpty) return <String>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded.whereType<String>().toSet();
+    } catch (_) {}
+    return <String>{};
+  }
+
+  static Future<void> _saveIdSet(String key, Set<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, jsonEncode(ids.toList()));
+  }
+
+  static bool _isBuiltinJsonId(String id) =>
+      ContentRegistry.novelJsonBuiltins.any((source) => source.id == id);
+
+  static Future<Set<String>> builtinHiddenIds() => _loadIdSet(hiddenBuiltinKey);
+
+  static Future<Set<String>> builtinRemovedIds() =>
+      _loadIdSet(removedBuiltinKey);
+
+  static Future<void> setBuiltinHidden(String id, bool hidden) async {
+    if (!_isBuiltinJsonId(id)) return;
+    final ids = await _loadIdSet(hiddenBuiltinKey);
+    if (hidden) {
+      ids.add(id);
+    } else {
+      ids.remove(id);
+    }
+    await _saveIdSet(hiddenBuiltinKey, ids);
+  }
+
+  static Future<void> removeBuiltin(String id) async {
+    if (!_isBuiltinJsonId(id)) return;
+    final removed = await _loadIdSet(removedBuiltinKey);
+    removed.add(id);
+    await _saveIdSet(removedBuiltinKey, removed);
+    final hidden = await _loadIdSet(hiddenBuiltinKey);
+    if (hidden.remove(id)) await _saveIdSet(hiddenBuiltinKey, hidden);
+  }
+
+  static Future<void> restoreRemovedBuiltins() async {
+    await _saveIdSet(removedBuiltinKey, <String>{});
+  }
+
   static bool isNovelComicPyText(String text) =>
       text.contains('novel://') || text.contains('pics://');
 
@@ -131,6 +183,10 @@ class NovelSourceStore {
     ContentRegistry.setNovelImports([
       for (final record in records) record.toSource(),
     ]);
+    ContentRegistry.setNovelJsonVisibility(
+      hidden: await _loadIdSet(hiddenBuiltinKey),
+      removed: await _loadIdSet(removedBuiltinKey),
+    );
   }
 
   static Future<NovelImportRecord?> importPicked() async {

@@ -90,7 +90,7 @@ void main() {
       expect(byKey.containsKey('ZakaLnkl'), isFalse);
       expect(byKey.containsKey('zakajavverse'), isFalse);
       expect(zakatvBuiltinSites.length, 147);
-      expect(zakatvJarMd5, '57c4ef722ba76693c033fa6eed085c0c');
+      expect(zakatvJarMd5, '0f12066a46abdae305534d565eead660');
     });
   });
 }

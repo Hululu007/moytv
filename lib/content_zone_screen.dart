@@ -5,7 +5,9 @@ import 'app_page_route.dart';
 
 import 'audio_history_screen.dart';
 import 'content_detail_screen.dart';
+import 'content_legado.dart';
 import 'content_models.dart';
+import 'content_registry.dart';
 import 'content_zone_binding.dart';
 import 'core_bridge.dart';
 import 'novel_cover.dart';
@@ -274,11 +276,9 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
       if (mounted) {
         final message = switch (e) {
           FormatException(message: '空文件') => '导入失败：文件是空的',
-          FormatException(message: '不是小说漫画源') =>
-            '导入失败：不是小说/漫画源，视频/音频源不能导入阅读区',
+          FormatException(message: '不是小说漫画源') => '导入失败：不是小说/漫画源，视频/音频源不能导入阅读区',
           FormatException(message: final m) => '导入失败：$m',
-          PlatformException() =>
-            '导入失败：所选文件取不到，试试先存到 Download 文件夹再选',
+          PlatformException() => '导入失败：所选文件取不到，试试先存到 Download 文件夹再选',
           _ => '导入失败：文件读取或保存失败',
         };
         ScaffoldMessenger.of(
@@ -288,49 +288,121 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
     }
   }
 
+  String _builtinSubtitle(ContentSource source) =>
+      source is JsonContentSource && source.isComic ? '漫画源' : '小说源';
+
   Future<void> _manageNovel() async {
     final records = await NovelSourceStore.load();
+    var hidden = await NovelSourceStore.builtinHiddenIds();
+    var removed = await NovelSourceStore.builtinRemovedIds();
     if (!mounted) return;
+    final builtins = ContentRegistry.novelJsonBuiltins;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('管理小说源'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: records.isEmpty
-              ? const Text('暂无导入的小说源')
-              : ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: records.length,
-                  itemBuilder: (context, index) {
-                    final record = records[index];
-                    return ListTile(
-                      title: Text(record.name),
-                      subtitle: record.kind == NovelImportKind.json
-                          ? Text(record.sourceType == 2 ? '漫画源' : '小说源')
-                          : null,
-                      trailing: IconButton(
-                        tooltip: '删除',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
-                          await NovelSourceStore.remove(record);
-                          if (context.mounted) Navigator.of(context).pop();
-                          await NovelSourceStore.applyToRegistry();
-                          if (!mounted) return;
-                          _bindSection();
-                          setState(() {});
-                        },
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> refreshZone() async {
+            await NovelSourceStore.applyToRegistry();
+            if (!mounted) return;
+            _bindSection();
+            setState(() {});
+          }
+
+          final visibleBuiltins = [
+            for (final source in builtins)
+              if (!removed.contains(source.id)) source,
+          ];
+          return AlertDialog(
+            title: const Text('管理小说源'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  const ListTile(title: Text('导入的小说源')),
+                  if (records.isEmpty)
+                    const ListTile(title: Text('暂无导入的小说源'))
+                  else
+                    for (final record in records)
+                      ListTile(
+                        title: Text(record.name),
+                        subtitle: record.kind == NovelImportKind.json
+                            ? Text(record.sourceType == 2 ? '漫画源' : '小说源')
+                            : null,
+                        trailing: IconButton(
+                          tooltip: '删除',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () async {
+                            await NovelSourceStore.remove(record);
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                            }
+                            await NovelSourceStore.applyToRegistry();
+                            if (!mounted) return;
+                            _bindSection();
+                            setState(() {});
+                          },
+                        ),
                       ),
-                    );
-                  },
-                ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('关闭'),
-          ),
-        ],
+                  const ListTile(title: Text('内置书源')),
+                  for (final source in visibleBuiltins)
+                    ListTile(
+                      title: Text(source.name),
+                      subtitle: Text(_builtinSubtitle(source)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: !hidden.contains(source.id),
+                            onChanged: (value) async {
+                              await NovelSourceStore.setBuiltinHidden(
+                                source.id,
+                                !value,
+                              );
+                              hidden =
+                                  await NovelSourceStore.builtinHiddenIds();
+                              setDialogState(() {});
+                              await refreshZone();
+                            },
+                          ),
+                          IconButton(
+                            tooltip: '删除',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () async {
+                              await NovelSourceStore.removeBuiltin(source.id);
+                              removed =
+                                  await NovelSourceStore.builtinRemovedIds();
+                              setDialogState(() {});
+                              await refreshZone();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (removed.isNotEmpty)
+                    ListTile(
+                      title: Text('已删除 ${removed.length} 个内置源'),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          await NovelSourceStore.restoreRemovedBuiltins();
+                          removed = await NovelSourceStore.builtinRemovedIds();
+                          setDialogState(() {});
+                          await refreshZone();
+                        },
+                        child: const Text('恢复'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
