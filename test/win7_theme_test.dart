@@ -6,7 +6,7 @@ void main() {
   group('Win7 主题注册', () {
     test('Win7 在主题表里，数量 12→13', () {
       expect(AppThemeMode.values, contains(AppThemeMode.win7));
-      expect(AppThemeMode.values.length, 13);
+      expect(AppThemeMode.values.length, 14);
     });
 
     test('Win7 配置：名与配色取设计稿精确值', () {
@@ -20,10 +20,7 @@ void main() {
     });
 
     test('Win7 绑定普通列表样式与底部标签导航', () {
-      expect(
-        siteListStyleForTheme(AppThemeMode.win7),
-        SiteListStyle.normal,
-      );
+      expect(siteListStyleForTheme(AppThemeMode.win7), SiteListStyle.normal);
       expect(navStyleForTheme(AppThemeMode.win7), NavStyle.bottomTabs);
     });
 

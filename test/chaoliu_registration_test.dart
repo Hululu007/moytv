@@ -11,11 +11,16 @@ import 'package:flutter_test/flutter_test.dart';
 /// 潮流AV 注册守卫：py 由潮流 App（live.zaka.chaoliu 2.20）静态逆向
 /// 写成，已在 2026-11-16 用蜘蛛本体抽查验过真站（173 个分类、分类
 /// 页 24 条有封面、详情出播放地址、playerContent 回真 m3u8 且拉到
-/// 200 变体列表；见 ~/workspace/chaoliu_re/REVERSE.md）。这里只守
-/// 注册正确：文件在位且与来源字节一致、协议齐全、key 唯一、无中文
-/// 注释、分类数 173、插件清单与跨站选线已接通。线路 3 的 CDN 在本机
-/// 出口 403、女优详情选集、图集 pics:// 链路、番号秒播表均属手机
-/// 待验项，注册时不冒充已验。
+/// 200 变体列表；见 ~/workspace/chaoliu_re/REVERSE.md）。2026-11-17
+/// 按用户发来的 chaoliu-spider jar（命令行爬虫，非 TVBox 蜘蛛，见
+/// ~/workspace/chaoliu_update_20261117/）移植更新：数据通道换新域名
+/// feed2-k7m2（旧域名留作回退）、UA 去掉 ChaoliuApp 后缀、详情补
+/// ac=detail 回退、搜索补 wd 回退；分类表与 jp220/mjv220 路径未动。
+/// 移植版只过了离线桩验，真站实测因出口断网待补，见 NOTES.md。这里
+/// 只守注册正确：文件在位且与来源字节一致、协议齐全、key 唯一、无
+/// 中文注释、分类数 173、插件清单与跨站选线已接通。线路 3 的 CDN 在
+/// 本机出口 403、女优详情选集、图集 pics:// 链路、番号秒播表均属
+/// 手机待验项，注册时不冒充已验。
 const _protocolMethods = <String>[
   'getName',
   'getDependence',
@@ -35,7 +40,7 @@ const _protocolMethods = <String>[
 
 /// 来源文件 md5（~/workspace/chaoliu_re/sources/chaoliu.py），树内
 /// 文件必须与它字节一致，改一个字节这里就报。
-const _sourceMd5 = 'bb9e3ffa140a0077b55df884a3a5d35e';
+const _sourceMd5 = '6cebe248ea2807424c141e85a646b0ed';
 
 int _countListEntries(List<String> lines, String header) {
   var inList = false;

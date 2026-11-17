@@ -36,6 +36,8 @@ import 'proxy_egress_wiring.dart';
 import 'signature_check.dart';
 import 'socks5_proxy.dart';
 import 'video_enhancement_assets.dart';
+import 'xp_boot_screen.dart';
+import 'boot_video.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -221,7 +223,7 @@ class _AppBootstrapState extends State<AppBootstrap>
   }
 }
 
-class MoyiApp extends StatelessWidget {
+class MoyiApp extends StatefulWidget {
   const MoyiApp({
     super.key,
     required this.repository,
@@ -241,109 +243,121 @@ class MoyiApp extends StatelessWidget {
   final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
+  State<MoyiApp> createState() => _MoyiAppState();
+}
+
+class _MoyiAppState extends State<MoyiApp> {
+  /// 启动屏首次出现的时间（只在首建 store 为空的冷启动里记）；
+  /// 首建即有 store（测试与热启动路径）时保持 null，启动屏永不出现。
+  DateTime? _bootShownAt;
+  bool _bootMinElapsed = false;
+  Timer? _bootTimer;
+
+  @override
+  void dispose() {
+    _bootTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([store]),
+    animation: Listenable.merge([widget.store]),
     builder: (_, _) => _application(),
   );
 
+  /// 启动屏是否可见：store 为空时一直可见；store 就绪后，若冷启动
+  /// 里启动屏出现过且最短时长未到，继续显示到最短时长（初始化在
+  /// 后台继续，绝不阻塞；取初始化完成与最短时间两者较晚者消失）。
+  /// 出错时 store 仍为空，直接显示出错分支，不受门控牵制。
+  bool get _bootVisible {
+    final store = widget.store;
+    if (store != null) {
+      return _bootShownAt != null && !_bootMinElapsed;
+    }
+    _bootShownAt ??= DateTime.now();
+    _bootTimer ??= Timer(xpBootMinDisplay, () {
+      if (mounted) setState(() => _bootMinElapsed = true);
+    });
+    return true;
+  }
+
   Widget _application() {
-    // 当前全局主题（13 套之一）：配色与亮暗全由主题自身决定；
+    // 当前全局主题（14 套之一）：配色与亮暗全由主题自身决定；
     // 同步给全局通知器，抽屉、内容区等深层组件据此决定是否走霓虹视觉。
+    final store = widget.store;
     final config = AppThemeConfig.forTheme(
       store?.appTheme ?? AppThemeMode.win7,
     );
     appThemeNotifier.value = config.mode;
     final themeData = config.toThemeData();
     return MaterialApp(
-    navigatorKey: navigatorKey,
-    navigatorObservers: [homeRouteObserver],
-    title: appName,
-    debugShowCheckedModeBanner: false,
-    locale: const Locale('zh', 'CN'),
-    supportedLocales: const [Locale('zh', 'CN')],
-    localizationsDelegates: GlobalMaterialLocalizations.delegates,
-    theme: themeData,
-    darkTheme: themeData,
-    themeMode: config.isDark ? ThemeMode.dark : ThemeMode.light,
-    builder: (context, child) {
-      final mode = store?.displayMode ?? 'auto';
-      final tv = mode == 'television' || mode == 'auto' && television;
-      final theme = Theme.of(context);
-      return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: AppTheme.systemBars(theme.brightness),
-        child: AppThemeBackground(
-          child: AppOrientationScope(
-            television: tv,
-            child: AppLayout(
+      navigatorKey: widget.navigatorKey,
+      navigatorObservers: [homeRouteObserver],
+      title: appName,
+      debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      theme: themeData,
+      darkTheme: themeData,
+      themeMode: config.isDark ? ThemeMode.dark : ThemeMode.light,
+      builder: (context, child) {
+        final mode = store?.displayMode ?? 'auto';
+        final tv = mode == 'television' || mode == 'auto' && widget.television;
+        final theme = Theme.of(context);
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: AppTheme.systemBars(theme.brightness),
+          child: AppThemeBackground(
+            child: AppOrientationScope(
               television: tv,
-              version: version,
-              child: Theme(
-                data: tv ? televisionTheme(theme) : theme,
-                child: Shortcuts(
-                  shortcuts: const {
-                    SingleActivator(
-                      LogicalKeyboardKey.select,
-                      includeRepeats: false,
-                    ): ActivateIntent(),
-                    SingleActivator(
-                      LogicalKeyboardKey.gameButtonA,
-                      includeRepeats: false,
-                    ): ActivateIntent(),
-                    SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
-                  },
-                  child: FocusTraversalGroup(child: child!),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-    home: store != null
-        ? store!.locked
-              ? ProfilesScreen(store: store!, locked: true)
-              : ExternalPyImportListener(
-                  store: store!,
-                  repository: repository,
-                  child: HomeScreen(
-                    key: ValueKey(
-                      'profile-${store!.profile.id}-${store!.profileEpoch}',
-                    ),
-                    repository: repository,
-                    store: store!,
+              child: AppLayout(
+                television: tv,
+                version: widget.version,
+                child: Theme(
+                  data: tv ? televisionTheme(theme) : theme,
+                  child: Shortcuts(
+                    shortcuts: const {
+                      SingleActivator(
+                        LogicalKeyboardKey.select,
+                        includeRepeats: false,
+                      ): ActivateIntent(),
+                      SingleActivator(
+                        LogicalKeyboardKey.gameButtonA,
+                        includeRepeats: false,
+                      ): ActivateIntent(),
+                      SingleActivator(LogicalKeyboardKey.goBack):
+                          DismissIntent(),
+                    },
+                    child: FocusTraversalGroup(child: child!),
                   ),
-                )
-        : Scaffold(
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.play_circle_fill_rounded,
-                      color: Color(0xFFFF765F),
-                      size: 72,
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      bootstrapError ?? '正在打开$appName',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    const SizedBox(height: 24),
-                    if (bootstrapError == null)
-                      const CircularProgressIndicator.adaptive()
-                    else
-                      FilledButton(
-                        onPressed: onRetry,
-                        child: const Text('重新打开'),
-                      ),
-                  ],
                 ),
               ),
             ),
           ),
+        );
+      },
+      home: _bootVisible
+          ? XpBootScreen(
+              appName: appName,
+              video: const BootVideo(),
+              // store 已就绪时门控只是补足最短时长，初始化已成功，
+              // 不显示已过期的错误文案。
+              error: store == null ? widget.bootstrapError : null,
+              onRetry: widget.onRetry,
+            )
+          : store!.locked
+          ? ProfilesScreen(store: store, locked: true)
+          : ExternalPyImportListener(
+              store: store,
+              repository: widget.repository,
+              child: HomeScreen(
+                key: ValueKey(
+                  'profile-${store.profile.id}-${store.profileEpoch}',
+                ),
+                repository: widget.repository,
+                store: store,
+              ),
+            ),
     );
   }
 }

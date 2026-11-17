@@ -196,10 +196,45 @@ class HaikuoStore {
     return HaikuoImportResult(added: added, updated: updated, notes: notes);
   }
 
+  /// 批量入库（跳过式，zip 备份导入专用）：同 id 或同标题已存在时
+  /// 跳过并计数，绝不覆盖——内置规则（origin 为“内置规则”）也在内，
+  /// 不弹重复对话框。同一批里同名重复只留第一份。
+  /// 返回实际新增与跳过的条目；全部跳过时不写文件。
+  Future<({List<HaikuoProgram> added, List<HaikuoProgram> skipped})>
+  addAllSkipExisting(List<HaikuoProgram> incoming, {String origin = ''}) async {
+    final existing = await list();
+    final takenIds = {for (final program in existing) program.id};
+    final takenNames = {for (final program in existing) program.name};
+    final added = <HaikuoProgram>[];
+    final skipped = <HaikuoProgram>[];
+    for (final program in incoming) {
+      final tagged = program.copyWith(
+        origin: origin.isEmpty ? program.origin : origin,
+      );
+      if (takenIds.contains(tagged.id) || takenNames.contains(tagged.name)) {
+        skipped.add(tagged);
+        continue;
+      }
+      takenIds.add(tagged.id);
+      takenNames.add(tagged.name);
+      added.add(tagged);
+    }
+    if (added.isEmpty) {
+      return (added: added, skipped: skipped);
+    }
+    final merged = [...existing, ...added]
+      ..sort((a, b) {
+        final left = a.importedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final right = b.importedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return right.compareTo(left);
+      });
+    await _writeAll(merged);
+    return (added: added, skipped: skipped);
+  }
+
   /// 保留两者时的改名：原名 + _2，_2 已被占就往后顺延（_3、_4…）；
   /// id 按新名重算，避免改名后的条目与原名条目 id 撞车。
-  HaikuoProgram _renameForKeepBoth(HaikuoProgram program, Set<String> taken) {
-    var suffix = 2;
+  HaikuoProgram _renameForKeepBoth(HaikuoProgram program, Set<String> taken) {    var suffix = 2;
     var name = '${program.name}_$suffix';
     while (taken.contains(name)) {
       suffix++;
@@ -318,10 +353,7 @@ class HaikuoStore {
       await _writeCollections(data);
       return false;
     }
-    favorites.insert(0, {
-      ...entry,
-      'at': DateTime.now().toIso8601String(),
-    });
+    favorites.insert(0, {...entry, 'at': DateTime.now().toIso8601String()});
     await _writeCollections(data);
     return true;
   }
@@ -365,10 +397,7 @@ class HaikuoStore {
     final data = await _readCollections();
     final bookmarks = data['bookmarks']!
       ..removeWhere((item) => _sameEntry(item, entry));
-    bookmarks.insert(0, {
-      ...entry,
-      'at': DateTime.now().toIso8601String(),
-    });
+    bookmarks.insert(0, {...entry, 'at': DateTime.now().toIso8601String()});
     await _writeCollections(data);
   }
 
@@ -707,7 +736,16 @@ class HaikuoStore {
   /// 实测可播）与规则生成器Pro（HOLD 解除：包测试已排除正则字面量内出现）。
   /// v6：2026-11-16 JMComic2本地修复版追加（157 → 158 条；HOLD 解除：用户令
   /// “会蹦就修”，搜索卡片 url 改用同页现成的 csdown.erji 写法，只动一处）。
-  static const builtinBundleVersion = 6;
+  /// v7：2026-11-16 用户令删 26 条用不了的工具规则（158 条 → 132 条）；
+  /// 播种新增撤包清理：升版时按上一版标记里的标题清掉已撤包的内置副
+  /// 本（只清来源为“内置规则”的，用户导入的同名规则不动）。
+  /// v8：2026-11-17 海阔 132 条全面检查修复（81 条修复版入包，条数与顺
+  /// 序不变，MissAV 一字未动）；播种清理行为与 v7 相同。
+  /// v9：2026-11-17 Apollo 3 条重写为普通自包含规则入包（条数与顺序
+  /// 不变，MissAV 一字未动）。
+  /// v10：2026-11-17 zip 修复规则 14 条追加入包（132 → 146 条，现有
+  /// 132 条顺序标题不动；2879 摘除详情播放文字行）。
+  static const builtinBundleVersion = 10;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 
@@ -717,6 +755,8 @@ class HaikuoStore {
   /// 旧版（规则全文一变 id 就变，只按 id 去重会留重复项，所以按标题去重）；
   /// 若用户已导入同名规则，播种时以内置版为准（同名只留一份）；
   /// 用户删掉的内置规则只有版本升级或手动“恢复内置规则”时才补回。
+  /// v7 起升版时按上一版标记清理已撤包的内置副本（只清来源为“内置规则”
+  /// 的，用户导入的同名规则不动）。
   /// 返回新增/更新的条数；任何异常都吞掉返回 0，绝不拖垮页面加载。
   /// [bundleText] 仅供测试注入；[force] 为 true 时忽略版本标记重新播种。
   Future<int> ensureBuiltinRules({
@@ -726,16 +766,25 @@ class HaikuoStore {
     try {
       final dir = await root;
       final marker = File(p.join(dir.path, _builtinMarkerFile));
-      if (!force && await marker.exists()) {
+      // 上一版播种记下的内置标题：升版后据此清理已撤包的内置副本。
+      var previousNames = <String>{};
+      var markerCurrent = false;
+      if (await marker.exists()) {
         try {
           final saved = jsonDecode(await marker.readAsString());
-          if (saved is Map && saved['version'] == builtinBundleVersion) {
-            return 0;
+          if (saved is Map) {
+            final names = saved['names'];
+            if (names is List) {
+              previousNames = names.map((name) => '$name').toSet();
+            }
+            markerCurrent = saved['version'] == builtinBundleVersion;
           }
         } catch (_) {
-          // 标记损坏就当没播种过，继续往下走。
+          // 标记损坏就当没播种过，继续往下走（上一版标题未知，不做撤包清理）。
+          previousNames = <String>{};
         }
       }
+      if (!force && markerCurrent) return 0;
       final text = bundleText ?? await rootBundle.loadString(builtinAssetPath);
       final programs = HaikuoCodec.parseText(text, origin: '内置规则');
       if (programs.isEmpty) return 0;
@@ -746,9 +795,19 @@ class HaikuoStore {
         if (byId.containsKey(program.id)) continue;
         incoming.add(program);
       }
-      // 同名旧版（全文变了、id 不同）先摘掉，再写入新版，避免重复项。
+      // 撤包标题 = 上一版有、新包里没有的标题。
+      final removedNames = previousNames.difference(
+        programs.map((program) => program.name).toSet(),
+      );
+      // 同名旧版（全文变了、id 不同）先摘掉，再写入新版，避免重复项；
+      // 已撤包的内置副本一并摘掉（只认来源“内置规则”，用户导入的同名
+      // 规则即使同名也保留）。
       final merged = existing
-          .where((old) => !incoming.any((next) => next.name == old.name))
+          .where(
+            (old) =>
+                !incoming.any((next) => next.name == old.name) &&
+                !(old.origin == '内置规则' && removedNames.contains(old.name)),
+          )
           .toList();
       merged.addAll(incoming);
       merged.sort((a, b) {
@@ -768,6 +827,64 @@ class HaikuoStore {
       return incoming.length;
     } catch (_) {
       return 0;
+    }
+  }
+}
+
+/// E38：saveFile 落盘持久化（扁平 basename 键空间，与内存 `_savedFiles`
+/// 同键、明文存储、flag 忽略——混用读回不断裂）。
+///
+/// 布局：`<haikuo 根>/saved_files/<basename>`，与 `rule_files/`（备份
+/// 导入的规则私有文件）分目录，不与其它存储键冲突。**不做规则名隔离**：
+/// 语料里同族规则有意共享同一文件（JavDB v3/v5 共用 `cookie.txt`、
+/// Supjav 两条共用 `supjav_cookie.txt`），隔离会拆散共享；扁平落盘
+/// 保持现有共享语义。规则删除时不清理（扁平键空间无归属可查，且
+/// 共享文件误删会伤及其它规则；与 `rule_files/` 现状一致）。
+/// 坏名（空/`.`/`..`）静默跳过，不抛错（saveFile 语义本就宽容）。
+abstract final class HaikuoSavedFiles {
+  static const _dirName = 'saved_files';
+
+  static String? _safeBaseName(String fileName) {
+    final base = p.basename(fileName.replaceAll('\\', '/'));
+    if (base.isEmpty || base == '.' || base == '..') return null;
+    return base;
+  }
+
+  static Future<void> writeSavedFile(
+    Directory root,
+    String fileName,
+    List<int> bytes,
+  ) async {
+    final base = _safeBaseName(fileName);
+    if (base == null) return;
+    final dir = Directory(p.join(root.path, _dirName));
+    await dir.create(recursive: true);
+    await File(p.join(dir.path, base)).writeAsBytes(bytes, flush: true);
+  }
+
+  static Future<Uint8List?> readSavedFile(
+    Directory root,
+    String fileName,
+  ) async {
+    final base = _safeBaseName(fileName);
+    if (base == null) return null;
+    final file = File(p.join(root.path, _dirName, base));
+    try {
+      if (!await file.exists()) return null;
+      return await file.readAsBytes();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> deleteSavedFile(Directory root, String fileName) async {
+    final base = _safeBaseName(fileName);
+    if (base == null) return;
+    final file = File(p.join(root.path, _dirName, base));
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // 删不掉也不拦规则
     }
   }
 }

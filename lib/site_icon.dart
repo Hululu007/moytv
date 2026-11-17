@@ -8,15 +8,22 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 import 'core_bridge.dart';
+import 'site_builtin_icons.dart';
+import 'site_homepages.dart';
 import 'zakatv_builtin.dart';
 
 /// 站点图标：圆角图标块，优先显示站点自己的站标，取不到时显示
-/// 站名首字彩色块（与海阔页的兜底块同一做法）。
+/// 自制图案标（渐变底 + 白色通用图案，不带文字）。海阔页自有
+/// 的字块兜底（_haikuoIconGlyph）与此无关，未动。
 ///
 /// 站标只在给了候选地址时才联网取：调用方传 [iconUrls]，或
-/// jar 站从 ext 里的站点地址派生（[jarSiteIconCandidates]）。没有
-/// 候选地址的站直接显示字块，零网络请求。图标获取绝不阻塞列表、
-/// 绝不抛错：加载中与失败都显示字块。
+/// jar 站从 ext 里的站点地址派生（[jarSiteIconCandidates]），或
+/// py/Go/阅读站从桥接表里的主页派生（[siteHomepageCandidates]）。
+/// 没有候选地址的站直接显示图案标，零网络请求。图标获取绝不阻塞
+/// 列表、绝不抛错：加载中与失败都显示图案标。
+///
+/// 显示优先级：内置站标（[builtinSiteIconAsset]，离线即显）→
+/// favicon 候选（懒加载 + 磁盘缓存）→ 自制图案标（永远有，绝不留空）。
 
 /// 从站点地址派生站标候选地址：origin + 常见站标路径。
 /// 地址本身已是图片地址时把它放第一位（svg 除外，Flutter 解不了）。
@@ -42,7 +49,7 @@ List<String> siteIconCandidates(String address) {
     candidates.add(trimmed);
   }
   // apple-touch-icon 与 favicon.png 在前：它们是 PNG，Flutter 能解；
-  // favicon.ico 常是 ICO 格式，解不了时会回落字块，不阻塞。
+  // favicon.ico 常是 ICO 格式，解不了时会回落图案标，不阻塞。
   candidates.add('$origin/apple-touch-icon.png');
   candidates.add('$origin/favicon.png');
   candidates.add('$origin/favicon.ico');
@@ -51,7 +58,7 @@ List<String> siteIconCandidates(String address) {
 
 /// 地址是否像个公开站点首页：域名、有点、非内网/回环、非 t.me、
 /// 非纯 IP。ext 里常混着接口地址、中转地址、TG 链接，只取像
-/// 站点首页的，取不到就回落字块，不硬猜。
+/// 站点首页的，取不到就回落图案标，不硬猜。
 bool _isPublicSiteAddress(String address) {
   final uri = Uri.tryParse(address.trim());
   if (uri == null) return false;
@@ -73,7 +80,7 @@ bool _isPublicSiteAddress(String address) {
 
 /// jar 站的站标候选：从该站 ext JSON 里 host/base/site/url/homepage
 /// 字段取第一个像站点首页的地址再派生。ext 缺失、不是 JSON、没有
-/// 可用地址时返回空——调用方一律回落字块。
+/// 可用地址时返回空——调用方一律回落图案标。
 ///
 /// 站 id 形如 `jar:<配置>:<key>`；key 与 [zakatvBuiltinSites] 对上
 /// 才查得到，其余 id 直接返回空。
@@ -99,48 +106,72 @@ List<String> jarSiteIconCandidates(String siteId) {
       }
     }
   } catch (_) {
-    // ext 不是合法 JSON 时当没有地址，回落字块。
+    // ext 不是合法 JSON 时当没有地址，回落图案标。
   }
   return const [];
 }
 
-/// 站名首字：跳过开头的表情/符号（如 🔞），取第一个字母或数字；
-/// 全是符号时退回第一个字符，空名时用“站”。
-/// 注意不能用 substring(0, 1)：🔞 是代理对，截一半会显示成“?”。
-/// 与海阔页 _haikuoIconGlyph 同一做法。
-String siteIconGlyph(String name) {
-  final trimmed = name.trim();
-  if (trimmed.isEmpty) return '站';
-  for (final rune in trimmed.runes) {
-    final ch = String.fromCharCode(rune);
-    if (_letterOrDigit.hasMatch(ch)) return ch;
-  }
-  return String.fromCharCode(trimmed.runes.first);
+/// 站 id → 主页地址桥接：按站 id 查
+/// [pySiteHomepages]、[goSiteHomepages]、[legadoSiteHomepages] 三张
+/// 桥接表（值取自树内源文件原文，见 site_homepages.dart），取到
+/// 主页再派生。id 带 `jar:` 这类前缀时取最后一段；查不到、地址
+/// 不像公开站点首页时返回空——调用方一律回落图案标。
+List<String> siteHomepageCandidates(String siteId) {
+  final key = siteId.contains(':') ? siteId.split(':').last : siteId;
+  if (key.isEmpty) return const [];
+  final url =
+      pySiteHomepages[key] ?? goSiteHomepages[key] ?? legadoSiteHomepages[key];
+  if (url == null || !_isPublicSiteAddress(url)) return const [];
+  return siteIconCandidates(url);
 }
 
-final _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
-
-// 与海阔页 _kHaikuoIconPalette 同一色板，视觉一致。
-const List<Color> _kSiteIconPalette = [
-  Color(0xFFFF8A3D),
-  Color(0xFF3B82F6),
-  Color(0xFFA855F7),
-  Color(0xFF22C55E),
-  Color(0xFFEF4444),
-  Color(0xFF14B8A6),
-  Color(0xFFF59E0B),
-  Color(0xFF6366F1),
+/// 自制图案标：无真站标的站显示渐变底 + 中央白色通用图案，
+/// 不带任何文字，不模仿任何站的真实标志。渐变与图案都按站 id
+/// 哈希确定性选取，同站永远同一组合；纯计算、零网络、零 IO。
+///
+/// 渐变色板 8 对：色相与海阔页图标色板协调（橙/蓝/紫/绿/红/
+/// 青/黄/靛），每对浅→深。图案 8 个：Flutter 自带圆体粗图案，
+/// 30 像素下能看清。
+const List<List<Color>> _kSitePatternGradients = [
+  [Color(0xFFFF9E5E), Color(0xFFF97316)],
+  [Color(0xFF60A5FA), Color(0xFF2563EB)],
+  [Color(0xFFC084FC), Color(0xFF9333EA)],
+  [Color(0xFF4ADE80), Color(0xFF16A34A)],
+  [Color(0xFFF87171), Color(0xFFDC2626)],
+  [Color(0xFF2DD4BF), Color(0xFF0D9488)],
+  [Color(0xFFFBBF24), Color(0xFFD97706)],
+  [Color(0xFF818CF8), Color(0xFF4F46E5)],
 ];
 
-/// 字块底色：按站名哈希取色，同一站永远同一色。
-Color siteIconColor(String seed) {
-  if (seed.isEmpty) return _kSiteIconPalette.first;
+const List<IconData> _kSitePatternIcons = [
+  Icons.play_arrow_rounded,
+  Icons.movie_rounded,
+  Icons.live_tv_rounded,
+  Icons.menu_book_rounded,
+  Icons.headphones_rounded,
+  Icons.image_rounded,
+  Icons.music_note_rounded,
+  Icons.star_rounded,
+];
+
+int _sitePatternHash(String seed) {
   var hash = 0;
   for (final unit in seed.codeUnits) {
     hash = (hash * 31 + unit) & 0x7fffffff;
   }
-  return _kSiteIconPalette[hash % _kSiteIconPalette.length];
+  return hash;
 }
+
+/// 图案标渐变色（浅→深两色）：同站 id 永远同一对。
+List<Color> siteIconPatternColors(String siteId) =>
+    _kSitePatternGradients[_sitePatternHash(siteId) %
+        _kSitePatternGradients.length];
+
+/// 图案标中央图案：同站 id 永远同一个，与渐变独立分散。
+IconData siteIconPatternIcon(String siteId) =>
+    _kSitePatternIcons[(_sitePatternHash(siteId) ~/
+            _kSitePatternGradients.length) %
+        _kSitePatternIcons.length];
 
 /// 站标磁盘缓存：复用封面缓存设施——同一应用支持目录下的
 /// py_covers/、同一 sha1(url).img 键名、同一 [normalizeCoverBytes]
@@ -182,7 +213,7 @@ class SiteIconCache {
   }
 
   /// 取某地址的站标文件：磁盘命中直接回，否则下载后存盘。
-  /// 任何失败都回 null（调用方显示字块），绝不抛错。
+  /// 任何失败都回 null（调用方显示图案标），绝不抛错。
   Future<File?> resolve(String url) {
     if (_failed.contains(url)) return Future.value(null);
     return _pending.putIfAbsent(url, () => _resolve(url));
@@ -240,8 +271,7 @@ class SiteIconCache {
   }
 
   static Future<List<int>?> _downloadViaHttp(String url) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
       final request = await client.getUrl(Uri.parse(url));
       request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0');
@@ -250,9 +280,7 @@ class SiteIconCache {
       );
       if (response.statusCode != 200) return null;
       final buffer = <int>[];
-      await for (final chunk in response.timeout(
-        const Duration(seconds: 10),
-      )) {
+      await for (final chunk in response.timeout(const Duration(seconds: 10))) {
         buffer.addAll(chunk);
         if (buffer.length > _maxBytes) return null;
       }
@@ -308,7 +336,7 @@ class SiteIconCache {
 }
 
 /// 一个站点的图标块：有站标显示站标（圆角裁切），加载中或失败
-/// 显示站名首字彩色块。构造时不做 IO，图标在后台解析，解析到
+/// 显示图案标。构造时不做 IO，图标在后台解析，解析到
 /// 就 setState 换上；widget 销毁后不再 setState。
 class SiteIcon extends StatefulWidget {
   const SiteIcon({
@@ -324,8 +352,9 @@ class SiteIcon extends StatefulWidget {
   final String siteId;
   final String siteName;
 
-  /// 调用方给定的站标候选地址（按序尝试）。为空时按 [siteId] 查
-  /// jar 站 ext 派生；都为空则只显示字块，不联网。
+  /// 调用方给定的站标候选地址（按序尝试）。为空时先按 [siteId] 查
+  /// jar 站 ext 派生，再查 py/Go/阅读桥接表；都为空则只显示图案标，
+  /// 不联网。
   final List<String> iconUrls;
   final double size;
   final double borderRadius;
@@ -339,13 +368,15 @@ class SiteIcon extends StatefulWidget {
 
 class _SiteIconState extends State<SiteIcon> {
   File? _file;
+  String? _builtinAsset;
   List<String> _candidates = const [];
 
   @override
   void initState() {
     super.initState();
+    _builtinAsset = builtinSiteIconAsset(widget.siteId);
     _candidates = _resolveCandidates();
-    if (_candidates.isNotEmpty) {
+    if (_builtinAsset == null && _candidates.isNotEmpty) {
       unawaited(_load());
     }
   }
@@ -355,9 +386,10 @@ class _SiteIconState extends State<SiteIcon> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.siteId != widget.siteId ||
         oldWidget.iconUrls != widget.iconUrls) {
+      _builtinAsset = builtinSiteIconAsset(widget.siteId);
       _candidates = _resolveCandidates();
       _file = null;
-      if (_candidates.isNotEmpty) {
+      if (_builtinAsset == null && _candidates.isNotEmpty) {
         unawaited(_load());
       }
     }
@@ -365,7 +397,9 @@ class _SiteIconState extends State<SiteIcon> {
 
   List<String> _resolveCandidates() {
     if (widget.iconUrls.isNotEmpty) return widget.iconUrls;
-    return jarSiteIconCandidates(widget.siteId);
+    final jar = jarSiteIconCandidates(widget.siteId);
+    if (jar.isNotEmpty) return jar;
+    return siteHomepageCandidates(widget.siteId);
   }
 
   Future<void> _load() async {
@@ -383,33 +417,44 @@ class _SiteIconState extends State<SiteIcon> {
   @override
   Widget build(BuildContext context) {
     final file = _file;
+    final builtinAsset = _builtinAsset;
     return SizedBox(
       width: widget.size,
       height: widget.size,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(widget.borderRadius),
-        child: file != null
+        child: builtinAsset != null
+            ? Image.asset(
+                builtinAsset,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => _patternTile(),
+              )
+            : file != null
             ? Image.file(
                 file,
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => _glyphTile(),
+                errorBuilder: (_, _, _) => _patternTile(),
               )
-            : _glyphTile(),
+            : _patternTile(),
       ),
     );
   }
 
-  Widget _glyphTile() {
+  Widget _patternTile() {
+    final colors = siteIconPatternColors(widget.siteId);
     return Container(
-      color: siteIconColor(widget.siteName),
-      alignment: Alignment.center,
-      child: Text(
-        siteIconGlyph(widget.siteName),
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: widget.size * 0.42,
-          fontWeight: FontWeight.w700,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors,
         ),
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        siteIconPatternIcon(widget.siteId),
+        color: Colors.white,
+        size: widget.size * 0.58,
       ),
     );
   }

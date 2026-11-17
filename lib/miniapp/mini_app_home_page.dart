@@ -17,9 +17,9 @@ import 'haikuo/haikuo_home_page.dart';
 
 /// 小程序首页。
 ///
-/// 结构对齐参考实现：顶栏（标题 + 新建 / 视图切换 / 设置）+「已安装 / 市场 / 海阔」
-/// 三标签 + 四列图标网格。图标用名称首字 + 按 appId 取色的圆角方块，
-/// 与参考实现的视觉一致，也不依赖小程序包内提供图标资源。
+/// 结构对齐参考实现：紧凑单行顶栏（标签页 + 新建 / 视图切换 / 设置并作
+/// 一行）+「已安装 / 市场 / 海阔」三标签 + 四列图标网格。图标用名称首字 + 按
+/// appId 取色的圆角方块，与参考实现的视觉一致，也不依赖小程序包内提供图标资源。
 /// 海阔小程序有自己的独立标签（海阔规则列表与导入入口都在那页里），
 /// 不再以固定卡片挂在「已安装」列表顶部。
 class MiniAppHomePage extends StatefulWidget {
@@ -506,8 +506,31 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('小程序'),
-          titleSpacing: 4,
+          // 紧凑单行顶栏：标签页与动作钮并作一行（对标官方密度），
+          // “小程序”标题字不再单占一行（窗口标题/底部标签已有）。
+          toolbarHeight: 48,
+          titleSpacing: 0,
+          title: TabBar(
+            tabAlignment: TabAlignment.start,
+            isScrollable: true,
+            indicatorSize: TabBarIndicatorSize.label,
+            indicatorWeight: 3,
+            indicatorColor: colors.primary,
+            labelPadding: const EdgeInsets.symmetric(horizontal: 12),
+            labelStyle: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+            ),
+            unselectedLabelStyle: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w500,
+            ),
+            tabs: const [
+              Tab(text: '已安装'),
+              Tab(text: '市场'),
+              Tab(text: '海阔'),
+            ],
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.add_rounded),
@@ -534,24 +557,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
             ),
             const SizedBox(width: 4),
           ],
-          bottom: TabBar(
-            indicatorSize: TabBarIndicatorSize.label,
-            indicatorWeight: 3,
-            indicatorColor: colors.primary,
-            labelStyle: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w700,
-            ),
-            unselectedLabelStyle: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w500,
-            ),
-            tabs: const [
-              Tab(text: '已安装'),
-              Tab(text: '市场'),
-              Tab(text: '海阔'),
-            ],
-          ),
         ),
         body: _settings == null
             ? const Center(child: CircularProgressIndicator())
@@ -588,7 +593,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     }
     if (_viewMode == MiniAppViewMode.list) {
       return ListView.separated(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         itemCount: _installed.length,
         separatorBuilder: (_, _) => const SizedBox(height: 6),
         itemBuilder: (context, index) {
@@ -607,7 +612,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 28),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 4,
         mainAxisSpacing: 18,
@@ -653,7 +658,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       return RefreshIndicator(
         onRefresh: _loadMarket,
         child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
           itemCount: _market.length,
           separatorBuilder: (_, _) => const SizedBox(height: 6),
           itemBuilder: (context, index) {
@@ -678,7 +683,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     return RefreshIndicator(
       onRefresh: _loadMarket,
       child: GridView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 18, 12, 28),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 4,
           mainAxisSpacing: 18,

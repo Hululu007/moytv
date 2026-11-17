@@ -20,7 +20,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   header { display: flex; align-items: center; gap: 8px; margin: 4px 2px 14px; }
   header .dot { width: 8px; height: 8px; border-radius: 50%; background: #B14BFF; box-shadow: 0 0 12px #B14BFF; }
-  header h1 { font-size: 16px; font-weight: 800; margin: 0; letter-spacing: .3px; }
+  header h1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 800; margin: 0; letter-spacing: .3px; }
   header .badge {
     margin-left: auto; font-size: 11px; color: #B4A5CE;
     border: 1px solid rgba(177,75,255,.45); border-radius: 999px; padding: 2px 9px;
@@ -28,6 +28,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   header .back {
     font-size: 12px; color: #B4A5CE;
     border: 1px solid rgba(177,75,255,.45); border-radius: 999px; padding: 2px 9px;
+    background: transparent; cursor: pointer; white-space: nowrap;
+  }
+  header .hbtn {
+    font-size: 13px; line-height: 1; color: #B4A5CE;
+    border: 1px solid rgba(177,75,255,.45); border-radius: 999px; padding: 4px 8px;
     background: transparent; cursor: pointer; white-space: nowrap;
   }
   .cats { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px;
@@ -224,9 +229,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
 </head>
 <body>
 <header>
-  <button id="backBtn" class="back" type="button" style="display:none">‹ 返回</button>
+  <button id="backBtn" class="back" type="button">‹ 返回</button>
   <span class="dot"></span>
   <h1 id="title">__TITLE__</h1>
+  <button id="favBtn" class="hbtn" type="button" title="收藏">★</button>
+  <button id="searchBtn" class="hbtn" type="button" title="搜索">🔍</button>
+  <button id="reloadBtn" class="hbtn" type="button" title="刷新">↻</button>
   <span class="badge" id="badge">海阔</span>
 </header>
 <main id="list"></main>
@@ -339,7 +347,23 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     return (isDetail ? '' : categoryRowsHtml()) +
       '<div class="loading"><div class="spin"></div>正在加载…</div>';
   }
-  function showListLoading() { listEl.innerHTML = loadingHtml(); }
+  // C01：#noLoading# 的列表加载面抑制。openItem/handleLazyResult 在
+  // 剥除前捕获旗标置位，showListLoading 查后清零跳过一次；播放遮罩
+  // 的调用点统一查 consumeNavQuiet()。showLoading(text) 是规则主动
+  // 调的全屏遮罩，不受此旗标影响。
+  var nextNavQuiet = false;
+  function consumeNavQuiet() {
+    var q = nextNavQuiet;
+    nextNavQuiet = false;
+    return q;
+  }
+  function showListLoading() {
+    if (nextNavQuiet) { nextNavQuiet = false; return; }
+    // 列表面被加载态替换：先藏起上一页的原生 x5 行，新渲染
+    // 的 x5RowHtml 会再发配置把它带回来（同 URL 不重载）。
+    x5RenderBegin();
+    listEl.innerHTML = loadingHtml();
+  }
   // 规则调的 showLoading(text)/hideLoading：全屏遮罩 + 可选文字，
   // 与内部列表加载态分开（以前同名函数只在 IIFE 局部，规则调不到）。
   function showLoading(text) {
@@ -410,6 +434,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     try { window.fyclass = selectedCls; window.fyarea = selectedArea; window.fyyear = selectedYear; } catch (e) {}
     syncFilterGlobals();
     navStack.length = 0;
+    clearNavCapture();
+    applyPageTheme('');
+    setPageTitle(PROGRAM.name || '海阔小程序');
     showBack(false);
     isDetail = false;
     var token = ++navToken;
@@ -482,7 +509,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     // proxy 改写行（`原地址=>新地址`，包含匹配）：改写后地址进缓存键。
     url = applyProxyRewrites(String(url || ''));
     var headers = {};
-    var srcHeaders = opt.headers || {};
+    // 头源：opt.headers 优先，单数 opt.header 作回落（R6-F9）。
+    var srcHeaders = opt.headers || opt.header || {};
     for (var hk in srcHeaders) {
       if (Object.prototype.hasOwnProperty.call(srcHeaders, hk)) {
         headers[hk] = String(srcHeaders[hk]);
@@ -731,19 +759,52 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return parsed && parsed.name ? String(parsed.name) : '';
     } catch (e) { return ''; }
   }
+  // MY_TITLE：当前规则标题原文（title || name，未归一）。`?rule=` 匹配
+  // 两侧都归一化（isCurrentRuleTitle / Dart 侧），故原文与匹配键一致；
+  // 跨规则上下文切换时随 PROGRAM.rule 同步（与 MY_RULE 同机制）。
+  function syncMyTitle() {
+    MY_TITLE = currentRuleTitle();
+    try { window.MY_TITLE = MY_TITLE; } catch (e) {}
+  }
+  // MY_RULE.pageList 合成（R6-F12）：规则对象成为当前规则时，
+  // pageList 未定义才合成——pages 字符串 JSON.parse（失败回 []、
+  // 非数组回 []）、数组原样、缺失回 []；条目 name/path 字段原样
+  // 保留；规则自写的 pageList 绝不覆盖。
+  function ensureRulePageList(ruleObj) {
+    if (!ruleObj || typeof ruleObj !== 'object') return;
+    if (ruleObj.pageList !== undefined) return;
+    var pages = ruleObj.pages;
+    if (Array.isArray(pages)) {
+      ruleObj.pageList = pages;
+      return;
+    }
+    if (typeof pages === 'string') {
+      try {
+        var parsed = JSON.parse(pages);
+        ruleObj.pageList = Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        ruleObj.pageList = [];
+      }
+      return;
+    }
+    ruleObj.pageList = [];
+  }
   // 临时切换当前规则上下文（PROGRAM.rule / MY_RULE），执行完恢复。
   // 存储隔离（P0-4）按 MY_RULE.title 实时算键，切换期间自然走目标规则。
   function withRuleContext(ruleObj, fn) {
     var savedRule = PROGRAM.rule;
     var savedMyRule = MY_RULE;
+    ensureRulePageList(ruleObj);
     PROGRAM.rule = ruleObj;
     MY_RULE = ruleObj;
     try { window.MY_RULE = ruleObj; } catch (e) {}
+    syncMyTitle();
     try { return fn(); }
     finally {
       PROGRAM.rule = savedRule;
       MY_RULE = savedMyRule;
       try { window.MY_RULE = savedMyRule; } catch (e) {}
+      syncMyTitle();
     }
   }
   // fetch/request 的子页对象模式：hiker://page/… 回 JSON 字符串
@@ -911,12 +972,37 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       }
       return '';
     }
+    // H01：取数语境的 hiker://home@ 存在性判断（点击语境另有分支）。
+    // `||` 链逐个试：http(s) 候选直接回地址，规则候选经 findRuleTitle
+    // 命中回标题，全落空回字符串 'null'（规则用 ==='null' 判未安装）。
+    // 裸 hiker://home 无取数语义证据，维持回 ''。
+    if (text.indexOf('hiker://home@') === 0) {
+      var cands = stripFlags(text.slice(text.indexOf('@') + 1)).split('||');
+      for (var hi = 0; hi < cands.length; hi++) {
+        var cand = cands[hi].trim();
+        if (!cand) continue;
+        if (/^https?:\/\//.test(cand)) return cand;
+        var found = findRuleTitle(cand);
+        if (found) return found;
+      }
+      return 'null';
+    }
     if (text.indexOf('hiker://') === 0) return '';
     return null;
   }
 
   // ---------- 海阔内置函数 ----------
   var searchKeyword = '';
+  // MY_KEYWORD：当前搜索关键词（语料 98 条规则只读、0 条写，读法与
+  // searchKeyword 同义：searchFind 里 `MY_KEYWORD || ''`、putMyVar 种子）。
+  // 指南无定义，语义由语料推导；随搜索链路更新、其余时间保持上次的值
+  // （与 searchKeyword 的 sticky 语义一致）。
+  var MY_KEYWORD = '';
+  function setSearchKeyword(kw) {
+    searchKeyword = kw;
+    MY_KEYWORD = kw;
+    try { window.MY_KEYWORD = kw; } catch (e) {}
+  }
   // 网址模板替换（只对 http(s) 地址与 hiker://empty## 后的 http
   // 地址做；MY_URL 本身的 ## 分段不动，脚本 split 行为不变）。
   function substituteTemplates(url) {
@@ -942,7 +1028,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     out = out.replace(/\bfyarea\b/g, String(selectedArea || ''));
     out = out.replace(/\bfyyear\b/g, String(selectedYear || ''));
     out = out.replace(/\bfysort\b/g, String(selectedSort || ''));
-    out = out.replace(/fyAll/g, '');
+    out = out.replace(/fyAll/g, String(selectedCls || ''));
     out = out.replace(/%%/g, '**');
     if (out.indexOf('**') >= 0) out = out.split('**').join(searchKeyword || '');
     out = out.replace(/\{([A-Za-z_][\w]*)\}/g, function (m, name) {
@@ -1189,7 +1275,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (!qs.length) return base;
     return base + (base.indexOf('?') >= 0 ? '&' : '?') + qs.join('&');
   }
-  function getResCode() { return resCode; }
+  // 指南语义：返回当前页正文（规则拿它解析 JSON/HTML，如
+  // help_js 解析规则增强示例 `var s = getResCode(); eval('json=' + s)`）。
+  // 旧实现返回 HTTP 状态码数字，23 条规则按正文用它全是坏的；状态码
+  // 仍由 resCode 变量内部维护（rawHttpEx 副作用），无其它裸读取者。
+  function getResCode() { try { return fetchPageHtml(); } catch (e) { return ''; } }
   function getUrl() { return MY_URL; }
   function setPageTitle(title) { pageTitle = title || pageTitle; titleEl.textContent = pageTitle; }
   function getPageTitle() { return pageTitle; }
@@ -1229,12 +1319,23 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (/^[A-Za-z_][\w:.-]*$/.test(seg) && !HTML_TAG_NAMES[seg.toLowerCase()]) return true;
     return false;
   }
+  // 尾巴回退链：`data-src||src` 这类末段，每路都是尾巴形态时
+  // 整体当尾巴（B06 尾巴位语义，valueOf 内按序取首个非空）。
+  function isTailChain(seg) {
+    if (seg.indexOf('||') < 0) return false;
+    var alts = splitTopLevel(seg, '||');
+    if (alts.length < 2) return false;
+    for (var i = 0; i < alts.length; i++) {
+      if (!isTailSegment(alts[i].trim(), false)) return false;
+    }
+    return true;
+  }
   function splitChain(rule) {
     var text = String(rule == null ? '' : rule).trim();
     var parts = text.split('&&').map(function (p) { return p.trim(); }).filter(function (p) { return p !== ''; });
     if (!parts.length) return { selectors: ['html'], tail: '' };
     var tail = '';
-    if (parts.length > 1 && isTailSegment(parts[parts.length - 1], false)) {
+    if (parts.length > 1 && (isTailSegment(parts[parts.length - 1], false) || isTailChain(parts[parts.length - 1]))) {
       tail = parts.pop();
     }
     return { selectors: parts.length ? parts : ['html'], tail: tail };
@@ -1243,10 +1344,234 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var chain = splitChain(rule);
     return { css: chain.selectors[0] || 'html', tail: chain.tail };
   }
-  // 一段选择器里的 jQuery 伪类与下标后缀：先剥下来，查完再过滤。
-  // 支持 :eq(n) :first :last :contains(x) :gt(n) :lt(n) 与末尾 ,N / ,N:M；
-  // :not() 留给浏览器原生；查不到的伪类（如 :matches）剥掉后重试，
-  // 不让整条规则因一个选择器抛错而回空。
+  // 末段歧义回退：'source&&title' 这类链，title 既是标签名又是属性名，
+  // 静态判定只能按选择器走；选择器无匹配时，末段改按属性在父链上重试
+  // （有该属性的元素才算中）。官方语义本就是属性优先，静态判定只是
+  // 为了不误伤 'div&&span' 这类真后代链——回退只在无匹配时发生。
+  function selectWithAttrFallback(contextNodes, chain) {
+    var nodes = chainSelect(contextNodes, chain.selectors);
+    if (nodes.length || chain.tail) return { nodes: nodes, tail: chain.tail };
+    var sels = chain.selectors;
+    if (sels.length < 2) return { nodes: nodes, tail: chain.tail };
+    var last = sels[sels.length - 1];
+    if (!/^[A-Za-z_][\w:.-]*$/.test(last)) return { nodes: nodes, tail: chain.tail };
+    var parents = chainSelect(contextNodes, sels.slice(0, -1));
+    var withAttr = parents.filter(function (n) {
+      return n && n.getAttribute && n.getAttribute(last) != null;
+    });
+    if (!withAttr.length) return { nodes: nodes, tail: chain.tail };
+    return { nodes: withAttr, tail: last };
+  }
+  // 顶层切分：括号/方括号/引号内的分隔符不切；反斜杠转义下一字符。
+  // 供 `--` 排除与 `||` 并集拆分用（B04/B06）：`[...]`、`:matches(...)`
+  // 内的 `--`/`||` 不是算子。
+  function splitTopLevel(text, sep) {
+    var s = String(text == null ? '' : text);
+    var out = [];
+    var buf = '';
+    var depthParen = 0, depthBracket = 0, quote = null;
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === '\\' && i + 1 < s.length) { buf += ch + s.charAt(i + 1); i++; continue; }
+      if (quote) {
+        buf += ch;
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; buf += ch; continue; }
+      if (ch === '(') depthParen++;
+      else if (ch === ')') { if (depthParen > 0) depthParen--; }
+      else if (ch === '[') depthBracket++;
+      else if (ch === ']') { if (depthBracket > 0) depthBracket--; }
+      if (depthParen === 0 && depthBracket === 0 && s.indexOf(sep, i) === i) {
+        out.push(buf); buf = ''; i += sep.length - 1; continue;
+      }
+      buf += ch;
+    }
+    out.push(buf);
+    return out;
+  }
+  // 括号平衡：openIdx 指向 '('，返回配平的 ')' 下标；引号/转义内的
+  // 括号不计，配不平回 -1。
+  function findMatchingParen(text, openIdx) {
+    var depth = 0, quote = null;
+    for (var i = openIdx; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '\\' && i + 1 < text.length) { i++; continue; }
+      if (quote) { if (ch === quote) quote = null; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  }
+  // 剥离指定伪类块（括号平衡）：只认方括号/引号/圆括号外的伪类
+  // （嵌在 :has/:matches 参数内的伪类由参数求值方再判，不在此抽走）；
+  // 块内嵌套伪类保留在 arg 里。配不平的块当普通文本保留。
+  function stripPseudoBlocks(text, names) {
+    var blocks = [];
+    var out = '';
+    var i = 0;
+    var bracketDepth = 0, parenDepth = 0, quote = null;
+    while (i < text.length) {
+      var ch = text.charAt(i);
+      if (ch === '\\' && i + 1 < text.length) { out += text.slice(i, i + 2); i += 2; continue; }
+      if (quote) { out += ch; if (ch === quote) quote = null; i++; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; out += ch; i++; continue; }
+      if (ch === '[') bracketDepth++;
+      else if (ch === ']') { if (bracketDepth > 0) bracketDepth--; }
+      else if (ch === '(') parenDepth++;
+      else if (ch === ')') { if (parenDepth > 0) parenDepth--; }
+      var matched = null;
+      if (bracketDepth === 0 && parenDepth === 0 && ch === ':') {
+        for (var k = 0; k < names.length; k++) {
+          if (text.indexOf(':' + names[k] + '(', i) === i) { matched = names[k]; break; }
+        }
+      }
+      if (matched) {
+        var openIdx = i + 1 + matched.length;
+        var closeIdx = findMatchingParen(text, openIdx);
+        if (closeIdx >= 0) {
+          blocks.push({ name: matched, arg: text.slice(openIdx + 1, closeIdx) });
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+      out += ch;
+      i++;
+    }
+    return { text: out, blocks: blocks };
+  }
+  // 去掉参数首尾成对引号（:contains('x') 与 :contains(x) 等价）。
+  function unquotePseudoArg(arg) {
+    var s = String(arg == null ? '' : arg).trim();
+    if (s.length >= 2) {
+      var q = s.charAt(0);
+      if ((q === '"' || q === "'") && s.charAt(s.length - 1) === q) return s.slice(1, -1);
+    }
+    return s;
+  }
+  // 属性选择器归一化（B10-B）：未加引号的属性值加引号
+  // （`meta[property=og:image]`、`[size=1080]`）；`[attr!=val]` 从
+  // 选择器文本中移除、改后置过滤。已加引号的原样不动。
+  function normalizeAttrSelectors(selector) {
+    var filters = [];
+    var out = '';
+    var i = 0;
+    while (i < selector.length) {
+      var ch = selector.charAt(i);
+      if (ch !== '[') { out += ch; i++; continue; }
+      var j = i + 1, q2 = null, closeIdx = -1;
+      while (j < selector.length) {
+        var cj = selector.charAt(j);
+        if (cj === '\\' && j + 1 < selector.length) { j += 2; continue; }
+        if (q2) { if (cj === q2) q2 = null; j++; continue; }
+        if (cj === '"' || cj === "'") { q2 = cj; j++; continue; }
+        if (cj === ']') { closeIdx = j; break; }
+        j++;
+      }
+      if (closeIdx < 0) { out += selector.slice(i); break; }
+      var inner = selector.slice(i + 1, closeIdx);
+      var m = /^\s*([A-Za-z_][\w:.-]*)\s*(!=|\^=|\$=|\*=|~=|\|=|=)\s*([\s\S]*?)\s*$/.exec(inner);
+      if (!m) { out += selector.slice(i, closeIdx + 1); i = closeIdx + 1; continue; }
+      var attr = m[1], op = m[2], rawVal = m[3];
+      if (op === '!=') {
+        // 无该属性的节点视为不等（jsoup 读法，已标注假设；单例
+        // `a[href!=#]` 里无 href 的 <a> 保留后取 href 得空串，
+        // 不会产生假链接）。
+        filters.push({ kind: 'attrNe', attr: attr, value: unquotePseudoArg(rawVal) });
+        i = closeIdx + 1;
+        continue;
+      }
+      if (!rawVal) { out += selector.slice(i, closeIdx + 1); i = closeIdx + 1; continue; }
+      var firstCh = rawVal.charAt(0);
+      if (firstCh === '"' || firstCh === "'") { out += selector.slice(i, closeIdx + 1); i = closeIdx + 1; continue; }
+      var flag = '';
+      var flagM = /\s+([iIsS])$/.exec(rawVal);
+      if (flagM) { flag = ' ' + flagM[1]; rawVal = rawVal.slice(0, flagM.index); }
+      var escaped = rawVal.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      out += '[' + attr + op + '"' + escaped + '"' + flag + ']';
+      i = closeIdx + 1;
+    }
+    return { selector: out, filters: filters };
+  }
+  // jsoup 文本伪类求值：:matches 按正则测折叠空白后的文本，
+  // 无效正则回退子串匹配；:contains 子串匹配；Own 变体只看
+  // 自身直接文本节点。
+  function nodeTextCollapsed(node) {
+    return String((node && node.textContent) || '').replace(/\s+/g, ' ').trim();
+  }
+  function nodeOwnText(node) {
+    if (!node || !node.childNodes) return '';
+    var parts = [];
+    for (var i = 0; i < node.childNodes.length; i++) {
+      var c = node.childNodes[i];
+      if (c.nodeType === 3) parts.push(c.textContent || '');
+    }
+    return parts.join('');
+  }
+  function textFilterMatches(node, f) {
+    if (f.kind === 'contains') return String((node && node.textContent) || '').indexOf(f.value) >= 0;
+    if (f.kind === 'containsOwn') return nodeOwnText(node).indexOf(f.value) >= 0;
+    if (f.kind === 'matches' || f.kind === 'matchesOwn') {
+      var text = f.kind === 'matches' ? nodeTextCollapsed(node) : nodeOwnText(node).replace(/\s+/g, ' ').trim();
+      try { return new RegExp(f.value).test(text); }
+      catch (e) { return text.indexOf(f.value) >= 0; }
+    }
+    return true;
+  }
+  // :has(arg) 后备求值：后代里有匹配 arg 的即中；arg 内的 jsoup
+  // 文本伪类与 [attr!=val] 一并按同一套语义判。
+  function nodeHasDescendant(node, arg) {
+    if (!node || !node.querySelectorAll) return false;
+    var stripped = stripPseudoBlocks(String(arg || ''), ['matches', 'contains', 'matchesOwn', 'containsOwn']);
+    var norm = normalizeAttrSelectors(stripped.text);
+    var sel = norm.selector.trim() || '*';
+    var cands = [];
+    try { cands = Array.prototype.slice.call(node.querySelectorAll(sel)); } catch (e) { return false; }
+    for (var i = 0; i < cands.length; i++) {
+      var ok = true;
+      for (var k = 0; k < stripped.blocks.length; k++) {
+        if (!textFilterMatches(cands[i], { kind: stripped.blocks[k].name, value: unquotePseudoArg(stripped.blocks[k].arg) })) { ok = false; break; }
+      }
+      if (ok) {
+        for (var n = 0; n < norm.filters.length; n++) {
+          var nf = norm.filters[n];
+          if (cands[i].getAttribute && cands[i].getAttribute(nf.attr) === nf.value) { ok = false; break; }
+        }
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
+  // :not(arg) 参数求值：arg 可含 :matches/:contains 文本伪类、
+  // :has(...) 与普通选择器；普通选择器走 Element.matches()。
+  function nodeMatchesSelectorArg(node, arg) {
+    if (!node) return false;
+    var stripped = stripPseudoBlocks(String(arg || ''), ['matches', 'contains', 'matchesOwn', 'containsOwn']);
+    for (var i = 0; i < stripped.blocks.length; i++) {
+      if (!textFilterMatches(node, { kind: stripped.blocks[i].name, value: unquotePseudoArg(stripped.blocks[i].arg) })) return false;
+    }
+    var hasBlocks = stripPseudoBlocks(stripped.text, ['has']);
+    for (var h = 0; h < hasBlocks.blocks.length; h++) {
+      if (!nodeHasDescendant(node, hasBlocks.blocks[h].arg)) return false;
+    }
+    var norm = normalizeAttrSelectors(hasBlocks.text);
+    for (var n = 0; n < norm.filters.length; n++) {
+      var nf = norm.filters[n];
+      if (node.getAttribute && node.getAttribute(nf.attr) === nf.value) return false;
+    }
+    var rest = norm.selector.trim();
+    if (!rest || rest === '*') return true;
+    try {
+      if (node.matches) return node.matches(rest);
+    } catch (e) { return false; }
+    return false;
+  }
+  // 一段选择器里的 jQuery/jsoup 伪类与下标后缀：先剥下来，查完再过滤。
+  // 支持 :eq(n) :first :last :contains(x) :matches(x) :gt(n) :lt(n)、
+  // :not(...)（内可嵌 :matches/:contains/:has/普通选择器）与末尾
+  // ,N / ,N:M；属性选择器归一化与 [attr!=val] 见 normalizeAttrSelectors。
   function parseSelectorSegment(seg) {
     var text = String(seg || '');
     var indexSlice = null;
@@ -1260,26 +1585,46 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       text = text.slice(0, mIdx.index);
     }
     var filters = [];
-    var mContains = /:contains\(([^)]*)\)/.exec(text);
-    if (mContains) {
-      filters.push({ kind: 'contains', value: mContains[1].replace(/^['"]|['"]$/g, '') });
-      text = text.replace(mContains[0], '');
+    var indexFilters = [];
+    // :not(...) 先整体取出（括号平衡），内嵌的 :matches/:contains
+    // 不得被顶层提取抽走（D3）；多重 :not 串联逐个应用。
+    var notStripped = stripPseudoBlocks(text, ['not']);
+    for (var ni = 0; ni < notStripped.blocks.length; ni++) {
+      filters.push({ kind: 'not', arg: notStripped.blocks[ni].arg });
     }
+    text = notStripped.text;
+    // jsoup 文本伪类（括号平衡提取，D1/D2；参数内可含字符类与 `)`）。
+    var jsStripped = stripPseudoBlocks(text, ['matches', 'contains', 'matchesOwn', 'containsOwn']);
+    for (var ji = 0; ji < jsStripped.blocks.length; ji++) {
+      filters.push({ kind: jsStripped.blocks[ji].name, value: unquotePseudoArg(jsStripped.blocks[ji].arg) });
+    }
+    text = jsStripped.text;
     var mEq = /:eq\((-?\d+)\)/.exec(text);
-    if (mEq) { filters.push({ kind: 'eq', value: parseInt(mEq[1], 10) }); text = text.replace(mEq[0], ''); }
+    if (mEq) { indexFilters.push({ kind: 'eq', value: parseInt(mEq[1], 10) }); text = text.replace(mEq[0], ''); }
     var mGt = /:gt\((-?\d+)\)/.exec(text);
-    if (mGt) { filters.push({ kind: 'gt', value: parseInt(mGt[1], 10) }); text = text.replace(mGt[0], ''); }
+    if (mGt) { indexFilters.push({ kind: 'gt', value: parseInt(mGt[1], 10) }); text = text.replace(mGt[0], ''); }
     var mLt = /:lt\((-?\d+)\)/.exec(text);
-    if (mLt) { filters.push({ kind: 'lt', value: parseInt(mLt[1], 10) }); text = text.replace(mLt[0], ''); }
-    if (/:first\b/.test(text)) { filters.push({ kind: 'first' }); text = text.replace(/:first\b/, ''); }
-    if (/:last\b/.test(text)) { filters.push({ kind: 'last' }); text = text.replace(/:last\b/, ''); }
-    return { selector: text.trim() || '*', filters: filters, indexSlice: indexSlice };
+    if (mLt) { indexFilters.push({ kind: 'lt', value: parseInt(mLt[1], 10) }); text = text.replace(mLt[0], ''); }
+    if (/:first(?![\w-])/.test(text)) { indexFilters.push({ kind: 'first' }); text = text.replace(/:first(?![\w-])/, ''); }
+    if (/:last(?![\w-])/.test(text)) { indexFilters.push({ kind: 'last' }); text = text.replace(/:last(?![\w-])/, ''); }
+    // 属性归一化与 [attr!=val] 后置过滤（D4/D5）；:has 留给引擎原生。
+    var norm = normalizeAttrSelectors(text);
+    for (var ai = 0; ai < norm.filters.length; ai++) filters.push(norm.filters[ai]);
+    text = norm.selector;
+    // 内容过滤先于下标过滤：:eq/:first 等在过滤后的集合上算下标。
+    return { selector: text.trim() || '*', filters: filters.concat(indexFilters), indexSlice: indexSlice };
   }
   function applyNodeFilters(nodes, parsed) {
     var out = nodes;
     parsed.filters.forEach(function (f) {
       if (f.kind === 'contains') {
         out = out.filter(function (n) { return (n.textContent || '').indexOf(f.value) >= 0; });
+      } else if (f.kind === 'matches' || f.kind === 'matchesOwn' || f.kind === 'containsOwn') {
+        out = out.filter(function (n) { return textFilterMatches(n, f); });
+      } else if (f.kind === 'not') {
+        out = out.filter(function (n) { return !nodeMatchesSelectorArg(n, f.arg); });
+      } else if (f.kind === 'attrNe') {
+        out = out.filter(function (n) { return !n.getAttribute || n.getAttribute(f.attr) !== f.value; });
       } else if (f.kind === 'eq') {
         var idx = f.value < 0 ? out.length + f.value : f.value;
         out = (idx >= 0 && idx < out.length) ? [out[idx]] : [];
@@ -1314,37 +1659,142 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     try {
       nodes = Array.prototype.slice.call(context.querySelectorAll(parsed.selector));
     } catch (e) {
-      // 不认识的伪类导致抛错：剥掉除 :not 外的伪类再试一次。
-      var cleaned = parsed.selector.replace(/:(?!not\()[a-zA-Z-]+(\([^)]*\))?/g, '');
+      // 禁止静默放宽：重试只剥离已识别的 jsoup 伪类（进过滤器），
+      // 剥离后仍抛错则回 []，绝不把带过滤语义的选择器放宽成
+      // 无过滤查询（D1 的错取根源即旧的“剥全部伪类重试”）。
+      var stripped = stripPseudoBlocks(parsed.selector, ['matches', 'contains', 'matchesOwn', 'containsOwn']);
+      var retryParsed = parsed;
+      if (stripped.blocks.length) {
+        var extra = stripped.blocks.map(function (b) { return { kind: b.name, value: unquotePseudoArg(b.arg) }; });
+        retryParsed = { selector: stripped.text.trim() || '*', filters: parsed.filters.concat(extra), indexSlice: parsed.indexSlice };
+      }
       try {
-        nodes = Array.prototype.slice.call(context.querySelectorAll(cleaned || '*'));
-      } catch (e2) { nodes = []; }
+        nodes = Array.prototype.slice.call(context.querySelectorAll(retryParsed.selector));
+        parsed = retryParsed;
+      } catch (e2) {
+        // :has 防御性后备（SHOULD）：旧引擎上仅含 :has 的选择器抛错时，
+        // 剥 :has 查候选集，再按后代存在过滤；现代引擎走原生路径。
+        var hasStripped = stripPseudoBlocks(retryParsed.selector, ['has']);
+        if (!hasStripped.blocks.length) return [];
+        try {
+          nodes = Array.prototype.slice.call(context.querySelectorAll(hasStripped.text.trim() || '*'));
+        } catch (e3) { return []; }
+        nodes = nodes.filter(function (n) {
+          for (var i = 0; i < hasStripped.blocks.length; i++) {
+            if (!nodeHasDescendant(n, hasStripped.blocks[i].arg)) return false;
+          }
+          return true;
+        });
+        parsed = retryParsed;
+      }
     }
     return applyNodeFilters(nodes, parsed);
   }
   function nodesOf(doc, sel) {
     try { return Array.prototype.slice.call(doc.querySelectorAll(sel)); } catch (e) { return []; }
   }
+  // `||` 并集求值（B06）：每路按单选择器语义求值（下标/伪类各绑
+  // 各路），结果合并去重后按文档顺序排（已标注假设：文档顺序而非
+  // 路序优先，pdfa 列表需跨路合并；路内下标如 `.stripe,-1` 只绑本路）。
+  // 无 `||` 时与旧 chainSelect 单段行为一致，不排序、不去重。
+  function queryAlternatives(contexts, text) {
+    var alts = splitTopLevel(text, '||').map(function (a) { return a.trim(); }).filter(function (a) { return a !== ''; });
+    if (!alts.length) return [];
+    if (alts.length === 1) {
+      var parsed = parseSelectorSegment(alts[0]);
+      var next = [];
+      for (var j = 0; j < contexts.length; j++) {
+        var found = queryWithin(contexts[j], parsed);
+        for (var k = 0; k < found.length; k++) next.push(found[k]);
+      }
+      return next;
+    }
+    var collected = [];
+    for (var a = 0; a < alts.length; a++) {
+      var p = parseSelectorSegment(alts[a]);
+      for (var c = 0; c < contexts.length; c++) {
+        var f2 = queryWithin(contexts[c], p);
+        for (var d = 0; d < f2.length; d++) {
+          if (collected.indexOf(f2[d]) < 0) collected.push(f2[d]);
+        }
+      }
+    }
+    var indexed = collected.map(function (n, i) { return { n: n, i: i }; });
+    indexed.sort(function (x, y) {
+      if (x.n === y.n) return 0;
+      try {
+        if (x.n.compareDocumentPosition) {
+          var pos = x.n.compareDocumentPosition(y.n);
+          if (pos & 4) return -1;
+          if (pos & 2) return 1;
+        }
+      } catch (e) {}
+      return x.i - y.i;
+    });
+    return indexed.map(function (e) { return e.n; });
+  }
+  // 单段求值（B04）：先 `--` 拆分（拆分先于下标解析，base 与排除部
+  // 的 `,N` 各绑各段），base 求值后对每个节点深克隆，在克隆内按
+  // 排除部顺序依次重查并摘除命中节点（已标注假设：多次排除按书写
+  // 顺序依次重查，后一次下标在前一次摘除后的剩余集合上算）。
+  // 原始文档绝不改动（parseDoc 有缓存，改脏会污染后续调用）。
+  // 已知限制：`--` 一律按排除算子解析，BEM 式含 `--` 的类名
+  // （如 `.foo--bar`）会被误拆——全语料无此形态，接受该限制。
+  function querySegment(contexts, seg) {
+    var parts = splitTopLevel(seg, '--');
+    var baseNodes = queryAlternatives(contexts, parts[0]);
+    if (parts.length === 1) return baseNodes;
+    var out = [];
+    for (var i = 0; i < baseNodes.length; i++) {
+      var node = baseNodes[i];
+      if (!node || !node.cloneNode) { out.push(node); continue; }
+      var clone = node.cloneNode(true);
+      for (var e = 1; e < parts.length; e++) {
+        var excl = parts[e].trim();
+        if (!excl) continue;
+        var hits = queryAlternatives([clone], excl);
+        for (var h = 0; h < hits.length; h++) {
+          var hit = hits[h];
+          if (hit.remove) { try { hit.remove(); } catch (err) {} }
+          else if (hit.parentNode) { try { hit.parentNode.removeChild(hit); } catch (err2) {} }
+        }
+      }
+      out.push(clone);
+    }
+    return out;
+  }
   function chainSelect(contexts, selectors) {
     var current = contexts;
     for (var i = 0; i < selectors.length; i++) {
-      var parsed = parseSelectorSegment(selectors[i]);
-      var next = [];
-      for (var j = 0; j < current.length; j++) {
-        var found = queryWithin(current[j], parsed);
-        for (var k = 0; k < found.length; k++) next.push(found[k]);
-      }
-      current = next;
+      var seg = String(selectors[i] || '').trim();
+      // 中段裸 Text/Html/OuterHtml 整段跳过（B06 §7，D7）：HTML 中
+      // 不存在 <Text> 元素，跳过不改变任何可成立结果；仅跳过恰好
+      // 等于三关键字之一的整段。
+      if (selectors.length > 1 && (seg === 'Text' || seg === 'Html' || seg === 'OuterHtml')) continue;
+      current = querySegment(current, seg);
       if (!current.length) break;
     }
     return current;
   }
   function valueOf(node, tail) {
     if (!node) return '';
-    if (!tail || tail === 'Text') return (node.textContent || '').trim();
-    if (tail === 'Html') return node.innerHTML || '';
-    if (tail === 'OuterHtml') return node.outerHTML || '';
-    return node.getAttribute ? (node.getAttribute(tail) || '') : '';
+    var t = String(tail == null ? '' : tail);
+    // 尾巴位回退链（B06）：`data-src||src` 按序取值，取首个非空串；
+    // 属性缺失（getAttribute 回 null）与 Text/Html 空串都继续下一路。
+    if (t.indexOf('||') >= 0) {
+      var alts = splitTopLevel(t, '||');
+      for (var i = 0; i < alts.length; i++) {
+        var alt = alts[i].trim();
+        if (!alt) continue;
+        var v = valueOf(node, alt);
+        if (v !== '') return v;
+      }
+      return '';
+    }
+    if (!t || t === 'Text') return (node.textContent || '').trim();
+    if (t === 'Html') return node.innerHTML || '';
+    if (t === 'OuterHtml') return node.outerHTML || '';
+    return node.getAttribute ? (node.getAttribute(t) || '') : '';
   }
   function resolveUrl(rel, base) {
     var value = String(rel || '');
@@ -1358,16 +1808,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   function pdfa(html, rule) {
     var chain = splitChain(rule);
-    var nodes = chainSelect([docOf(html)], chain.selectors);
+    var sel = selectWithAttrFallback([docOf(html)], chain);
+    var nodes = sel.nodes;
     // pdfa 无尾巴时回元素外层 HTML（海阔语义）：调用方再拿它
     // 当 HTML 继续 pdfh 细查；以前回纯文本，嵌套解析全断。
-    var tail = chain.tail || 'OuterHtml';
+    var tail = sel.tail || 'OuterHtml';
     return nodes.map(function (node) { return valueOf(node, tail); });
   }
   function pdfh(html, rule) {
     var chain = splitChain(rule);
-    var nodes = chainSelect([docOf(html)], chain.selectors);
-    return valueOf(nodes[0], chain.tail);
+    var sel = selectWithAttrFallback([docOf(html)], chain);
+    var nodes = sel.nodes;
+    return valueOf(nodes[0], sel.tail);
   }
   // parseDom（缩写 pd）：按指南与 pdfh 功能一致（取第一个匹配
   // 的值），区别只在属性尾巴（href/src 等）按 baseUrl 补全相对
@@ -1376,11 +1828,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // indexOf 永远 -1（AnySex 首页因此一条视频都出不来）。
   function parseDom(html, rule, baseUrl) {
     var chain = splitChain(rule);
-    var nodes = chainSelect([docOf(html)], chain.selectors);
+    var sel = selectWithAttrFallback([docOf(html)], chain);
+    var nodes = sel.nodes;
     if (!nodes.length) return '';
-    var tail = chain.tail || 'OuterHtml';
+    var tail = sel.tail || 'OuterHtml';
     var v = valueOf(nodes[0], tail);
-    if (tail && tail !== 'Text' && tail !== 'Html' && tail !== 'OuterHtml') {
+    // 相对地址补全只对带网址形态的值生效（/ . ? # : 任一）；裸词属性值
+    // （如清晰度 1080p）不许被拼成假网址。
+    if (tail && tail !== 'Text' && tail !== 'Html' && tail !== 'OuterHtml' &&
+        /[/.?#:]/.test(v)) {
       return resolveUrl(v, baseUrl || MY_URL);
     }
     return v;
@@ -1413,8 +1869,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       chainParts = parts.slice(1);
     }
     var chain = splitChain(chainParts.join('&&'));
-    var nodes = chainSelect([contextNode], chain.selectors);
-    var value = valueOf(nodes[0], chain.tail);
+    // 声明式路径与 pdfa/pdfh 共用同一末段歧义回退（B10-C，D6）：
+    // 末段是标签名又是属性名（如 Title/title/style）时，标签查不到
+    // 就改按属性在上一级取；不得另写一套判定。
+    var sel = selectWithAttrFallback([contextNode], chain);
+    var nodes = sel.nodes;
+    var value = valueOf(nodes[0], sel.tail);
     if (jsCode !== null) value = evalJsTransform(jsCode, value);
     return { field: field, value: value, chain: chain };
   }
@@ -1476,8 +1936,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       text = text.slice(0, jsIdx);
     }
     var chain = splitChain(text);
-    var nodes = chainSelect([docOf(html)], chain.selectors);
-    var value = valueOf(nodes[0], chain.tail);
+    // 与 evalFieldSegment 同理：复用 selectWithAttrFallback（B10-C）。
+    var sel = selectWithAttrFallback([docOf(html)], chain);
+    var nodes = sel.nodes;
+    var value = valueOf(nodes[0], sel.tail);
     if (jsCode !== null) value = evalJsTransform(jsCode, value);
     return value;
   }
@@ -1586,11 +2048,43 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (!obj || typeof obj !== 'object' || !Array.isArray(obj.urls) || !obj.urls.length) return null;
       var first = String(obj.urls[0] || '');
       if (!first) return null;
-      return { url: first, subtitle: obj.subtitle, lyric: obj.lyric, audioUrls: obj.audioUrls, headers: normalizePlayHeaders(obj.headers), names: obj.names };
+      var urls = obj.urls.map(function (u) { return String(u || ''); });
+      var danmu = (typeof obj.danmu === 'string') ? obj.danmu : undefined;
+      return { url: first, urls: urls, subtitle: obj.subtitle, lyric: obj.lyric, audioUrls: obj.audioUrls, headers: normalizePlayHeaders(obj.headers), headersList: normalizePlayHeadersList(obj.headers), names: obj.names, danmu: danmu };
     } catch (e) { return null; }
+  }
+  // 逐线路头归一：headers 数组 → 按下标对齐的表数组；单个对象/字符串 →
+  // 全线路共用的一张表；缺省 → 两项皆空。单元素数组按共用处理
+  // （一条头无法按下标区分，沿用旧合并语义、所有线路共用）。
+  function normalizePlayHeadersList(h) {
+    if (!h) return { list: null, shared: null };
+    if (Array.isArray(h)) {
+      var list = [];
+      for (var i = 0; i < h.length; i++) {
+        var one = normalizePlayHeaders(h[i]);
+        list.push(one || {});
+      }
+      if (list.length === 1) return { list: list, shared: list[0] };
+      return { list: list, shared: null };
+    }
+    return { list: null, shared: normalizePlayHeaders(h) };
   }
   function normalizePlayHeaders(h) {
     if (!h) return null;
+    // 头数组形态（规则常写 headers: [{...}]）：逐项归一后合并成一张表；
+    // 旧代码把数组当对象遍历，键 '0' 的值被 String() 压成 [object Object]。
+    if (Array.isArray(h)) {
+      var merged = {};
+      for (var i = 0; i < h.length; i++) {
+        var one = normalizePlayHeaders(h[i]);
+        if (one) {
+          for (var k in one) {
+            if (Object.prototype.hasOwnProperty.call(one, k)) merged[k] = one[k];
+          }
+        }
+      }
+      return merged;
+    }
     if (typeof h === 'object') {
       var out = {};
       for (var k in h) {
@@ -1627,13 +2121,69 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     return isMedia(url);
   }
+  // 播放地址尾部 `;{头@值&&头2@值2}` 后缀：只认紧贴地址末尾的一块，
+  // 地址中间的 `;`（如查询串里的）一律不动。fetch 链路的 parseUrlSuffix
+  // 不走播放链路，这里单独摘，后缀头随 play 消息发给播放器；
+  // 无有效键值对时原样返回，不动地址。
+  function extractPlayHeaderSuffix(text) {
+    var s = String(text || '');
+    var m = /;\{([^{}]*)\}\s*$/.exec(s);
+    if (!m) return { url: s, headers: null };
+    var headers = {};
+    var pairs = m[1].split('&&');
+    for (var i = 0; i < pairs.length; i++) {
+      var at = pairs[i].indexOf('@');
+      if (at > 0) {
+        var hk = pairs[i].slice(0, at).trim();
+        var hv = pairs[i].slice(at + 1).replace(/；；/g, ';');
+        if (hv.indexOf('.js:') === 0) {
+          hv = evalJsTransform(hv.slice(4), s.slice(0, m.index));
+        }
+        if (hk) headers[hk] = hv;
+      }
+    }
+    var keys = 0;
+    for (var k in headers) { keys++; }
+    if (!keys) return { url: s, headers: null };
+    return { url: s.slice(0, m.index), headers: headers };
+  }
+  // 播放地址尾部 `@Referer=/@User-Agent=/@Cookie=` 后缀头（R6-F1，
+  // db_id 2918 形态）：只认尾部连续段，值取到下一个 `@` 或串尾
+  // （含 `//` 原样保留，与 parseImageSuffix 捕获规则一致）；
+  // 地址中间的 `@`（如 URL 用户信息段）不动；同键取最左一段
+  // （与 parseImageSuffix 先到先得一致）。无有效段时原样返回。
+  function extractPlayAtHeaders(text) {
+    var s = String(text || '');
+    var headers = {};
+    var end = s.length;
+    var found = false;
+    while (end > 0) {
+      var at = s.lastIndexOf('@', end - 1);
+      if (at < 0) break;
+      var seg = s.slice(at, end);
+      var m = /^@(Referer|User-Agent|Cookie)=(.*)$/.exec(seg);
+      if (!m) break;
+      if (m[2] === '') break;
+      headers[m[1]] = m[2];
+      found = true;
+      end = at;
+    }
+    if (!found) return { url: s, headers: null };
+    return { url: s.slice(0, end), headers: headers };
+  }
   function sendPlay(url, item, fromDetail, playExtras) {
     // detail：播放是否从详情页发起。原生据此决定内嵌播放
     // （详情页海报墙就地变播放器）还是推一个新播放页。
     // 详情页内的播放入口（海报播放键、选集点按）显式传 true，
     // 不依赖点击时刻 isDetail 全局变量的状态；列表页不传，
     // 仍按 isDetail 判定、保持推新页。
-    var payload = { type: 'play', url: url, title: itemTitle(item), detail: fromDetail === true ? true : isDetail };
+    // 尾部 `;{...}` 后缀头与 `@头=` 后缀头在此摘出（见
+    // extractPlayHeaderSuffix / extractPlayAtHeaders），
+    // 干净地址发给播放器，头随 play 消息带过去。
+    var cleaned = extractPlayHeaderSuffix(url);
+    var atCleaned = extractPlayAtHeaders(cleaned.url);
+    var playUrl = atCleaned.url;
+    var payload = { type: 'play', url: playUrl, title: itemTitle(item), detail: fromDetail === true ? true : isDetail };
     var ctx = episodeContext(item);
     if (ctx) { payload.episodes = ctx.episodes; payload.index = ctx.index; payload.series = ctx.series; }
     // 字幕/弹幕地址随 play 消息带给播放器（条目自带才有，没有不编）。
@@ -1648,9 +2198,69 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (playExtras.lyric) payload.lyric = String(playExtras.lyric);
       if (playExtras.audioUrls) payload.audioUrls = playExtras.audioUrls;
       if (playExtras.headers) payload.headers = playExtras.headers;
+      if (typeof playExtras.danmu === 'string' && playExtras.danmu) payload.danmaku = playExtras.danmu;
     }
-    // 历史记录：条目地址优先（点历史回到详情），没有则记播放地址。
+    // 后缀头与播放 JSON 头合并：JSON 头优先，`;{...}` 头次之，
+    // `@` 后缀头补位（R6-F1）。
+    if (cleaned.headers || atCleaned.headers) {
+      var mergedHeaders = {};
+      var mhk;
+      if (atCleaned.headers) {
+        for (mhk in atCleaned.headers) { mergedHeaders[mhk] = atCleaned.headers[mhk]; }
+      }
+      if (cleaned.headers) {
+        for (mhk in cleaned.headers) { mergedHeaders[mhk] = cleaned.headers[mhk]; }
+      }
+      if (payload.headers) {
+        for (mhk in payload.headers) { mergedHeaders[mhk] = payload.headers[mhk]; }
+      }
+      payload.headers = mergedHeaders;
+    }
+    // 历史记录：记原始地址（含后缀），点历史重播时后缀头能再次摘出。
     var historyUrl = (item && (item.url || item.link)) || url;
+    // 多线路：playExtras 带 urls 数组时组装 payload.lines（下标对齐，
+    // 缺名补默认名）；单条不发 lines 字段，payload 与旧形态一致。
+    // 每条线路 URL 各自独立过一次 extractPlayHeaderSuffix（D03 函数）
+    // 与 extractPlayAtHeaders（R6-F1），摘出的后缀头与该条 JSON 头
+    // 合并、JSON 头优先。
+    if (playExtras && Array.isArray(playExtras.urls) && playExtras.urls.length > 1) {
+      var rawNames = Array.isArray(playExtras.names) ? playExtras.names : [];
+      var hl = playExtras.headersList || null;
+      var lines = [];
+      for (var li = 0; li < playExtras.urls.length; li++) {
+        var rawLine = String(playExtras.urls[li] || '');
+        if (!rawLine) continue;
+        var lineClean = extractPlayHeaderSuffix(stripFlags(rawLine));
+        var lineAtClean = extractPlayAtHeaders(lineClean.url);
+        var lineHeaders = {};
+        var hk2;
+        if (lineAtClean.headers) {
+          for (hk2 in lineAtClean.headers) { lineHeaders[hk2] = lineAtClean.headers[hk2]; }
+        }
+        if (lineClean.headers) {
+          for (hk2 in lineClean.headers) { lineHeaders[hk2] = lineClean.headers[hk2]; }
+        }
+        var jsonLineHeaders = null;
+        if (hl) {
+          if (hl.list && li < hl.list.length) jsonLineHeaders = hl.list[li];
+          else if (hl.shared) jsonLineHeaders = hl.shared;
+        }
+        if (jsonLineHeaders) {
+          for (hk2 in jsonLineHeaders) { lineHeaders[hk2] = jsonLineHeaders[hk2]; }
+        }
+        var lineName = String(rawNames[li] || '').trim();
+        lines.push({ name: lineName || ('线路' + (li + 1)), url: lineAtClean.url, headers: lineHeaders });
+      }
+      if (lines.length > 1) {
+        payload.lines = lines;
+        // 首条头与单条 payload.headers 对齐：播放器初开用 payload.headers。
+        var firstHeaders = lines[0].headers;
+        var hasFirst = false;
+        for (var fk in firstHeaders) { hasFirst = true; break; }
+        if (hasFirst) payload.headers = firstHeaders;
+        else delete payload.headers;
+      }
+    }
     recordHistoryThrottled(itemTitle(item), historyUrl, item ? itemPic(item) : '');
     native(payload);
   }
@@ -1667,10 +2277,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         if (firstUrl) {
           sendPlay(stripFlags(firstUrl), item, fromDetail, {
             headers: normalizePlayHeaders(result.headers),
+            headersList: normalizePlayHeadersList(result.headers),
+            urls: result.urls,
             names: result.names,
             subtitle: result.subtitle,
             lyric: result.lyric,
-            audioUrls: result.audioUrls
+            audioUrls: result.audioUrls,
+            danmu: result.danmu
           });
           return;
         }
@@ -1679,6 +2292,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     if (typeof result !== 'string') return; // 函数自己已处理（如内部调了 play）
     if (!result) { toast('解析失败'); return; }
+    // 旗标捕获（剥除前）：lazy 结果经 openItem 重入时旗标已丢，
+    // 必须在此按原始结果补捕获；重入分支置 pendingNavCarried 保住它。
+    captureNavFlags(result, item, null);
     var clean = stripFlags(result);
     if (clean.indexOf('toast://') === 0) {
       toast(clean.slice('toast://'.length) || '解析失败');
@@ -1693,6 +2309,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         clean.indexOf('novel://') === 0 ||
         clean.indexOf('video://') === 0 || clean.indexOf('webRule://') === 0 ||
         clean.indexOf('x5Rule://') === 0) {
+      pendingNavCarried = true;
       openItem({ url: clean, title: itemTitle(item), extra: item ? item.extra : null }, fromDetail);
       return;
     }
@@ -1756,10 +2373,357 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (t && (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10)) cancel();
     });
   }
+  // ---------- 导航捕获：页面标记 / 主题 / 标题 / 自动翻页 / 页面缓存 ----------
+  // 旗标在 openItem/handleLazyResult 里剥除，下游函数拿到的是干净地址，
+  // 所以一切旗标行为必须在此处用原始地址先捕获，再以模块状态带进导航。
+  // captureNavFlags 在 openItem 入口跑一次；handleLazyResult 重入 openItem
+  // 时旗标已丢，由它先捕获并置 pendingNavCarried，openItem 跳过重捕获。
+  var pendingNav = null;
+  var pendingNavCarried = false;
+  // C08/C09/C11：页面主题。full > game > immersive（语料中三者未同链
+  // 叠加，优先级只作确定性规定）。immersive 只藏 WebView header；
+  // full/game 再经 setPageImmersive 消息藏状态栏（C09 按字面读法：
+  // 标题栏 + 状态栏全藏；C11 不新增任何游戏输入）。
+  var currentPageTheme = '';
+  var lastPageImmersiveSent = false;
+  function pageThemeOf(raw) {
+    if (hasFlag(raw, 'fullTheme')) return 'full';
+    if (hasFlag(raw, 'gameTheme')) return 'game';
+    if (hasFlag(raw, 'immersiveTheme')) return 'immersive';
+    return '';
+  }
+  function applyPageTheme(theme) {
+    theme = theme || '';
+    currentPageTheme = theme;
+    try {
+      var headerEl = null;
+      if (document.querySelector) headerEl = document.querySelector('header');
+      if (headerEl && headerEl.style) headerEl.style.display = theme ? 'none' : '';
+    } catch (e) {}
+    try {
+      if (document.body && document.body.classList) {
+        if (theme) document.body.classList.add('hk-immersive');
+        else document.body.classList.remove('hk-immersive');
+      }
+    } catch (e) {}
+    var immersive = theme === 'full' || theme === 'game';
+    if (immersive !== lastPageImmersiveSent) {
+      lastPageImmersiveSent = immersive;
+      native({ type: 'setPageImmersive', immersive: immersive });
+    }
+  }
+  // E76：下页标题。① extra.pageTitle ② ?pageTitle= 参数
+  // ③ inheritTitle:false 取按钮标题 ④ 默认拼接不实现（指南未定义
+  // 连接方式），返回 null 表示沿用当前标题。
+  function computeNextTitle(item, targetUrl) {
+    var extra = item && item.extra;
+    if (extra && typeof extra.pageTitle === 'string' && extra.pageTitle.trim()) {
+      return extra.pageTitle;
+    }
+    var ref = splitPageRef(targetUrl || '');
+    var params = parseQueryParams(ref.query);
+    if (params.pageTitle) return params.pageTitle;
+    if (extra && extra.inheritTitle === false) return itemTitle(item);
+    return null;
+  }
+  function captureNavFlags(rawText, item, clickIndex) {
+    var raw = String(rawText || '');
+    nextNavQuiet = hasFlag(raw, 'noLoading');
+    pendingNav = {
+      theme: pageThemeOf(raw),
+      title: computeNextTitle(item, stripFlags(raw))
+    };
+    armAutoPage(raw, item, clickIndex);
+    armPageCache(raw, item);
+  }
+  // 在跑目标脚本之前应用捕获到的主题与标题（规则脚本内后续的
+  // setPageTitle 可再覆盖）。消费一次后置空，重复调用无操作。
+  function applyCapturedNavState() {
+    if (!pendingNav) return;
+    var nav = pendingNav;
+    pendingNav = null;
+    applyPageTheme(nav.theme);
+    if (nav.title !== null && nav.title !== undefined && nav.title !== '') {
+      setPageTitle(nav.title);
+    }
+  }
+  function clearNavCapture() {
+    pendingNav = null;
+    pendingNavCarried = false;
+    nextNavQuiet = false;
+    autoPageCtx = null;
+    autoPageLoading = false;
+    pageCacheArmed = null;
+    pageCacheBypass = false;
+  }
+  // 导航栈条目：回上一级要用的地址/页码 + 当时主题 + 当时标题，
+  // goBack 按条目恢复主题与标题。
+  function pushNavEntry() {
+    navStack.push({ url: MY_URL, page: MY_PAGE, theme: currentPageTheme, title: pageTitle });
+  }
+  // ---------- C12 #autoPage#：滚到底自动拼接下一章 ----------
+  var autoPageCtx = null;
+  var autoPageLoading = false;
+  var autoPageScrollBound = false;
+  function armAutoPage(raw, item, clickIndex) {
+    autoPageCtx = null;
+    autoPageLoading = false;
+    var clean = stripFlags(raw);
+    if (!hasFlag(raw, 'autoPage')) return;
+    if (clean.indexOf('fypage') >= 0) return;
+    var items = currentItems.slice();
+    var idx = -1;
+    if (typeof clickIndex === 'number' && clickIndex >= 0 && clickIndex < items.length) {
+      idx = clickIndex;
+    } else {
+      for (var i = 0; i < items.length; i++) {
+        var u = stripFlags(String((items[i] && (items[i].url || items[i].link)) || ''));
+        if (u && u === clean) { idx = i; break; }
+      }
+    }
+    if (idx < 0) return;
+    autoPageCtx = { items: items, index: idx, parentUrl: MY_URL, parentPage: MY_PAGE };
+  }
+  function bindAutoPageScroll() {
+    if (autoPageScrollBound) return;
+    autoPageScrollBound = true;
+    try {
+      window.addEventListener('scroll', function () { maybeAutoPage(); }, { passive: true });
+    } catch (e) {
+      try { window.addEventListener('scroll', function () { maybeAutoPage(); }); } catch (e2) {}
+    }
+  }
+  function maybeAutoPage() {
+    if (!autoPageCtx || autoPageLoading || resultCapture) return;
+    var y = 0, vh = 0, sh = 0;
+    try {
+      y = window.scrollY || window.pageYOffset || 0;
+      vh = window.innerHeight || 0;
+      sh = document.body ? document.body.scrollHeight : 0;
+    } catch (e) { return; }
+    if (sh <= 0) return;
+    if (y + vh < sh - 200) return;
+    loadNextAutoPage();
+  }
+  function loadNextAutoPage() {
+    var ctx = autoPageCtx;
+    if (!ctx) return;
+    var nextIdx = -1, nextItem = null;
+    for (var i = ctx.index + 1; i < ctx.items.length; i++) {
+      var u = ctx.items[i] && (ctx.items[i].url || ctx.items[i].link);
+      if (u) { nextIdx = i; nextItem = ctx.items[i]; break; }
+    }
+    if (!nextItem) { autoPageCtx = null; return; }
+    autoPageLoading = true;
+    var captured = null;
+    try { captured = captureNextChapter(nextItem); } catch (e) { captured = null; }
+    autoPageLoading = false;
+    // 取不到内容也前进下标，避免同一条失败项反复触发。
+    ctx.index = nextIdx;
+    if (!captured || (!captured.items && !captured.text)) return;
+    var y = 0;
+    try { y = window.scrollY || 0; } catch (e) { y = 0; }
+    if (captured.items) {
+      render(currentItems.concat(captured.items));
+    } else {
+      try {
+        var div = document.createElement('div');
+        div.className = 'longtext';
+        div.textContent = captured.text;
+        listEl.appendChild(div);
+      } catch (e) {}
+    }
+    try { window.scrollTo(0, y); } catch (e) {}
+    recordHistoryThrottled(
+      itemTitle(nextItem),
+      stripFlags(String(nextItem.url || nextItem.link || '')),
+      itemPic(nextItem)
+    );
+  }
+  // 以捕获模式取下一章内容：复用聚合搜索的 resultCapture 模式，
+  // 绝不直接调 openItem（会替换整页并清上下文）。@rule=/子页/
+  // 详情脚本三种形态分别求值；求值期间的全局状态事后全数恢复，
+  // renderText 之类的直接写屏也被先存后恢复，不污染当前页。
+  function captureNextChapter(nextItem) {
+    var cleanNext = stripFlags(String(nextItem.url || nextItem.link || ''));
+    var collected = [];
+    var savedCapture = resultCapture;
+    var savedUrl = MY_URL, savedPage = MY_PAGE, savedInput = currentInput;
+    var savedPre = preResultItems.slice();
+    var savedRefresh = refreshListeners.slice();
+    var savedClose = closeListeners.slice();
+    var savedHtml = null;
+    try { savedHtml = listEl.innerHTML; } catch (e) { savedHtml = null; }
+    resultCapture = collected;
+    var textOut = '';
+    try {
+      var ruleIdx = cleanNext.indexOf('@rule=');
+      if (ruleIdx >= 0) {
+        var ruleBase = cleanNext.slice(0, ruleIdx);
+        var ruleCode = cleanNext.slice(ruleIdx + '@rule='.length).replace(/＆/g, '&');
+        if (ruleCode.indexOf('.js:') === 0) ruleCode = ruleCode.slice(4);
+        else if (ruleCode.indexOf('js:') === 0) ruleCode = ruleCode.slice(3);
+        var content = '';
+        try { content = fetch(ruleBase); } catch (e) { content = ''; }
+        setCurrentInput(content);
+        var out = evalJsTransform(ruleCode, content);
+        textOut = typeof out === 'string' ? out : '';
+      } else if (/^hiker:\/\/page\//i.test(cleanNext)) {
+        var ref = splitPageRef(cleanNext.replace(/^hiker:\/\/page\//i, ''));
+        var page = findPage(ref.path);
+        if (page) {
+          textOut = runPageRule(page.rule, ref.path + (ref.query ? '?' + ref.query : ''));
+        }
+      } else if (/^https?:\/\//.test(cleanNext) && hasDetailRule()) {
+        setGlobals(cleanNext, 1);
+        setCurrentInput(cleanNext);
+        runSource(detailScript());
+      }
+    } catch (e) { textOut = ''; }
+    resultCapture = savedCapture;
+    setGlobals(savedUrl, savedPage);
+    setCurrentInput(savedInput);
+    preResultItems = savedPre;
+    refreshListeners.length = 0;
+    for (var ri = 0; ri < savedRefresh.length; ri++) refreshListeners.push(savedRefresh[ri]);
+    closeListeners.length = 0;
+    for (var ci2 = 0; ci2 < savedClose.length; ci2++) closeListeners.push(savedClose[ci2]);
+    if (savedHtml !== null) {
+      try { listEl.innerHTML = savedHtml; } catch (e) {}
+    }
+    if (collected.length) return { items: collected };
+    if (textOut) {
+      try {
+        var parsed = JSON.parse(textOut);
+        if (Array.isArray(parsed)) return { items: parsed };
+      } catch (e) { /* 不是数组就当文本 */ }
+      return { text: textOut };
+    }
+    return null;
+  }
+  // ---------- C13 #autoCache#/#cacheOnly#/cacheCode：页面级缓存 ----------
+  // 只缓存第一页（MY_PAGE==1 才读写）；键 = md5(剥除后地址 + '|' +
+  // 被点条目标题)。E76 联动：键的标题分量按本规格用条目标题，不用
+  // computeNextTitle 算出的下页标题；将来若改用下页标题，旧键自然
+  // 失效、无需迁移。fetch('hiker://page/x#autoCache#') 是取数语境，
+  // 不走 openItem 捕获，页面缓存对其无操作用，行为不变。
+  var pageCacheArmed = null;
+  var pageCacheHook = null;
+  var pageCacheBypass = false;
+  var PAGE_CACHE_TTL_MS = 15 * 24 * 3600 * 1000;
+  var PAGE_CACHE_MAX = 200;
+  function armPageCache(raw, item) {
+    var auto = hasFlag(raw, 'autoCache');
+    var only = hasFlag(raw, 'cacheOnly');
+    if (!auto && !only) {
+      pageCacheArmed = null;
+      pageCacheBypass = false;
+      return;
+    }
+    var key = '';
+    try {
+      var digest = md5(stripFlags(raw) + '|' + itemTitle(item));
+      if (digest) key = 'pgc_' + digest;
+    } catch (e) { key = ''; }
+    if (!key) { pageCacheArmed = null; return; }
+    pageCacheArmed = { key: key, cacheOnly: only };
+  }
+  function cacheCode(code) {
+    if (typeof code === 'function') pageCacheHook = dollarToString(code);
+    else pageCacheHook = String(code == null ? '' : code);
+  }
+  function readPageCache(key) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      if (!obj || !Array.isArray(obj.items)) return null;
+      if (Date.now() - (obj.at || 0) > PAGE_CACHE_TTL_MS) {
+        try { localStorage.removeItem(key); } catch (e) {}
+        return null;
+      }
+      return obj;
+    } catch (e) { return null; }
+  }
+  function maybeWritePageCache(items) {
+    var armed = pageCacheArmed;
+    if (!armed || resultCapture) return;
+    if (MY_PAGE !== 1) return;
+    if (!Array.isArray(items)) return;
+    try {
+      localStorage.setItem(armed.key, JSON.stringify({
+        at: Date.now(), items: items, isDetail: !!isDetail,
+        title: pageTitle, hook: pageCacheHook || ''
+      }));
+    } catch (e) { /* 配额不足等一律静默，缓存只是加速 */ }
+  }
+  // 武装进入时先查缓存：命中则先渲染（hook 命中渲染前求值，返回
+  // 数组则覆盖缓存条目），cacheOnly 时返回 'skip' 跳过网络，autoCache
+  // 时返回 'shown' 继续跑脚本（setResult 覆盖写缓存并重画）。
+  // 命中即消费本次导航的 noLoading 抑制（内容已显示，不再需要占位）。
+  function tryServePageCache(wantDetail) {
+    var armed = pageCacheArmed;
+    if (!armed) return 'miss';
+    if (MY_PAGE !== 1) return 'miss';
+    if (pageCacheBypass) { pageCacheBypass = false; return 'miss'; }
+    var entry = readPageCache(armed.key);
+    if (!entry) return 'miss';
+    var items = entry.items;
+    if (entry.hook) {
+      try {
+        var hooked = evalJsValue(entry.hook, currentInput);
+        if (Array.isArray(hooked)) items = hooked;
+      } catch (e) { /* hook 出错用缓存条目原样显示 */ }
+    }
+    nextNavQuiet = false;
+    preResultItems = [];
+    isDetail = !!wantDetail;
+    render(items);
+    showBack(true);
+    return armed.cacheOnly ? 'skip' : 'shown';
+  }
+  function prunePageCache() {
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf('pgc_') === 0) keys.push(k);
+      }
+      var kept = [];
+      for (var j = 0; j < keys.length; j++) {
+        var obj = null;
+        try { obj = JSON.parse(localStorage.getItem(keys[j]) || 'null'); } catch (e) { obj = null; }
+        if (!obj || Date.now() - (obj.at || 0) > PAGE_CACHE_TTL_MS) {
+          try { localStorage.removeItem(keys[j]); } catch (e) {}
+        } else {
+          kept.push({ key: keys[j], at: obj.at || 0 });
+        }
+      }
+      kept.sort(function (a, b) { return a.at - b.at; });
+      while (kept.length > PAGE_CACHE_MAX) {
+        var oldest = kept.shift();
+        try { localStorage.removeItem(oldest.key); } catch (e) {}
+      }
+    } catch (e) {}
+  }
   function openItem(item, fromDetail, clickIndex) {
     if (!item) return;
     var rawUrl = item.url || item.link || '';
     if (!rawUrl) return;
+    // 旗标捕获（剥除前，见 captureNavFlags）。handleLazyResult 重入时
+    // 它已按原始结果捕获过，pendingNavCarried 置位，这里跳过重捕获。
+    if (pendingNavCarried) {
+      pendingNavCarried = false;
+    } else {
+      captureNavFlags(rawUrl, item, clickIndex);
+    }
+    // 列表项 url 对象形态（R6-F2，db_id 2779）：{urls:[...]} 复用
+    // handleLazyResult 的对象分支（单地址直播/多地址线路选择/
+    // headers 并入播放头）；无 urls 字段的对象走现有行为。
+    if (rawUrl && typeof rawUrl === 'object' && Array.isArray(rawUrl.urls) && rawUrl.urls.length) {
+      handleLazyResult(rawUrl, item, fromDetail);
+      return;
+    }
     var url = stripFlags(rawUrl);
     // fyIndex：点击时替换成被点条目的下标。
     if (clickIndex !== undefined && clickIndex !== null && url.indexOf('fyIndex') >= 0) {
@@ -1784,6 +2748,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (crossParams.rule && !isCurrentRuleTitle(crossParams.rule)) {
         var fetched = fetchRulePageObject(crossParams.rule, crossRef.path);
         if (fetched && fetched.page) {
+          applyCapturedNavState();
           var crossText = withRuleContext(fetched.rule || {}, function () {
             return runPageRule(pageRuleText(fetched.page), crossRef.path + (crossRef.query ? '?' + crossRef.query : ''));
           });
@@ -1805,7 +2770,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       var lazyCode = url.slice(lazyIdx + '@lazyRule='.length).replace(/＆/g, '&');
       if (lazyCode.indexOf('.js:') === 0) lazyCode = lazyCode.slice(4);
       else if (lazyCode.indexOf('js:') === 0) lazyCode = lazyCode.slice(3);
-      var lazyQuiet = hasFlag(rawUrl, 'noLoading');
+      var lazyQuiet = consumeNavQuiet();
       if (!lazyQuiet) showPlayLoading(true);
       defer(function () {
         try {
@@ -1836,11 +2801,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       var ruleCode = url.slice(ruleIdx + '@rule='.length).replace(/＆/g, '&');
       if (ruleCode.indexOf('.js:') === 0) ruleCode = ruleCode.slice(4);
       else if (ruleCode.indexOf('js:') === 0) ruleCode = ruleCode.slice(3);
-      navStack.push({ url: MY_URL, page: MY_PAGE });
+      pushNavEntry();
       setGlobals(ruleBase, 1);
       showBack(true);
       isDetail = false;
-      showListLoading();
+      applyCapturedNavState();
+      var ruleCacheServed = tryServePageCache(false);
+      if (ruleCacheServed === 'skip') return;
+      if (ruleCacheServed !== 'shown') showListLoading();
       defer(function () {
         var content = '';
         try { content = fetch(ruleBase); } catch (e) { content = ''; }
@@ -1850,7 +2818,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
           if (typeof out === 'string' && out) {
             try {
               var parsed = JSON.parse(out);
-              if (Array.isArray(parsed)) { render(parsed); return; }
+              if (Array.isArray(parsed)) { maybeWritePageCache(parsed); render(parsed); return; }
             } catch (e) { /* 不是数组就当文本 */ }
             renderText(out);
           }
@@ -1858,21 +2826,33 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       });
       return;
     }
-    if (url.indexOf('hiker://lazy#') === 0) {
-      var entry = lazyMap[url.slice('hiker://lazy#'.length)];
+    // 懒规则链接：纯 hiker://lazy#key，或页地址 + lazy 的复合地址
+    // （规则常写 url: detailUrl + lazy，lazy 函数以页地址为 input、
+    // 以绑定参数为形参，如 AnySex 的 (host, ua)）。复合地址的 input
+    // 取 # 前的页地址，绑定参数原样传；纯 lazy 地址沿用旧语义。
+    var lazyIdx = url.indexOf('hiker://lazy#');
+    if (lazyIdx >= 0) {
+      var entry = lazyMap[url.slice(lazyIdx + 'hiker://lazy#'.length)];
       if (entry) {
         // 解析是同步 XHR 链：先亮遮罩、再延迟执行，让浏览器
         // 先把“正在解析”画出来；遮罩在解析结束时一定撤掉。
-        // #noLoading# 旗标压住遮罩。点击前先把绑定的 input 写进全局。
-        var quiet = hasFlag(rawUrl, 'noLoading');
+        // #noLoading# 旗标压住遮罩（入口捕获，统一查 consumeNavQuiet）。
+        // 点击前先把绑定的 input 写进全局。
+        var quiet = consumeNavQuiet();
         if (!quiet) showPlayLoading(true);
         defer(function () {
           try {
             if (typeof entry === 'function') {
+              if (lazyIdx > 0) setCurrentInput(url.slice(0, lazyIdx));
               handleLazyResult(entry(), item, fromDetail);
             } else {
-              setCurrentInput(entry.input === undefined ? '' : entry.input);
-              handleLazyResult(entry.fn(entry.input), item, fromDetail);
+              var lazyArgs = entry.args || [entry.input];
+              if (lazyIdx > 0) {
+                setCurrentInput(url.slice(0, lazyIdx));
+              } else {
+                setCurrentInput(lazyArgs.length === 0 || lazyArgs[0] === undefined ? '' : lazyArgs[0]);
+              }
+              handleLazyResult(entry.fn.apply(null, lazyArgs), item, fromDetail);
             }
           } catch (error) { say('执行失败：' + error); }
           finally { if (!quiet) showPlayLoading(false); }
@@ -1888,7 +2868,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (item && item.extra && item.extra.url && /^hiker:\/\/page\//i.test(url)) {
         pageUrl = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'url=' + encodeURIComponent(String(item.extra.url));
       }
-      var virtual = resolveVirtual(pageUrl);
+      var virtual = null;
+      applyCapturedNavState();
+      if (tryServePageCache(false) !== 'skip') {
+        virtual = resolveVirtual(pageUrl);
+      }
       if (virtual) { renderVirtual(virtual, url); return; }
       return;
     }
@@ -1978,11 +2962,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     if (url.indexOf('webview://') === 0) {
       // 点击形态：去掉前缀后按普通链接重走（取数形态走 rawHttpEx）。
+      // 外层链接的旗标捕获由重入的 openItem 沿用，不重捕获。
+      pendingNavCarried = true;
       openItem({ url: url.slice('webview://'.length), title: itemTitle(item), extra: item ? item.extra : null }, fromDetail);
       return true;
     }
     if (url.indexOf('func://background') === 0) {
-      native({ type: 'pop' });
+      // E84 微选项：无窗口机制可隐藏，诚实提示、不退出运行页
+      // （旧行为 native pop 直接退出整页，是误伤）。
+      toast('没有可隐藏的窗口');
       return true;
     }
     if (url.indexOf('rule://') === 0 || url.indexOf('海阔视界') === 0) {
@@ -2014,8 +3002,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return true;
     }
     if (url.indexOf('share://') === 0) {
-      native({ type: 'copy', text: url.slice('share://'.length) });
-      toast('链接已复制，可分享给他人');
+      // H22：交给原生分享面板（文件目标经 /__files/ 同源查找落盘
+      // 后分享，找不到或失败时原生侧回落复制 + 提示）。
+      native({ type: 'share', target: url.slice('share://'.length) });
       return true;
     }
     if (url.indexOf('openFile://') === 0) {
@@ -2029,6 +3018,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     if (url.indexOf('fileSelect://') === 0) {
       native({ type: 'pickFile', code: url.slice('fileSelect://'.length) });
+      return true;
+    }
+    if (url === 'hiker://browser' || url.indexOf('hiker://browser?') === 0) {
+      // hiker://browser?url=…（R6-F11）：解码后走壳内打开网页；
+      // url 缺失/为空时提示并视为已消费。
+      var bParams = parseQuery(splitPageRef(url).query);
+      var bUrl = bParams.url || '';
+      if (!bUrl) {
+        toast('没有可打开的地址');
+        return true;
+      }
+      native({ type: 'open', url: bUrl, title: itemTitle(item) });
       return true;
     }
     if (url.indexOf('hiker://search') === 0) {
@@ -2076,6 +3077,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (url.indexOf('hiker://page/list') === 0) {
       var listPage = findPage('list');
       if (listPage) {
+        applyCapturedNavState();
         var listText = runPageRule(listPage.rule, 'list');
         if (listText) { renderVirtual(listText, url); return true; }
       }
@@ -2085,6 +3087,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (url.indexOf('hiker://page/search') === 0) {
       var searchPage = findPage('search');
       if (searchPage) {
+        applyCapturedNavState();
         var searchText = runPageRule(searchPage.rule, 'search');
         if (searchText) { renderVirtual(searchText, url); return true; }
       }
@@ -2101,7 +3104,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return true;
     }
     if (url.indexOf('hiker://download') === 0) {
-      toast('暂不支持打开下载管理页');
+      renderDownloadList();
       return true;
     }
     if (url.indexOf('hiker://js') === 0) {
@@ -2132,11 +3135,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function pushNavigate(pushUrl) {
     clearPageTasks();
     var target = decodeURIComponentSafe(pushUrl);
-    navStack.push({ url: MY_URL, page: MY_PAGE });
+    pushNavEntry();
     setGlobals(target, 1);
     showBack(true);
     isDetail = false;
-    showListLoading();
+    applyCapturedNavState();
+    var pushCacheServed = tryServePageCache(false);
+    if (pushCacheServed === 'skip') return;
+    if (pushCacheServed !== 'shown') showListLoading();
     var token = ++navToken;
     defer(function () {
       if (token !== navToken) return;
@@ -2147,7 +3153,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // pics:// 多图浏览：图片纵排显示，返回键回首页脚本。
   function renderGallery(urls) {
     if (!urls.length) return;
-    navStack.push({ url: MY_URL, page: MY_PAGE });
+    x5RenderBegin();
+    pushNavEntry();
     showBack(true);
     isDetail = false;
     var html = '<div class="gallery">';
@@ -2165,7 +3172,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var id = 'sniff' + (++sniffSeq);
     var extra = (item && item.extra) || {};
     sniffPending[id] = { item: item, fromDetail: fromDetail, cacheM3u8: !!extra.cacheM3u8 };
-    showPlayLoading(true);
+    if (!consumeNavQuiet()) showPlayLoading(true);
     var mode = 'video';
     var js = '';
     var target = url;
@@ -2246,6 +3253,36 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var idx = parseInt(res.result, 10);
     return isNaN(idx) ? -1 : idx;
   }
+  // ---------- 云剪贴板桥（仅云 6） ----------
+  // 同步 XHR 打到 Dart /__paste：规则的调用形态是同步赋值，
+  // 异步桥会改变语义。失败抛 Error，规则的 try/catch 自行承接。
+  function pasteRequest(body) {
+    var xhr = new XMLHttpRequest();
+    try {
+      xhr.open('POST', window.location.origin + '/__paste', false);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.send(JSON.stringify(body));
+    } catch (e) { throw new Error('云剪贴板桥接失败：' + e); }
+    if (xhr.status !== 200) throw new Error('云剪贴板桥接失败：HTTP ' + xhr.status);
+    var res;
+    try { res = JSON.parse(xhr.responseText || 'null'); }
+    catch (e) { throw new Error('云剪贴板桥接失败：响应无法解析'); }
+    if (!res || res.ok !== true) throw new Error((res && res.error) || '云剪贴板操作失败');
+    return res.result;
+  }
+  function getPastes() {
+    var res = pasteRequest({ op: 'list' });
+    if (!Array.isArray(res)) throw new Error('云剪贴板桥接失败：返回格式不对');
+    return res;
+  }
+  function sharePaste(content, paste) {
+    var res = pasteRequest({ op: 'share', content: String(content == null ? '' : content), paste: String(paste == null ? '' : paste) });
+    return String(res == null ? '' : res);
+  }
+  function parsePaste(url) {
+    var res = pasteRequest({ op: 'parse', url: String(url == null ? '' : url) });
+    return String(res == null ? '' : res);
+  }
   // confirm 宿主函数：字符串形态回布尔；对象形态按选择执行
   // confirm/cancel 里的代码串（代码不能引用外层变量，与官方一致）。
   function confirmFn(arg) {
@@ -2289,12 +3326,19 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (idx < 0 || idx >= options.length) return;
     if (cfg.js) {
       try {
+        // 选中下标先写 MY_INDEX（IIFE 变量 + window 同步）再求值，
+        // 回调读 MY_INDEX 得下标、读 input 得选中字符串；回调返回
+        // 字符串时走长按菜单同款跟随 openItem({url: out})。
+        MY_INDEX = idx;
+        try { window.MY_INDEX = idx; } catch (e0) {}
         setCurrentInput(String(options[idx]));
-        (0, eval)(String(cfg.js));
+        var out = (0, eval)(String(cfg.js));
+        if (typeof out === 'string' && out) openItem({ url: out });
       } catch (e) { say('执行失败：' + e); }
     }
   }
   function renderText(text) {
+    x5RenderBegin();
     listEl.innerHTML = '<div class="empty">' + escapeHtml(String(text).slice(0, 4000)) + '</div>';
   }
   // 当前渲染的条目（updateItem/deleteItem 等动态接口的操作对象，
@@ -2410,6 +3454,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       for (var ci = 0; ci < cap.length; ci++) resultCapture.push(cap[ci]);
       return;
     }
+    // 新一帧渲染开始：重置本帧 x5 行计数并藏起旧原生行；
+    // 本帧的 x5RowHtml 会再发配置（捕获模式已在上面返回，不动行）。
+    x5RenderBegin();
     currentItems = mainItems.slice();
     if (!isDetail && preResultItems.length) items = preResultItems.concat(items);
     currentMode = isDetail ? 'detail' : 'list';
@@ -2440,7 +3487,6 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       html += sectionHtml(sec.col, sec.indexes, items);
     });
     listEl.innerHTML = html;
-    bindX5Frames();
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
       el.addEventListener('click', function () {
         var idx = Number(el.getAttribute('data-index'));
@@ -2483,7 +3529,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     });
   }
   function isSingleBlockCol(col) {
-    return col === 'line' || col === 'line_blank' || col === 'blank_block' ||
+    return col === 'line' || col === 'line_blank' || col === 'blank_block' || col === 'big_blank_block' ||
       col === 'rich_text' || col === 'long_text' || col === 'input' ||
       col === 'icon_1_search' || col === 'movie_1_vertical_pic' ||
       col === 'movie_1_vertical_pic_blur' || col === 'pic_1_full' ||
@@ -2550,11 +3596,40 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       '</div>';
   }
   function extraOf(it) { return (it && it.extra) || {}; }
-  // 文本尺寸/行距（long_text/rich_text 的 extra.textSize/lineSpacing）。
+  // extra 字号：textSize 优先，缺失/非法/非正时回落 fontSize；
+  // 两者皆无效回 NaN（调用方按无字号处理，与现有 textSize 守卫一致）。
+  function textExtraFontSize(ex) {
+    var fs = parseInt(ex.textSize, 10);
+    if (isFinite(fs) && fs > 0) return fs;
+    var alt = parseInt(ex.fontSize, 10);
+    if (isFinite(alt) && alt > 0) return alt;
+    return NaN;
+  }
+  // extra 文字颜色：只认 #rgb/#rrggbb/#rrggbbaa 与纯字母色名，
+  // 其余形态忽略（不拼未经校验的值进 style，防样式注入）。
+  function textExtraColor(ex) {
+    var c = String(ex.textColor || '').trim();
+    if (/^#[0-9a-fA-F]{3}$/.test(c) || /^#[0-9a-fA-F]{6}$/.test(c) || /^#[0-9a-fA-F]{8}$/.test(c)) return c;
+    if (/^[a-zA-Z]{1,20}$/.test(c)) return c;
+    return '';
+  }
+  // 文本行字号 + 颜色内联样式（text_1/text_center_1 与 text_N
+  // 网格分支用；行距只 long_text/rich_text 经 textStyleExtra 处理）。
+  function textFontColorStyle(it) {
+    var ex = extraOf(it);
+    var style = '';
+    var fs = textExtraFontSize(ex);
+    if (isFinite(fs) && fs > 0) style += 'font-size:' + fs + 'px;';
+    var tc = textExtraColor(ex);
+    if (tc) style += 'color:' + tc + ';';
+    return style;
+  }
+  // 文本尺寸/行距（long_text/rich_text 的 extra.textSize/lineSpacing；
+  // fontSize 是 textSize 的别名，textSize 优先、缺失/非法时回落 fontSize）。
   function textStyleExtra(it) {
     var ex = extraOf(it);
     var style = '';
-    var fs = parseInt(ex.textSize, 10);
+    var fs = textExtraFontSize(ex);
     if (isFinite(fs) && fs > 0) style += 'font-size:' + fs + 'px;';
     var ls = parseInt(ex.lineSpacing, 10);
     if (isFinite(ls)) {
@@ -2630,7 +3705,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       html += '<div class="textrows">';
       for (i = 0; i < indexes.length; i++) {
         index = indexes[i]; it = items[index];
-        var lvStyle = lineVisibleStyle(it);
+        var lvStyle = lineVisibleStyle(it) + textFontColorStyle(it);
         html += '<div class="textrow' + (col === 'text_center_1' ? ' center' : '') + '" data-index="' + index + '"' + (lvStyle ? ' style="' + lvStyle + '"' : '') + '>' +
           markupTitle(itemTitle(it)) +
           (itemDesc(it) ? '<div class="d" style="font-size:12px;color:#B4A5CE">' + escapeHtml(itemDesc(it)) + '</div>' : '') +
@@ -2646,7 +3721,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       for (i = 0; i < indexes.length; i++) {
         index = indexes[i]; it = items[index];
         var align = extraOf(it).textAlign;
-        var alignStyle = (align === 'left' || align === 'right' || align === 'center') ? ' style="text-align:' + align + '"' : '';
+        var cellStyle = (align === 'left' || align === 'right' || align === 'center') ? 'text-align:' + align + ';' : '';
+        cellStyle += textFontColorStyle(it);
+        var alignStyle = cellStyle ? ' style="' + cellStyle + '"' : '';
         html += '<div class="tcell" data-index="' + index + '"' + alignStyle + '>' + escapeHtml(itemTitle(it) || '选集') + '</div>';
       }
       html += '</div>';
@@ -2711,7 +3788,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       for (i = 0; i < indexes.length; i++) html += '<div class="divider"></div>';
       return html;
     }
-    if (col === 'line_blank' || col === 'blank_block') {
+    if (col === 'line_blank' || col === 'blank_block' || col === 'big_blank_block') {
       for (i = 0; i < indexes.length; i++) html += '<div class="blankblock"></div>';
       return html;
     }
@@ -2821,6 +3898,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 播放线路 / 选集，不再全画成统一卡片。每个条目仍保留一个
   // data-index（点选行为与列表页一致；hiker://empty 的行点按无反应）。
   function renderDetail(items) {
+    // 详情渲染亦可含 x5 行（renderDetail 也被 rerenderCurrent 直调，
+    // 故与 render 各自在入口重置；经 render 进来时会重置两次，无害）。
+    x5RenderBegin();
     if (!items.length) {
       listEl.innerHTML = '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
       return;
@@ -2885,7 +3965,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         html += '<div class="divider"></div>';
         return;
       }
-      if (col === 'line_blank' || col === 'blank_block') {
+      if (col === 'line_blank' || col === 'blank_block' || col === 'big_blank_block') {
         closeEpGrid();
         html += '<div class="blankblock"></div>';
         return;
@@ -3000,7 +4080,6 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       html = '<div class="d-player" onclick="__haikuoPlayFirst()"><div class="pbtn">▶</div></div>' + html;
     }
     listEl.innerHTML = html;
-    bindX5Frames();
     // 历史记录：详情页渲染完成记一条（同地址节流，旗标可压住）。
     recordHistoryThrottled(detailTitle || itemTitle(items[0]), MY_URL, headItem ? itemPic(headItem) : '');
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
@@ -3044,7 +4123,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     });
   }
 
-  function setResult(items) { render(items); }
+  function setResult(items) {
+    // 规则常写 res.data = d; setHomeResult(res)（包内 8 条）——对象包
+    // data 时先解包再渲染；数组原样。指南只写了数组形态，真实规则
+    // 两种都用；setHomeResult/setSearchResult 与 setResult 同义，共用此口。
+    if (items && !Array.isArray(items) && Array.isArray(items.data)) {
+      items = items.data;
+    }
+    maybeWritePageCache(items);
+    render(items);
+  }
   // refreshPage：真刷新——详情页重跑详情脚本，列表页重跑首页
   // 脚本（含 prerule）；传 false 时保持滚动位置。并触发 onRefresh 监听。
   var refreshListeners = [];
@@ -3054,6 +4142,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     });
   }
   function refreshPage(toTop) {
+    // C13 手动刷新旁路：下一次武装进入忽略缓存直接走网络
+    // （cacheOnly 亦然），tryServePageCache 消费后清零。顶栏刷新钮
+    // 走 Dart 整页重载，JS 状态随之重置，旁路对它无意义，不另设。
+    pageCacheBypass = true;
+    nextNavQuiet = false;
     var keepScroll = toTop === false;
     var y = 0;
     try { y = window.scrollY || 0; } catch (e) { y = 0; }
@@ -3081,26 +4174,67 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function download(url, dest) {
     native({ type: 'download', url: String(url || ''), title: String(dest || '') });
   }
-  function getVar(key, fallback) {
+  // ---------- putVar/getVar 会话存储（E33，指南：重启软件后失效） ----------
+  // 旧实现写 localStorage `v_` 键：跨重启残留（同端口）或偶然丢失
+  // （换端口换起源），两种行为都与指南语义无关。现改 Dart 侧进程内
+  // 静态表 + 页内镜像：启动时一次同步 XHR 填充镜像，put/clear 写穿；
+  // XHR 失败只更新镜像、不抛错。无迁移：旧 localStorage `v_` 键是
+  // 会话垃圾，不再读写、绝不搬进会话存储（过期通行证不得复活）。
+  var sessionVars = {};
+  var sessionVarsLoaded = false;
+  function ensureSessionVars() {
+    if (sessionVarsLoaded) return;
+    sessionVarsLoaded = true;
     try {
-      var v = localStorage.getItem('v_' + key);
-      return v === null ? (fallback === undefined ? '' : fallback) : v;
-    } catch (e) { return fallback === undefined ? '' : fallback; }
-  }
-  function putVar(key, value) { try { localStorage.setItem('v_' + key, value == null ? '' : String(value)); } catch (e) {} }
-  function clearVar(key) {
-    try {
-      if (key === undefined || key === null || key === '') {
-        var keys = [];
-        for (var i = 0; i < localStorage.length; i++) {
-          var k = localStorage.key(i);
-          if (k && k.indexOf('v_') === 0) keys.push(k);
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', window.location.origin + '/__vars', false);
+      xhr.send(null);
+      if (xhr.status === 200) {
+        var parsed = JSON.parse(xhr.responseText || '{}');
+        var vars = parsed && parsed.vars;
+        if (vars && typeof vars === 'object') {
+          for (var k in vars) {
+            if (Object.prototype.hasOwnProperty.call(vars, k)) sessionVars[k] = String(vars[k]);
+          }
         }
-        keys.forEach(function (k) { localStorage.removeItem(k); });
-      } else {
-        localStorage.removeItem('v_' + key);
       }
-    } catch (e) {}
+    } catch (e) { /* 取不到快照就用空镜像，不拦规则 */ }
+  }
+  function writeThroughSessionVars(op, key, value) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', window.location.origin + '/__vars', false);
+      xhr.send(JSON.stringify({ op: op, key: key == null ? '' : String(key), value: value == null ? '' : String(value) }));
+    } catch (e) { /* 写穿失败只留镜像，不抛错 */ }
+  }
+  function getVar(key, fallback) {
+    ensureSessionVars();
+    var k = String(key);
+    if (Object.prototype.hasOwnProperty.call(sessionVars, k)) return sessionVars[k];
+    return fallback === undefined ? '' : fallback;
+  }
+  function putVar(key, value) {
+    // 对象形态（R6-F3）：putVar({key, value}) 转调键值形态；
+    // 无字符串 key 的对象静默忽略（不写键、不抛错）。
+    if (key !== null && typeof key === 'object') {
+      if (typeof key.key === 'string') { putVar(key.key, key.value); }
+      return;
+    }
+    ensureSessionVars();
+    var k = String(key);
+    var v = value == null ? '' : String(value);
+    sessionVars[k] = v;
+    writeThroughSessionVars('set', k, v);
+  }
+  function clearVar(key) {
+    ensureSessionVars();
+    if (key === undefined || key === null || key === '') {
+      sessionVars = {};
+      writeThroughSessionVars('clearAll', '', '');
+    } else {
+      delete sessionVars[String(key)];
+      writeThroughSessionVars('clear', String(key), '');
+    }
   }
   // MyVar/Item 按规则隔离：键 = 前缀 + 归一化规则标题 + '_' + 键名。
   // 读时新键优先、旧全局键兜底（老规则已存的值不丢）；写只写新键。
@@ -3144,6 +4278,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var end = Date.now() + wait;
     while (Date.now() < end) { /* busy wait */ }
   }
+  // closeMe：关输入流（指南定义）；空参/无 close 方法/关闭抛错
+  // 时均静默（R6-F7）。不碰 Bitmap 等图形调用方（另判 UNFILLABLE）。
+  function closeMe(s) {
+    try {
+      if (s && typeof s.close === 'function') s.close();
+    } catch (e) { /* ignore */ }
+  }
   // ---------- 本地 m3u8 存取（规则去广告后用） ----------
   // 规则 playFn 里的 saveFile('clean.m3u8', 清单)/getPath('hiker://files/clean.m3u8')
   // 原来运行时根本没有这两个函数：saveFile 一调就报 ReferenceError，
@@ -3177,8 +4318,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     try {
       var v = localStorage.getItem(myVarStorageKey(key));
       if (v !== null) return v;
-      var legacy = localStorage.getItem('v_' + key);
-      if (legacy !== null) return legacy;
+      // 旧键回落改读会话镜像（仅同会话内有效）；旧 localStorage `v_`
+      // 值不再被读到（E33 语义收紧，`mv_` 新键值不受影响）。
+      ensureSessionVars();
+      var k = String(key);
+      if (Object.prototype.hasOwnProperty.call(sessionVars, k)) return sessionVars[k];
       return fb;
     } catch (e) { return fb; }
   }
@@ -3302,7 +4446,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   function getRule() { return MY_RULE; }
   function setError(msg) { say(msg); }
   function getColTypes() {
-    return ['movie_3', 'movie_3_marquee', 'movie_2', 'movie_1', 'movie_1_left_pic', 'movie_1_vertical_pic', 'movie_1_vertical_pic_blur', 'text_1', 'text_center_1', 'text_2', 'text_3', 'text_4', 'text_5', 'long_text', 'rich_text', 'pic_3', 'pic_3_square', 'pic_2', 'pic_2_card', 'pic_1', 'pic_1_full', 'pic_1_center', 'icon_4', 'icon_4_card', 'icon_small_4', 'icon_small_3', 'icon_round_4', 'icon_round_small_4', 'icon_2', 'icon_2_round', 'line', 'line_blank', 'avatar', 'text_icon', 'blank_block', 'flex_button', 'scroll_button', 'card_pic_2', 'card_pic_1', 'card_pic_2_2', 'card_pic_2_2_left', 'card_pic_3', 'input', 'icon_1_search', 'x5_webview_single'];
+    return ['movie_3', 'movie_3_marquee', 'movie_2', 'movie_1', 'movie_1_left_pic', 'movie_1_vertical_pic', 'movie_1_vertical_pic_blur', 'text_1', 'text_center_1', 'text_2', 'text_3', 'text_4', 'text_5', 'long_text', 'rich_text', 'pic_3', 'pic_3_square', 'pic_2', 'pic_2_card', 'pic_1', 'pic_1_full', 'pic_1_center', 'icon_4', 'icon_4_card', 'icon_small_4', 'icon_small_3', 'icon_round_4', 'icon_round_small_4', 'icon_2', 'icon_2_round', 'line', 'line_blank', 'avatar', 'text_icon', 'blank_block', 'big_blank_block', 'flex_button', 'scroll_button', 'card_pic_2', 'card_pic_1', 'card_pic_2_2', 'card_pic_2_2_left', 'card_pic_3', 'input', 'icon_1_search', 'x5_webview_single'];
   }
   function back(refresh) {
     if (navStack.length) goBack();
@@ -3463,10 +4607,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       localStorage.setItem(cacheKeyFor(url), JSON.stringify({ at: Date.now(), text: text }));
     } catch (e) {}
   }
-  function fetchCache(url, hours) {
+  function fetchCache(url, hours, opts) {
     var cached = readRemoteCache(url, hours);
     if (cached !== null) return cached;
-    var text = fetch(url);
+    var text = fetch(url, opts || {});
     if (text) writeRemoteCache(url, text);
     return text;
   }
@@ -3725,13 +4869,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (crossRuleObj) {
       var savedRule = PROGRAM.rule;
       var savedMyRule = MY_RULE;
+      ensureRulePageList(crossRuleObj);
       PROGRAM.rule = crossRuleObj;
       MY_RULE = crossRuleObj;
       try { window.MY_RULE = crossRuleObj; } catch (e) {}
+      syncMyTitle();
       restoreCrossRule = function () {
         PROGRAM.rule = savedRule;
         MY_RULE = savedMyRule;
         try { window.MY_RULE = savedMyRule; } catch (e) {}
+        syncMyTitle();
       };
     }
     var force = !!param;
@@ -3805,11 +4952,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (typeof fn === 'function') return String(fn);
     return String(fn == null ? '' : fn);
   }
-  function registerLazy(fn, inputArg) {
+  function registerLazy(fn) {
     if (typeof fn !== 'function') return 'hiker://empty';
     var key = 'lazy' + Math.random().toString(36).slice(2);
-    // 存 {fn, input}：点击时先把 input 绑到全局，再调 fn(input)。
-    lazyMap[key] = { fn: fn, input: inputArg };
+    // 存 {fn, args}：点击时把绑定参数按原序全传给 fn，第一个参数
+    // 同时写进全局 input。规则常写 lazyRule((a,b,c)=>{…}, a, b, c)；
+    // 只存第一个参数会让其余参数变 undefined（胖大AV 点卡报错根因）。
+    // 单参/无参老写法行为不变。input 字段保留，读第一个参数用。
+    var args = Array.prototype.slice.call(arguments, 1);
+    lazyMap[key] = { fn: fn, args: args, input: args.length ? args[0] : undefined };
     return 'hiker://lazy#' + key;
   }
   // 参数序列化（$.toString / $().image 共用）：函数取源码，undefined
@@ -3930,13 +5081,22 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     return fmt.replace(/yyyy|yy|MMMM|MMM|MM|M|ww|w|WW|W|DDD|DD|D|F|EEEE|EEE|EE|E|a|dd|d|HH|H|kk|k|KK|K|hh|h|mm|m|ss|s|SSS|S|zzzz|zzz|zz|z|Z|G/g, function (tok) { return map[tok]; });
   }
   var closeListeners = [];
+  // 页面生命周期监听（指南：只在首页与二级页面有效，搜索页无效；
+  // 监听函数内不能引用函数外变量——调用方传 $.toString(fn) 串）。
+  // 全局 addListener 与 $.addListener 共用同一份注册；监听按页生效，
+  // runSource 开头清掉上一页的（refreshPage 先触发再重跑，不丢本次）。
+  function registerPageListener(event, code) {
+    var codeStr = fnSource(code);
+    if (event === 'onRefresh') refreshListeners.push(codeStr);
+    else if (event === 'onClose') closeListeners.push(codeStr);
+  }
   var $api = {
     require: function (path, param) { return loadModule(path, param); },
     toString: dollarToString,
     post: function (url, body, headers) { return post(url, body, { headers: headers || {} }); },
     get: function (url, headers) { return fetch(url, { headers: headers || {} }); },
-    lazyRule: function (fn, input) {
-      return registerLazy(fn, input);
+    lazyRule: function (fn) {
+      return registerLazy.apply(null, arguments);
     },
     random: function (n) { return Math.floor(Math.random() * (n || 1000)); },
     base64Encode: base64Encode,
@@ -3947,11 +5107,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     dateFormat: dateFormatImpl,
     type: dollarType,
     hiker: {},
-    addListener: function (event, code) {
-      var codeStr = fnSource(code);
-      if (event === 'onRefresh') refreshListeners.push(codeStr);
-      else if (event === 'onClose') closeListeners.push(codeStr);
-    }
+    addListener: registerPageListener
   };
   // 规则里写的是 $() / $(url) / $(url, headers)（函数调用形式），
   // 不是 $.lazyRule；$api 本身是普通对象，$() 会报 TypeError。
@@ -3959,12 +5115,25 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 为空串，$api 方法经原型链可用；$().image 不再抛错）。
   function $(selector, headers) {
     var url = typeof selector === 'string' ? selector : '';
+    // $() 数组入参（F16-select）：选项逐项 String 化；第 2 参为数字
+    // 时是列数，第 3 参为字符串时是对话框标题。字符串入参路径不变。
+    var selectOptions = null;
+    var selectCol;
+    var selectTitle;
+    if (Array.isArray(selector)) {
+      selectOptions = selector.map(function (v) { return String(v); });
+      if (typeof headers === 'number') selectCol = headers;
+      if (typeof arguments[2] === 'string') selectTitle = arguments[2];
+    }
     var chained = Object.create($api);
     chained.rule = function (fn) {
       return url + '@rule=.js:(' + fnSource(fn) + ')()';
     };
-    chained.lazyRule = function (fn, inputArg) {
-      return registerLazy(fn, inputArg === undefined ? url : inputArg);
+    chained.lazyRule = function (fn) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      if (!args.length) args.push(url);
+      else if (args[0] === undefined) args[0] = url;
+      return registerLazy.apply(null, [fn].concat(args));
     };
     chained.image = function (fn, s1, s2) {
       // fn 的参数：有 s1/s2 就序列化内联；都没有就把图片数据 input 传进去。
@@ -3983,6 +5152,24 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     chained.confirm = function (fn) {
       return 'confirm://' + url + '.js:(' + fnSource(fn) + ')()';
     };
+    chained.select = function (fn) {
+      // 生成 select:// 链接：回调经 dollarToString 序列化成 IIFE 串，
+      // 绑定参数须自包含（闭包变量丢失与 $.toString 既有限制一致）。
+      // col 非数字时省略字段（走对话框缺省）；title 未传时省略。
+      // 非数组首参时把首参包成单选项（防御性默认，无语料）。
+      var args = Array.prototype.slice.call(arguments, 1);
+      var cfg = {
+        options: selectOptions ? selectOptions.slice() : [url],
+        js: dollarToString.apply(null, [fn].concat(args))
+      };
+      if (selectTitle !== undefined) cfg.title = selectTitle;
+      if (typeof selectCol === 'number') cfg.col = selectCol;
+      return 'select://' + JSON.stringify(cfg);
+    };
+    // .b64() 窄口径：仅链式恒等。本壳 lazyRule 用内存 lazyMap，
+    // 载荷不进 URL，唯一用例（7MMTV 简介切换）不依赖线上编码格式；
+    // 官方 b64 线上格式无定义，绝不编造（UNFILLABLE）。
+    chained.b64 = function () { return chained; };
     return chained;
   }
   Object.keys($api).forEach(function (key) { $[key] = $api[key]; });
@@ -4014,6 +5201,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   var MY_URL = homeUrl();
   var MY_RULE = PROGRAM.rule || {};
+  ensureRulePageList(MY_RULE);
+  var MY_TITLE = currentRuleTitle();
   var MY_PAGE = 1;
   var MY_TYPE = 'home';
   var MY_PARAMS = {};
@@ -4022,6 +5211,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   var MY_AREA = '';
   var MY_SORT = '';
   var MY_YEAR = '';
+  // select:// 对话框选中下标：openSelectDialog 求值前设置，IIFE 内
+  // var 与 window.MY_INDEX 双份同步（与 input 同款，回调两路可读）。
+  var MY_INDEX = -1;
   var fypage = '1';
   var fyclass = '';
   var fyarea = '';
@@ -4040,6 +5232,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   var navStack = [];
 
   function setGlobals(myUrl, myPage) {
+    // A20：换页即清上页 setLastChapterRule 的残留文本，evalLastChapter
+    // 改读本规则字段；同详情页内 setLastChapterRule 在 runSource 里调、
+    // 在 showLastChapter 前，中间无 setGlobals 调用，不会被误清。
+    lastChapterRuleText = '';
     MY_URL = myUrl || '';
     MY_PAGE = myPage || 1;
     fypage = String(MY_PAGE);
@@ -4077,31 +5273,58 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (detail) return detail;
     return sdetail;
   }
+  // 返回键常驻：壳子顶栏已拿掉，规则顶栏即顶栏；首页点返回发 pop
+  // 退出本页（见 onBackBtn），详情页点返回回上一级。show 参数保留，
+  // 各处调用点不动，显示状态不再随它变。
   function showBack(show) {
     var btn = document.getElementById('backBtn');
-    if (btn) btn.style.display = show ? 'inline-block' : 'none';
+    if (btn) btn.style.display = 'inline-block';
   }
   function openDetail(url) {
     clearPageTasks();
-    navStack.push({ url: MY_URL, page: MY_PAGE });
+    pushNavEntry();
     setGlobals(url, 1);
     setCurrentInput(url);
     showBack(true);
     isDetail = true;
+    applyCapturedNavState();
+    var detailCacheServed = tryServePageCache(true);
+    if (detailCacheServed === 'skip') return;
     var token = ++navToken;
-    showListLoading();
+    if (detailCacheServed !== 'shown') showListLoading();
     defer(function () {
       if (token !== navToken) return;
       runSource(detailScript());
       showLastChapter();
     });
   }
+  // 顶栏返回键：有上一级（详情/导航栈）就回上一级，否则发 pop 让壳子
+  // 按返回键逻辑处理（内嵌全屏先退全屏、内嵌播放先关播放器，否则退页）。
+  function onBackBtn() {
+    // G11 canBack：原生 x5 行有历史时，返回键先退行内历史，不动
+    // 规则导航栈（Dart 侧按实测 canGoBack 维护该标志；行内已无历史
+    // 时标志为 false，正常走规则返回，绝不 double-pop）。
+    if (window.__haikuoX5CanGoBack === true) {
+      native({ type: 'x5rowBack' });
+      return;
+    }
+    if (navStack.length > 0 || isDetail) goBack();
+    else native({ type: 'pop' });
+  }
   function goBack() {
     clearPageTasks();
+    clearNavCapture();
     var prev = navStack.pop();
     showBack(navStack.length > 0);
-    if (prev) setGlobals(prev.url, prev.page);
-    else setGlobals(homeUrl(), 1);
+    if (prev) {
+      setGlobals(prev.url, prev.page);
+      applyPageTheme(prev.theme || '');
+      setPageTitle(prev.title ? prev.title : (PROGRAM.name || '海阔小程序'));
+    } else {
+      setGlobals(homeUrl(), 1);
+      applyPageTheme('');
+      setPageTitle(PROGRAM.name || '海阔小程序');
+    }
     MY_TYPE = 'home';
     try { window.MY_TYPE = 'home'; } catch (e) {}
     setCurrentInput('');
@@ -4116,6 +5339,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   function runSource(source) {
     preResultItems = [];
+    // C13：cacheCode hook 按页生效，新页运行前清掉上一页挂起的。
+    pageCacheHook = null;
+    // 监听按页生效：新页运行前清掉上一页注册的，避免跨页泄漏与重复触发。
+    refreshListeners.length = 0;
+    closeListeners.length = 0;
     var text = String(source || '');
     if (text.indexOf('js:') === 0) text = text.slice(3);
     if (!text.trim()) return false;
@@ -4124,8 +5352,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return runDeclarativeSource(text);
     }
     try {
+      // 注意：工厂不设 input 形参——规则代码里的裸 input 读全局
+      // window.input（setCurrentInput 随时同步）。设成形参时，懒规则
+      // 闭包捕获的是建工厂那一刻的旧值，点卡时 input 永远是空串
+      // （AnySex 点卡取空地址根因）。官方里 input 本来就是全局。
       var factory = new Function(
-        'require', 'module', 'exports', 'console', 'input',
+        'require', 'module', 'exports', 'console',
         text + '\n;return {' +
         'home: typeof home === "function" ? home : null,' +
         'detail: typeof detail === "function" ? detail : null,' +
@@ -4135,9 +5367,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         'main: typeof main === "function" ? main : null' +
         '};'
       );
+      setCurrentInput(currentInput);
       var api = factory(
         function (p, prm) { return loadModule(p, prm); },
-        {}, {}, { log: log }, currentInput
+        {}, {}, { log: log }
       );
       if (api.home) api.home();
       else if (api.main) api.main();
@@ -4155,7 +5388,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var t = String(text || '').trim();
     if (t === '*') return true;
     if (t.indexOf('&&') < 0) return false;
-    if (/\b(var|let|const|function|return|fetch|setResult|eval|require)\b/.test(t)) return false;
+    // `.js:` 变换段内的 JS 代码不参与判别：段内出现 fetch 等词时
+    // （如探花 find_rule 的 lazyRule 里 fetch 取 m3u8）仍是声明式；
+    // 段外出现 var/function/fetch 等词仍判非声明式。
+    var withoutJs = t.replace(/\.js:[^;]*/g, '');
+    if (/\b(var|let|const|function|return|fetch|setResult|eval|require)\b/.test(withoutJs)) return false;
     return true;
   }
   function fetchPageHtml() {
@@ -4202,12 +5439,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var code = pre.trim();
     if (code.indexOf('js:') === 0) code = code.slice(3);
     try {
+      // 与 runSource 同理：不设 input 形参，裸 input 读动态全局。
       var fn = new Function(
-        'require', 'module', 'exports', 'console', 'input', code
+        'require', 'module', 'exports', 'console', code
       );
+      setCurrentInput(currentInput);
       fn(
         function (p, prm) { return loadModule(p, prm); },
-        { exports: {} }, {}, { log: log }, currentInput
+        { exports: {} }, {}, { log: log }
       );
     } catch (error) {
       say('prerule 执行失败：' + (error && error.message ? error.message : error));
@@ -4241,9 +5480,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // prerule 先跑，再跑 searchFind（没有则回落 find_rule）。
   function runSearch(keyword, page) {
     clearPageTasks();
+    clearNavCapture();
     var rule = PROGRAM.rule || {};
     var kw = String(keyword == null ? '' : keyword);
-    searchKeyword = kw;
+    setSearchKeyword(kw);
     var searchUrl = String(rule.search_url || '');
     var searchFind = String(rule.searchFind || rule.searchfind || '');
     var script = searchFind || String(rule.find_rule || PROGRAM.script || '');
@@ -4252,12 +5492,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (searchUrl) {
       myUrl = searchUrl.split('**').join(kw);
       myUrl = myUrl.replace(/\bfypage\b/g, String(page || 1));
-      myUrl = myUrl.replace(/fyAll/g, '');
+      myUrl = myUrl.replace(/fyAll/g, String(selectedCls || ''));
       myUrl = myUrl.replace(/\bfyclass\b/g, String(selectedCls || ''));
     } else {
       myUrl = 'hiker://empty?word=' + encodeURIComponent(kw) + '&page=' + (page || 1);
     }
-    navStack.push({ url: MY_URL, page: MY_PAGE });
+    // 相对 search_url（R6-F10，db_id 2551）：以 `/` 开头且规则
+    // 主页非空时补全；`//` 协议相对地址与主页为空时原样保留。
+    if (rule.url && myUrl.charAt(0) === '/' && myUrl.charAt(1) !== '/' && getHome(rule.url)) {
+      myUrl = getHome(rule.url) + myUrl;
+    }
+    pushNavEntry();
+    applyPageTheme('');
     setGlobals(myUrl, page || 1);
     MY_TYPE = 'search';
     try { window.MY_TYPE = 'search'; } catch (e) {}
@@ -4321,11 +5567,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // __CRYPTOJS_FACTORY_START__
   // CryptoJS 子集（官方用法：eval(getCryptoJS()) 后用 CryptoJS.*）。
   // 覆盖规则实际会用的部分：enc.Utf8/Hex/Base64/Latin1、
-  // lib.WordArray/CipherParams、AES（CBC/ECB/CTR + Pkcs7/
+  // lib.WordArray/CipherParams、AES（CBC/ECB/CTR/CFB + Pkcs7/
   // ZeroPadding/NoPadding，含口令 + OpenSSL Salted__ 形态）、
   // RC4/RC4Drop、MD5（纯 JS）、SHA1/SHA256/SHA512 与 Hmac*
   // （走 Dart 摘要接口）、EvpKDF/OpenSSL KDF、PBKDF2（走 Dart 端）。
-  // DES/TripleDES/CFB/OFB 不在本子集内（见回报）。
+  // DES/TripleDES/OFB 不在本子集内（见回报）。
   function __cryptoJSFactory() {
     function bytesToWA(bytes) {
       var words = [];
@@ -4704,6 +5950,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
             counter[ci] = (counter[ci] + 1) & 0xFF;
             if (counter[ci] !== 0) break;
           }
+        } else if (mode === 'CFB') {
+          // CFB128（R6-F4）：移位寄存器初值 IV；加密后 shift=密文块，
+          // 解密后 shift=输入密文块；segmentSize 一律按 CFB128
+          // （无证据做 CFB8/CFB1）。
+          var cfbStream = aesEncryptBlock(prev, expanded);
+          result = block.map(function (b, i) { return b ^ cfbStream[i]; });
+          prev = encrypt ? result.slice() : block.slice();
         } else {
           if (encrypt) {
             var xored = block.map(function (b, i) { return b ^ prev[i]; });
@@ -4717,7 +5970,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         }
         out = out.concat(result);
       }
-      if (mode === 'CTR') {
+      if (mode === 'CTR' || mode === 'CFB') {
         // 流模式：输出与输入等长，末块补的零不算数。
         out = out.slice(0, inputLen);
         return out;
@@ -4942,7 +6195,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     return {
       lib: { WordArray: WA, CipherParams: CipherParams },
       enc: { Hex: Hex, Latin1: Latin1, Utf8: Utf8, Base64: Base64 },
-      mode: { CBC: { name: 'CBC' }, ECB: { name: 'ECB' }, CTR: { name: 'CTR' } },
+      mode: { CBC: { name: 'CBC' }, ECB: { name: 'ECB' }, CTR: { name: 'CTR' }, CFB: { name: 'CFB' } },
       pad: { Pkcs7: { name: 'Pkcs7' }, ZeroPadding: { name: 'ZeroPadding' }, NoPadding: { name: 'NoPadding' } },
       algo: {
         MD5: { _hashName: 'md5' }, SHA1: { _hashName: 'sha1' },
@@ -5108,8 +6361,160 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       toInputStream: function () { return makeInputStream(data); },
       toByteArray: function () { return data.slice(); },
       toHex: function () { return bytesToHex(data); },
+      // Data 内字节是 base64 文本时解出原文（id=60 链路）；与 parseBase64
+      // 共用 base64ToByteArray 解码路径。
+      base64Decode: function () { return makeDataObj(base64ToByteArray(bytesToLatin1(data))); },
       toString: function () { return bytesToLatin1(data); }
     };
+  }
+  // ---------- DES（纯 JS，FIPS 46-3；id=60 图片链 DES/CBC/PKCS7Padding 用） ----------
+  // 64 位块以 [hi, lo] 两个无符号 32 位数表示，位 1 = hi 的最高位。
+  // 不依赖 CryptoJS（子集无 DES）与 Dart 侧（crypto 包无 DES），无新依赖。
+  var DES_IP = [58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4, 62, 54, 46, 38, 30, 22, 14, 6, 64, 56, 48, 40, 32, 24, 16, 8, 57, 49, 41, 33, 25, 17, 9, 1, 59, 51, 43, 35, 27, 19, 11, 3, 61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7];
+  var DES_FP = [40, 8, 48, 16, 56, 24, 64, 32, 39, 7, 47, 15, 55, 23, 63, 31, 38, 6, 46, 14, 54, 22, 62, 30, 37, 5, 45, 13, 53, 21, 61, 29, 36, 4, 44, 12, 52, 20, 60, 28, 35, 3, 43, 11, 51, 19, 59, 27, 34, 2, 42, 10, 50, 18, 58, 26, 33, 1, 41, 9, 49, 17, 57, 25];
+  var DES_E = [32, 1, 2, 3, 4, 5, 4, 5, 6, 7, 8, 9, 8, 9, 10, 11, 12, 13, 12, 13, 14, 15, 16, 17, 16, 17, 18, 19, 20, 21, 20, 21, 22, 23, 24, 25, 24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32, 1];
+  var DES_P = [16, 7, 20, 21, 29, 12, 28, 17, 1, 15, 23, 26, 5, 18, 31, 10, 2, 8, 24, 14, 32, 27, 3, 9, 19, 13, 30, 6, 22, 11, 4, 25];
+  var DES_PC1 = [57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35, 27, 19, 11, 3, 60, 52, 44, 36, 63, 55, 47, 39, 31, 23, 15, 7, 62, 54, 46, 38, 30, 22, 14, 6, 61, 53, 45, 37, 29, 21, 13, 5, 28, 20, 12, 4];
+  var DES_PC2 = [14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4, 26, 8, 16, 7, 27, 20, 13, 2, 41, 52, 31, 37, 47, 55, 30, 40, 51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32];
+  var DES_SHIFTS = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
+  var DES_SBOX = [
+    [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7, 0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8, 4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0, 15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13],
+    [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10, 3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5, 0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15, 13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9],
+    [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8, 13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1, 13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7, 1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12],
+    [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15, 13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9, 10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4, 3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14],
+    [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9, 14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6, 4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14, 11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3],
+    [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11, 10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8, 9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6, 4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13],
+    [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1, 13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6, 1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2, 6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12],
+    [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7, 1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2, 7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8, 2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]
+  ];
+  function desBit64(p, hi, lo) {
+    return p <= 32 ? ((hi >>> (32 - p)) & 1) : ((lo >>> (64 - p)) & 1);
+  }
+  function desPermute64(table, hi, lo) {
+    var oHi = 0, oLo = 0;
+    for (var i = 0; i < 64; i++) {
+      var bit = desBit64(table[i], hi, lo);
+      if (i < 32) oHi |= bit << (31 - i);
+      else oLo |= bit << (63 - i);
+    }
+    return [oHi >>> 0, oLo >>> 0];
+  }
+  function desSubkeys(keyBytes) {
+    var hi = ((keyBytes[0] << 24) | (keyBytes[1] << 16) | (keyBytes[2] << 8) | keyBytes[3]) >>> 0;
+    var lo = ((keyBytes[4] << 24) | (keyBytes[5] << 16) | (keyBytes[6] << 8) | keyBytes[7]) >>> 0;
+    var c = 0, d = 0;
+    for (var i = 0; i < 56; i++) {
+      var bit = desBit64(DES_PC1[i], hi, lo);
+      if (i < 28) c = (c << 1) | bit;
+      else d = (d << 1) | bit;
+    }
+    var keys = [];
+    for (var r = 0; r < 16; r++) {
+      var s = DES_SHIFTS[r];
+      c = (((c << s) | (c >>> (28 - s))) & 0x0FFFFFFF) >>> 0;
+      d = (((d << s) | (d >>> (28 - s))) & 0x0FFFFFFF) >>> 0;
+      var groups = [];
+      for (var g = 0; g < 8; g++) {
+        var v = 0;
+        for (var b = 0; b < 6; b++) {
+          var p = DES_PC2[g * 6 + b];
+          var kb = p <= 28 ? ((c >>> (28 - p)) & 1) : ((d >>> (56 - p)) & 1);
+          v = (v << 1) | kb;
+        }
+        groups.push(v);
+      }
+      keys.push(groups);
+    }
+    return keys;
+  }
+  function desRoundF(right, subkey) {
+    var sOut = 0;
+    for (var g = 0; g < 8; g++) {
+      var v = 0;
+      for (var b = 0; b < 6; b++) {
+        var p = DES_E[g * 6 + b];
+        v = (v << 1) | ((right >>> (32 - p)) & 1);
+      }
+      v ^= subkey[g];
+      var row = (((v & 0x20) >>> 4) | (v & 1));
+      var col = (v >>> 1) & 0x0F;
+      sOut = (sOut << 4) | DES_SBOX[g][row * 16 + col];
+    }
+    var out = 0;
+    for (var i = 0; i < 32; i++) {
+      out |= (((sOut >>> (32 - DES_P[i])) & 1) << (31 - i));
+    }
+    return out >>> 0;
+  }
+  function desBlock(block, subkeys, decrypt) {
+    var hi = ((block[0] << 24) | (block[1] << 16) | (block[2] << 8) | block[3]) >>> 0;
+    var lo = ((block[4] << 24) | (block[5] << 16) | (block[6] << 8) | block[7]) >>> 0;
+    var perm = desPermute64(DES_IP, hi, lo);
+    var left = perm[0], right = perm[1];
+    for (var r = 0; r < 16; r++) {
+      var k = subkeys[decrypt ? 15 - r : r];
+      var next = left ^ desRoundF(right, k);
+      left = right;
+      right = next >>> 0;
+    }
+    var final = desPermute64(DES_FP, right, left);
+    var fh = final[0], fl = final[1];
+    return [(fh >>> 24) & 0xFF, (fh >>> 16) & 0xFF, (fh >>> 8) & 0xFF, fh & 0xFF,
+            (fl >>> 24) & 0xFF, (fl >>> 16) & 0xFF, (fl >>> 8) & 0xFF, fl & 0xFF];
+  }
+  function desCryptBytes(input, key, iv, encrypt, opts) {
+    var modeStr = String((opts && opts.mode) || 'DES/CBC/PKCS7Padding');
+    var useCbc = !/ECB/i.test(modeStr);
+    var padding = 'pkcs7';
+    if (/NoPadding/i.test(modeStr)) padding = 'none';
+    else if (/ZeroPadding/i.test(modeStr)) padding = 'zero';
+    var keyBytes = key.slice(0, 8);
+    if (keyBytes.length < 8) throw new Error('DES 密钥须 8 字节');
+    var ivBytes = iv ? iv.slice(0, 8) : [];
+    while (ivBytes.length < 8) ivBytes.push(0);
+    var subkeys = desSubkeys(keyBytes);
+    var data = input.slice();
+    if (encrypt) {
+      if (padding === 'pkcs7') {
+        var padLen = 8 - (data.length % 8);
+        for (var pi = 0; pi < padLen; pi++) data.push(padLen);
+      } else if (padding === 'zero') {
+        while (data.length % 8 !== 0) data.push(0);
+      } else if (data.length % 8 !== 0) {
+        throw new Error('DES NoPadding 要求 8 字节倍数');
+      }
+    } else if (data.length === 0 || data.length % 8 !== 0) {
+      throw new Error('DES 解密输入须为非空 8 字节倍数');
+    }
+    var out = [];
+    var prev = ivBytes.slice();
+    for (var off = 0; off < data.length; off += 8) {
+      var block = data.slice(off, off + 8);
+      if (encrypt) {
+        if (useCbc) for (var xi = 0; xi < 8; xi++) block[xi] ^= prev[xi];
+        var enc = desBlock(block, subkeys, false);
+        for (var ei = 0; ei < 8; ei++) out.push(enc[ei]);
+        prev = enc;
+      } else {
+        var dec = desBlock(block, subkeys, true);
+        if (useCbc) for (var di = 0; di < 8; di++) dec[di] ^= prev[di];
+        for (var oi = 0; oi < 8; oi++) out.push(dec[oi]);
+        prev = block;
+      }
+    }
+    if (!encrypt) {
+      if (padding === 'pkcs7') {
+        var n = out[out.length - 1];
+        if (n < 1 || n > 8) throw new Error('DES 填充无效');
+        for (var ci = 0; ci < n; ci++) {
+          if (out[out.length - 1 - ci] !== n) throw new Error('DES 填充无效');
+        }
+        out = out.slice(0, out.length - n);
+      } else if (padding === 'zero') {
+        while (out.length && out[out.length - 1] === 0) out.pop();
+      }
+    }
+    return out;
   }
   // crypto-java 桥：规则用 $.require("hiker://assets/crypto-java.js")
   // 解构 {Data, AES}。壳内合成，基于已有 CryptoJS 子集实现。
@@ -5118,7 +6523,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       parseHex: function (hex) { return makeDataObj(hexToByteArray(hex)); },
       parseInputStream: function (stream) { return makeDataObj(readStreamBytes(stream)); },
       parseUTF8: function (str) { return makeDataObj(utf8ToBytes(str)); },
-      parseBytes: function (arr) { return makeDataObj(dataToBytes(arr)); }
+      parseBytes: function (arr) { return makeDataObj(dataToBytes(arr)); },
+      // flags 接受但忽略（NO_WRAP 等只影响编码换行，解码无影响）。
+      parseBase64: function (b64, flags) {
+        var text = b64 == null ? '' : (typeof b64 === 'object' && b64.__str !== undefined ? b64.__str : String(b64));
+        return makeDataObj(base64ToByteArray(text.replace(/\s+/g, '')));
+      }
     };
     function parseCipherOpts(opts) {
       var o = opts || {};
@@ -5155,7 +6565,22 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         return makeDataObj(dataToBytes(cipher.ciphertext));
       }
     };
-    return { Data: Data, AES: AES };
+    // DES：语料只证实 decrypt（id=60，DES/CBC/PKCS7Padding）；encrypt
+    // 与 decrypt 共用同一核心，顺带提供。模式解析独立于 AES（不碰
+    // CryptoJS），缺 iv 时 CBC 用零向量（宽容，语料均显式传 iv）。
+    var DES = {
+      decrypt: function (data, key, opts) {
+        var o = opts || {};
+        return makeDataObj(desCryptBytes(dataToBytes(data), dataToBytes(key),
+          o.iv !== undefined ? dataToBytes(o.iv) : null, false, o));
+      },
+      encrypt: function (data, key, opts) {
+        var o = opts || {};
+        return makeDataObj(desCryptBytes(dataToBytes(data), dataToBytes(key),
+          o.iv !== undefined ? dataToBytes(o.iv) : null, true, o));
+      }
+    };
+    return { Data: Data, AES: AES, DES: DES };
   }
 
   // ---------- Java 桥最小垫片（Rhino java.* / javax.* / android.*） ----------
@@ -5278,9 +6703,481 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     return javaSignedBytes(dataToBytes(out));
   };
+  // ---------- PBEKeySpec / SecretKeyFactory（PBKDF2 垫片，纯加法） ----------
+  // FullEroticMovies 详情解密链用：PBEKeySpec(char[], salt, iterations, keyBits)
+  // + SecretKeyFactory.getInstance('PBKDF2WithHmacSHA512').generateSecret(spec)
+  // .getEncoded()，再接 SecretKeySpec + Cipher AES/CBC 解密。
+  // 口令按 UTF-8 取字节（与 Java 侧一致）；派生走已有 CryptoJS.PBKDF2
+  //（Dart 端真实现，迭代上限 10000，本链用 999）。
+  function JavaPBEKeySpec(password, salt, iterationCount, keyLength) {
+    var pw;
+    if (password != null && typeof password === 'object' &&
+        typeof password.length === 'number') {
+      pw = Array.prototype.join.call(password, '');
+    } else if (password != null && typeof password === 'object' &&
+        typeof password.__str === 'string') {
+      pw = password.__str;
+    } else {
+      pw = String(password == null ? '' : password);
+    }
+    this.password = pw;
+    this.salt = javaBytesFrom(salt);
+    this.iterationCount = iterationCount | 0;
+    this.keyLength = keyLength | 0;
+  }
+  JavaPBEKeySpec.prototype.getPassword = function () { return this.password.split(''); };
+  JavaPBEKeySpec.prototype.getSalt = function () { return javaSignedBytes(this.salt); };
+  JavaPBEKeySpec.prototype.getIterationCount = function () { return this.iterationCount; };
+  JavaPBEKeySpec.prototype.getKeyLength = function () { return this.keyLength; };
+  function JavaSecretKeyFactory(algo) {
+    this.algo = String(algo || '');
+  }
+  JavaSecretKeyFactory.getInstance = function (algo) {
+    return new JavaSecretKeyFactory(algo);
+  };
+  JavaSecretKeyFactory.prototype.generateSecret = function (keySpec) {
+    var a = this.algo.toUpperCase().replace(/-/g, '');
+    var hash = 'sha1';
+    if (a.indexOf('SHA512') >= 0) hash = 'sha512';
+    else if (a.indexOf('SHA256') >= 0) hash = 'sha256';
+    var bits = (keySpec && keySpec.keyLength) || 256;
+    var derived = CryptoJS.PBKDF2(
+      keySpec ? keySpec.password : '',
+      CryptoJS.enc.Hex.parse(bytesToHex(keySpec ? keySpec.salt : [])),
+      { keySize: Math.ceil(bits / 32), iterations: (keySpec && keySpec.iterationCount) || 1, hasher: hash }
+    );
+    var keyBytes = dataToBytes(derived);
+    return {
+      getEncoded: function () { return javaSignedBytes(keyBytes); },
+      getAlgorithm: function () { return 'PBKDF2'; },
+      getFormat: function () { return 'RAW'; }
+    };
+  };
+  // ---------- E116-F1：java.io 流 + GZIP + java.util.Base64 ----------
+  // read(buf) 按 Java 语义往 buf 里填有符号字节；read() 无参回无符号
+  // 单字节；内部一律存无符号字节（javaBytesFrom 掩码）。
+  function javaReadInto(self, buf, off, len) {
+    if (buf === undefined) {
+      if (self.__pos >= self.__data.length) return -1;
+      return self.__data[self.__pos++];
+    }
+    var start = off == null ? 0 : Math.max(0, off | 0);
+    var count = len == null ? (buf.length - start) : Math.max(0, len | 0);
+    if (self.__pos >= self.__data.length) return -1;
+    var n = Math.min(count, self.__data.length - self.__pos, buf.length - start);
+    if (n <= 0) return 0;
+    for (var i = 0; i < n; i++) {
+      var b = self.__data[self.__pos++];
+      buf[start + i] = b > 127 ? b - 256 : b;
+    }
+    return n;
+  }
+  function JavaByteArrayInputStream(bytes, off, len) {
+    if (!(this instanceof JavaByteArrayInputStream)) return new JavaByteArrayInputStream(bytes, off, len);
+    var all = javaBytesFrom(bytes);
+    var start = off == null ? 0 : Math.max(0, off | 0);
+    var end = len == null ? all.length : Math.min(all.length, start + Math.max(0, len | 0));
+    this.__data = all.slice(start, end);
+    this.__pos = 0;
+    this.__mark = 0;
+  }
+  JavaByteArrayInputStream.prototype.read = function (buf, off, len) { return javaReadInto(this, buf, off, len); };
+  JavaByteArrayInputStream.prototype.available = function () { return this.__data.length - this.__pos; };
+  JavaByteArrayInputStream.prototype.close = function () {};
+  JavaByteArrayInputStream.prototype.mark = function (readlimit) { this.__mark = this.__pos; };
+  JavaByteArrayInputStream.prototype.reset = function () { this.__pos = this.__mark; };
+  JavaByteArrayInputStream.prototype.markSupported = function () { return true; };
+  JavaByteArrayInputStream.prototype.skip = function (n) {
+    var k = this.__data.length - this.__pos;
+    if (n < k) k = n < 0 ? 0 : n;
+    this.__pos += k;
+    return k;
+  };
+  // 剩余字节（供 readStreamBytes/drain 走 getBytes 路；不挂 _hkBytes，
+  // 否则读流字节会无视游标回整段）。
+  JavaByteArrayInputStream.prototype.getBytes = function () { return this.__data.slice(this.__pos); };
+  JavaByteArrayInputStream.prototype.readAll = function () {
+    var rest = this.__data.slice(this.__pos);
+    this.__pos = this.__data.length;
+    return rest;
+  };
+  function JavaByteArrayOutputStream(size) {
+    if (!(this instanceof JavaByteArrayOutputStream)) return new JavaByteArrayOutputStream(size);
+    this.__data = [];
+  }
+  JavaByteArrayOutputStream.prototype.write = function (b, off, len) {
+    if (typeof b === 'number') { this.__data.push(b & 0xFF); return; }
+    var bytes = javaBytesFrom(b);
+    var start = off == null ? 0 : Math.max(0, off | 0);
+    var count = len == null ? (bytes.length - start) : Math.max(0, len | 0);
+    for (var i = 0; i < count && start + i < bytes.length; i++) this.__data.push(bytes[start + i]);
+  };
+  JavaByteArrayOutputStream.prototype.toByteArray = function () { return javaSignedBytes(this.__data); };
+  JavaByteArrayOutputStream.prototype.toString = function (charset) { return javaDecodeBytes(this.__data, charset); };
+  JavaByteArrayOutputStream.prototype.size = function () { return this.__data.length; };
+  JavaByteArrayOutputStream.prototype.reset = function () { this.__data = []; };
+  JavaByteArrayOutputStream.prototype.flush = function () {};
+  JavaByteArrayOutputStream.prototype.close = function () {};
+  // 读空被包流的剩余字节（GZIPInputStream 构造时用；read(buf) 循环，
+  // 游标语义正确；无 read 方法时回落 readStreamBytes）。
+  function drainJavaStream(stream) {
+    if (!stream) return [];
+    if (typeof stream.read === 'function') {
+      var out = [];
+      var buf = [];
+      for (var i = 0; i < 8192; i++) buf.push(0);
+      var guard = 0;
+      while (guard++ < 1048576) {
+        var n;
+        try { n = stream.read(buf); } catch (e) { break; }
+        if (n === -1 || n === null || n === undefined || n <= 0) break;
+        for (var j = 0; j < n; j++) out.push(buf[j] & 0xFF);
+      }
+      return out;
+    }
+    return readStreamBytes(stream);
+  }
+  // GZIP：解压/压缩走 Dart 同步端点（cryptoRequest op gunzip/gzip，
+  // dart:convert 的 gzip），绝不在 JS 手写 inflate。构造时一次性解
+  // 压（同步语义要求，Java 的惰性流式在此不可观察）。
+  function JavaGZIPInputStream(stream) {
+    if (!(this instanceof JavaGZIPInputStream)) return new JavaGZIPInputStream(stream);
+    var compressed = drainJavaStream(stream);
+    if (!compressed.length) throw new Error('GZIPInputStream: 输入为空');
+    var b64 = cryptoRequest({ op: 'gunzip', hex: bytesToHex(compressed) });
+    if (!b64) throw new Error('GZIP 解压失败');
+    this.__data = base64ToByteArray(b64);
+    this.__pos = 0;
+  }
+  JavaGZIPInputStream.prototype.read = function (buf, off, len) { return javaReadInto(this, buf, off, len); };
+  JavaGZIPInputStream.prototype.available = function () { return this.__data.length - this.__pos; };
+  JavaGZIPInputStream.prototype.close = function () {};
+  function JavaGZIPOutputStream(out, syncFlush) {
+    if (!(this instanceof JavaGZIPOutputStream)) return new JavaGZIPOutputStream(out, syncFlush);
+    this.__out = out;
+    this.__buf = [];
+    this.__finished = false;
+  }
+  JavaGZIPOutputStream.prototype.write = function (b, off, len) {
+    if (typeof b === 'number') { this.__buf.push(b & 0xFF); return; }
+    var bytes = javaBytesFrom(b);
+    var start = off == null ? 0 : Math.max(0, off | 0);
+    var count = len == null ? (bytes.length - start) : Math.max(0, len | 0);
+    for (var i = 0; i < count && start + i < bytes.length; i++) this.__buf.push(bytes[start + i]);
+  };
+  JavaGZIPOutputStream.prototype.flush = function () {};
+  JavaGZIPOutputStream.prototype.finish = function () {
+    if (this.__finished) return;
+    this.__finished = true;
+    var b64 = cryptoRequest({ op: 'gzip', hex: bytesToHex(this.__buf) });
+    if (!b64) throw new Error('GZIP 压缩失败');
+    var bytes = base64ToByteArray(b64);
+    var out = this.__out;
+    if (out && typeof out.write === 'function') {
+      try { out.write(bytes, 0, bytes.length); }
+      catch (e) {
+        for (var i = 0; i < bytes.length; i++) out.write(bytes[i]);
+      }
+    }
+  };
+  JavaGZIPOutputStream.prototype.close = function () {
+    this.finish();
+    try { if (this.__out && typeof this.__out.close === 'function') this.__out.close(); } catch (e) {}
+  };
+  // InflaterInputStream（R6-F17）：raw deflate 解压走 Dart 同步端点
+  // （cryptoRequest op inflate，ZLibDecoder(raw: true)，与 gunzip
+  // 同款 hex 进 / base64 出）；构造时一次性解压（与 GZIP 同款
+  // 同步语义）；损坏输入抛错，走规则侧既有分支兜底。
+  function JavaInflaterInputStream(stream) {
+    if (!(this instanceof JavaInflaterInputStream)) return new JavaInflaterInputStream(stream);
+    var compressed = drainJavaStream(stream);
+    if (!compressed.length) throw new Error('InflaterInputStream: 输入为空');
+    var b64 = cryptoRequest({ op: 'inflate', hex: bytesToHex(compressed) });
+    if (!b64) throw new Error('inflate 解压失败');
+    this.__data = base64ToByteArray(b64);
+    this.__pos = 0;
+  }
+  JavaInflaterInputStream.prototype.read = function (buf, off, len) { return javaReadInto(this, buf, off, len); };
+  JavaInflaterInputStream.prototype.available = function () { return this.__data.length - this.__pos; };
+  JavaInflaterInputStream.prototype.close = function () {};
+  // Base64 解码：复用 base64ToByteArray（容忍空白、要求正确 padding；
+  // 失败回 [] 故先行校验、无效抛错——id=116 的 _b64arr 靠 try/catch
+  // 在标准解码失败时回落 URL 解码，静默回 [] 会吞掉回落）。
+  function base64DecodeStrict(text, urlSafe) {
+    var s = String(text == null ? '' : text).replace(/\s+/g, '');
+    if (urlSafe) {
+      s = s.replace(/-/g, '+').replace(/_/g, '/');
+      while (s.length % 4 !== 0) s += '=';
+    }
+    if (s.length % 4 !== 0) throw new Error('Base64 长度不对');
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) throw new Error('Base64 内容不对');
+    var out = base64ToByteArray(s);
+    if (s.length > 0 && out.length === 0) throw new Error('Base64 解码失败');
+    return out;
+  }
+  function makeJavaBase64Coder(urlSafe, mime) {
+    function toText(input) {
+      if (typeof input === 'string') return input;
+      if (input && typeof input.__str === 'string') return input.__str;
+      if (input && typeof input.length === 'number') return bytesToLatin1(javaBytesFrom(input));
+      return String(input == null ? '' : input);
+    }
+    function encodeText(bytes) {
+      var b64 = byteArrayToBase64(javaBytesFrom(bytes));
+      return urlSafe ? b64.replace(/\+/g, '-').replace(/\//g, '_') : b64;
+    }
+    return {
+      decode: function (input) {
+        var text = toText(input);
+        // MIME 解码器（R6-F13）：解码前剥离全部非 Base64 字母表字符。
+        if (mime) text = text.replace(/[^A-Za-z0-9+/=]/g, '');
+        return javaSignedBytes(base64DecodeStrict(text, urlSafe));
+      },
+      encodeToString: function (bytes) { return encodeText(bytes); },
+      encode: function (bytes) { return javaSignedBytes(latin1ToBytes(encodeText(bytes))); }
+    };
+  }
+  var JavaUtilBase64 = {
+    getDecoder: function () { return makeJavaBase64Coder(false); },
+    getEncoder: function () { return makeJavaBase64Coder(false); },
+    getUrlDecoder: function () { return makeJavaBase64Coder(true); },
+    getUrlEncoder: function () { return makeJavaBase64Coder(true); },
+    getMimeDecoder: function () { return makeJavaBase64Coder(false, true); }
+  };
+  // ---------- E116-F2：小件纯 JS 类（方法清单按语料 grep 结果） ----------
+  // StringBuilder：语料只证实 new/append/toString（21/47 的 jdbMd5）；
+  // length/charAt/setLength 为同类标准小件，一并提供。
+  function JavaStringBuilder(initial) {
+    if (!(this instanceof JavaStringBuilder)) return new JavaStringBuilder(initial);
+    this.__s = initial == null ? '' : (typeof initial === 'object' && initial.__str !== undefined ? initial.__str : String(initial));
+  }
+  JavaStringBuilder.prototype.append = function (x) {
+    this.__s += x == null ? 'null' : (typeof x === 'object' && x.__str !== undefined ? x.__str : String(x));
+    return this;
+  };
+  JavaStringBuilder.prototype.toString = function () { return this.__s; };
+  JavaStringBuilder.prototype.valueOf = function () { return this.__s; };
+  JavaStringBuilder.prototype.length = function () { return this.__s.length; };
+  JavaStringBuilder.prototype.charAt = function (i) { return this.__s.charAt(i); };
+  JavaStringBuilder.prototype.setLength = function (n) {
+    n = n | 0;
+    if (n < this.__s.length) this.__s = this.__s.slice(0, n);
+    else while (this.__s.length < n) this.__s += String.fromCharCode(0);
+  };
+  // Integer：语料只证实 toHexString（21/47）；parseInt/valueOf 按任务清单补。
+  var JavaInteger = {
+    toHexString: function (n) { return ((Number(n) | 0) >>> 0).toString(16); },
+    parseInt: function (s, radix) { return parseInt(String(s), radix == null ? 10 : radix); },
+    valueOf: function (n) { return Number(n) | 0; }
+  };
+  // System：arraycopy + currentTimeMillis 均有语料（30/116）。
+  var JavaSystem = {
+    arraycopy: function (src, srcPos, dest, destPos, len) {
+      var s = srcPos | 0, d = destPos | 0, n = len | 0;
+      var tmp = [];
+      for (var i = 0; i < n; i++) tmp.push(src[s + i]);
+      for (var j = 0; j < n; j++) dest[d + j] = tmp[j];
+    },
+    currentTimeMillis: function () { return Date.now(); }
+  };
+  // Object：空构造，仅为让 newInstance(java.lang.Object, n) 的参数求值不抛错。
+  function JavaObject() {}
+  // Runnable：直通包装，new Runnable({run}) 回原对象，供 Thread 构造取 run。
+  function JavaRunnable(target) {
+    if (target && typeof target.run === 'function') return target;
+    var fn = typeof target === 'function' ? target : function () {};
+    return { run: fn };
+  }
+  // AtomicInteger：语料证实 get/getAndIncrement/incrementAndGet（149/199）；
+  // set/addAndGet/decrementAndGet 同对象顺带。单线程 JS 内无竞态，值语义即可。
+  function JavaAtomicInteger(initial) {
+    if (!(this instanceof JavaAtomicInteger)) return new JavaAtomicInteger(initial);
+    this.__v = (initial == null ? 0 : initial) | 0;
+  }
+  JavaAtomicInteger.prototype.get = function () { return this.__v; };
+  JavaAtomicInteger.prototype.set = function (v) { this.__v = v | 0; };
+  JavaAtomicInteger.prototype.getAndIncrement = function () { var o = this.__v; this.__v = (o + 1) | 0; return o; };
+  JavaAtomicInteger.prototype.incrementAndGet = function () { this.__v = (this.__v + 1) | 0; return this.__v; };
+  JavaAtomicInteger.prototype.addAndGet = function (delta) { this.__v = (this.__v + delta) | 0; return this.__v; };
+  JavaAtomicInteger.prototype.decrementAndGet = function () { this.__v = (this.__v - 1) | 0; return this.__v; };
+  // Vector：语料仅 JavaImporter(java.util.Vector) 导入、无可执行调用；
+  // 最小集合 + __javaSimpleName 供导入时取裸名 Vector。
+  function JavaVector() {
+    if (!(this instanceof JavaVector)) return new JavaVector();
+    this.__items = [];
+  }
+  JavaVector.__javaSimpleName = 'Vector';
+  JavaVector.prototype.add = function (x) { this.__items.push(x); return true; };
+  JavaVector.prototype.get = function (i) { return this.__items[i]; };
+  JavaVector.prototype.size = function () { return this.__items.length; };
+  JavaVector.prototype.isEmpty = function () { return this.__items.length === 0; };
+  JavaVector.prototype.clear = function () { this.__items = []; };
+  // Pattern：语料唯一实际 pattern 是 id=91 的
+  // (?<=\D)(?=\d)|(?<=\d)(?=\D)，只用 compile + split(JavaString)；
+  // matcher(find/group/matches) 按任务清单最小提供，底层 JS RegExp。
+  var JavaPattern = {
+    compile: function (pattern, flags) {
+      var src = pattern && typeof pattern.__str === 'string' ? pattern.__str : String(pattern == null ? '' : pattern);
+      var f = flags == null ? 0 : (flags | 0);
+      var jsFlags = '';
+      if (f & 2) jsFlags += 'i';
+      if (f & 8) jsFlags += 'm';
+      if (f & 32) jsFlags += 's';
+      var re = new RegExp(src, jsFlags);
+      function toText(input) {
+        return input && typeof input.__str === 'string' ? input.__str : String(input == null ? '' : input);
+      }
+      return {
+        split: function (input, limit) {
+          var text = toText(input);
+          var lim = limit == null ? 0 : (limit | 0);
+          if (lim > 0) {
+            var parts = [];
+            var g = new RegExp(src, jsFlags + 'g');
+            var start = 0, m;
+            while (parts.length < lim - 1 && (m = g.exec(text)) !== null) {
+              parts.push(text.slice(start, m.index));
+              start = m.index + m[0].length;
+              if (m[0].length === 0) g.lastIndex++;
+            }
+            parts.push(text.slice(start));
+            return parts;
+          }
+          var all = text.split(re);
+          while (all.length && all[all.length - 1] === '') all.pop();
+          return all;
+        },
+        matcher: function (input) {
+          var text = toText(input);
+          var greedy = new RegExp(src, jsFlags + 'g');
+          var last = null;
+          return {
+            find: function () { last = greedy.exec(text); return last !== null; },
+            group: function (index) {
+              if (!last) return null;
+              var idx = index == null ? 0 : (index | 0);
+              return idx < last.length ? (last[idx] == null ? null : last[idx]) : null;
+            },
+            matches: function () {
+              var anchored = new RegExp('^(?:' + src + ')$', jsFlags);
+              last = anchored.exec(text);
+              return last !== null;
+            }
+          };
+        }
+      };
+    }
+  };
+  // ---------- BigInteger（JS BigInt 包装；方法清单按 91/116 grep 结果） ----------
+  // 构造：(十进制串)、(串, radix)、(signum, 字节数组)、(字节数组二补码)。
+  // 方法：compareTo、modPow、toByteArray（二补码最小长度、有符号字节）、
+  // toString(radix)。91 只用 compareTo，116 的 DH 只用 modPow/toByteArray。
+  function bigIntParseRadix(s, radix) {
+    var r = radix | 0;
+    if (r < 2 || r > 36) throw new Error('BigInteger radix 不对：' + radix);
+    var text = String(s);
+    if (!text) throw new Error('BigInteger 空串');
+    var neg = false, i = 0;
+    if (text.charAt(0) === '-') { neg = true; i = 1; }
+    else if (text.charAt(0) === '+') { i = 1; }
+    if (i >= text.length) throw new Error('BigInteger 数字不对');
+    var v = 0n;
+    var rb = BigInt(r);
+    for (; i < text.length; i++) {
+      var ch = text.charAt(i);
+      var d;
+      if (ch >= '0' && ch <= '9') d = ch.charCodeAt(0) - 48;
+      else if (ch >= 'a' && ch <= 'z') d = ch.charCodeAt(0) - 87;
+      else if (ch >= 'A' && ch <= 'Z') d = ch.charCodeAt(0) - 55;
+      else throw new Error('BigInteger 数字不对');
+      if (d >= r) throw new Error('BigInteger 数字不对');
+      v = v * rb + BigInt(d);
+    }
+    return neg ? -v : v;
+  }
+  function bigIntFromBytes(bytes) {
+    var v = 0n;
+    for (var i = 0; i < bytes.length; i++) v = (v << 8n) | BigInt(bytes[i] & 0xFF);
+    return v;
+  }
+  function JavaBigInteger(a, b) {
+    if (!(this instanceof JavaBigInteger)) return new JavaBigInteger(a, b);
+    if (a && typeof a.__str === 'string') a = a.__str;
+    var v;
+    if (typeof a === 'bigint') { v = a; }
+    else if (typeof a === 'string' && b !== undefined) { v = bigIntParseRadix(a, b); }
+    else if (typeof a === 'number' && b !== undefined) {
+      var mag = bigIntFromBytes(javaBytesFrom(b));
+      if (a === 0) v = 0n;
+      else if (a < 0) v = -mag;
+      else v = mag;
+    }
+    else if (typeof a === 'string') { v = bigIntParseRadix(a, 10); }
+    else if (a !== null && typeof a === 'object') {
+      var bytes = javaBytesFrom(a);
+      if (!bytes.length) throw new Error('BigInteger 空字节数组');
+      v = bigIntFromBytes(bytes);
+      if (bytes[0] & 0x80) v = v - (1n << BigInt(8 * bytes.length));
+    }
+    else if (typeof a === 'number') { v = BigInt(a); }
+    else { throw new Error('BigInteger 参数不对'); }
+    this.__v = v;
+  }
+  JavaBigInteger.prototype.compareTo = function (other) {
+    var o = other instanceof JavaBigInteger ? other.__v : new JavaBigInteger(other).__v;
+    if (this.__v < o) return -1;
+    if (this.__v > o) return 1;
+    return 0;
+  };
+  JavaBigInteger.prototype.modPow = function (exponent, modulus) {
+    var e = exponent instanceof JavaBigInteger ? exponent.__v : new JavaBigInteger(exponent).__v;
+    var m = modulus instanceof JavaBigInteger ? modulus.__v : new JavaBigInteger(modulus).__v;
+    if (e < 0n) throw new Error('BigInteger modPow 指数为负');
+    if (m <= 0n) throw new Error('BigInteger modPow 模须为正');
+    var result = 1n;
+    var base = ((this.__v % m) + m) % m;
+    while (e > 0n) {
+      if ((e & 1n) === 1n) result = (result * base) % m;
+      e >>= 1n;
+      base = (base * base) % m;
+    }
+    return new JavaBigInteger(result);
+  };
+  JavaBigInteger.prototype.toByteArray = function () {
+    var v = this.__v;
+    if (v === 0n) return [0];
+    var bytes = [];
+    if (v > 0n) {
+      var mag = v;
+      while (mag > 0n) { bytes.unshift(Number(mag & 0xFFn)); mag >>= 8n; }
+      if (bytes[0] & 0x80) bytes.unshift(0);
+    } else {
+      var len = 1;
+      while (true) {
+        var min = -(1n << BigInt(8 * len - 1));
+        var max = (1n << BigInt(8 * len - 1)) - 1n;
+        if (v >= min && v <= max) break;
+        len++;
+      }
+      var twos = (1n << BigInt(8 * len)) + v;
+      for (var i = 0; i < len; i++) bytes.push(Number((twos >> BigInt(8 * (len - 1 - i))) & 0xFFn));
+    }
+    return javaSignedBytes(bytes);
+  };
+  JavaBigInteger.prototype.toString = function (radix) {
+    var r = radix == null ? 10 : (radix | 0);
+    if (r < 2 || r > 36) throw new Error('BigInteger radix 不对：' + radix);
+    return this.__v.toString(r);
+  };
+  JavaBigInteger.prototype.valueOf = function () { return this.toString(10); };
   var java = {
     lang: {
       String: JavaString,
+      StringBuilder: JavaStringBuilder,
+      Integer: JavaInteger,
+      System: JavaSystem,
+      Object: JavaObject,
+      Runnable: JavaRunnable,
       Byte: { TYPE: { __javaType: 'byte' } },
       Thread: function (fn) {
         this.__fn = (typeof fn === 'function') ? fn : (fn && typeof fn.run === 'function' ? fn.run : null);
@@ -5291,6 +7188,17 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
             var a = [];
             for (var i = 0; i < (len || 0); i++) a.push(0);
             return a;
+          },
+          // R6-F14：getLength 回 length；getByte 回有符号字节
+          // （-128..127，规则侧 & 0xff 掩码）；null/undefined 抛 TypeError。
+          getLength: function (arr) {
+            if (arr === null || arr === undefined) throw new TypeError('Array.getLength: null');
+            return arr.length;
+          },
+          getByte: function (arr, index) {
+            if (arr === null || arr === undefined) throw new TypeError('Array.getByte: null');
+            var b = arr[index] & 0xFF;
+            return b > 127 ? b - 256 : b;
           }
         }
       }
@@ -5312,10 +7220,17 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     var fn = this.__fn;
     if (fn) setTimeout(function () { try { fn(); } catch (e) { /* ignore */ } }, 0);
   };
+  java.lang.Thread.prototype.join = function (timeout) {
+    /* 空实现（立即返回）：149/199 在 start() 后调 join(120000)，但
+       start() 是 setTimeout 异步、worker 内的 org.mozilla.javascript
+       （Rhino Context）本就不存在，规则靠 done.get()===0 回落逐个
+       解析；join 立即返回保住该回落，阻塞等待会冻住 WebView。 */
+  };
   var javax = {
     crypto: {
       Cipher: JavaCipher,
-      spec: { SecretKeySpec: JavaSecretKeySpec, IvParameterSpec: JavaIvParameterSpec }
+      SecretKeyFactory: JavaSecretKeyFactory,
+      spec: { SecretKeySpec: JavaSecretKeySpec, IvParameterSpec: JavaIvParameterSpec, PBEKeySpec: JavaPBEKeySpec }
     }
   };
   var android = {
@@ -5326,6 +7241,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         URL_SAFE: 8,
         decode: function (b64, flags) {
           return javaSignedBytes(base64ToByteArray(b64));
+        },
+        // R6-F16：NO_WRAP 忽略（输出本无折行）；URL_SAFE 换表；
+        // 默认标准字母表（DEFAULT 亦不折行，与 byteArrayToBase64 一致）。
+        encodeToString: function (bytes, flags) {
+          var b64 = byteArrayToBase64(javaBytesFrom(bytes));
+          if (((flags | 0) & 8) !== 0) b64 = b64.replace(/\+/g, '-').replace(/\//g, '_');
+          return b64;
         }
       }
     }
@@ -5333,6 +7255,237 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   try { window.java = java; } catch (e) {}
   try { window.javax = javax; } catch (e) {}
   try { window.android = android; } catch (e) {}
+  // ---------- JavaImporter / Packages / FileUtil（Nashorn 形态最小子集） ----------
+  // 规则实际用法（只覆盖已实现类的导入；java.io / java.nio 等未实现，
+  // 碰到仍报原错，不编造）：
+  //   new JavaImporter() + importPackage(Packages.javax.crypto) + with (imp)
+  //     —— 91成人短剧（新）封面 AES 解密、老炮片库图片钩子；
+  //   JavaImporter(java.net.URL) + with (javaUrl) { new URL(u); }
+  //     —— 绅士漫画 urlParse 取协议/主机/端口。
+  function JavaURL(spec) {
+    var parsed;
+    try {
+      parsed = new URL(String(spec));
+    } catch (e) {
+      throw new Error('java.net.MalformedURLException: no protocol: ' + spec);
+    }
+    this.__url = parsed;
+    this.__spec = String(spec);
+  }
+  JavaURL.__javaSimpleName = 'URL';
+  JavaURL.prototype.getProtocol = function () {
+    return this.__url.protocol.replace(/:$/, '');
+  };
+  JavaURL.prototype.getHost = function () { return this.__url.hostname; };
+  JavaURL.prototype.getPort = function () {
+    return this.__url.port ? parseInt(this.__url.port, 10) : -1;
+  };
+  JavaURL.prototype.getFile = function () {
+    return this.__url.pathname + this.__url.search;
+  };
+  JavaURL.prototype.getPath = function () { return this.__url.pathname; };
+  JavaURL.prototype.getQuery = function () {
+    return this.__url.search ? this.__url.search.slice(1) : null;
+  };
+  JavaURL.prototype.getRef = function () {
+    return this.__url.hash ? this.__url.hash.slice(1) : null;
+  };
+  JavaURL.prototype.toString = function () { return this.__spec; };
+  // ---------- java.net.URL.openConnection（R6-F15） ----------
+  // 惰性连接对象：首次 connect()/getInputStream()/getResponseCode()
+  // 时经 rawHttpEx 发起请求并缓存结果；方法集只含 R6 13c 已证实者。
+  // 失败时 getResponseCode 回 0、getInputStream 抛错（调用方均有
+  // try/catch/兜底）；code>=400 时 getInputStream 抛错、getErrorStream
+  // 回正文流。Cookie/重定向走取数代理语义，非 HttpURLConnection 语义；
+  // 请求体经 latin1 串送 rawHttpEx，ASCII 体无损、二进制体不保真。
+  function JavaURLConnection(urlObj) {
+    if (!(this instanceof JavaURLConnection)) return new JavaURLConnection(urlObj);
+    this.__url = urlObj;
+    this.__method = 'GET';
+    this.__props = {};
+    this.__connectTimeout = 0;
+    this.__readTimeout = 0;
+    this.__doOutput = false;
+    this.__followRedirects = true;
+    this.__out = null;
+    this.__done = false;
+    this.__code = 0;
+    this.__bytes = [];
+    this.__headers = {};
+  }
+  JavaURLConnection.prototype.__ensure = function () {
+    if (this.__done) return;
+    this.__done = true;
+    var opt = { headers: {}, toHex: true };
+    var k;
+    for (k in this.__props) {
+      if (Object.prototype.hasOwnProperty.call(this.__props, k)) opt.headers[k] = this.__props[k];
+    }
+    var timeout = Math.max(this.__connectTimeout | 0, this.__readTimeout | 0);
+    if (timeout > 0) opt.timeout = timeout;
+    if (!this.__followRedirects) opt.redirect = false;
+    if (this.__out) {
+      var bodyBytes = javaBytesFrom(this.__out.toByteArray());
+      if (bodyBytes.length) opt.body = bytesToLatin1(bodyBytes);
+    }
+    var res = rawHttpEx(this.__method, this.__url.__spec, opt);
+    this.__code = res.code || 0;
+    this.__headers = res.headers || {};
+    try { this.__bytes = hexToByteArray(res.body || ''); } catch (e) { this.__bytes = []; }
+  };
+  JavaURLConnection.prototype.setRequestMethod = function (m) { this.__method = String(m || 'GET').toUpperCase(); };
+  JavaURLConnection.prototype.getRequestMethod = function () { return this.__method; };
+  JavaURLConnection.prototype.setRequestProperty = function (k, v) { this.__props[String(k)] = String(v == null ? '' : v); };
+  JavaURLConnection.prototype.getRequestProperty = function (k) {
+    var key = String(k);
+    if (Object.prototype.hasOwnProperty.call(this.__props, key)) return this.__props[key];
+    var lower = key.toLowerCase();
+    for (var p in this.__props) {
+      if (String(p).toLowerCase() === lower) return this.__props[p];
+    }
+    return null;
+  };
+  JavaURLConnection.prototype.setConnectTimeout = function (ms) { this.__connectTimeout = ms | 0; };
+  JavaURLConnection.prototype.setReadTimeout = function (ms) { this.__readTimeout = ms | 0; };
+  JavaURLConnection.prototype.setDoOutput = function (flag) { this.__doOutput = !!flag; };
+  JavaURLConnection.prototype.getDoOutput = function () { return this.__doOutput; };
+  JavaURLConnection.prototype.getOutputStream = function () {
+    if (!this.__out) this.__out = new JavaByteArrayOutputStream();
+    return this.__out;
+  };
+  JavaURLConnection.prototype.setInstanceFollowRedirects = function (flag) { this.__followRedirects = !!flag; };
+  JavaURLConnection.prototype.connect = function () {
+    this.__ensure();
+    if (this.__code <= 0) throw new Error('openConnection: 请求失败');
+  };
+  JavaURLConnection.prototype.getResponseCode = function () {
+    try { this.__ensure(); } catch (e) { return 0; }
+    return this.__code;
+  };
+  JavaURLConnection.prototype.getInputStream = function () {
+    this.__ensure();
+    if (this.__code <= 0) throw new Error('openConnection: 请求失败');
+    if (this.__code >= 400) throw new Error('openConnection: HTTP ' + this.__code);
+    return makeInputStream(this.__bytes);
+  };
+  JavaURLConnection.prototype.getErrorStream = function () {
+    try { this.__ensure(); } catch (e) { return null; }
+    if (this.__code >= 400) return makeInputStream(this.__bytes);
+    return null;
+  };
+  JavaURL.prototype.openConnection = function () { return new JavaURLConnection(this); };
+  java.net = { URL: JavaURL };
+  var FileUtil = {
+    // 输入流/字节数组 → Java 有符号字节数组（老炮片库拿 all[0]==-1 认 JPEG）。
+    toBytes: function (input) {
+      if (input && (input._hkBytes !== undefined ||
+          typeof input.getBytes === 'function' ||
+          typeof input.readAll === 'function' ||
+          typeof input.read === 'function')) {
+        return javaSignedBytes(readStreamBytes(input));
+      }
+      return javaSignedBytes(dataToBytes(input));
+    },
+    // 有符号字节数组 → 输入流（内部转无符号，图片魔数识别与 base64 才对）。
+    toInputStream: function (bytes) {
+      return makeInputStream(javaBytesFrom(bytes));
+    },
+    // R6-F18：基名中最后一个 `.` 之后的子串，无点回 ''。
+    getFileSuffix: function (path) {
+      var base = String(path == null ? '' : path).split('/').pop().split('\\').pop();
+      var dot = base.lastIndexOf('.');
+      if (dot < 0) return '';
+      return base.slice(dot + 1);
+    }
+  };
+  function __markJavaPackage(obj) {
+    try {
+      Object.defineProperty(obj, '__hkJavaPackage', {
+        value: true, enumerable: false, configurable: true
+      });
+    } catch (e) { /* 标记不上也不影响导入 */ }
+    return obj;
+  }
+  function __isJavaPackage(obj) {
+    return !!obj && obj.__hkJavaPackage === true;
+  }
+  // E116 新包/新类挂接（与 java 字面量同步；Packages.java.* 与 java.*
+  // 是同一对象，子包标记在 Packages 构造后补，避免 importPackage
+  // 把子包当类拷进 with 作用域）。
+  java.io = {
+    ByteArrayInputStream: JavaByteArrayInputStream,
+    ByteArrayOutputStream: JavaByteArrayOutputStream
+  };
+  java.math = { BigInteger: JavaBigInteger };
+  java.util.zip = {
+    GZIPInputStream: JavaGZIPInputStream,
+    GZIPOutputStream: JavaGZIPOutputStream,
+    InflaterInputStream: JavaInflaterInputStream
+  };
+  java.util.Base64 = JavaUtilBase64;
+  java.util.Vector = JavaVector;
+  java.util.regex = { Pattern: JavaPattern };
+  java.util.concurrent = { atomic: { AtomicInteger: JavaAtomicInteger } };
+  var Packages = __markJavaPackage({
+    java: __markJavaPackage({
+      lang: __markJavaPackage(java.lang),
+      net: __markJavaPackage(java.net),
+      io: __markJavaPackage(java.io),
+      math: __markJavaPackage(java.math),
+      util: __markJavaPackage(java.util),
+      security: __markJavaPackage(java.security)
+    }),
+    javax: __markJavaPackage({
+      crypto: __markJavaPackage(javax.crypto)
+    }),
+    android: __markJavaPackage({
+      util: __markJavaPackage(android.util)
+    }),
+    com: __markJavaPackage({
+      example: __markJavaPackage({
+        hikerview: __markJavaPackage({
+          utils: __markJavaPackage({ FileUtil: FileUtil })
+        })
+      })
+    })
+  });
+  // javax.crypto.spec 是 crypto 的子包：importPackage(crypto) 时不把它
+  // 当类拷进 with 作用域（子包靠 Packages.javax.crypto.spec 直取）。
+  __markJavaPackage(javax.crypto.spec);
+  __markJavaPackage(java.util.zip);
+  __markJavaPackage(java.util.regex);
+  __markJavaPackage(java.util.concurrent);
+  __markJavaPackage(java.util.concurrent.atomic);
+  function __javaImportInto(target, arg) {
+    if (arg === undefined || arg === null) return;
+    if (__isJavaPackage(arg)) {
+      Object.keys(arg).forEach(function (key) {
+        var value = arg[key];
+        if (!__isJavaPackage(value)) target[key] = value;
+      });
+      return;
+    }
+    if (typeof arg === 'function') {
+      var name = arg.__javaSimpleName || arg.name;
+      if (name) target[name] = arg;
+    }
+  }
+  function JavaImporter() {
+    var self = (this instanceof JavaImporter)
+      ? this
+      : Object.create(JavaImporter.prototype);
+    var args = Array.prototype.slice.call(arguments);
+    for (var i = 0; i < args.length; i++) __javaImportInto(self, args[i]);
+    return self;
+  }
+  JavaImporter.prototype.importPackage = function () {
+    for (var i = 0; i < arguments.length; i++) __javaImportInto(this, arguments[i]);
+  };
+  JavaImporter.prototype.importClass = function () {
+    for (var i = 0; i < arguments.length; i++) __javaImportInto(this, arguments[i]);
+  };
+  try { window.JavaImporter = JavaImporter; } catch (e) {}
+  try { window.Packages = Packages; } catch (e) {}
 
   // 同步存文件（POST /__savefile，base64 正文）：图片解密与
   // writeHexFile 用，避开 saveFile 的异步通道竞态。
@@ -5432,6 +7585,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       }
       if (dataUrl) { imageDecryptCachePut(cacheKey, dataUrl); return dataUrl; }
       if (!outBytes || !outBytes.length) { imageDecryptCachePut(cacheKey, fallback); return fallback; }
+      // B27-F3 魔数守卫：解密结果无图魔数时回落原图，绝不把短串/乱
+      // 字节存成 imgdec_* 假图（M9 类“返回字符串垃圾”即此）。
+      if (!isImageBytes(outBytes)) { imageDecryptCachePut(cacheKey, fallback); return fallback; }
       var ext = imageExtFromBytes(outBytes, parsed.base);
       var name = 'imgdec_' + Math.abs(hashString(raw)) + ext;
       if (!saveFileSync(name, byteArrayToBase64(outBytes))) {
@@ -5445,6 +7601,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       imageDecryptCachePut(cacheKey, fallback);
       return fallback;
     }
+  }
+  function isImageBytes(bytes) {
+    if (!bytes || bytes.length < 2) return false;
+    if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return true;
+    if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return true;
+    if (bytes.length >= 3 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return true;
+    if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return true;
+    if (bytes[0] === 0x42 && bytes[1] === 0x4D) return true;
+    return false;
   }
   function imageExtFromBytes(bytes, baseUrl) {
     if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return '.jpg';
@@ -5747,9 +7913,89 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     return { heightCss: heightCss, floatMode: floatMode, topMode: topMode, videoMode: parts.indexOf('video') >= 0 };
   }
+  // G11：本帧已画的 x5 行数（单行约束：指南称一页只能有一行，
+  // 多出的行只画空 div，不建原生行）；x5RenderBegin 在每帧渲染
+  // 入口重置。x5FallbackActive：本帧已回落 iframe 时，后续同帧
+  // x5RowHtml 直接画 iframe，不再重复发原生配置。
+  var x5RowCountThisRender = 0;
+  var x5FallbackActive = false;
+  function x5RenderBegin() {
+    x5RowCountThisRender = 0;
+    x5FallbackActive = false;
+    native({ type: 'x5rowClear' });
+  }
+  // extra.js / urlInterceptor 归一：函数取源码，字符串原样，其余转串。
+  function x5JsCode(value) {
+    if (typeof value === 'function') return fnSource(value);
+    if (value === undefined || value === null) return '';
+    return String(value);
+  }
+  // blockRules 归一：数组逐项转串；字符串按逗号切（id=151 形态）；
+  // 其余（空串/缺失）为空表。空规则项不过滤，Dart 侧 wildcardContains
+  // 对空串恒真、会拦死全部导航，故在此先剔掉。
+  function x5BlockRules(value) {
+    var out = [];
+    var list = [];
+    if (Array.isArray(value)) list = value;
+    else if (typeof value === 'string') list = value.split(',');
+    for (var i = 0; i < list.length; i++) {
+      var r = String(list[i] == null ? '' : list[i]).trim();
+      if (r) out.push(r);
+    }
+    return out;
+  }
   function x5RowHtml(it, index) {
+    x5RowCountThisRender++;
+    if (x5RowCountThisRender > 1) return '<div data-x5-slot="0"></div>';
     var url = stripFlags(String(it.url || it.link || ''));
+    // 相对地址按当前 http 页补全（旧 iframe 按本地服务源解析，
+    // 必然 404；原生行无法复现该源，补全后才能加载）。
+    if (url.charAt(0) === '/' && /^https?:\/\//.test(MY_URL)) {
+      try { url = resolveUrl(url, MY_URL); } catch (e) {}
+    }
     var spec = parseX5Desc(it.desc || '');
+    // 已回落 iframe 的同帧：直接画旧 iframe 形态，不再发原生配置。
+    if (x5FallbackActive) return x5IframeWrapHtml(url, it.desc || '', index);
+    var extra = (it && it.extra) || {};
+    // 顶栏实测高：top 模式的 Dart 侧偏移 = 状态栏 + 此值，不写死 120px。
+    var topOffset = 0;
+    try {
+      var hdr = document.querySelector('header');
+      if (hdr && hdr.offsetHeight) topOffset = hdr.offsetHeight;
+    } catch (e) {}
+    // 只认指南定义的 ua 键：id=44 的 "User-Agent" 键无定义，不认。
+    native({
+      type: 'x5row', url: url, desc: String(it.desc || ''), index: index,
+      topOffset: topOffset,
+      extra: {
+        ua: String(extra.ua || ''),
+        referer: String(extra.referer || ''),
+        js: x5JsCode(extra.js),
+        jsLoadingInject: !!extra.jsLoadingInject,
+        blockRules: x5BlockRules(extra.blockRules),
+        urlInterceptor: x5JsCode(extra.urlInterceptor),
+        canBack: !!extra.canBack,
+        floatVideo: extra.floatVideo === true, // W6：严格门控，真值形态一律不开
+        showProgress: extra.showProgress !== false
+      }
+    });
+    // 占位 div：列表模式按 desc 占高（与原生行同高，内容不错位）；
+    // float/top 是悬浮层，脱离文档流，占位只留 0 高。回落用的
+    // 地址/desc 存在 data 属性里，Dart 侧失败时 __haikuoX5Fallback
+    // 凭它把占位换成 iframe，不得白屏。
+    var phStyle;
+    if (spec.floatMode) phStyle = 'height:0;overflow:hidden;';
+    else if (spec.videoMode) phStyle = 'width:100%;aspect-ratio:16/9;';
+    else phStyle = 'width:100%;height:' + spec.heightCss + ';';
+    return '<div data-x5-slot="1" data-index="' + index + '"' +
+      ' data-x5-url="' + escapeHtml(url) + '" data-x5-desc="' + escapeHtml(String(it.desc || '')) + '"' +
+      ' style="' + phStyle + '"></div>';
+  }
+  // 旧 iframe 形态（只供回落用）：与 G11 之前 x5RowHtml 的输出一致，
+  // 含 spinner 与 float/top 固定定位；top 的 120px 只保留在此回落
+  // 路径里，原生路径用实测偏移。
+  function x5IframeWrapHtml(url, desc, index) {
+    var spec = parseX5Desc(desc || '');
     var style = '';
     if (spec.topMode) style = 'position:fixed;left:0;right:0;top:120px;bottom:0;z-index:20;background:#fff;';
     else if (spec.floatMode) style = 'position:fixed;left:0;right:0;bottom:0;z-index:20;background:#fff;';
@@ -5760,39 +8006,53 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       '<iframe data-x5="1" data-index="' + index + '" src="' + escapeHtml(url) + '" style="' + frameStyle + '" allowfullscreen></iframe></div>';
   }
   function x5Frame() {
-    try { return document.querySelector('iframe[data-x5]'); } catch (e) { return null; }
+    try { return document.querySelector('iframe[data-x5], [data-x5-slot="1"]'); } catch (e) { return null; }
   }
   function refreshX5WebView(url) {
-    var frame = x5Frame();
-    if (!frame) return;
-    if (url) frame.src = String(url);
-    else frame.src = frame.src;
+    // 回落 iframe 在位时改它；否则发原生消息（无原生行时 Dart 侧
+    // 忽略，即旧“无行空实现”；空 url = 重载当前行）。
+    var frame = null;
+    try { frame = document.querySelector('iframe[data-x5]'); } catch (e) {}
+    if (frame) {
+      if (url) frame.src = String(url);
+      else frame.src = frame.src;
+      return;
+    }
+    native({ type: 'x5rowRefresh', url: url ? String(url) : '' });
   }
   function refreshX5Desc(desc) {
-    var frame = x5Frame();
-    if (!frame) return;
-    var spec = parseX5Desc(desc);
-    if (spec.videoMode) {
-      frame.style.aspectRatio = '16/9';
-      frame.style.height = 'auto';
-    } else {
-      frame.style.aspectRatio = '';
-      frame.style.height = spec.heightCss;
+    var frame = null;
+    try { frame = document.querySelector('iframe[data-x5]'); } catch (e) {}
+    if (frame) {
+      var spec = parseX5Desc(desc);
+      if (spec.videoMode) {
+        frame.style.aspectRatio = '16/9';
+        frame.style.height = 'auto';
+      } else {
+        frame.style.aspectRatio = '';
+        frame.style.height = spec.heightCss;
+      }
+      return;
     }
+    native({ type: 'x5rowRefresh', desc: String(desc || '') });
   }
-  function bindX5Frames() {
+  // 静默求值（x5 桥与 urlInterceptor 共用）：表达式先试，失败按
+  // 语句跑（语句可用顶层 return 交值）；求值失败回 {ok:false}，
+  // 不 toast、不回落 input（evalJsValue 的 input 回落会把待跳 URL
+  // 误读成“待执行代码串”，拦截器绝不能用它）。
+  function x5EvalSilent(code, inputValue) {
+    var src = String(code || '');
     try {
-      var frames = document.querySelectorAll('iframe[data-x5]');
-      Array.prototype.forEach.call(frames, function (frame) {
-        frame.addEventListener('load', function () {
-          var wrap = frame.parentNode;
-          if (wrap) {
-            var spin = wrap.querySelector('.x5spin');
-            if (spin) spin.style.display = 'none';
-          }
-        });
-      });
-    } catch (e) {}
+      var expr = new Function('input', 'return (' + src + ')');
+      return { ok: true, value: expr(inputValue) };
+    } catch (e1) {
+      try {
+        var stmt = new Function('input', src);
+        return { ok: true, value: stmt(inputValue) };
+      } catch (e2) {
+        return { ok: false, value: undefined };
+      }
+    }
   }
   var pagePicUrl = '';
   function setPagePicUrl(url) {
@@ -5991,8 +8251,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     } catch (e) {}
   }
   function renderCollectionList(kind, query) {
-    var params = parseQueryParams(query || '');
-    var path = '';
+    x5RenderBegin();
+    var params = parseQueryParams(query || '');    var path = '';
     if (kind === 'history') path = '/__history?rule=' + encodeURIComponent(params.rule || '');
     else if (kind === 'bookmark') path = '/__bookmark?rule=' + encodeURIComponent(params.rule || '');
     else path = '/__collection?rule=' + encodeURIComponent(params.rule || '') + '&group=' + encodeURIComponent(params.group || '');
@@ -6025,11 +8285,73 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
         setCurrentInput(savedInput);
       }
     }
-    navStack.push({ url: MY_URL, page: MY_PAGE });
+    pushNavEntry();
     showBack(true);
     isDetail = false;
+    applyCapturedNavState();
     var label = kind === 'history' ? '历史' : (kind === 'bookmark' ? '书签' : '收藏');
     setPageTitle(label);
+    render(items);
+  }
+  // H04：下载中心列表页，仿 renderCollectionList。Dart 侧 /__downloads
+  // 列 haikuo_downloads/ 目录。条目点按走 copy:// 复制绝对路径；
+  // 长按菜单给“删除”，删完重画列表（不重复入栈）。明确不出范围：
+  // 不新增系统文件打开器，列表里只能看、删、复制路径。
+  function formatDownloadDesc(e) {
+    var parts = [];
+    var size = Number(e.size);
+    if (!isNaN(size) && size >= 0) {
+      if (size < 1024) parts.push(size + ' B');
+      else if (size < 1024 * 1024) parts.push((size / 1024).toFixed(1) + ' KB');
+      else parts.push((size / (1024 * 1024)).toFixed(1) + ' MB');
+    }
+    var mtime = Number(e.mtime);
+    if (!isNaN(mtime) && mtime > 0) {
+      try {
+        var d = new Date(mtime);
+        parts.push(d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' +
+          ('0' + d.getDate()).slice(-2) + ' ' + ('0' + d.getHours()).slice(-2) + ':' +
+          ('0' + d.getMinutes()).slice(-2));
+      } catch (e2) { /* 日期格式化失败只显示大小 */ }
+    }
+    return parts.join(' · ');
+  }
+  function deleteDownloadAndRefresh(name) {
+    var res = collectionRequest('/__downloads', { action: 'delete', name: name });
+    if (res && res.ok) {
+      renderDownloadList(true);
+      toast('已删除');
+    } else {
+      toast('删除失败');
+    }
+  }
+  function renderDownloadList(reload) {
+    x5RenderBegin();
+    var res = collectionRequest('/__downloads');
+    var entries = res && Array.isArray(res.entries) ? res.entries : [];
+    var items = entries.map(function (e) {
+      var name = String(e.name || '');
+      return {
+        title: name,
+        desc: formatDownloadDesc(e),
+        url: 'copy://' + String(e.path || name),
+        pic_url: '',
+        col_type: 'movie_1',
+        extra: {
+          longClick: [{
+            title: '删除',
+            js: (function (nm) {
+              return function () { deleteDownloadAndRefresh(nm); };
+            })(name)
+          }]
+        }
+      };
+    });
+    if (!reload) pushNavEntry();
+    showBack(true);
+    isDetail = false;
+    if (!reload) applyCapturedNavState();
+    setPageTitle('下载');
     render(items);
   }
   function currentPageInfo() {
@@ -6053,6 +8375,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // ---------- 聚合搜索（extra.rules，P1-17） ----------
   var resultCapture = null;
   function runAggregatedSearch(keyword, rulesCode, fromDetail) {
+    clearNavCapture();
     var kw = String(keyword == null ? '' : keyword);
     var codeStr = String(rulesCode == null ? '' : rulesCode);
     var ruleList = null;
@@ -6089,16 +8412,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
           pages: entry.pages || [],
           prerule: entry.prerule || ''
         };
+        ensureRulePageList(ruleObj);
         PROGRAM.rule = ruleObj;
         MY_RULE = ruleObj;
         try { window.MY_RULE = ruleObj; } catch (e) {}
+        syncMyTitle();
         var tpl = String(ruleObj.search_url || '');
         var myUrl = tpl.split('**').join(kw).split('%%').join(kw)
           .replace(/\bfypage\b/g, '1').replace(/fyAll/g, '').replace(/\bfyclass\b/g, '');
         setGlobals(myUrl || 'hiker://empty', 1);
         MY_TYPE = 'search';
         try { window.MY_TYPE = MY_TYPE; } catch (e) {}
-        searchKeyword = kw;
+        setSearchKeyword(kw);
         setCurrentInput(kw);
         try {
           runPrerule();
@@ -6112,13 +8437,15 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       PROGRAM.rule = savedRule;
       MY_RULE = savedMyRule;
       try { window.MY_RULE = savedMyRule; } catch (e) {}
+      syncMyTitle();
       setGlobals(savedUrl, savedPage);
       MY_TYPE = savedType;
       try { window.MY_TYPE = MY_TYPE; } catch (e) {}
-      searchKeyword = savedKeyword;
+      setSearchKeyword(savedKeyword);
       setCurrentInput(savedKeyword);
     }
-    navStack.push({ url: savedUrl, page: savedPage });
+    navStack.push({ url: savedUrl, page: savedPage, theme: currentPageTheme, title: pageTitle });
+    applyPageTheme('');
     showBack(true);
     isDetail = false;
     render(collected);
@@ -6133,9 +8460,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     xpath: xpath, xpathArray: xpathArray, xpa: xpathArray,
     setResult: setResult, setHomeResult: setResult, setSearchResult: setResult,
     setPreResult: setPreResult,
-    refreshPage: refreshPage, setPage: setPage, join: join, play: play, open: open,
+    refreshPage: refreshPage, addListener: registerPageListener,
+    cacheCode: cacheCode,
+    setPage: setPage, join: join, play: play, open: open,
     playVideo: playVideo, download: download,
-    toast: toast, log: log, sleep: sleep,
+    toast: toast, log: log, sleep: sleep, closeMe: closeMe,
     showLoading: showLoading, hideLoading: hideLoading,
     confirm: confirmFn, alert: dialogAlert,
     getVar: getVar, putVar: putVar, clearVar: clearVar,
@@ -6153,6 +8482,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     registerTask: registerTask, unRegisterTask: unRegisterTask,
     getIP: getIP, getAppVersion: getAppVersion, getRuleCount: getRuleCount,
     getCpuAbi: getCpuAbi, getLastRules: getLastRules,
+    getPastes: getPastes, sharePaste: sharePaste, parsePaste: parsePaste,
     refreshX5WebView: refreshX5WebView, refreshX5Desc: refreshX5Desc,
     setPagePicUrl: setPagePicUrl, requireDownload: requireDownload,
     decodeStr: decodeStr, encodeStr: encodeStr,
@@ -6177,8 +8507,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     getCryptoJS: getCryptoJS, CryptoJS: CryptoJS,
     base64Encode: base64Encode, base64Decode: base64Decode,
     MY_URL: MY_URL, MY_RULE: MY_RULE, MY_PAGE: MY_PAGE, MY_TYPE: MY_TYPE,
+    MY_TITLE: MY_TITLE, MY_KEYWORD: MY_KEYWORD,
     MY_HOME: getHome(MY_URL), MY_PARAMS: MY_PARAMS, MY_NAME: MY_NAME,
     MY_CLASS_URL: MY_CLASS_URL, MY_AREA: MY_AREA, MY_SORT: MY_SORT, MY_YEAR: MY_YEAR,
+    MY_INDEX: MY_INDEX,
     fypage: fypage, fyclass: fyclass, fyarea: fyarea, fyyear: fyyear,
     MOBILE_UA: MOBILE_UA, PC_UA: PC_UA, config: config, input: currentInput
   };
@@ -6188,6 +8520,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   window.$$ = $;
   window.MY_URL = MY_URL;
   window.MY_RULE = MY_RULE;
+  window.MY_TITLE = MY_TITLE;
+  window.MY_KEYWORD = MY_KEYWORD;
   window.MY_PAGE = MY_PAGE;
   window.MY_TYPE = MY_TYPE;
   window.MY_PARAMS = MY_PARAMS;
@@ -6196,6 +8530,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   window.MY_AREA = MY_AREA;
   window.MY_SORT = MY_SORT;
   window.MY_YEAR = MY_YEAR;
+  window.MY_INDEX = MY_INDEX;
   window.fypage = fypage;
   window.fyclass = fyclass;
   window.fyarea = fyarea;
@@ -6206,7 +8541,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     encode: base64Encode,
     decode: base64Decode,
     encodeToString: base64Encode,
-    decodeToString: base64Decode
+    decodeToString: base64Decode,
+    // android.util.Base64 同名常量值（规则传 _base64.NO_WRAP 作 flag 用）。
+    DEFAULT: 0,
+    NO_WRAP: 2,
+    URL_SAFE: 8
   };
   // CryptoJS 子集的 SHA/HMAC 走 Dart 摘要接口（十六进制字节输入）。
   window.__haikuoHash = function (op, hexText, isHex) {
@@ -6244,6 +8583,124 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   window.__haikuoSearch = function (keyword) {
     try { runSearch(String(keyword || ''), 1); } catch (e) {}
   };
+  // ---------- G11 原生 x5 行：Dart 侧求值入口 ----------
+  // urlInterceptor 决策：input = 待跳 URL，求值环境是规则上下文
+  // （指南：拦截代码不在网页中执行，没有 fy_bridge_app）。回 JSON
+  // 串供 Dart 侧 haikuoParseX5Intercept 解析：true/"true" 拦住、
+  // 非空他串拦住并在页内执行该串、其余放行；求值失败放行。
+  window.__haikuoUrlInterceptor = function (code, url) {
+    var saved = currentInput;
+    try {
+      setCurrentInput(url);
+      var r = x5EvalSilent(code, url);
+      if (!r.ok) return '{"d":"allow"}';
+      var v = r.value;
+      if (v === true || v === 'true') return '{"d":"block"}';
+      if (typeof v === 'string' && v.length) return JSON.stringify({ d: 'exec', code: v });
+      return '{"d":"allow"}';
+    } catch (e) {
+      return '{"d":"allow"}';
+    } finally {
+      try { setCurrentInput(saved); } catch (e2) {}
+    }
+  };
+  // x5 页内桥 open：复用规则点击链（子页/详情/ scheme 全走 openItem）。
+  window.__haikuoX5Open = function (title, url) {
+    try { openItem({ title: title || '', url: String(url || '') }, false); } catch (e) {}
+  };
+  // x5 页内桥 playVideo：复用 sendPlay（含后缀头摘取与历史记录）。
+  window.__haikuoX5Play = function (url) {
+    try {
+      var u = String(url || '');
+      sendPlay(u, { title: '', url: u }, false);
+    } catch (e) {}
+  };
+  // x5 页内桥 parseLazyRule(_Async)：求值 $$$().lazyRule 产物
+  // （url@lazyRule=IIFE）。input 取 @ 前的 base；无结果（undefined/
+  // null/空串，如只调 setPageTitle 的回调）时静默，不报解析失败；
+  // 有结果走 handleLazyResult 统一出口。对象结果直通（不像
+  // @lazyRule= 分支那样经 evalJsTransform 转字符串）。
+  window.__haikuoX5ParseLazy = function (lazyString) {
+    try {
+      var s = String(lazyString || '');
+      if (!s) return;
+      var base = '';
+      var code = s;
+      var idx = s.indexOf('@lazyRule=');
+      if (idx >= 0) {
+        base = s.slice(0, idx);
+        code = s.slice(idx + '@lazyRule='.length).replace(/＆/g, '&');
+        if (code.indexOf('.js:') === 0) code = code.slice(4);
+        else if (code.indexOf('js:') === 0) code = code.slice(3);
+      }
+      var saved = currentInput;
+      try {
+        setCurrentInput(base);
+        var result;
+        if (/^https?:\/\//.test(code)) {
+          result = code;
+        } else {
+          var r = x5EvalSilent(code, base);
+          if (!r.ok) return;
+          result = r.value;
+        }
+        if (result === undefined || result === null || result === '') return;
+        handleLazyResult(result, { url: base }, false);
+      } finally {
+        try { setCurrentInput(saved); } catch (e) {}
+      }
+    } catch (e) {}
+  };
+  // x5 页内桥只写变量：putVar/clearVar/putMyVar/clearMyVar。
+  // clear 系 key 为 null/undefined/'' 时清全部（与规则侧语义一致）。
+  window.__haikuoX5Var = function (op, key, value) {
+    try {
+      if (op === 'putVar') putVar(key, value);
+      else if (op === 'clearVar') clearVar(key);
+      else if (op === 'putMyVar') putMyVar(key, value);
+      else if (op === 'clearMyVar') clearMyVar(key);
+    } catch (e) {}
+  };
+  // x5 页内桥 fetch：规则 fetch 是同步的，求完经 x5fetchResult
+  // 消息回 Dart，Dart 再兑现页内的 Promise。
+  window.__haikuoX5Fetch = function (id, url, opts) {
+    var result = '';
+    try {
+      var r = fetch(String(url || ''), opts || {});
+      result = (r === null || r === undefined) ? '' : String(r);
+    } catch (e) { result = ''; }
+    try { native({ type: 'x5fetchResult', id: id, result: result }); } catch (e2) {}
+  };
+  // 原生行建不起来时的回落：把占位换成旧 iframe 形态，不得白屏。
+  // Dart 侧只在建行失败/主框加载失败时调一次；换完置旗标，
+  // 同帧后续渲染直接画 iframe。
+  window.__haikuoX5Fallback = function () {
+    try {
+      x5FallbackActive = true;
+      var slots = document.querySelectorAll('[data-x5-slot="1"]');
+      Array.prototype.forEach.call(slots, function (slot) {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = x5IframeWrapHtml(
+          slot.getAttribute('data-x5-url') || '',
+          slot.getAttribute('data-x5-desc') || '',
+          Number(slot.getAttribute('data-index')) || 0);
+        var wrap = tmp.firstChild;
+        if (wrap && slot.parentNode) {
+          slot.parentNode.replaceChild(wrap, slot);
+          var frame = wrap.querySelector('iframe[data-x5]');
+          if (frame) {
+            frame.addEventListener('load', function () {
+              var spin = wrap.querySelector('.x5spin');
+              if (spin) spin.style.display = 'none';
+            });
+          }
+        }
+      });
+    } catch (e) {}
+  };
+  // 原生 x5 行是否可后退（Dart 侧按实测 canGoBack 维护，onBackBtn
+  // 与系统返回键都看它；初始 false）。
+  window.__haikuoX5CanGoBack = false;
   // 浏览器原生对话框改走原生弹窗：WebView 默认行为大概率直接
   // 返回 false，规则的确认分支永远走不到。
   try { window.confirm = confirmFn; } catch (e) {}
@@ -6293,10 +8750,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
 
   function boot() {
     var backBtn = document.getElementById('backBtn');
-    if (backBtn) backBtn.addEventListener('click', goBack);
+    if (backBtn) backBtn.addEventListener('click', onBackBtn);
+    var favBtn = document.getElementById('favBtn');
+    if (favBtn) favBtn.addEventListener('click', function () { native({ type: 'shellFavorite' }); });
+    var searchBtn = document.getElementById('searchBtn');
+    if (searchBtn) searchBtn.addEventListener('click', function () { native({ type: 'shellSearch' }); });
+    var reloadBtn = document.getElementById('reloadBtn');
+    if (reloadBtn) reloadBtn.addEventListener('click', function () { native({ type: 'shellReload' }); });
     isDetail = false;
     seedStorage();
     syncFilterGlobals();
+    bindAutoPageScroll();
+    prunePageCache();
     var source = String(PROGRAM.script || '');
     if (source.indexOf('js:') === 0) source = source.slice(3);
     if (!source.trim()) {

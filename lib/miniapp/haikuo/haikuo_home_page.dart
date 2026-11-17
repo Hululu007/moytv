@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -7,10 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'haikuo_clipboard.dart';
+import 'haikuo_cloud6.dart';
 import 'haikuo_codec.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runner_page.dart';
 import 'haikuo_store.dart';
+import 'haikuo_zip_import.dart';
 
 /// 导入时发现同名站点，问用户怎么处理：替换旧的 / 保留两者
 /// （新导入的改名 _2）/ 取消整批导入。点遮罩或返回键关掉也算取消。
@@ -51,10 +52,40 @@ Future<HaikuoDuplicateDecision> showHaikuoDuplicateDialog(
   return choice ?? HaikuoDuplicateDecision.cancel;
 }
 
+/// 长按规则图标的官方操作表（主表）：9 项，顺序照官方海阔视界截图。
+const List<({String value, String label})> haikuoActionSheetItems = [
+  (value: 'edit', label: '编辑规则'),
+  (value: 'search', label: '搜索内容'),
+  (value: 'share', label: '分享规则'),
+  (value: 'more', label: '更多分享'),
+  (value: 'homepage', label: '网站首页'),
+  (value: 'delete', label: '删除规则'),
+  (value: 'clearCache', label: '清除缓存'),
+  (value: 'webEdit', label: 'Web编辑'),
+  (value: 'reborn', label: '重生恢复'),
+];
+
+/// “更多分享”子表：13 项，顺序照官方海阔视界截图。
+const List<({String value, String label})> haikuoMoreShareSheetItems = [
+  (value: 'plaintext', label: '明文口令'),
+  (value: 'cloudRepo', label: '提交云仓库'),
+  (value: 'file1', label: '文件形式1'),
+  (value: 'file2', label: '文件形式2'),
+  (value: 'cloud1', label: '云剪贴板1'),
+  (value: 'cloud2', label: '云剪贴板2'),
+  (value: 'cloud5', label: '云剪贴板5'),
+  (value: 'cloud6', label: '云剪贴板6'),
+  (value: 'cloud7', label: '云剪贴板7'),
+  (value: 'cloud9', label: '云剪贴板9'),
+  (value: 'cloud10', label: '云剪贴板10'),
+  (value: 'pack1', label: '小程序包'),
+  (value: 'pack2', label: '小程序包2'),
+];
+
 /// 海阔小程序面板：导入、管理、打开。
 ///
 /// 入口在小程序模块里：小程序页「海阔」标签，右上角「+」菜单里也有
-/// 快捷入口。支持三种导入方式：JSON 文件、剪贴板口令、直链。
+/// 快捷入口。支持四种导入方式：JSON 文件、剪贴板口令、直链、zip 备份。
 class HaikuoHomePage extends StatefulWidget {
   const HaikuoHomePage({
     super.key,
@@ -509,6 +540,123 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
     await _run(() => _store.importUrl(url, onDuplicates: _askDuplicates));
   }
 
+  /// zip 备份导入：选一个海阔备份 zip（数据库 + 规则 JSON + 嵌套
+  /// 压缩包 + 模块文件），规则入库、同名跳过不覆盖，模块文件落盘
+  /// 到对应规则的私有文件区。60MB 级别走流式解压，进度弹窗实时报
+  /// 阶段；完成后弹汇总（成功/跳过/失败 + 首条错误），网格刷新。
+  Future<void> _importZipBackup() async {
+    if (_busy) return;
+    final files = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['zip'],
+      dialogTitle: '选择海阔备份 zip',
+    );
+    if (files.isEmpty) return;
+    final picked = files.first;
+    if (!mounted) return;
+    setState(() => _busy = true);
+    var progress = const HaikuoZipImportProgress('正在准备…', 0, 0);
+    var dialogShown = false;
+    void Function(void Function())? refreshDialog;
+    void closeProgress() {
+      if (dialogShown && mounted) {
+        dialogShown = false;
+        Navigator.of(context).pop();
+      }
+    }
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setStateDialog) {
+            refreshDialog = setStateDialog;
+            final determinate = progress.total > 0;
+            return AlertDialog(
+              title: const Text('正在导入 zip 备份'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (determinate)
+                    LinearProgressIndicator(
+                      value: progress.total == 0
+                          ? null
+                          : (progress.done / progress.total).clamp(0.0, 1.0),
+                    )
+                  else
+                    const LinearProgressIndicator(),
+                  const SizedBox(height: 12),
+                  Text(progress.phase, style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    // showDialog 同步把路由入栈：立即记为已显示，导入极快完成时
+    // closeProgress 也能关掉它（只靠 builder 里置位会有关不掉的竞态）。
+    dialogShown = true;
+    try {
+      final importer = HaikuoZipImporter(_store);
+      void onProgress(HaikuoZipImportProgress next) {
+        progress = next;
+        if (dialogShown) {
+          try {
+            refreshDialog?.call(() {});
+          } catch (_) {
+            // 弹窗已关，忽略
+          }
+        }
+      }
+
+      final HaikuoZipImportResult result;
+      final path = picked.path;
+      if (path != null) {
+        result = await importer.importZipFile(
+          File(path),
+          onProgress: onProgress,
+        );
+      } else {
+        final bytes = await picked.readAsBytes();
+        if (bytes.isEmpty) {
+          throw const HaikuoFormatException('选到的文件是空的');
+        }
+        result = await importer.importZipBytes(
+          bytes,
+          fileName: picked.name,
+          onProgress: onProgress,
+        );
+      }
+      closeProgress();
+      await _load();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('zip 备份导入完成'),
+          content: Text(result.summary),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } on HaikuoFormatException catch (error) {
+      closeProgress();
+      _snack(error.message);
+    } catch (error) {
+      closeProgress();
+      _snack('导入失败：$error');
+    } finally {
+      closeProgress();
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// 内置示例：格式参考自公开的海阔规则仓库（hikerViewRules 等）。
   Future<void> _importSamples() async {
     if (_busy) return;
@@ -575,45 +723,6 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
     );
   }
 
-  Future<void> _showInfo(HaikuoProgram program) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(program.name),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('类型：${haikuoKindLabel(program.kind)}'),
-              if (program.group.isNotEmpty) Text('分组：${program.group}'),
-              if (program.ruleType.isNotEmpty) Text('规则类型：${program.ruleType}'),
-              if (program.author.isNotEmpty) Text('作者：${program.author}'),
-              if (program.version.isNotEmpty) Text('版本：${program.version}'),
-              if (program.origin.isNotEmpty) Text('来源：${program.origin}'),
-              if (program.url.isNotEmpty) Text('入口：${program.url}'),
-              if (program.description.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(program.description),
-              ],
-              const SizedBox(height: 10),
-              Text(
-                '脚本长度：${program.script.length} 字符',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _delete(HaikuoProgram program) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -638,43 +747,39 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
     _snack('已删除');
   }
 
-  Future<void> _export(HaikuoProgram program) async {
-    // 复制完整规则 JSON（含 class/sort 等声明），不是重建的子集，
-    // 否则粘回去再导入会丢分类。能格式化就格式化，方便人读。
-    final raw = HaikuoCodec.shareJson(program);
-    var text = raw;
-    try {
-      text = const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
-    } on FormatException {
-      // 原始文本不是合法 JSON，原样复制。
-    }
-    await Clipboard.setData(ClipboardData(text: text));
-    _snack('已复制「${program.name}」的 JSON 到剪贴板');
-  }
-
   /// 生成口令分享：把规则编成官方 ￥ 口令，弹窗展示、可一键复制。
   /// 对方在口令导入里粘贴即可认回（往返已由编解码测试覆盖）。
-  /// 云剪贴板 6 的上传接口未公开，这里不出假短码，只出本地口令。
   Future<void> _shareCode(HaikuoProgram program) async {
     final code = HaikuoCodec.buildShareCode(program);
+    await _showShareTextDialog(
+      title: '分享「${program.name}」',
+      intro: '把下面这段口令发给对方，对方在海阔页点“口令导入”粘贴即可。',
+      text: code,
+      copyLabel: '复制口令',
+      copiedMessage: '口令已复制到剪贴板',
+    );
+  }
+
+  /// 分享文本弹窗：展示一段可选取文本 + 一键复制（口令分享与云 6 分享共用）。
+  Future<void> _showShareTextDialog({
+    required String title,
+    required String intro,
+    required String text,
+    required String copyLabel,
+    required String copiedMessage,
+  }) async {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('分享「${program.name}」'),
+        title: Text(title),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '把下面这段口令发给对方，对方在海阔页点“导入口令”粘贴即可。',
-                style: TextStyle(fontSize: 12),
-              ),
+              Text(intro, style: const TextStyle(fontSize: 12)),
               const SizedBox(height: 10),
-              SelectableText(
-                code,
-                style: const TextStyle(fontSize: 11),
-              ),
+              SelectableText(text, style: const TextStyle(fontSize: 11)),
             ],
           ),
         ),
@@ -685,11 +790,88 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
           ),
           FilledButton(
             onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: code));
+              await Clipboard.setData(ClipboardData(text: text));
               if (context.mounted) Navigator.pop(context);
-              _snack('口令已复制到剪贴板');
+              _snack(copiedMessage);
             },
-            child: const Text('复制口令'),
+            child: Text(copyLabel),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 明文口令：把官方 ￥ 口令直接复制到剪贴板，不弹窗。
+  Future<void> _copyPlaintextCode(HaikuoProgram program) async {
+    final code = HaikuoCodec.buildShareCode(program);
+    await Clipboard.setData(ClipboardData(text: code));
+    _snack('明文口令已复制到剪贴板');
+  }
+
+  /// 云剪贴板 6 分享：真上传到 pasteme.tyrantg.com，产出官方同形短码
+  /// +“小程序：名”两行，弹窗展示、可一键复制。
+  Future<void> _shareCloud6(HaikuoProgram program) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final upload = await uploadCloud6ShareCode(
+        HaikuoCodec.buildShareCode(program),
+      );
+      if (!mounted) return;
+      await _showShareTextDialog(
+        title: '云剪贴板 6 分享',
+        intro:
+            '下面这段就是官方云剪贴板 6 的分享格式，发给对方，'
+            '对方复制后在海阔视界或魔蚁海阔页里都能直接导入。',
+        text: upload.shareText(program.name),
+        copyLabel: '复制分享文本',
+        copiedMessage: '分享文本已复制到剪贴板',
+      );
+    } on HaikuoFormatException catch (error) {
+      _snack(error.message);
+    } catch (error) {
+      _snack('云剪贴板 6 上传失败：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 搜索内容：打开规则并直接展开搜索栏（只展开，不跑搜索）。
+  Future<void> _openSearch(HaikuoProgram program) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            HaikuoRunnerPage(program: program, initialShowSearch: true),
+      ),
+    );
+  }
+
+  /// 网站首页：在应用内 WebView 里打开规则的站点首页。
+  Future<void> _openHomepage(HaikuoProgram program) async {
+    final url = haikuoSiteUrl(program);
+    if (url == null) {
+      _snack('这条规则没有网站地址，打不开首页');
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => HaikuoWebPage(url: url, title: program.name),
+      ),
+    );
+  }
+
+  /// 诚实不可用态：官方表里有、魔蚁暂时做不了的项，点后明说原因，
+  /// 绝不做点了没反应的假按钮。
+  Future<void> _showUnavailable(String title, String reason) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(reason),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了'),
           ),
         ],
       ),
@@ -731,6 +913,8 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
             tooltip: '更多导入方式',
             onSelected: (value) {
               switch (value) {
+                case 'zip':
+                  _importZipBackup();
                 case 'link':
                   _importLink();
                 case 'samples':
@@ -740,6 +924,7 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
               }
             },
             itemBuilder: (context) => const [
+              PopupMenuItem(value: 'zip', child: Text('zip 备份导入')),
               PopupMenuItem(value: 'link', child: Text('从链接导入')),
               PopupMenuItem(value: 'samples', child: Text('导入内置示例')),
               PopupMenuItem(value: 'restore', child: Text('恢复内置规则')),
@@ -787,6 +972,12 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
           label: const Text('口令导入'),
         ),
         const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _importZipBackup,
+          icon: const Icon(Icons.folder_zip_outlined),
+          label: const Text('zip 备份导入'),
+        ),
+        const SizedBox(height: 10),
         TextButton.icon(
           onPressed: _busy ? null : _importSamples,
           icon: const Icon(Icons.auto_awesome_rounded),
@@ -797,11 +988,11 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
   }
 
   /// 平铺网格：与小程序页「已安装」tab 同一样式（图标块 + 站名在下），
-  /// 四列。角标 ⋮ 打开操作表（打开/详情/复制 JSON/删除），长按仍直接弹详情。
+  /// 四列。长按弹官方操作表（主表 9 项），图标上不放 ⋮ 角标。
   Widget _grid() {
     return GridView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 28),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 4,
         mainAxisSpacing: 18,
@@ -820,62 +1011,174 @@ class _HaikuoHomePageState extends State<HaikuoHomePage>
     );
   }
 
+  /// 长按操作表：官方海阔视界同款两列表（主表 9 项），点一项执行一项。
+  /// 旧 5 项表（打开/详情/复制 JSON/生成口令分享/删除）已随官方表替换
+  /// 而取消：打开=点图标，详情见瓦片副标题，JSON 复制由分享口令替代。
   Future<void> _showActions(HaikuoProgram program) async {
-    final action = await showModalBottomSheet<String>(
+    final action = await _showOfficialSheet(
+      title: '请选择操作',
+      items: haikuoActionSheetItems,
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'edit':
+        _showUnavailable(
+          '编辑规则',
+          '魔蚁里还没有海阔规则编辑器，做不了规则内编辑。\n\n'
+              '要做的话需要新做一个规则 JSON 编辑页（含格式校验与保存回库），'
+              '约 200–300 行代码加测试，已记下来，等排期。',
+        );
+      case 'search':
+        _openSearch(program);
+      case 'share':
+        _shareCode(program);
+      case 'more':
+        _showMoreShare(program);
+      case 'homepage':
+        _openHomepage(program);
+      case 'delete':
+        _delete(program);
+      case 'clearCache':
+        _showUnavailable(
+          '清除缓存',
+          '规则的缓存存在 WebView 沙盒里，魔蚁没有按规则单独清理的接口，'
+              '列表页清不了单条规则的缓存。',
+        );
+      case 'webEdit':
+        _showUnavailable(
+          'Web编辑',
+          'Web编辑是官方的局域网网页编辑模式（hiker://webRule）：手机开服务、'
+              '电脑浏览器里改规则。魔蚁没有这套局域网编辑服务，做不了，已记下来。',
+        );
+      case 'reborn':
+        _showUnavailable(
+          '重生恢复',
+          '官方手册里没有“重生恢复”的说明，魔蚁不知道它恢复的是什么，'
+              '不敢猜着做，已记下来，等查到确切说法再做。',
+        );
+    }
+  }
+
+  /// “更多分享”子表：官方同款两列表（13 项）。
+  Future<void> _showMoreShare(HaikuoProgram program) async {
+    final action = await _showOfficialSheet(
+      title: '更多分享',
+      items: haikuoMoreShareSheetItems,
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'plaintext':
+        _copyPlaintextCode(program);
+      case 'cloudRepo':
+        _showUnavailable(
+          '提交云仓库',
+          '提交云仓库需要先设置云仓库账号密码（官方手册 publish_account），'
+              '魔蚁没有这项设置与发布接口，提交不了。',
+        );
+      case 'file1':
+      case 'file2':
+        _showUnavailable(
+          action == 'file1' ? '文件形式1' : '文件形式2',
+          '官方没有公开“文件形式1/2”的格式区别，魔蚁不知道两种形式各是'
+          '什么文件，无法按官方格式导出。',
+        );
+      case 'cloud1':
+      case 'cloud2':
+      case 'cloud5':
+      case 'cloud7':
+      case 'cloud9':
+      case 'cloud10':
+        final number = action!.substring('cloud'.length);
+        _showUnavailable(
+          '云剪贴板$number',
+          '云剪贴板$number 的服务端地址未公开（官方导入器闭源），魔蚁不知道'
+              '往哪台服务器上传，做不了真上传，不编假短码。'
+              '可用“云剪贴板 6”或“明文口令”。',
+        );
+      case 'cloud6':
+        _shareCloud6(program);
+      case 'pack1':
+      case 'pack2':
+        _showUnavailable(
+          action == 'pack1' ? '小程序包' : '小程序包2',
+          '官方没有公开小程序包的打包格式，魔蚁不知道包里除规则 JSON 外还装'
+          '什么，无法按官方格式导出；且魔蚁没有系统分享面板，导出的文件'
+          '也发不出去。',
+        );
+    }
+  }
+
+  /// 官方操作表弹窗：标题 + 两列浅色圆角按钮，点一项返回其 value，
+  /// 点遮罩/返回键返回 null。
+  Future<String?> _showOfficialSheet({
+    required String title,
+    required List<({String value, String label})> items,
+  }) {
+    return showDialog<String>(
       context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.play_arrow_rounded),
-              title: const Text('打开'),
-              onTap: () => Navigator.pop(context, 'open'),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        // 限宽：宽屏上弹窗不再随屏宽拉大、把两列按钮撑成高块；
+        // 内容可滚：矮屏/横屏时 13 项子表不溢出。
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 10,
+                          crossAxisSpacing: 10,
+                          childAspectRatio: 2.8,
+                        ),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) {
+                      final item = items[index];
+                      return FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: () => Navigator.pop(context, item.value),
+                        child: Text(
+                          item.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.info_outline_rounded),
-              title: const Text('详情'),
-              onTap: () => Navigator.pop(context, 'info'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.copy_rounded),
-              title: const Text('复制 JSON'),
-              onTap: () => Navigator.pop(context, 'export'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.share_rounded),
-              title: const Text('生成口令分享'),
-              onTap: () => Navigator.pop(context, 'share'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline_rounded),
-              title: const Text('删除'),
-              onTap: () => Navigator.pop(context, 'delete'),
-            ),
-          ],
+          ),
         ),
       ),
     );
-    switch (action) {
-      case 'open':
-        _open(program);
-      case 'info':
-        _showInfo(program);
-      case 'export':
-        _export(program);
-      case 'share':
-        _shareCode(program);
-      case 'delete':
-        _delete(program);
-    }
   }
 }
 
 /// 平铺图标块：与「已安装」tab 的 _MiniAppTile 同一样式（58 圆角块 +
 /// 站名在下），另加一行小字副标题（作者 · 版本 · 类型）。点按打开，
-/// 长按弹出操作（打开/详情/复制 JSON/生成口令分享/删除），图标上
-/// 不再放 ⋮ 角标按钮。
+/// 长按弹出官方操作表（主表 9 项），图标上不放 ⋮ 角标按钮。
 class _ProgramTile extends StatelessWidget {
   const _ProgramTile({
     required this.program,

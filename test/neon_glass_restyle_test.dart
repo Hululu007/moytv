@@ -117,41 +117,38 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('霓虹玻璃套件随主题变色', () {
-    Future<void> pumpKit(WidgetTester tester, AppThemeMode mode) =>
-        _pumpThemed(
-          tester,
-          mode,
-          Column(
-            children: [
-              const NeonGlassCard(child: Text('卡片')),
-              NeonCapsule(label: '已选胶囊', selected: true, onTap: () {}),
-              NeonCapsule(label: '未选胶囊', selected: false, onTap: () {}),
-              NeonSwitch(value: true, onChanged: (_) {}),
-            ],
-          ),
-        );
+    Future<void> pumpKit(WidgetTester tester, AppThemeMode mode) => _pumpThemed(
+      tester,
+      mode,
+      Column(
+        children: [
+          const NeonGlassCard(child: Text('卡片')),
+          NeonCapsule(label: '已选胶囊', selected: true, onTap: () {}),
+          NeonCapsule(label: '未选胶囊', selected: false, onTap: () {}),
+          NeonSwitch(value: true, onChanged: (_) {}),
+        ],
+      ),
+    );
 
     testWidgets('紫蓝霓虹下卡片与胶囊取当前主题色', (tester) async {
       await pumpKit(tester, AppThemeMode.purpleNeon);
       final config = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
-      final cardContainer =
-          tester.widget<Container>(
-                find
-                    .descendant(
-                      of: find.byType(NeonGlassCard),
-                      matching: find.byType(Container),
-                    )
-                    .first,
-              );
+      final cardContainer = tester.widget<Container>(
+        find
+            .descendant(
+              of: find.byType(NeonGlassCard),
+              matching: find.byType(Container),
+            )
+            .first,
+      );
       expect(
         (cardContainer.decoration as BoxDecoration?)?.color,
         config.surfaceColor,
       );
-      final selectedCapsule =
-          find.descendant(
-            of: find.byType(NeonCapsule).first,
-            matching: find.byType(AnimatedContainer),
-          );
+      final selectedCapsule = find.descendant(
+        of: find.byType(NeonCapsule).first,
+        matching: find.byType(AnimatedContainer),
+      );
       final capsuleDecoration =
           tester.widget<AnimatedContainer>(selectedCapsule).decoration
               as BoxDecoration?;
@@ -169,26 +166,27 @@ void main() {
       final config = AppThemeConfig.forTheme(AppThemeMode.lightClean);
       final neon = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
       expect(config.surfaceColor, isNot(neon.surfaceColor));
-      final cardContainer =
-          tester.widget<Container>(
-                find
-                    .descendant(
-                      of: find.byType(NeonGlassCard),
-                      matching: find.byType(Container),
-                    )
-                    .first,
-              );
+      final cardContainer = tester.widget<Container>(
+        find
+            .descendant(
+              of: find.byType(NeonGlassCard),
+              matching: find.byType(Container),
+            )
+            .first,
+      );
       expect(
         (cardContainer.decoration as BoxDecoration?)?.color,
         config.surfaceColor,
       );
       final capsuleDecoration =
-          tester.widget<AnimatedContainer>(
-                find.descendant(
-                  of: find.byType(NeonCapsule).first,
-                  matching: find.byType(AnimatedContainer),
-                ),
-              ).decoration
+          tester
+                  .widget<AnimatedContainer>(
+                    find.descendant(
+                      of: find.byType(NeonCapsule).first,
+                      matching: find.byType(AnimatedContainer),
+                    ),
+                  )
+                  .decoration
               as BoxDecoration?;
       // 浅色主题没有现成渐变，套件用主色→辅色合成渐变。
       expect(
@@ -201,7 +199,7 @@ void main() {
   });
 
   group('分类侧栏全显', () {
-    testWidgets('13 套主题侧栏长分类名都不截断且可点', (tester) async {
+    testWidgets('14 套主题侧栏长分类名都不截断且可点', (tester) async {
       for (final mode in AppThemeMode.values) {
         String? selected;
         await _pumpThemed(
@@ -235,9 +233,7 @@ void main() {
             CategorySidebarItem(
               id: 'movie',
               name: '电影',
-              filters: [
-                CategorySidebarFilter(name: longFilter, value: 'v'),
-              ],
+              filters: [CategorySidebarFilter(name: longFilter, value: 'v')],
             ),
           ],
           selectedId: 'movie',
@@ -367,21 +363,19 @@ void main() {
         MaterialApp(
           theme: config.toThemeData(),
           home: Builder(
-            builder:
-                (context) => Scaffold(
-                  body: Center(
-                    child: FilledButton(
-                      onPressed:
-                          () => showSitePickerDialog(
-                            context,
-                            sectionName: '短剧',
-                            currentId: 'long',
-                            groups: groups,
-                          ),
-                      child: const Text('打开'),
-                    ),
+            builder: (context) => Scaffold(
+              body: Center(
+                child: FilledButton(
+                  onPressed: () => showSitePickerDialog(
+                    context,
+                    sectionName: '短剧',
+                    currentId: 'long',
+                    groups: groups,
                   ),
+                  child: const Text('打开'),
                 ),
+              ),
+            ),
           ),
         ),
       );
@@ -525,7 +519,7 @@ void main() {
         settle: false,
       );
       await _pumpCoverFrames(tester);
-      expect(find.text(data.items.first.title), findsNWidgets(13));
+      expect(find.text(data.items.first.title), findsNWidgets(14));
       expect(find.text(data.categories[1].name), findsWidgets);
       expect(find.text('内容未加载'), findsNothing);
       expect(find.text('紫蓝霓虹'), findsOneWidget);
@@ -563,9 +557,7 @@ void main() {
   });
 
   group('频道侧栏与筛选胶囊', () {
-    testWidgets('两套主题下选中胶囊渐变随主题走，长分类名不截断', (
-      tester,
-    ) async {
+    testWidgets('两套主题下选中胶囊渐变随主题走，长分类名不截断', (tester) async {
       final data = loadRealFixture();
       for (final mode in [AppThemeMode.purpleNeon, AppThemeMode.lightClean]) {
         final config = AppThemeConfig.forTheme(mode);
@@ -598,12 +590,14 @@ void main() {
           matching: find.byType(NeonCapsule),
         );
         final capsuleDecoration =
-            tester.widget<AnimatedContainer>(
-                  find.descendant(
-                    of: capsule,
-                    matching: find.byType(AnimatedContainer),
-                  ),
-                ).decoration
+            tester
+                    .widget<AnimatedContainer>(
+                      find.descendant(
+                        of: capsule,
+                        matching: find.byType(AnimatedContainer),
+                      ),
+                    )
+                    .decoration
                 as BoxDecoration?;
         expect(capsuleDecoration?.gradient, neonSelectedGradient(config));
         _expectNoEllipsis(find.text(_longName));
@@ -621,15 +615,14 @@ void main() {
     );
     final config = AppThemeConfig.forTheme(AppThemeMode.purpleNeon);
     expect(find.byType(NeonGlassCard), findsWidgets);
-    final cardContainer =
-        tester.widget<Container>(
-              find
-                  .descendant(
-                    of: find.byType(NeonGlassCard).first,
-                    matching: find.byType(Container),
-                  )
-                  .first,
-            );
+    final cardContainer = tester.widget<Container>(
+      find
+          .descendant(
+            of: find.byType(NeonGlassCard).first,
+            matching: find.byType(Container),
+          )
+          .first,
+    );
     expect(
       (cardContainer.decoration as BoxDecoration?)?.color,
       config.surfaceColor,
@@ -644,10 +637,7 @@ void main() {
       ImportCenterScreen(repository: FixtureRepository(), store: store),
     );
     expect(find.text('TVBox 配置（0）'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('import-center-file')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('import-center-file')), findsOneWidget);
     expect(find.byKey(const ValueKey('import-center-url')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

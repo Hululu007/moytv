@@ -1,16 +1,5 @@
 js:(function () {
-// ==== Chaturbate 数据引擎 v1（模块化单例，path: cbl） ====
-// 站点：https://www.chaturbate.lat/（Chaturbate 镜像域，官方前端+API）
-// 房源：GET /api/ts/roomlist/room-list/（genders/limit/offset/keywords/regions）
-// 取流：GET /api/chatvideocontext/{room}/ -> hls_source（镜像域直出，匿名可看 public 房）
-//  • type=live；4 性别分类 + 6 地区筛选（标准 UILib navs/filters：sd_cls/sd_page/sd_filter）
-//  • 卡片用真实房间页 URL（原生 200），经顶层 detail_find_rule 进详情（不用 @rule 跳模块）
-//  • 详情在页面上下文取 hls，选集=最终 m3u8 纯字符串 + #isVideo=true#
 var X = {};
-// ---------- 清晰度（data: URI 方案，不走本地代理） ----------
-// master 音视频分离：分档 URL 纯视频无声。把"单档视频+其音频组"过滤成新的
-// master 文本（URI 全转绝对），base64 后做成 data: URI 选集，播放器解析后
-// 直接从 CDN 拉音视频。失败回退 master 原地址。
 X._masterText = '';
 X._absUrl = function (base, rel) {
   if (/^https?:\/\//i.test(rel)) return rel;
@@ -105,7 +94,6 @@ X.REGIONS = [
   { name: '全部地区', value: '' }, { name: '北美', value: 'NA' }, { name: '欧洲俄罗斯', value: 'ER' },
   { name: '亚洲', value: 'AS' }, { name: '南美', value: 'SA' }, { name: '其他', value: 'O' }
 ];
-// ---------- 房源 ----------
 X._rooms = function (params) {
   var q = [];
   for (var k in params) {
@@ -126,18 +114,18 @@ X._rooms = function (params) {
     return { rooms: d.rooms || [], total: d.total_count || 0 };
   } catch (e) { return { rooms: [], total: 0 }; }
 };
+X._cleanText = function (s) {
+  return String(s || '').replace(/<[^>]*>/g, '').replace(/&#x([0-9a-fA-F]+);/g, function (m, h) { return String.fromCharCode(parseInt(h, 16)); }).replace(/&#(\d+);/g, function (m, n) { return String.fromCharCode(parseInt(n, 10)); }).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim();
+};
 X._statusBadge = function (r) {
   var show = String(r.current_show || '').toLowerCase();
-  // private/group/ticket 等为付费中；公开列表一般全是 public，逻辑保留
   if (show === 'private' || show === 'group' || show === 'ticket' || show === 'password') return '💰 收费中';
   return '🔴 直播中';
 };
 X._card = function (r) {
   var username = r.username || '';
-  // 标题去 HTML 标签（如 <a href="/tag/…"）
-  var subject = String(r.subject || r.room_subject || '').replace(/<[^>]*>/g, '').trim();
+  var subject = X._cleanText(r.subject || r.room_subject || '');
   var viewers = parseInt(r.num_users, 10) || 0;
-  // 备注尽量短：徽章+人数，避免过长被截断
   var remark = X._statusBadge(r) + (viewers > 0 ? '·' + viewers + '人' : '');
   return {
     title: subject || username,
@@ -146,8 +134,6 @@ X._card = function (r) {
     url: X.HOST + '/' + encodeURIComponent(username) + '/#immersiveTheme#'
   };
 };
-// ---------- 首页/分类 ----------
-// 分页：明确的上一页/下一页按钮（sd_page；自动翻页在部分设备上不触发，改回按钮最稳）
 X.home = function () {
   var cls = '';
   try { cls = String(getMyVar('sd_cls', '')); } catch (e) {}
@@ -182,7 +168,6 @@ X.home = function () {
     hasMore: r2.rooms.length >= 21
   });
 };
-// ---------- 详情 ----------
 X.detail = function () {
   var room = '';
   try {
@@ -200,7 +185,7 @@ X.detail = function () {
   } catch (e2) {}
   var title = room, pic = '', desc = '🔴LIVE', intro = '';
   if (info) {
-    title = String(info.subject || info.room_subject || room).trim() || room;
+    title = X._cleanText(info.subject || info.room_subject || room) || room;
     pic = info.img || '';
     var viewers = parseInt(info.num_users, 10) || 0;
     desc = '🔴LIVE' + (viewers > 0 ? '·' + viewers + '人' : '');
@@ -232,8 +217,6 @@ X.detail = function () {
   } catch (e3) {}
   var lines = [];
   if (hls) {
-    // 各清晰度：data: URI（单档视频+音频组，不过代理），真机确认可播有声音；
-    // master 原地址那集播不了，已去掉（data 失败时才回退 master 保底）
     var eps = [];
     var qs = X._qualities(hls);
     for (var q = 0; q < qs.length; q++) {
@@ -252,7 +235,6 @@ X.detail = function () {
     sortable: false
   });
 };
-// ---------- 搜索 ----------
 X.search = function () {
   var kw = '';
   try { kw = String(MY_KEYWORD || getMyVar('keyword', '')); } catch (e) {}

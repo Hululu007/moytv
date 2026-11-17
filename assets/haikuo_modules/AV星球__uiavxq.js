@@ -49,7 +49,6 @@ UI.cards = function (d, items) {
   }
 };
 
-// 亚色模式翻页：putMyVar + refreshPage
 UI.pager = function (d, pg, hasMore, varName) {
   var vn = varName || 'avxq_page';
   if (pg > 1) {
@@ -116,9 +115,11 @@ UI.renderDetail = function (data) {
   if (data.play_url) {
     var parts = String(data.play_url).split('$');
     if (parts.length >= 2) {
+      var epUrl = parts[1];
+      if (epUrl.indexOf('lazyRule') < 0 && epUrl.indexOf('hiker://lazy') !== 0) epUrl += '#isVideo=true#';
       d.push({
         title: '▶ ' + parts[0],
-        url: parts[1] + '#isVideo=true#',
+        url: epUrl,
         col_type: 'text_3'
       });
     }

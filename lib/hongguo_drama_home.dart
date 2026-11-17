@@ -97,6 +97,8 @@ class HongguoDramaHome extends StatefulWidget {
     required this.onOpenSaved,
     this.onSettingsPressed,
     this.onOpenFeatured,
+    this.onRefresh,
+    this.onHomeTabSelected,
     this.currentSourceLabel,
     this.requestedTab,
     this.contentTier,
@@ -127,6 +129,7 @@ class HongguoDramaHome extends StatefulWidget {
   /// 霓虹首页/频道页放大镜的动作：那两处没有输入框，点放大镜直接
   /// 打开全站全局搜索（多媒体屏自带网盘搜索框，不走这里）。
   final VoidCallback onOpenGlobalSearch;
+
   /// 霓虹首页头像的动作：抽屉拆除后，点头像进“我的”页。
   final VoidCallback onAvatarPressed;
   final VoidCallback onFilterPressed;
@@ -140,6 +143,14 @@ class HongguoDramaHome extends StatefulWidget {
   /// 霓虹轮播位点按：混入的其它站源幻灯片由此打开（壳侧先切区切
   /// 源）；为空时轮播点按走 [onOpenDrama]。
   final ValueChanged<Drama>? onOpenFeatured;
+
+  /// 霓虹首页的刷新动作：下拉刷新与顶栏 🔄 钮共用；为空时刷新为
+  /// 空操作（顶栏 🔄 钮不响应）。
+  final Future<void> Function()? onRefresh;
+
+  /// 切回霓虹首页页签时通知外层（外层据此决定是否自动刷新；节流与
+  /// 可见性判断都在外层）。同页签重复点按不触发（_selectTab 早返）。
+  final VoidCallback? onHomeTabSelected;
 
   /// 频道页站点切换胶囊上显示的当前站名（全部站源时为“全部站源”）；
   /// 不传时胶囊显示旧的 sortLabel。
@@ -946,6 +957,13 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   void _selectTab(int index) {
     if (index == _tab) return;
     setState(() => _tab = index);
+    if (index == _neonHomeTab && widget.onHomeTabSelected != null) {
+      // didUpdateWidget 也会调 _selectTab（外层请求清除时回首页），
+      // 回调经 post-frame 再递出，避免在构建期内对外层 setState。
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => widget.onHomeTabSelected?.call(),
+      );
+    }
     if (index != 0) {
       _playToken++;
       if (_player.hasVideo) unawaited(_player.pause());
@@ -1006,12 +1024,11 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
                 ? config.secondaryColor
                 : config.primaryColor,
             rightGlowAlpha: _tab == _neonHomeTab ? 1 : .62,
-            child: SafeArea(
-              bottom: false,
-              child: _tab == _neonHomeTab
-                  ? _neonHome(context)
-                  : _neonChannel(context),
-            ),
+            // 不包 SafeArea：外层壳（普通首页 Scaffold / Win7 窗口槽）已
+            // 占一份顶部安全边距，这里再包就叠出死空白。
+            child: _tab == _neonHomeTab
+                ? _neonHome(context)
+                : _neonChannel(context),
           )
         : switch (_tab) {
             1 => _multimedia(context),
@@ -1020,10 +1037,13 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             _ => _feed(context),
           };
     return Scaffold(
-      backgroundColor: _tab == 0 ? Colors.black : (neonTab ? config.backgroundColor : null),
+      backgroundColor: _tab == 0
+          ? Colors.black
+          : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
       // 我的页与小程序页不显示内部导航芯片行：回其它页走外层底栏。
-      body: hideCapsuleBar &&
+      body:
+          hideCapsuleBar &&
               _tab != 0 &&
               _tab != HongguoDramaHome.mineTabIndex &&
               _tab != HongguoDramaHome.miniAppTabIndex
@@ -1083,6 +1103,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onSearch: widget.onOpenGlobalSearch,
       onSourceTap: widget.onPickSource,
       onLongPress: widget.onOpenDrama,
+      onRefresh: widget.onRefresh,
       onAvatar: widget.onAvatarPressed,
       onRankings: widget.onRankingsPressed,
       onFeaturedPlay: widget.onOpenFeatured ?? widget.onOpenDrama,
@@ -1114,24 +1135,23 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   /// 空态本身不提供抽屉入口，这两个出口就是逃生通道，不可删。
   Widget _tierEmptyView() {
     final tier = widget.contentTier ?? ContentTier.all;
-    return SafeArea(
-      child: StatusPanel(
-        title: '暂无${tier.label}',
-        message: '当前站点没有「${tier.label}」分类，切回全部内容或换个站点。',
-        action: '切回全部内容',
-        onRetry: () => saveUserChange(
-          context,
-          () => widget.store.setDisplayScheme(
-            widget.store.appTheme,
-            widget.store
-                .displayScheme(widget.store.appTheme)
-                .copyWith(contentTier: ContentTier.all),
-          ),
+    // 不包 SafeArea：与霓虹页同理，外层壳已占安全边距。
+    return StatusPanel(
+      title: '暂无${tier.label}',
+      message: '当前站点没有「${tier.label}」分类，切回全部内容或换个站点。',
+      action: '切回全部内容',
+      onRetry: () => saveUserChange(
+        context,
+        () => widget.store.setDisplayScheme(
+          widget.store.appTheme,
+          widget.store
+              .displayScheme(widget.store.appTheme)
+              .copyWith(contentTier: ContentTier.all),
         ),
-        secondaryAction: TextButton(
-          onPressed: widget.onPickSource,
-          child: const Text('切换站点'),
-        ),
+      ),
+      secondaryAction: TextButton(
+        onPressed: widget.onPickSource,
+        child: const Text('切换站点'),
       ),
     );
   }
@@ -1235,35 +1255,35 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         ),
       );
     }
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            if (widget.hideCapsuleBar)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  key: const ValueKey('feed-back-home'),
-                  onPressed: () => _selectTab(_neonHomeTab),
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  tooltip: '返回首页',
-                ),
-              ),
-            Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: tabWidgets),
-            ),
+    // 不包 SafeArea：推荐页签与霓虹页同在外层壳的安全边距内，顶栏
+    // 再包一份会把频道芯片行往下顶出死空白。
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (widget.hideCapsuleBar)
             Align(
-              alignment: Alignment.centerRight,
+              alignment: Alignment.centerLeft,
               child: IconButton(
-                onPressed: () => _selectTab(1),
-                icon: const Icon(Icons.search, color: Colors.white),
-                tooltip: '搜索',
+                key: const ValueKey('feed-back-home'),
+                onPressed: () => _selectTab(_neonHomeTab),
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                tooltip: '返回首页',
               ),
             ),
-          ],
-        ),
+          Center(
+            child: Row(mainAxisSize: MainAxisSize.min, children: tabWidgets),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              onPressed: () => _selectTab(1),
+              icon: const Icon(Icons.search, color: Colors.white),
+              tooltip: '搜索',
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1540,7 +1560,9 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              drama.heat.isNotEmpty ? heatDisplayText(drama.heat) : '播放 ${drama.views}',
+              drama.heat.isNotEmpty
+                  ? heatDisplayText(drama.heat)
+                  : '播放 ${drama.views}',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: Colors.white70),

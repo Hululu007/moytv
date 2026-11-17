@@ -86,6 +86,7 @@ class PlayerScreen extends StatefulWidget {
     this.onEmbeddedClose,
     this.onEmbeddedFullscreen,
     this.onEmbeddedIndexChanged,
+    this.onPlaybackExhausted,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -102,6 +103,11 @@ class PlayerScreen extends StatefulWidget {
   final VoidCallback? onEmbeddedClose;
   final VoidCallback? onEmbeddedFullscreen;
   final ValueChanged<int>? onEmbeddedIndexChanged;
+
+  /// 恢复耗尽回调（女优模块静默换线用）：在线播放恢复耗尽、错误界面
+  /// 已显示时调一次，带播放器自身的 context 供调用方弹栈换线。
+  /// 默认 null，现有调用行为一字不变；本地播放不调。
+  final void Function(BuildContext)? onPlaybackExhausted;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -314,6 +320,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _sniffPreviousError;
   bool get _televisionDecoderApplies => _television && Platform.isAndroid;
   AppOrientationController? _orientationController;
+  bool _embeddedOrientationApplied = false;
   bool get _pictureInPictureVisible =>
       _pictureInPictureActive || _pictureInPictureRequested;
   bool get _canUsePictureInPicture =>
@@ -569,7 +576,15 @@ class _PlayerScreenState extends State<PlayerScreen>
           });
           _scheduleSystemUi();
           if ((previousRatio >= 1) != (_aspectRatio >= 1)) {
-            unawaited(_applyOrientation());
+            if (widget.embedded) {
+              // 内嵌时 _applyOrientation 提前返回：已在全屏里才跟宽高比重锁，
+              // 没全屏时详情页的方向不受播放器干预。
+              if (widget.embeddedFullscreen) {
+                unawaited(_syncEmbeddedOrientation());
+              }
+            } else {
+              unawaited(_applyOrientation());
+            }
           }
         }
       }),
@@ -898,6 +913,21 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (mounted && !_closed) _rotate();
       });
     }
+    if (widget.embedded &&
+        widget.embeddedFullscreen &&
+        !_embeddedOrientationApplied) {
+      _embeddedOrientationApplied = true;
+      unawaited(_syncEmbeddedOrientation());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PlayerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.embedded &&
+        widget.embeddedFullscreen != oldWidget.embeddedFullscreen) {
+      unawaited(_syncEmbeddedOrientation());
+    }
   }
 
   void _scheduleSystemUi() {
@@ -1001,6 +1031,14 @@ class _PlayerScreenState extends State<PlayerScreen>
                     : '本地成品读取失败，请重试或重新生成。'
               : '自动恢复未成功，请检查网络后重试，也可换一集或选择其他清晰度。';
         });
+        // 女优模块静默换线：非本地且回调非空时，下一帧通知调用方
+        // （调用方弹栈换线；回调里不再写回本页状态）。
+        final onExhausted = widget.onPlaybackExhausted;
+        if (!current.local && onExhausted != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) onExhausted(context);
+          });
+        }
       }
       return;
     }
@@ -1534,9 +1572,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               throw AppFailure('解析接口全部失败（取流地址=$pageUrl）');
             }
           } else {
-            throw AppFailure(
-              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）',
-            );
+            throw AppFailure('播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）');
           }
         }
       }
@@ -1577,10 +1613,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 三条播放路径共用解析后的 plan，跳转行为一致；解析失败时
       // 返回原地址，行为与原来一致（见 playback_redirect）。
       if (shouldPreResolveRedirects(plan)) {
-        final resolved = await resolvePlaybackRedirects(
-          plan.url,
-          plan.headers,
-        );
+        final resolved = await resolvePlaybackRedirects(plan.url, plan.headers);
         plan = plan.withUrl(resolved.url).withHeaders(resolved.headers);
       }
       await _serialize(() async {
@@ -2029,6 +2062,39 @@ class _PlayerScreenState extends State<PlayerScreen>
           ));
     } catch (_) {}
     if (mounted && !_closed) _scheduleSystemUi();
+  }
+
+  /// 内嵌播放器的方向同步：详情页翻转 embeddedFullscreen 时方向要跟
+  /// 着走（与独立路由的 _rotate 同款语义）。_rotate 与 _applyOrientation
+  /// 都对 embedded 提前返回，内嵌这条只能靠这里；退出全屏时释放方
+  /// 向主人，方向回到不约束。
+  Future<void> _syncEmbeddedOrientation() async {
+    if (!widget.embedded || _television || !_mobile || _closed) return;
+    try {
+      if (widget.embeddedFullscreen) {
+        await (_orientationController?.setPlayback(
+              this,
+              fullscreen: true,
+              aspectRatio: _aspectRatio,
+              mode: _orientationMode,
+            ) ??
+            SystemChrome.setPreferredOrientations(
+              AppOrientationController.orientations(
+                television: _television,
+                fullscreen: true,
+                aspectRatio: _aspectRatio,
+                mode: _orientationMode,
+              ),
+            ));
+      } else {
+        await (_orientationController?.releasePlayback(this) ??
+            SystemChrome.setPreferredOrientations(
+              AppOrientationController.orientations(
+                television: _television,
+              ),
+            ));
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadParseSelection() async {
@@ -2815,7 +2881,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           appBar: AppBar(
             title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
-          body: SafeArea(child: _nonVideoPane()),
+          body: SafeArea(top: false, child: _nonVideoPane()),
         ),
       );
     }
@@ -2962,7 +3028,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         children: [
           _videoBackdrop(),
           Container(color: Colors.black.withValues(alpha: .35)),
+          // 顶边距只留一份：上层 body SafeArea（全屏/手机）或 AppBar
+          // （桌面）已占，覆盖层不再重复加顶；底边距只在全屏时由
+          // 覆盖层占（非全屏时 body 已占），滑杆不被手势条压住。
           SafeArea(
+            top: false,
+            bottom: _showFullscreen,
             child: Column(
               children: [
                 Row(
@@ -3206,14 +3277,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     // _backToList，藏掉哪一个都不改变返回行为。嗅探态同理：左上角
     // 只留关嗅探的 X，常驻返回藏掉（X 盖在它下层，留着点不到），
     // 关掉嗅探后常驻返回随状态恢复；系统返回仍走 _backToList。
-    final permanentBackVisible = _mobile &&
+    final permanentBackVisible =
+        _mobile &&
         !_television &&
         !_useNativeHandle &&
         !_useIjkCore &&
         !_sniffEmbedded &&
         !hideOverlayForPictureInPicture &&
         !((_loading || _error != null) && _showFullscreen);
-    final loadingFullscreenExitVisible = (_loading || _error != null) &&
+    final loadingFullscreenExitVisible =
+        (_loading || _error != null) &&
         !hideOverlayForPictureInPicture &&
         _showFullscreen &&
         !_television;
@@ -3872,10 +3945,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
           const SizedBox(height: 6),
           SizedBox(
-            height: episodePreviewCardExtent(
-              context,
-              episodePreviewCardWidth,
-            ),
+            height: episodePreviewCardExtent(context, episodePreviewCardWidth),
             child: ListView.separated(
               controller: _episodeStripController,
               scrollDirection: Axis.horizontal,

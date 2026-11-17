@@ -170,11 +170,13 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
       try {
         bookmark = await loadBookmark(widget.source.id, widget.book.id);
       } catch (_) {}
-      final startIndex = (widget.initialChapterIndex ??
-              (bookmark == null ? 0 : bookmark.chapterIndex))
-          .clamp(0, _chapters.length - 1);
-      _initialPage =
-          widget.initialChapterIndex != null ? 0 : bookmark?.pageIndex ?? 0;
+      final startIndex =
+          (widget.initialChapterIndex ??
+                  (bookmark == null ? 0 : bookmark.chapterIndex))
+              .clamp(0, _chapters.length - 1);
+      _initialPage = widget.initialChapterIndex != null
+          ? 0
+          : bookmark?.pageIndex ?? 0;
       await _loadChapter(startIndex, resume: true);
       unawaited(_recordHistory());
     } catch (_) {
@@ -306,9 +308,7 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
     if (_content == null || _error.isNotEmpty) return;
     if (_ttsAvailable == false && !_ttsPlaying && !_ttsPaused) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('手机里没有中文语音，朗读不可用，请安装语音引擎后重试'),
-        ),
+        const SnackBar(content: Text('手机里没有中文语音，朗读不可用，请安装语音引擎后重试')),
       );
       return;
     }
@@ -432,45 +432,50 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                 top: 0,
                 left: 0,
                 right: 0,
-                child: Container(
-                  color: Colors.black54,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        key: const ValueKey('novel-back'),
-                        tooltip: '返回',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      ),
-                      Expanded(
-                        child: Text(
-                          widget.book.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white),
+                // 顶栏从状态栏/挖孔下方开始，返回钮不许被状态栏盖住。
+                child: SafeArea(
+                  bottom: false,
+                  child: Container(
+                    color: Colors.black54,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          key: const ValueKey('novel-back'),
+                          tooltip: '返回',
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(
+                            Icons.arrow_back,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        key: const ValueKey('novel-bookshelf-toggle'),
-                        tooltip: _shelved ? '移出书架' : '加入书架',
-                        onPressed: _toggleShelf,
-                        icon: Icon(
-                          _shelved
-                              ? Icons.bookmark
-                              : Icons.bookmark_border,
-                          color: Colors.white,
+                        Expanded(
+                          child: Text(
+                            widget.book.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white),
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        key: const ValueKey('novel-chapter-list'),
-                        tooltip: '章节列表',
-                        onPressed: _chapters.isEmpty ? null : _pickChapter,
-                        icon: const Icon(
-                          Icons.list_rounded,
-                          color: Colors.white,
+                        IconButton(
+                          key: const ValueKey('novel-bookshelf-toggle'),
+                          tooltip: _shelved ? '移出书架' : '加入书架',
+                          onPressed: _toggleShelf,
+                          icon: Icon(
+                            _shelved ? Icons.bookmark : Icons.bookmark_border,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                    ],
+                        IconButton(
+                          key: const ValueKey('novel-chapter-list'),
+                          tooltip: '章节列表',
+                          onPressed: _chapters.isEmpty ? null : _pickChapter,
+                          icon: const Icon(
+                            Icons.list_rounded,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -489,9 +494,7 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                   key: const ValueKey('novel-tts-fab'),
                   heroTag: 'novel-tts-fab',
                   onPressed: _toggleTts,
-                  icon: Icon(
-                    _ttsPlaying ? Icons.pause : Icons.volume_up,
-                  ),
+                  icon: Icon(_ttsPlaying ? Icons.pause : Icons.volume_up),
                   label: Text(_ttsPlaying ? '暂停' : '朗读'),
                 ),
               ),
@@ -500,62 +503,68 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: Container(
-                  color: Colors.black54,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      IconButton(
-                        key: const ValueKey('novel-prev-chapter'),
-                        tooltip: '上一章',
-                        onPressed: _index > 0
-                            ? () => _loadChapter(_index - 1)
-                            : null,
-                        icon: const Icon(
-                          Icons.chevron_left,
-                          color: Colors.white,
+                // 底栏落在手势条上方，不被系统手势条压住。
+                child: SafeArea(
+                  top: false,
+                  child: Container(
+                    color: Colors.black54,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        IconButton(
+                          key: const ValueKey('novel-prev-chapter'),
+                          tooltip: '上一章',
+                          onPressed: _index > 0
+                              ? () => _loadChapter(_index - 1)
+                              : null,
+                          icon: const Icon(
+                            Icons.chevron_left,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        key: const ValueKey('novel-tts-play-pause'),
-                        tooltip: _ttsPlaying ? '暂停朗读' : '开始朗读',
-                        onPressed: _toggleTts,
-                        icon: Icon(
-                          _ttsPlaying ? Icons.pause : Icons.play_arrow,
-                          color: Colors.white,
+                        IconButton(
+                          key: const ValueKey('novel-tts-play-pause'),
+                          tooltip: _ttsPlaying ? '暂停朗读' : '开始朗读',
+                          onPressed: _toggleTts,
+                          icon: Icon(
+                            _ttsPlaying ? Icons.pause : Icons.play_arrow,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        key: const ValueKey('novel-tts-stop'),
-                        tooltip: '停止朗读',
-                        onPressed: _ttsPlaying || _ttsPaused ? _stopTts : null,
-                        icon: const Icon(Icons.stop, color: Colors.white),
-                      ),
-                      PopupMenuButton<double>(
-                        key: const ValueKey('novel-tts-rate'),
-                        tooltip: '朗读语速',
-                        initialValue: _ttsRate,
-                        onSelected: _setTtsRate,
-                        icon: const Icon(Icons.speed, color: Colors.white),
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(value: 0.5, child: Text('0.5倍')),
-                          PopupMenuItem(value: 1.0, child: Text('1倍')),
-                          PopupMenuItem(value: 1.5, child: Text('1.5倍')),
-                          PopupMenuItem(value: 2.0, child: Text('2倍')),
-                        ],
-                      ),
-                      IconButton(
-                        key: const ValueKey('novel-next-chapter'),
-                        tooltip: '下一章',
-                        onPressed: _index + 1 < _chapters.length
-                            ? () => _loadChapter(_index + 1)
-                            : null,
-                        icon: const Icon(
-                          Icons.chevron_right,
-                          color: Colors.white,
+                        IconButton(
+                          key: const ValueKey('novel-tts-stop'),
+                          tooltip: '停止朗读',
+                          onPressed: _ttsPlaying || _ttsPaused
+                              ? _stopTts
+                              : null,
+                          icon: const Icon(Icons.stop, color: Colors.white),
                         ),
-                      ),
-                    ],
+                        PopupMenuButton<double>(
+                          key: const ValueKey('novel-tts-rate'),
+                          tooltip: '朗读语速',
+                          initialValue: _ttsRate,
+                          onSelected: _setTtsRate,
+                          icon: const Icon(Icons.speed, color: Colors.white),
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 0.5, child: Text('0.5倍')),
+                            PopupMenuItem(value: 1.0, child: Text('1倍')),
+                            PopupMenuItem(value: 1.5, child: Text('1.5倍')),
+                            PopupMenuItem(value: 2.0, child: Text('2倍')),
+                          ],
+                        ),
+                        IconButton(
+                          key: const ValueKey('novel-next-chapter'),
+                          tooltip: '下一章',
+                          onPressed: _index + 1 < _chapters.length
+                              ? () => _loadChapter(_index + 1)
+                              : null,
+                          icon: const Icon(
+                            Icons.chevron_right,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

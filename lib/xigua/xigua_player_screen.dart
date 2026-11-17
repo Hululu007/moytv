@@ -75,6 +75,7 @@ class XiguaPlayerScreen extends StatefulWidget {
     this.videoBuilder,
     this.searchKeyword = '',
     this.startFullscreen = false,
+    this.onPlaybackExhausted,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -86,6 +87,11 @@ class XiguaPlayerScreen extends StatefulWidget {
   final LocalStore store;
   final String searchKeyword;
   final bool startFullscreen;
+
+  /// 恢复耗尽回调（女优模块静默换线用）：与 guo 播放器同语义，
+  /// 在线播放恢复耗尽、错误界面已显示时调一次；默认 null，
+  /// 现有调用行为一字不变；本地播放不调。
+  final void Function(BuildContext)? onPlaybackExhausted;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -1046,6 +1052,14 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
                     : '本地成品读取失败，请重试或重新生成。'
               : '自动恢复未成功，请检查网络后重试，也可换一集或选择其他清晰度。';
         });
+        // 女优模块静默换线：非本地且回调非空时，下一帧通知调用方
+        // （调用方弹栈换线；回调里不再写回本页状态）。
+        final onExhausted = widget.onPlaybackExhausted;
+        if (!current.local && onExhausted != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) onExhausted(context);
+          });
+        }
       }
       return;
     }

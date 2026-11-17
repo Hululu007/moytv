@@ -47,11 +47,9 @@ var AvJoy = {
         d.push({ title: '', url: 'hiker://empty', col_type: 'blank_block' });
     },
 
-    // ---- 列表 URL ----
     videoUrl: function (sort, page) {
-        var path = '/videos?o=' + (sort || 'mr');
-        if (page > 1) path += '&page=' + page;
-        return this.HOST + path;
+        if (page > 1) return this.HOST + '/?page=' + page;
+        return this.HOST + '/';
     },
 
     parseVideos: function (html) {
@@ -144,7 +142,6 @@ var AvJoy = {
             if (!href || !name) continue;
             if (seen[href]) continue;
             seen[href] = 1;
-            // 就近取计数（可选）
             var count = '';
             var slice = html.substring(Math.max(0, m.index - 120), m.index);
             var cm = slice.match(/tag-counter">(\d+)</);
@@ -206,7 +203,6 @@ var AvJoy = {
         }
     },
 
-    // ---- 影片 ----
     videoList: function () {
         var sort = getMyVar(this.K.sort, 'mr');
         var page = parseInt(MY_PAGE, 10) || 1;
@@ -215,8 +211,6 @@ var AvJoy = {
             var head = [];
             this.pushSearch(head);
             this.pushTabs(head, 'videos');
-            this.gap(head);
-            this.pushVideoSort(head, sort);
             this.gap(head);
             setPreResult(head);
         }
@@ -234,7 +228,6 @@ var AvJoy = {
     categoryList: function () {
         var page = parseInt(MY_PAGE, 10) || 1;
         if (page < 1) page = 1;
-        // 分类页无翻页，仅第一页
         if (page > 1) { setResult([]); return; }
         var head = [];
         this.pushSearch(head);

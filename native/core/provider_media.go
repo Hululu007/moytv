@@ -38,7 +38,7 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.HuangguoVideoURL, huangguoVideoBaseURL
 	case sourceHuangdou:
 		configured, fallback = d.cfg.HuangdouURL, huangdouBaseURL
-	case sourceHongguo, sourceHGTV:
+	case sourceHongguo, sourceHGTV, sourceHongguoNew:
 		configured, fallback = d.cfg.HongguoURL, hongguoBaseURL
 	case sourceHuangju:
 		configured, fallback = d.cfg.HuangjuURL, huangjuBaseURL
@@ -176,6 +176,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	if strings.HasPrefix(chapter.VideoURL, "novel://hgitem:") {
 		return d.resolveHongguoNovelMedia(ctx, task)
+	}
+	if chapter.Source == sourceHongguoNew {
+		return d.resolveHongguoNewMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)

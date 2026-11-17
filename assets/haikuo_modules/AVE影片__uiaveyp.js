@@ -3,7 +3,6 @@ var UI = {};
 UI.engine = 'aveyp';
 UI.MV = 'aveyp_';
 
-// 顶部横滑分类（首页 + 10 分类）：URL 参数软导航，不跳页
 UI.navs = function (d, cats, current) {
   var navs = [{ title: '首页', id: '0' }];
   for (var i = 0; i < cats.length; i++) navs.push({ title: cats[i].name, id: String(i + 1) });
@@ -24,7 +23,6 @@ UI.navs = function (d, cats, current) {
   d.push({ col_type: 'line_blank' });
 };
 
-// 搜索框
 UI.searchBox = function (d) {
   d.push({
     title: '🔍 搜索',
@@ -42,7 +40,6 @@ UI.searchBox = function (d) {
   d.push({ col_type: 'line_blank' });
 };
 
-// 卡片列表
 UI.cards = function (d, cards) {
   for (var i = 0; i < cards.length; i++) {
     var c = cards[i];
@@ -56,7 +53,6 @@ UI.cards = function (d, cards) {
   }
 };
 
-// 翻页按钮：URL 参数软翻页，不跳页、不 lazyRule
 UI.pager = function (d, pg, pc) {
   if (pc <= 1) return;
   d.push({ col_type: 'line_blank' });
@@ -84,7 +80,6 @@ UI.pager = function (d, pg, pc) {
   }
 };
 
-// 首页/分类渲染
 UI.render = function (data) {
   var d = [];
   var cats = data.cats || [];
@@ -103,7 +98,6 @@ UI.render = function (data) {
   setResult(d);
 };
 
-// 搜索结果渲染
 UI.renderSearch = function (data) {
   var d = [];
   d.push({ title: '搜索：' + (data.keyword || '') + '（第' + (data.pg || 1) + '页）', url: 'hiker://empty', col_type: 'text_1' });
@@ -116,18 +110,19 @@ UI.renderSearch = function (data) {
   setResult(d);
 };
 
-// 详情渲染
 UI.renderDetail = function (data) {
   var d = [];
-  // 海报卡
   d.push({
     title: data.vod_name,
     pic_url: data.vod_pic,
-    desc: '',
+    desc: data.vod_remarks || '',
     url: 'hiker://empty',
     col_type: 'movie_1_vertical_pic_blur'
   });
-  // 线路 + 选集
+  var lines0 = data.lines || [];
+  for (var li = 0; li < lines0.length; li++) {
+    d.push({ title: lines0[li].name || '默认线路', url: 'hiker://empty', col_type: 'text_1' });
+  }
   var lines = data.lines || [];
   for (var i = 0; i < lines.length; i++) {
     var eps = lines[i].eps || [];

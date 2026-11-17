@@ -31,7 +31,7 @@ var ASList = {
           var t = pdfh(srcs[i], 'source&&title') || ('线路' + (list.length + 1));
           if (u) list.push({ u: u, t: t });
         }
-        if (!list.length) return 'toast://未解析到播放地址';
+        if (!list.length) return 'toast://解析失败';
         list.sort(function (a, b) {
           return (parseInt(String(b.t).replace(/\D/g, ''), 10) || 0) - (parseInt(String(a.t).replace(/\D/g, ''), 10) || 0);
         });

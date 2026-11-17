@@ -200,7 +200,7 @@ void main() {
 
     testWidgets('新装 13 张卡默认全部内容', (tester) async {
       await pumpThemeScreen(tester);
-      expect(find.text('显示内容：全部内容'), findsNWidgets(13));
+      expect(find.text('显示内容：全部内容'), findsNWidgets(14));
     });
 
     testWidgets('点档行改档不切主题', (tester) async {
@@ -423,11 +423,12 @@ void main() {
         'appThemeMode': 'purpleNeon',
       });
       final probe = LocalStore(await SharedPreferences.getInstance());
-      final hideIds = probe.sources
-          .where((site) => isAdultSourceName(site.name))
-          .map((site) => site.id)
-          .toSet()
-        ..add('adult-hidden');
+      final hideIds =
+          probe.sources
+              .where((site) => isAdultSourceName(site.name))
+              .map((site) => site.id)
+              .toSet()
+            ..add('adult-hidden');
       probe.dispose();
       await pumpDramaHome(
         tester,

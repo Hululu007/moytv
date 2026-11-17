@@ -1,23 +1,17 @@
 js:
-// ==== UILib 可复用 UI 渲染模块（奈雪影视技法蒸馏，小仙女适配版：无设置子页）====
 (function () {
   var UI = {};
-  // 本源的引擎子页面 path
   UI.engine = 'cb';
-  // 强调前缀：两个左引号+两个右引号
   var Q = '\u2018\u2018\u2019\u2019';
 
-  // 随机色
   UI.rndColor = function () {
     return '#' + ('00000' + (Math.random() * 0x1000000 << 0).toString(16)).substr(-6);
   };
 
-  // 高亮按钮
   UI.hi = function (text, active) {
     return active ? Q + '<b><font color="#FF5D50">' + text + '</font></b>' : text;
   };
 
-  // 轮播（含开关）
   UI.banner = function (d, cfg) {
     var id = Math.random().toString(36).substr(2, 5) + 'lunbo';
     var items = cfg.items || [];
@@ -45,7 +39,6 @@ js:
     }, { id: id, data: items }));
   };
 
-  // 分类导航（scroll_button，高亮）。注意点首页时必须同时清全局筛选，否则返回首页残留筛选/分页状态。
   UI.navs = function (d, navs, current) {
     for (var i = 0; i < navs.length; i++) {
       var active = String(current) === String(navs[i].id);
@@ -65,7 +58,6 @@ js:
     d.push({ col_type: 'line_blank' });
   };
 
-  // 折叠筛选（推入主数组，保证“大类在上、筛选在下”）
   UI.filters = function (d, filters, filterKey, foldKey) {
     if (!filters.length) return;
     var s = d;   // 直接复用主数组，不再 setPreResult
@@ -103,7 +95,6 @@ js:
     d.push({ col_type: 'line_blank' });
   };
 
-  // 分区标题（text_icon 带图标）
   UI.sectionTitle = function (d, title, icon, url) {
     d.push({
       title: '▍'.fontcolor(UI.rndColor()) + '<b>' + title + '</b>'.fontcolor('Black'),
@@ -112,9 +103,6 @@ js:
     });
   };
 
-  // 搜索下方历史按钮：avatar 行紧贴搜索框下方，使用系统图标 icon3。
-  // 单击 → 进历史记录页(hiker://history?rule=<源名>#noRecordHistory#)；
-  // 长按弹菜单：🛠️管理 / ⭐收藏。（本源无设置子页，不放设置项）
   UI.topBtns = function (d, cfg) {
     var rule = MY_RULE.title;
     d.push({
@@ -132,16 +120,13 @@ js:
     });
   };
 
-  // ---------- 首页 ----------
   UI.renderHome = function (data) {
     var d = [];
     var page = MY_PAGE;
     var cls = String(getMyVar('sd_cls', ''));
 
     if (!cls) {  // 首页模式（首页无分页，忽略 page 直接渲染，防止从筛选页返回首页时 page 残留）
-      // 分类导航（首页也显示，首页按钮放第一位，点击进入分类模式）
       UI.navs(d, [{ title: '首页', id: '' }].concat(data.navs || []), '');
-      // 搜索框（★ 必须开 fypage 子页再搜，绝不能内联直接跑 search()，否则 fetch 返回的 "error" 会被原生 ArticleListModel 当 URL 报 Expected URL scheme）
       if (data.search) {
         d.push({
           title: '🔍 搜索',
@@ -158,14 +143,11 @@ js:
         });
         d.push({ col_type: 'line_blank' });
       }
-      // 搜索下方历史按钮（仅首页显示）
       UI.topBtns(d, data.topBtns);
-      // 轮播：显示与否由 banner_on 控制（默认开；本源无设置页，读 getItem 默认值）
       if (data.banner && getItem('banner_on', 'true') == 'true') {
         UI.banner(d, { items: data.banner.items || [], time: data.banner.time || 4000 });
         d.push({ col_type: 'line_blank' });
       }
-      // 分区
       for (var si = 0; si < data.sections.length; si++) {
         var sec = data.sections[si];
         UI.sectionTitle(d, sec.title, sec.icon, sec.url);
@@ -182,18 +164,14 @@ js:
       }
       setResult(d);
     } else {  // 分类模式
-      // autoPage：上拉自动翻页（App 触底自增 MY_PAGE，结果自动追加；第1页才渲染导航/筛选，不加翻页按钮）
       var autoPage = !!data.autoPage;
       var cpg = 1;
       try { cpg = parseInt(MY_PAGE, 10) || 1; } catch (eap) {}
       if (cpg < 1) cpg = 1;
       if (!autoPage || cpg === 1) {
-        // 分类导航（首页按钮第一位）
         UI.navs(d, [{ title: '首页', id: '' }].concat(data.navs || []), cls);
-        // 折叠筛选（排在分类下方）
         UI.filters(d, data.filters || [], 'sd_filter', 'sd_fold');
       }
-      // 列表数据由各源在 homeData 里提供（AI 抓完塞入 data.listItems）
       var items = data.listItems || data.sections && data.sections[0] && data.sections[0].items || [];
       if (!items.length) {
         if (autoPage && cpg > 1) { setResult([]); return; }  // 自动翻页到底：不再追加
@@ -204,7 +182,6 @@ js:
         d.push({ title: items[k].title, pic_url: items[k].pic, desc: items[k].desc || '', url: items[k].url, col_type: 'movie_3' });
       }
       if (!autoPage) {
-        // 翻页按钮（显式，仅非 autoPage 源使用）
         var pg = parseInt(data.page || '1', 10) || 1;
         if (pg > 1) {
           d.push({
@@ -225,14 +202,10 @@ js:
     }
   };
 
-  // ---------- 搜索结果页 ----------
-  // 数据契约：data.items = [{ title, pic, desc, url }]（由引擎 search() 只取数据后 $.require('uil').renderSearch({items}) 交付）
-  // 渲染：首屏 loading（仅第1页）→ 结果列表 → 空态；setPreResult([]) 放 setResult(d) 前先清 loading。
   UI.renderSearch = function (data) {
     var d = [];
     var items = data.items || [];
 
-    // ① 首屏先放 loading 占位，界面立即出现，数据随后 setResult 覆盖
     if (MY_PAGE == 1) {
       var dL = [{
         img: "http://123.56.105.145/weisyr/img/Loading1.gif",
@@ -243,7 +216,6 @@ js:
       setPreResult(dL);
     }
 
-    // ② 渲染结果列表
     for (var i = 0; i < items.length; i++) {
       if (!items[i].title) continue;
       d.push({
@@ -255,17 +227,14 @@ js:
       });
     }
 
-    // ③ 空态提示（无结果时给用户明确反馈，而非白屏）
     if (!d.length) {
       d.push({ title: '未找到相关内容', desc: '请换个关键词重试', pic_url: '', url: 'javascript:;', col_type: 'list_1' });
     }
 
-    // ④ 先清掉首屏 loading，再正式 setResult
     setPreResult([]);
     setResult(d);
   };
 
-  // ---------- 直播列表（带地区筛选+翻页+返回） ----------
   UI.renderLiveList = function (data) {
     var d = [];
     d.push({
@@ -273,7 +242,6 @@ js:
       url: $('#noLoading#').lazyRule(function () { putMyVar('cb_gender', ''); putMyVar('cb_page', '1'); refreshPage(false); return 'hiker://empty'; }),
       col_type: 'text_center_1'
     });
-    // 地区筛选
     var regs = data.regions || [], cur = data.curRegion || '', gd = data.gender || 'f';
     if (regs.length) {
       var row = [];
@@ -320,11 +288,9 @@ js:
     setResult(d);
   };
 
-  // ---------- 详情页 ----------
   UI.renderDetail = function (data) {
     var d = [];
     var p = data.poster || {};
-    // ① 海报卡
     d.push({
       title: p.title, desc: p.desc || '',
       pic_url: p.pic ? p.pic + '@Referer=' + (data.referer || '') : '',
@@ -332,10 +298,8 @@ js:
       col_type: 'movie_1_vertical_pic_blur',
       extra: { gradient: true }
     });
-    // ② 简介 setDesc
     if (data.intro) UI.setDesc(d, data.intro, 60);
     d.push({ col_type: 'line' });
-    // ③ 快速搜索（可选，受 quickSearch_on 控制，默认开）
     if (getItem('quickSearch_on', 'true') == 'true' && data.quickSearch && data.quickSearch.length) {
       var qTitle = ''; try { qTitle = getPageTitle(); } catch (e) {}
       for (var q = 0; q < data.quickSearch.length; q++) {
@@ -349,9 +313,7 @@ js:
       }
       d.push({ col_type: 'line_blank' });
     }
-    // ④ TVBox 推送区域（默认显示；tvbox_on 读 getItem 默认值）
     if (getItem('tvbox_on', 'true') == 'true' && data.tvboxShow !== false && data.tvbox) UI.tvboxUI(d, data.tvbox);
-    // ⑤ 排序（在最前）+ 线路 + 剧集
     var lines = data.lines || [];
     var cur = parseInt(getMyVar('sd_line', '0'), 10);
     if (cur < 0 || cur >= lines.length) cur = 0;
@@ -394,7 +356,6 @@ js:
     setResult(d);
   };
 
-  // ---------- TVBox 推送（奈雪技法） ----------
   UI.tvboxUI = function (d, tvbox) {
     d.push({
       title: (getItem('webpush', '0') == '1' ? '单集推送🟢' : '单集推送🔴'),
@@ -419,7 +380,6 @@ js:
     d.push({ col_type: 'blank_block', extra: { height: 8 } });
   };
 
-  // ---------- 简介折叠（奈雪/河马技法） ----------
   UI.setDesc = function (d, desc, num) {
     if (!desc || !String(desc).trim()) return;
     num = num || 60;

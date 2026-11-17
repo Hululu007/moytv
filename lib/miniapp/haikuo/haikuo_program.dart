@@ -33,6 +33,34 @@ String? haikuoFaviconUrl(HaikuoProgram program) {
   return null;
 }
 
+/// 由规则的 host/入口链接推导可打开的网站首页地址；推导不出返回 null。
+///
+/// host 字段优先（裸域名默认补 https）；入口链接次之，嵌着真实地址的
+/// hiker://empty##https://站/... 取里面第一个 http(s) 地址；其余形态
+/// （hiker://、js:、空）一律不认，绝不编一个假地址。
+String? haikuoSiteUrl(HaikuoProgram program) {
+  return _haikuoSiteCandidate(program.host) ??
+      _haikuoSiteCandidate(program.url);
+}
+
+String? _haikuoSiteCandidate(String value) {
+  final text = value.trim();
+  if (text.isEmpty) return null;
+  final embedded = RegExp(r'https?://[^\s#]+').firstMatch(text);
+  final raw = embedded?.group(0) ?? text;
+  var uri = Uri.tryParse(raw);
+  if (uri == null) return null;
+  if (uri.scheme.isEmpty && !raw.contains('://')) {
+    uri = Uri.tryParse('https://$raw');
+  }
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    return null;
+  }
+  return uri.toString();
+}
+
 String? _haikuoOriginOf(String value) {
   final text = value.trim();
   if (text.isEmpty) return null;

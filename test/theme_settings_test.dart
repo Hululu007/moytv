@@ -55,7 +55,7 @@ void main() {
     store.dispose();
   });
 
-  testWidgets('主题设置页列出 13 套主题，点选即时存盘', (tester) async {
+  testWidgets('主题设置页列出 14 套主题，点选即时存盘', (tester) async {
     final store = await localStore();
     await tester.pumpWidget(
       MaterialApp(home: ThemeSettingsScreen(store: store)),
@@ -71,6 +71,7 @@ void main() {
     expect(find.text('紫蓝霓虹'), findsOneWidget);
     expect(find.text('黑金VIP'), findsOneWidget);
     expect(find.text('Win7'), findsOneWidget);
+    expect(find.text('XP'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('app-theme-goldVip')));
     await tester.pumpAndSettle();
     expect(store.appTheme, AppThemeMode.goldVip);

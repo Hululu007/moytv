@@ -43,10 +43,10 @@ enum Win7WindowKind {
 
 /// 桌面图标顺序与内容（设计稿固定 6 个，直播没有桌面图标、只在
 /// 开始菜单树里）。
+/// 桌面图标：短剧不在此列（桌面有片库即够用）；短剧窗只走开始菜单。
 const List<Win7WindowKind> win7DesktopIcons = [
   Win7WindowKind.audio,
   Win7WindowKind.novel,
-  Win7WindowKind.drama,
   Win7WindowKind.library,
   Win7WindowKind.miniApp,
   Win7WindowKind.multimedia,

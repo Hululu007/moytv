@@ -29,10 +29,10 @@ void main() {
       expect(jar.id, PluginManager.jarPluginId);
       expect(jar.kind, PluginIconKind.jar);
       expect(jar.md5, zakatvJarMd5);
-      // 147 条配置，1 条 audioOnly 不进站点列表。
-      expect(zakatvBuiltinSites.length, 147);
-      expect(jar.siteCount, 146);
-      expect(jar.detail, contains('147'));
+      // 148 条配置，1 条 audioOnly 不进站点列表。
+      expect(zakatvBuiltinSites.length, 148);
+      expect(jar.siteCount, 147);
+      expect(jar.detail, contains('148'));
     });
 
     test('50 py plugins in today register order', () {
@@ -107,15 +107,9 @@ void main() {
         isFalse,
       );
       await PluginManager.uninstallBuiltinPlugin('py:nope');
-      expect(
-        await PluginManager.isBuiltinPluginUninstalled('py:nope'),
-        isTrue,
-      );
+      expect(await PluginManager.isBuiltinPluginUninstalled('py:nope'), isTrue);
       expect(await PluginManager.installBuiltinPlugin('py:nope'), isFalse);
-      expect(
-        await PluginManager.isBuiltinPluginUninstalled('py:nope'),
-        isTrue,
-      );
+      expect(await PluginManager.isBuiltinPluginUninstalled('py:nope'), isTrue);
     });
 
     test('ensureBuiltinPlugins honors the uninstall list', () async {

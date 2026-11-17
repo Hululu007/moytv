@@ -28,7 +28,7 @@ Future<void> ensureDramaUiStyleLoaded() async {
   _dramaUiStyleLoaded = true;
 }
 
-/// 当前选中的全局主题（13 套之一）。
+/// 当前选中的全局主题（14 套之一）。
 ///
 /// 主题由 LocalStore 持久化，MaterialApp 构建时会把它同步到这里，
 /// 让深层组件（抽屉、内容区背景）也能判断要不要走霓虹视觉。

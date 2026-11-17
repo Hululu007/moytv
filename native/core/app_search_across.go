@@ -34,7 +34,7 @@ func nativeSourceSupportsSearch(source string) bool {
 		return true
 	}
 	switch source {
-	case sourceHongguo, sourceHuangju, sourceGuipian, sourceHanxiaoquan,
+	case sourceHongguo, sourceHongguoNew, sourceHuangju, sourceGuipian, sourceHanxiaoquan,
 		sourceYeguo, sourceDSD, sourceA123, sourceIkanbot, sourceHGTV,
 		sourceHGTVMirror:
 		return true
@@ -90,6 +90,20 @@ func (engine *nativeEngine) nativeSearchSource(ctx context.Context, source, quer
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
 		result.Warning, result.Page = entry.Warning, 1
+		if entry.Limited && result.Warning == "" {
+			result.Warning = "已显示当前可获取的匹配结果，使用更完整的剧名可继续查找"
+		}
+		return result, nil
+
+	case source == sourceHongguoNew:
+		entry, err := d.fetchHongguoNewSearchAPI(ctx, query, page)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range entry.Dramas {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.Warning, result.Page = entry.Warning, page
 		if entry.Limited && result.Warning == "" {
 			result.Warning = "已显示当前可获取的匹配结果，使用更完整的剧名可继续查找"
 		}

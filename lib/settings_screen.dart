@@ -338,7 +338,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           lucide: LucideIcons.palette,
           title: '外观主题',
           detail:
-              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 13 套主题',
+              '当前：${AppThemeConfig.forTheme(store.appTheme).themeName} · 14 套主题',
           onTap: () => _push(
             ThemeSettingsScreen(
               store: store,

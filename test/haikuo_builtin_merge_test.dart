@@ -83,11 +83,11 @@ void main() {
     'year_url',
   ];
 
-  test('内置规则总数 158、标题唯一、每条都有标题与 fixlog', () {
+  test('内置规则总数 146、标题唯一、每条都有标题与 fixlog', () {
     final rules = _rules();
-    expect(rules, hasLength(158));
+    expect(rules, hasLength(146));
     final titles = rules.map((rule) => '${rule['title']}').toList();
-    expect(titles.toSet(), hasLength(158));
+    expect(titles.toSet(), hasLength(146));
     for (final rule in rules) {
       expect('${rule['title']}'.isNotEmpty, isTrue);
       expect(rule.containsKey('fixlog'), isTrue, reason: '${rule['title']}');
@@ -167,7 +167,7 @@ void main() {
     expect('${cnx['fixlog']}', contains('去掉分类白名单'));
   });
 
-  test('8 条门禁与 3 条整条排除未进树，91成人短剧仍是内置 v2', () {
+  test('8 条门禁与 3 条整条排除未进树，91成人短剧仍是内置 v3（扫修版）', () {
     final titles = _rules().map((rule) => '${rule['title']}').toSet();
     for (final gated in [
       '🔞91hub',
@@ -185,7 +185,7 @@ void main() {
       expect(titles, isNot(contains(gated)), reason: gated);
     }
     final adult91 = _byTitle(_rules(), '🔞91成人短剧');
-    expect(adult91['version'], 2);
+    expect(adult91['version'], 3);
   });
 
   test('全部分类字段无带词分类、无成人游戏/赌博分类', () {

@@ -21,7 +21,7 @@ class SourcePickerEntry {
   final bool deletable;
 
   /// 调用方给定的站标候选地址（按序尝试）。为空时按 [id] 查 jar 站
-  /// ext 派生；都为空则宫格显示站名首字块，不联网。
+  /// ext 与 py/Go/阅读桥接表派生；都为空则宫格显示图案标，不联网。
   final List<String> iconUrls;
 }
 
@@ -296,12 +296,16 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   /// 图标宫格：普通列表样式下的站点呈现——圆角图标块 + 下面站名，
   /// 点块进站（与旧文字芯片点行完全一致，pop 回站 id）。方块列
   /// （霓虹主题 + 传仓库 + 非编辑模式）走 [_cubeList]，不受影响。
-  /// 图标取不到时显示站名首字块，见 [SiteIcon]。
+  /// 图标取不到时显示图案标，见 [SiteIcon]。
   Widget _siteGrid(({String title, List<SourcePickerEntry> entries}) group) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final columns = width >= 480 ? 5 : width >= 340 ? 4 : 3;
+        final columns = width >= 480
+            ? 5
+            : width >= 340
+            ? 4
+            : 3;
         return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -434,9 +438,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final rows = <_CubeRow>[];
     for (final group in visible) {
       if (!searching && group.title.isNotEmpty) {
-        rows.add(
-          _CubeRow.header('${group.title}（${group.entries.length}）'),
-        );
+        rows.add(_CubeRow.header('${group.title}（${group.entries.length}）'));
       }
       for (final entry in group.entries) {
         rows.add(_CubeRow.entry(entry));
@@ -516,10 +518,7 @@ class _SiteCubeRowState extends State<_SiteCubeRow> {
 
   Future<List<String>> _loadCovers() async {
     try {
-      final page = await widget.repository.catalog(
-        widget.entry.id,
-        page: 1,
-      );
+      final page = await widget.repository.catalog(widget.entry.id, page: 1);
       final covers = <String>[];
       for (final drama in page.items.take(6)) {
         try {

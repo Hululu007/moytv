@@ -944,6 +944,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			items, totalPages, err = d.fetchHongguoCategoryPage(ctx, "real-drama?page="+strconv.Itoa(page), "真人剧")
 			result.HasMore = page < totalPages
 		}
+	case sourceHongguoNew:
+		items, result.HasMore, result.Filters, err = d.fetchHongguoNewCatalogPage(ctx, category, page, input.Filters)
 	case sourceHuangdou:
 		client := newHuangdouAPIClient(d)
 		var decoded any
@@ -1055,6 +1057,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		if err == nil {
 			raw = Drama{Title: title, Name: title}
 		}
+	case sourceHongguoNew:
+		raw, chapters, err = engine.downloader.fetchHongguoNewDetail(ctx, sourceID)
 	case sourceHGTV:
 		raw, chapters, err = engine.downloader.fetchHGTVDetail(ctx, sourceID)
 	case sourceHGTVMirror:

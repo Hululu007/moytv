@@ -1,0 +1,433 @@
+// 女优模块：模型与纯逻辑（归一化、去重合并、名气分、硬线过滤）。
+//
+// 数据口径（2026-11-17 用户令 + 三家名册补令）：
+// - 人物三家合并：潮流名册 + whos.tv + MissAV，按归一化名字去重；
+// - 作品按归一化番号去重，无番号的按归一化标题去重；
+// - 站点来源信息只在内部流转（封面解析、探活），界面任何地方不显示。
+
+/// 硬线词表：与潮流 jar 版分类过滤（ZakaChaoliu.BLOCKED_CAT_WORDS）
+/// 同一套，一字不改；命中即整条剔除（人物整人不要、作品整部不要），
+/// 绝不拿命中条目验播，绝不在界面与日志里引用命中原文。
+const actressBlockedWords = <String>{
+  '萝莉',
+  '幼女',
+  '初中生',
+  '小学生',
+  '未成年',
+  '幼齿',
+  'loli',
+};
+
+/// 文本是否含硬线词：大小写不敏感的子串匹配，与 jar 版过滤同一语义。
+bool actressTextBlocked(String text) {
+  if (text.isEmpty) return false;
+  final lower = text.toLowerCase();
+  for (final word in actressBlockedWords) {
+    if (lower.contains(word)) return true;
+  }
+  return false;
+}
+
+/// 名字归一化键：去全部空白（含全角空格）、小写。去重只认这个键，
+/// 显示永远用原始名字。
+String actressNameKey(String name) =>
+    name.replaceAll(RegExp(r'[\s\u3000\u00A0]+'), '').toLowerCase();
+
+/// 名字切别名：潮流名册的 n 字段含逗号分隔的别名；`、` 与中文逗号
+/// 同样切分。返回去重后的非空原形（不做归一化，归一化在比对时做）。
+List<String> actressNameVariants(String rawName) {
+  final seen = <String>{};
+  final out = <String>[];
+  for (final part in rawName.split(RegExp(r'[,，、]'))) {
+    final name = part.trim();
+    if (name.isEmpty) continue;
+    if (seen.add(actressNameKey(name))) out.add(name);
+  }
+  return out;
+}
+
+/// 番号归一化键：chaoliu.py `_code_key` 的逐字移植——大写、去全部
+/// 非字母数字、`前缀+去前导零的数字`（如 SSIS-00123 → SSIS123）。
+/// 三家名册与全站搜索命中共用这一个键，去重口径才一致。
+String normalizeAvCode(String code) {
+  final cleaned = code.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  final match = RegExp(r'^([A-Z]+)0*(\d+)$').firstMatch(cleaned);
+  if (match != null) return '${match.group(1)}${match.group(2)}';
+  return cleaned;
+}
+
+/// 无番号作品的标题去重键：小写、去空白与常见标点。只在番号为空时
+/// 用作去重键，同一人物内有效。
+String actressTitleKey(String title) => title.toLowerCase().replaceAll(
+  RegExp(r'''[\s\-_·•:：,，。.!！?？()（）\[\]"'“”''/]'''),
+  '',
+);
+
+/// 性别筛选：与浏览列表、排行榜同一口径。
+enum ActressSexFilter { all, female, male }
+
+/// 浏览排序：作品数从多到少，或名字升序。
+enum ActressSort { worksDesc, nameAsc }
+
+/// 第二排册别筛选：按名册自带的标签字段筛（潮流名册 c 字段）。
+/// 无标签的人物（whos/MissAV 名册不带标签）只进 [all]，不进分册。
+enum ActressTagFilter {
+  all('三册全部', ''),
+  coded('有码', '有码'),
+  uncoded('无码', '无码'),
+  western('欧美', '欧美');
+
+  const ActressTagFilter(this.label, this.tagValue);
+
+  final String label;
+
+  /// 匹配的标签值：空表示不过滤。
+  final String tagValue;
+}
+
+/// 名册源标识：只在内部流转，界面不显示。
+enum ActressRosterSourceId { chaoliu, whos, missav }
+
+/// 名册拉回的一条人物（单源视角，合并前）。
+class RosterPerson {
+  const RosterPerson({
+    required this.source,
+    required this.sourceId,
+    required this.name,
+    this.sex = '',
+    this.avatarUrl = '',
+    this.tags = const [],
+    this.worksHint = 0,
+    this.recommended = false,
+  });
+
+  final ActressRosterSourceId source;
+
+  /// 源内身份：潮流 actors.json 的 id、whos 的 slug、MissAV 的人物
+  /// 相对路径。只用于取该人作品清单，界面不显示。
+  final String sourceId;
+
+  /// 原始名字（可能含逗号分隔的别名，合并时切分）。
+  final String name;
+  final String sex;
+  final String avatarUrl;
+  final List<String> tags;
+
+  /// 名册自带的作品数提示（潮流 t 字段）；whos/MissAV 列表页没有，
+  /// 为 0，作品数以实际同步到的作品行数为准。
+  final int worksHint;
+
+  /// 潮流名册 c 字段含“推荐”：编辑推荐，计入名气分。
+  final bool recommended;
+}
+
+/// 名册拉回的一部作品（单源视角）。
+class RosterFilm {
+  const RosterFilm({required this.code, this.title = '', this.date = ''});
+
+  /// 原始番号文本（可能为空，如 whos 标题里提不到番号的条目）。
+  final String code;
+  final String title;
+  final String date;
+
+  String get codeKey => normalizeAvCode(code);
+  String get titleKey => actressTitleKey(title.isEmpty ? code : title);
+}
+
+/// 本地库里合并后的一位演员：三家来源合并为一条，来源身份只存内部
+/// 字段，界面只显示名字、头像、标签与作品数。
+class ActressPerson {
+  const ActressPerson({
+    this.localId = 0,
+    required this.displayName,
+    this.aliases = const [],
+    this.sex = '',
+    this.avatarUrl = '',
+    this.tags = const [],
+    this.worksCount = 0,
+    this.rosterWorks = 0,
+    this.fromChaoliu = false,
+    this.fromWhos = false,
+    this.fromMissav = false,
+    this.chaoliuId = '',
+    this.whosSlug = '',
+    this.missavPath = '',
+    this.missavRank,
+    this.recommended = false,
+    this.filmsSyncedAt,
+    this.enrichedAt,
+  });
+
+  final int localId;
+  final String displayName;
+  final List<String> aliases;
+  final String sex;
+  final String avatarUrl;
+  final List<String> tags;
+
+  /// 已入库的去重后作品行数（ films 同步后维护）。
+  final int worksCount;
+
+  /// 名册提示的作品数（取三家提示的最大值）：作品清单尚未同步时
+  /// 界面显示用，同步完成后以 [worksCount] 为准。
+  final int rosterWorks;
+
+  final bool fromChaoliu;
+  final bool fromWhos;
+  final bool fromMissav;
+  final String chaoliuId;
+  final String whosSlug;
+  final String missavPath;
+
+  /// MissAV 排行名次（1 起）：名气分的主信号；未上榜为 null。
+  final int? missavRank;
+  final bool recommended;
+
+  /// 任一源的作品清单同步完成时间（任一源完成即置），null = 还没
+  /// 有任何一源的作品清单（首轮同步未跑到此人）。
+  final int? filmsSyncedAt;
+
+  /// 全站搜索补封面完成时间，null = 还没补过（下次打开继续补）。
+  final int? enrichedAt;
+
+  /// 界面显示的作品数：取实际行数与名册提示的最大值——同步未完成
+  /// 时不低估（名册提示是总数），同步完成后与实际行数一致；
+  /// 与 SQL 排序的 MAX(works_count, roster_works) 同一口径。
+  int get displayWorks => worksCount > rosterWorks ? worksCount : rosterWorks;
+
+  /// 该人在某源的身份 id（取作品清单用），没有返回 ''。
+  String sourceIdFor(ActressRosterSourceId source) => switch (source) {
+    ActressRosterSourceId.chaoliu => chaoliuId,
+    ActressRosterSourceId.whos => whosSlug,
+    ActressRosterSourceId.missav => missavPath,
+  };
+
+  bool hasSource(ActressRosterSourceId source) =>
+      sourceIdFor(source).isNotEmpty;
+
+  ActressPerson copyWith({
+    int? localId,
+    String? displayName,
+    List<String>? aliases,
+    String? sex,
+    String? avatarUrl,
+    List<String>? tags,
+    int? worksCount,
+    int? rosterWorks,
+    bool? fromChaoliu,
+    bool? fromWhos,
+    bool? fromMissav,
+    String? chaoliuId,
+    String? whosSlug,
+    String? missavPath,
+    int? missavRank,
+    bool? recommended,
+    int? filmsSyncedAt,
+    int? enrichedAt,
+  }) => ActressPerson(
+    localId: localId ?? this.localId,
+    displayName: displayName ?? this.displayName,
+    aliases: aliases ?? this.aliases,
+    sex: sex ?? this.sex,
+    avatarUrl: avatarUrl ?? this.avatarUrl,
+    tags: tags ?? this.tags,
+    worksCount: worksCount ?? this.worksCount,
+    rosterWorks: rosterWorks ?? this.rosterWorks,
+    fromChaoliu: fromChaoliu ?? this.fromChaoliu,
+    fromWhos: fromWhos ?? this.fromWhos,
+    fromMissav: fromMissav ?? this.fromMissav,
+    chaoliuId: chaoliuId ?? this.chaoliuId,
+    whosSlug: whosSlug ?? this.whosSlug,
+    missavPath: missavPath ?? this.missavPath,
+    missavRank: missavRank ?? this.missavRank,
+    recommended: recommended ?? this.recommended,
+    filmsSyncedAt: filmsSyncedAt ?? this.filmsSyncedAt,
+    enrichedAt: enrichedAt ?? this.enrichedAt,
+  );
+}
+
+/// 三家名册人物合并规则（写死，测试钉死）：
+/// - 命中条件：任一名字变体键相同即同一人；
+/// - 显示名优先级：潮流 > whos > MissAV（潮流名字最规范、带别名）；
+/// - 别名/标签取并集；头像取优先级最高的非空；性别取第一个非空；
+/// - 作品提示取最大值；推荐取或；排行取最好名次；来源身份各自保留。
+ActressPerson mergeRosterIntoPerson(
+  ActressPerson? existing,
+  RosterPerson roster,
+) {
+  final variants = actressNameVariants(roster.name);
+  final primary = variants.isEmpty ? roster.name.trim() : variants.first;
+  if (existing == null) {
+    return ActressPerson(
+      displayName: primary,
+      aliases: variants.length > 1 ? variants.sublist(1) : const [],
+      sex: roster.sex,
+      avatarUrl: roster.avatarUrl,
+      tags: roster.tags,
+      rosterWorks: roster.worksHint,
+      fromChaoliu: roster.source == ActressRosterSourceId.chaoliu,
+      fromWhos: roster.source == ActressRosterSourceId.whos,
+      fromMissav: roster.source == ActressRosterSourceId.missav,
+      chaoliuId: roster.source == ActressRosterSourceId.chaoliu
+          ? roster.sourceId
+          : '',
+      whosSlug: roster.source == ActressRosterSourceId.whos
+          ? roster.sourceId
+          : '',
+      missavPath: roster.source == ActressRosterSourceId.missav
+          ? roster.sourceId
+          : '',
+      recommended: roster.recommended,
+    );
+  }
+  // 显示名：已有名字来自低优先级源、且新名字来自更高优先级源时替换。
+  int priority(ActressPerson person) => person.fromChaoliu
+      ? 0
+      : person.fromWhos
+      ? 1
+      : 2;
+  final incomingPriority = switch (roster.source) {
+    ActressRosterSourceId.chaoliu => 0,
+    ActressRosterSourceId.whos => 1,
+    ActressRosterSourceId.missav => 2,
+  };
+  final displayName = incomingPriority < priority(existing)
+      ? primary
+      : existing.displayName;
+  // 别名 = 旧显示名 + 旧别名 + 新变体，排除新显示名自身、按键去重。
+  final aliases = <String>[];
+  final aliasKeys = <String>{actressNameKey(displayName)};
+  for (final candidate in [
+    existing.displayName,
+    ...existing.aliases,
+    ...variants,
+  ]) {
+    if (aliasKeys.add(actressNameKey(candidate))) aliases.add(candidate);
+  }
+  final tags = <String>{...existing.tags, ...roster.tags}.toList();
+  return existing.copyWith(
+    displayName: displayName,
+    aliases: aliases,
+    sex: existing.sex.isNotEmpty ? existing.sex : roster.sex,
+    avatarUrl: existing.avatarUrl.isNotEmpty
+        ? existing.avatarUrl
+        : roster.avatarUrl,
+    tags: tags,
+    rosterWorks: roster.worksHint > existing.rosterWorks
+        ? roster.worksHint
+        : existing.rosterWorks,
+    fromChaoliu:
+        existing.fromChaoliu || roster.source == ActressRosterSourceId.chaoliu,
+    fromWhos: existing.fromWhos || roster.source == ActressRosterSourceId.whos,
+    fromMissav:
+        existing.fromMissav || roster.source == ActressRosterSourceId.missav,
+    chaoliuId: roster.source == ActressRosterSourceId.chaoliu
+        ? roster.sourceId
+        : existing.chaoliuId,
+    whosSlug: roster.source == ActressRosterSourceId.whos
+        ? roster.sourceId
+        : existing.whosSlug,
+    missavPath: roster.source == ActressRosterSourceId.missav
+        ? roster.sourceId
+        : existing.missavPath,
+    recommended: existing.recommended || roster.recommended,
+  );
+}
+
+/// 排行榜综合分（名气为主、作品数为辅，榜内口径一致）：
+/// - 名气分：MissAV 排行名次换算，第 1 名 1000 分，每后一名减 1 分，
+/// 1000 名开外 0 分；潮流“推荐”加 50 分；
+/// - 作品分：显示作品数，封顶 500 分（避免超多产一人压过全部名气分，
+/// 同分时再按实际作品数排）；
+/// - 总分 = 名气分 + 作品分。
+int actressRankScore(ActressPerson person) {
+  var fame = 0;
+  final rank = person.missavRank;
+  if (rank != null && rank >= 1 && rank <= 1000) fame += 1001 - rank;
+  if (person.recommended) fame += 50;
+  final works = person.displayWorks.clamp(0, 500);
+  return fame + works;
+}
+
+/// 排行榜比较：综合分高者在前，同分作品多者在前，再同名按名字。
+int compareActressRank(ActressPerson a, ActressPerson b) {
+  final score = actressRankScore(b).compareTo(actressRankScore(a));
+  if (score != 0) return score;
+  final works = b.displayWorks.compareTo(a.displayWorks);
+  if (works != 0) return works;
+  return a.displayName.compareTo(b.displayName);
+}
+
+/// 本地库里的一部作品：归一化番号去重，无番号按标题去重。
+/// [coverSource]/[coverDramaId]/[coverUrl] 只供封面解析内部用，
+/// 界面绝不显示其中任何一项。
+class ActressWork {
+  const ActressWork({
+    this.id = 0,
+    required this.personId,
+    required this.codeKey,
+    required this.titleKey,
+    this.codeDisplay = '',
+    this.title = '',
+    this.date = '',
+    this.coverSource = '',
+    this.coverDramaId = '',
+    this.coverUrl = '',
+    this.fromCrossSite = false,
+  });
+
+  final int id;
+  final int personId;
+  final String codeKey;
+  final String titleKey;
+  final String codeDisplay;
+  final String title;
+  final String date;
+  final String coverSource;
+  final String coverDramaId;
+  final String coverUrl;
+  final bool fromCrossSite;
+
+  /// 卡片主标题：有真实标题用标题，否则用番号。
+  String get displayTitle => title.isNotEmpty ? title : codeDisplay;
+
+  /// 卡片副标题：日期 + 番号（标题已是番号时只剩日期）。
+  String get displaySubtitle {
+    final parts = <String>[];
+    if (date.isNotEmpty) parts.add(date);
+    if (title.isNotEmpty && codeDisplay.isNotEmpty) parts.add(codeDisplay);
+    return parts.join(' · ');
+  }
+
+  bool get hasCover =>
+      coverSource.isNotEmpty && coverDramaId.isNotEmpty && coverUrl.isNotEmpty;
+
+  /// 播放用番号：优先归一化番号对应的显示形，其次从标题里现取。
+  String get playCode => codeDisplay;
+
+  ActressWork copyWith({
+    int? id,
+    int? personId,
+    String? codeKey,
+    String? titleKey,
+    String? codeDisplay,
+    String? title,
+    String? date,
+    String? coverSource,
+    String? coverDramaId,
+    String? coverUrl,
+    bool? fromCrossSite,
+  }) => ActressWork(
+    id: id ?? this.id,
+    personId: personId ?? this.personId,
+    codeKey: codeKey ?? this.codeKey,
+    titleKey: titleKey ?? this.titleKey,
+    codeDisplay: codeDisplay ?? this.codeDisplay,
+    title: title ?? this.title,
+    date: date ?? this.date,
+    coverSource: coverSource ?? this.coverSource,
+    coverDramaId: coverDramaId ?? this.coverDramaId,
+    coverUrl: coverUrl ?? this.coverUrl,
+    fromCrossSite: fromCrossSite ?? this.fromCrossSite,
+  );
+}

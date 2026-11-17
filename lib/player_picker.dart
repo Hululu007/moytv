@@ -45,6 +45,7 @@ Route<T> buildPlayerRoute<T>(
   String searchKeyword = '',
   PlaybackQueue? queue,
   bool startFullscreen = false,
+  void Function(BuildContext)? onPlaybackExhausted,
 }) {
   if (selectedPlayer(store) == AppPlayer.xigua) {
     // TODO(xigua): xigua 播放器暂未接 PlaybackQueue，单集上下滑切条目仅 guo 播放器生效。
@@ -60,6 +61,7 @@ Route<T> buildPlayerRoute<T>(
             store: store,
             searchKeyword: searchKeyword,
             startFullscreen: startFullscreen,
+            onPlaybackExhausted: onPlaybackExhausted,
           ),
         )
         as Route<T>;
@@ -76,6 +78,7 @@ Route<T> buildPlayerRoute<T>(
           store: store,
           queue: queue,
           startFullscreen: startFullscreen,
+          onPlaybackExhausted: onPlaybackExhausted,
         ),
       )
       as Route<T>;
@@ -94,6 +97,7 @@ Future<T?> pushPlayer<T>(
   String searchKeyword = '',
   PlaybackQueue? queue,
   bool startFullscreen = false,
+  void Function(BuildContext)? onPlaybackExhausted,
 }) => Navigator.of(context).push<T>(
   buildPlayerRoute<T>(
     context,
@@ -108,6 +112,7 @@ Future<T?> pushPlayer<T>(
     searchKeyword: searchKeyword,
     queue: queue,
     startFullscreen: startFullscreen,
+    onPlaybackExhausted: onPlaybackExhausted,
   ),
 );
 

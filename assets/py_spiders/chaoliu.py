@@ -20,9 +20,10 @@ import urllib.parse
 import urllib.request
 
 
-FEED = "https://chaoliu-feed-8809814861.web.zaka.live"
+FEED = "https://chaoliu-feed2-k7m2.web.zaka.live"
+FEED_OLD = "https://chaoliu-feed-8809814861.web.zaka.live"
 WEB = "https://chaoliu-av-tk8m.web.zaka.live"
-UA = "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36 ChaoliuApp/2.17"
+UA = "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 LINES = ["/api/", "/api2/", "/api3/"]
 JP_V = "20261005c"
 PAGE = 24
@@ -286,8 +287,8 @@ def _http_get_once(url, timeout, depth=0):
             pass
 
 
-def _http_json(url, timeout=35):
-    for attempt in range(4):
+def _http_json(url, timeout=35, attempts=4):
+    for attempt in range(attempts):
         try:
             raw = _http_get_once(url, timeout)
             text = raw.decode("utf-8", "ignore")
@@ -299,9 +300,34 @@ def _http_json(url, timeout=35):
     return None
 
 
-def _api(line, params):
+def _api(line, params, host=None, timeout=35, attempts=4):
     qs = urllib.parse.urlencode(params)
-    return _http_json(FEED + LINES[line] + "?" + qs)
+    return _http_json((host or FEED) + LINES[line] + "?" + qs, timeout, attempts)
+
+
+def _feed_dump(line):
+    key = "feed:%d" % line
+    got = _CACHE.get(key)
+    if got:
+        return got
+    rows = []
+    for host, ac, timeout, attempts in ((FEED, "videolist", 35, 4), (FEED, "list", 15, 2), (FEED_OLD, "videolist", 15, 2), (FEED_OLD, "list", 15, 2)):
+        d = _api(line, {"ac": ac, "pg": 1, "pagesize": 1300}, host, timeout, attempts)
+        rows = (d or {}).get("list") or []
+        if rows:
+            break
+    if rows:
+        _CACHE[key] = rows
+    return rows
+
+
+def _detail_api(line, oid):
+    for host, attempts in ((FEED, 3), (FEED_OLD, 2)):
+        d = _api(line, {"ac": "detail", "ids": str(oid)}, host, 20, attempts)
+        rows = (d or {}).get("list") or []
+        if rows:
+            return rows[0]
+    return None
 
 
 def _cached(key, loader):
@@ -408,8 +434,7 @@ def _src_lookup(code):
 def _line_search_code(code):
     kn = _code_key(code)
     for line in range(3):
-        d = _api(line, {"ac": "videolist", "pg": 1, "pagesize": 20, "wd": code})
-        for v in ((d or {}).get("list") or []):
+        for v in _feed_dump(line):
             if kn and kn not in _norm_text(v.get("vod_name") or ""):
                 continue
             url = _first_play_url(v.get("vod_play_url") or "")
@@ -492,8 +517,7 @@ class Spider(BaseSpider):
         return {"class": classes, "list": [], "filters": {}}
 
     def homeVideoContent(self):
-        d = _api(0, {"ac": "videolist", "pg": 1, "pagesize": PAGE})
-        items = [_vod_item(0, v) for v in ((d or {}).get("list") or [])]
+        items = [_vod_item(0, v) for v in _feed_dump(0)[:PAGE]]
         return {"list": items}
 
     def categoryContent(self, tid, pg, filter=False, extend=None):
@@ -514,28 +538,19 @@ class Spider(BaseSpider):
                 return {"list": [], "page": pg, "pagecount": 1, "limit": PAGE, "total": 0}
             if 0 <= idx < len(CATS):
                 _name, targets = CATS[idx]
-                items = []
+                merged = []
                 seen = set()
-                pagecount = 1
-                total = 0
                 for line, type_id in targets:
-                    d = _api(line, {"ac": "videolist", "t": type_id, "pg": pg, "pagesize": PAGE})
-                    if not d:
-                        continue
-                    try:
-                        pagecount = max(pagecount, int(d.get("pagecount") or 1))
-                    except Exception:
-                        pass
-                    try:
-                        total = max(total, int(d.get("total") or 0))
-                    except Exception:
-                        pass
-                    for v in d.get("list") or []:
-                        vid = "v%d_%s" % (line, v.get("vod_id"))
-                        if vid in seen:
+                    for v in _feed_dump(line):
+                        key = str(v.get("vod_id"))
+                        if key in seen:
                             continue
-                        seen.add(vid)
-                        items.append(_vod_item(line, v))
+                        seen.add(key)
+                        merged.append((line, v))
+                total = len(merged)
+                start = (pg - 1) * PAGE
+                items = [_vod_item(line, v) for line, v in merged[start:start + PAGE]]
+                pagecount = (total + PAGE - 1) // PAGE if total else 1
                 return {"list": items, "page": pg, "pagecount": pagecount, "limit": PAGE, "total": total}
         return {"list": [], "page": pg, "pagecount": 1, "limit": PAGE, "total": 0}
 
@@ -639,20 +654,33 @@ class Spider(BaseSpider):
                 "vod_play_from": "番号解析",
                 "vod_play_url": "正片$jpcode:" + code,
             }]}
-        m = re.match(r"^v(\d)_(\d+)$", vid)
+        m = re.match(r"^v(\d)_(.+)$", vid)
         if m:
             return self._detail_line(int(m.group(1)), m.group(2), vid)
         return {"list": []}
 
     def _detail_line(self, line, oid, vid):
-        d = _api(line, {"ac": "detail", "ids": oid})
-        items = (d or {}).get("list") or []
-        if not items:
+        v = None
+        for row in _feed_dump(line):
+            if str(row.get("vod_id")) == str(oid):
+                v = row
+                break
+        from_api = False
+        if not v:
+            v = _detail_api(line, oid)
+            from_api = bool(v)
+        if not v:
             return {"list": []}
-        v = items[0]
         play_from = []
         play_urls = []
         main = v.get("vod_play_url") or ""
+        if not main and not from_api:
+            d = _detail_api(line, oid)
+            if d:
+                for k in ("vod_name", "vod_pic", "vod_actor", "vod_director", "vod_area", "vod_year", "vod_remarks", "vod_content"):
+                    if not v.get(k) and d.get(k):
+                        v[k] = d[k]
+                main = d.get("vod_play_url") or ""
         if main:
             play_from.append("线路%d" % (line + 1))
             play_urls.append(main)
@@ -662,8 +690,7 @@ class Spider(BaseSpider):
             for other in range(3):
                 if other == line:
                     continue
-                d2 = _api(other, {"ac": "videolist", "pg": 1, "pagesize": 20, "wd": code})
-                for v2 in ((d2 or {}).get("list") or []):
+                for v2 in _feed_dump(other):
                     if kn and kn not in _norm_text(v2.get("vod_name") or ""):
                         continue
                     u = _first_play_url(v2.get("vod_play_url") or "")
@@ -788,18 +815,40 @@ class Spider(BaseSpider):
         key = (key or "").strip()
         if not key:
             return {"list": []}
+        kw = key
         items = []
         seen = set()
+        kl = key.lower()
         for line in range(3):
-            d = _api(line, {"ac": "videolist", "wd": key, "pg": pg, "pagesize": 20})
-            for v in ((d or {}).get("list") or []):
-                vid = "v%d_%s" % (line, v.get("vod_id"))
-                if vid in seen:
+            for v in _feed_dump(line):
+                name = str(v.get("vod_name") or "")
+                en = str(v.get("vod_en") or "")
+                if kl not in name.lower() and kl not in en.lower():
                     continue
-                seen.add(vid)
+                key = str(v.get("vod_id"))
+                if key in seen:
+                    continue
+                seen.add(key)
                 items.append(_vod_item(line, v))
+                if len(items) >= 100:
+                    break
+            if len(items) >= 100:
+                break
+        if not items:
+            for line in range(3):
+                d = _api(line, {"ac": "list", "wd": kw, "pg": pg})
+                for v in ((d or {}).get("list") or []):
+                    vid = str(v.get("vod_id"))
+                    if vid in seen:
+                        continue
+                    seen.add(vid)
+                    items.append(_vod_item(line, v))
+                    if len(items) >= 100:
+                        break
+                if len(items) >= 100:
+                    break
         if pg == 1:
-            k = _code_key(key)
+            k = _code_key(kw)
             if len(k) >= 3 and any(c.isdigit() for c in k):
                 hits = self._code_hits(k)
                 for code, mid, date in hits[:20]:

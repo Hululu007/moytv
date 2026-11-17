@@ -56,9 +56,7 @@ void main() {
       find.byKey(const ValueKey('category-sidebar-item-movie')),
       findsOneWidget,
     );
-    await tester.tap(
-      find.byKey(const ValueKey('category-sidebar-item-movie')),
-    );
+    await tester.tap(find.byKey(const ValueKey('category-sidebar-item-movie')));
     expect(selected, 'movie');
   });
 
@@ -120,13 +118,13 @@ void main() {
     );
   });
 
-  testWidgets('窄屏上侧边栏宽度收敛到屏宽 36%', (tester) async {
+  testWidgets('窄屏上侧边栏宽度收敛到屏宽 30%', (tester) async {
     await pumpSidebar(tester, mode: AppThemeMode.purpleNeon, width: 300);
     final size = tester.getSize(
       find.byKey(const ValueKey('category-sidebar-list')),
     );
-    // 演示宽 110，屏宽 300 的 36% 是 108，取小者。
-    expect(size.width, closeTo(108, 1));
+    // 演示宽 88，屏宽 300 的 30% 是 90，取小者。
+    expect(size.width, closeTo(88, 1));
   });
 
   testWidgets('宽屏上用演示宽度', (tester) async {
@@ -134,22 +132,32 @@ void main() {
     final size = tester.getSize(
       find.byKey(const ValueKey('category-sidebar-list')),
     );
-    expect(size.width, closeTo(110, 1));
+    expect(size.width, closeTo(88, 1));
   });
 
-  test('9 种样式演示宽度在 72–140 之间', () {
+  test('9 种样式演示宽度在 64–112 之间', () {
     for (final style in CategoryNavStyle.values) {
       final width = CategorySidebar.demoWidthFor(style);
-      expect(width, greaterThanOrEqualTo(72));
-      expect(width, lessThanOrEqualTo(140));
+      expect(width, greaterThanOrEqualTo(64));
+      expect(width, lessThanOrEqualTo(112));
     }
-    expect(
-      CategorySidebar.demoWidthFor(CategoryNavStyle.miniIconSidebar),
-      72,
-    );
+    expect(CategorySidebar.demoWidthFor(CategoryNavStyle.miniIconSidebar), 64);
     expect(
       CategorySidebar.demoWidthFor(CategoryNavStyle.foldFilterSidebar),
-      140,
+      112,
     );
+  });
+
+  testWidgets('分类字居中、12 字、块是横向扁长条', (tester) async {
+    await pumpSidebar(tester, mode: AppThemeMode.purpleNeon);
+    final text = tester.widget<Text>(find.text('电视剧'));
+    expect(text.textAlign, TextAlign.center);
+    expect(text.style?.fontSize, 12);
+    // 扁长条：块宽大于块高（字不折行时高 36 上下）。
+    final itemBox = tester.getSize(
+      find.byKey(const ValueKey('category-sidebar-item-drama')),
+    );
+    expect(itemBox.width, greaterThan(itemBox.height));
+    expect(itemBox.height, lessThan(48));
   });
 }

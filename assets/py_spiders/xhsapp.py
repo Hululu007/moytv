@@ -723,21 +723,14 @@ class Spider(BaseSpider):
     def _proxy(self, u):
         if not u:
             return ''
-        try:
-            p = self.getProxyUrl()
-            if not p:
-                return self._img_url(u)
-            s = '&' if '?' in p else '?'
-            return p + s + 'do=img&type=img&u=%s' % quote(str(u), safe='')
-        except Exception:
-            return self._img_url(u)
+        return 'proxy://do=img&type=img&u=%s' % quote(str(u), safe='')
 
     def _proxy_param(self, param):
         try:
             if isinstance(param, dict):
                 if param.get('u') or param.get('url'):
                     return (param.get('do') or param.get('type') or 'img',
-                            unquote(str(param.get('u') or param.get('url') or '')))
+                            str(param.get('u') or param.get('url') or ''))
                 q = parse_qs(str(param.get('query') or param.get('params') or ''))
             else:
                 q = parse_qs(str(param))

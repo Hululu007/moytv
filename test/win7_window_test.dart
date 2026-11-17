@@ -40,11 +40,13 @@ void main() {
 
   Finder win7Key(String name) => find.byKey(ValueKey(name));
 
-  testWidgets('Win7 桌面：6 图标 + 任务栏 + 无胶囊栏', (tester) async {
+  testWidgets('Win7 桌面：5 图标 + 任务栏 + 无胶囊栏', (tester) async {
     await pumpWin7Home(tester);
     expect(win7Key('win7-desktop'), findsOneWidget);
     for (final kind in Win7WindowKind.values) {
-      if (kind == Win7WindowKind.live) continue;
+      if (kind == Win7WindowKind.live || kind == Win7WindowKind.drama) {
+        continue;
+      }
       expect(
         win7Key('win7-desktop-icon-${kind.name}'),
         findsOneWidget,
@@ -52,6 +54,8 @@ void main() {
       );
     }
     expect(win7Key('win7-desktop-icon-live'), findsNothing);
+    // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
+    expect(win7Key('win7-desktop-icon-drama'), findsNothing);
     expect(win7Key('win7-taskbar'), findsOneWidget);
     expect(win7Key('win7-start-button'), findsOneWidget);
     expect(find.byType(NeonCapsuleBar), findsNothing);
@@ -73,18 +77,6 @@ void main() {
     // 导航只在窗口内部：目录顶栏的站源切换在窗口里。
     expect(win7Key('source-switch'), findsOneWidget);
     expect(find.byType(NeonCapsuleBar), findsNothing);
-  });
-
-  testWidgets('点短剧图标开短剧窗口', (tester) async {
-    await pumpWin7Home(tester);
-    await tester.tap(win7Key('win7-desktop-icon-drama'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(
-      tester.widget<Text>(win7Key('win7-window-title')).data,
-      '短剧',
-    );
-    expect(win7Key('win7-window-close'), findsOneWidget);
   });
 
   testWidgets('关闭窗口回桌面，任务栏条目消失', (tester) async {

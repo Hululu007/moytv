@@ -73,4 +73,7 @@ flutter:
     - assets/haikuo_modules_manifest.json
     - assets/miniapps/builtin/
     - assets/novel_covers/
+    - assets/site_icons/
+    - assets/xp_wallpaper.jpg
+    - assets/xp_boot_video.mp4
     - assets/ant_logo.png

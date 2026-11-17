@@ -1,18 +1,6 @@
 var tabs = 线路.map(n =>n.replace("资源",""));//[]
 var lists = 选集;//[]
-/*改成JSON
-pdfa(html, 线路).forEach(data => {
-    data = pdfh(data, 线路名)
-    if (typeof(排除) != 'undefined' && 排除 != '') {
-        data = data.replace(new RegExp(排除, "g"), "")
-    }
-    tabs.push(data)
-})
 
-pdfa(html, 选集).forEach(data => {
-    lists.push(pdfa(data, 选集列表))
-})
-*/
 
 addListener("onClose", $.toString(() => {
     clearMyVar("lists");
@@ -117,11 +105,7 @@ list.forEach((data, id) => {
         }
     });
 })
-/*
-setLastChapterRule('js:' + $.toString((选集, 选集列表) => {
-    setResult('更新至: 第' + pdfa(getResCode(), 选集).map(data => pdfa(data, 选集列表).length).sort((a, b) => b - a)[0] + "集");
-}, 选集, 选集列表));
-*/
+
 d.push({
     col_type: "big_blank_block",
     extra: {

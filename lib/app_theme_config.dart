@@ -7,9 +7,9 @@ import 'package:path_provider/path_provider.dart';
 
 import 'liquid_glass.dart';
 
-/// 全局主题：13 套固定主题（用户 2026-11-13 发来的代码定版 8 套，
+/// 全局主题：14 套固定主题（用户 2026-11-13 发来的代码定版 8 套，
 /// 2026-11-14 新增第 9 套“左侧分类”，同日新增霓虹三套，2026-11-16
-/// 新增第 13 套 Win7；名与配色均为暂定、用户可改；紫蓝霓虹配色取
+/// 新增第 13 套 Win7 与第 14 套 XP；名与配色均为暂定、用户可改；紫蓝霓虹配色取
 /// 用户发的霓虹定义精确值）。
 ///
 /// 配色与名字与用户文件逐字一致；每套主题绑定一种分类侧边栏样式。
@@ -29,7 +29,8 @@ enum AppThemeMode {
   cyanCyberNeon,
   redBlackNeon,
   pinkPurpleNeon,
-  win7;
+  win7,
+  xpWindows;
 
   String get storageValue => name;
 
@@ -52,11 +53,10 @@ enum NavStyle {
     NavStyle.bottomTabs => '底部标签',
   };
 
-  static NavStyle fromStorageValue(String? value) => NavStyle.values
-      .firstWhere(
-        (style) => style.name == value,
-        orElse: () => NavStyle.drawer,
-      );
+  static NavStyle fromStorageValue(String? value) => NavStyle.values.firstWhere(
+    (style) => style.name == value,
+    orElse: () => NavStyle.drawer,
+  );
 }
 
 /// 内容档：主题绑定的内容过滤（第三阶段生效；第二阶段只存取、不过滤）。
@@ -75,11 +75,8 @@ enum ContentTier {
     ContentTier.adult => '成人视频',
   };
 
-  static ContentTier fromStorageValue(String? value) =>
-      ContentTier.values.firstWhere(
-        (tier) => tier.name == value,
-        orElse: () => ContentTier.all,
-      );
+  static ContentTier fromStorageValue(String? value) => ContentTier.values
+      .firstWhere((tier) => tier.name == value, orElse: () => ContentTier.all);
 }
 
 /// 主题绑定的显示方案：导航样式 + 内容档。切主题时四件一起变
@@ -136,10 +133,7 @@ class ThemeDisplayScheme {
 }
 
 /// 站点列表样式：普通列表，或 3D 方块列（一个站点一个可拖动旋转的方块）。
-enum SiteListStyle {
-  normal,
-  cube,
-}
+enum SiteListStyle { normal, cube }
 
 /// 列表样式固定映射：紫蓝霓虹主题 = 3D 方块，其余主题 = 普通。
 /// 固定值只随主题切换一起变，不存偏好、不在主题设置里单设此项。
@@ -157,10 +151,11 @@ SiteListStyle siteListStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.redBlackNeon => SiteListStyle.normal,
   AppThemeMode.pinkPurpleNeon => SiteListStyle.normal,
   AppThemeMode.win7 => SiteListStyle.normal,
+  AppThemeMode.xpWindows => SiteListStyle.normal,
 };
 
-/// 导航样式固定映射：全部 13 套主题一律底部标签栏（霓虹胶囊壳；
-/// Win7 主题下首页外壳换成桌面 + 任务栏，胶囊栏不渲染，见 home_screen）。
+/// 导航样式固定映射：全部 14 套主题一律底部标签栏（霓虹胶囊壳；
+/// Win7 与 XP 主题下首页外壳换成桌面 + 任务栏，胶囊栏不渲染，见 home_screen）。
 ///
 /// 用户 2026-11-15 21:14 令：模仿蚂蚁影视的抽屉那套不用了（小退总
 /// 丢首页），全部主题改底部标签栏，以霓虹那套 UI 为准先做；抽屉已拆，
@@ -181,6 +176,7 @@ NavStyle navStyleForTheme(AppThemeMode mode) => switch (mode) {
   AppThemeMode.redBlackNeon => NavStyle.bottomTabs,
   AppThemeMode.pinkPurpleNeon => NavStyle.bottomTabs,
   AppThemeMode.win7 => NavStyle.bottomTabs,
+  AppThemeMode.xpWindows => NavStyle.bottomTabs,
 };
 
 enum CategoryNavStyle {
@@ -260,11 +256,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
   final List<Shadow> titleShadows;
   final List<Shadow> subtitleShadows;
 
-  /// 亮暗由底色定：浅色清爽 / 亲子儿童 / 极简卡片是浅底，其余是深底。
+  /// 亮暗由底色定：浅色清爽 / 亲子儿童 / 极简卡片 / XP 是浅底，其余是深底。
   Brightness get brightness => switch (mode) {
     AppThemeMode.lightClean ||
     AppThemeMode.kidFamily ||
-    AppThemeMode.minimalCard => Brightness.light,
+    AppThemeMode.minimalCard ||
+    AppThemeMode.xpWindows => Brightness.light,
     _ => Brightness.dark,
   };
 
@@ -294,11 +291,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Colors.white12,
           unselectedText: Colors.white70,
           backgroundGradient: LinearGradient(
-            colors: [
-              Color(0xFF6A0572),
-              Color(0xFF1A2980),
-              Color(0xFF000000),
-            ],
+            colors: [Color(0xFF6A0572), Color(0xFF1A2980), Color(0xFF000000)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -571,11 +564,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Colors.white12,
           unselectedText: Color(0xFFB9F6CA),
           backgroundGradient: LinearGradient(
-            colors: [
-              Color(0xFF004D40),
-              Color(0xFF001A1A),
-              Color(0xFF000000),
-            ],
+            colors: [Color(0xFF004D40), Color(0xFF001A1A), Color(0xFF000000)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -613,11 +602,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Colors.white12,
           unselectedText: Color(0xFFFFCDD2),
           backgroundGradient: LinearGradient(
-            colors: [
-              Color(0xFF4A0000),
-              Color(0xFF1A0000),
-              Color(0xFF000000),
-            ],
+            colors: [Color(0xFF4A0000), Color(0xFF1A0000), Color(0xFF000000)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -655,11 +640,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Colors.white12,
           unselectedText: Color(0xFFF8BBD0),
           backgroundGradient: LinearGradient(
-            colors: [
-              Color(0xFFF06292),
-              Color(0xFF4A148C),
-              Color(0xFF1A0033),
-            ],
+            colors: [Color(0xFFF06292), Color(0xFF4A148C), Color(0xFF1A0033)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -700,11 +681,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           unselectedBg: Colors.white12,
           unselectedText: Colors.white70,
           backgroundGradient: LinearGradient(
-            colors: [
-              Color(0xFF0F4C81),
-              Color(0xFF1E88E5),
-              Color(0xFF002147),
-            ],
+            colors: [Color(0xFF0F4C81), Color(0xFF1E88E5), Color(0xFF002147)],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -715,6 +692,42 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
           accentColor: Color(0xFF0078D4),
           cardBorderColor: Colors.white12,
           glowColor: Color(0xFF0078D4),
+          glowBlur: 0,
+          titleShadows: const [],
+          subtitleShadows: const [],
+        );
+
+      // 第 14 套 XP：Luna 蓝主色、绿色开始钮点缀、浅色底；外观与
+      // Win7 严格区分（用户 2026-11-16 令“win7是win7，xp系统你应该
+      // 知道”）：桌面是用户发的绿色山丘墙纸图（assets/xp_wallpaper.jpg），
+      // 这里只定全应用通用的 Material 配色（窗口内各区沿用各自界面）。
+      case AppThemeMode.xpWindows:
+        return AppThemeConfig(
+          mode: mode,
+          themeName: 'XP',
+          primaryColor: Color(0xFF245EDC),
+          secondaryColor: Color(0xFF3F8CF3),
+          backgroundColor: Color(0xFFECE9D8),
+          surfaceColor: Colors.white,
+          textPrimary: Color(0xFF1A1A1A),
+          textSecondary: Color(0xFF4A4A4A),
+          dividerColor: Color(0xFFD4D0C8),
+          selectedBg: Color(0xFF245EDC),
+          selectedText: Colors.white,
+          unselectedBg: Color(0xFFF1F1EA),
+          unselectedText: Color(0xFF4A4A4A),
+          backgroundGradient: LinearGradient(
+            colors: [Color(0xFF5A7EDC), Color(0xFF245EDC)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+          selectedGradient: LinearGradient(
+            colors: [Color(0xFF3F8CF3), Color(0xFF245EDC)],
+          ),
+          navStyle: CategoryNavStyle.lightSidebar,
+          accentColor: Color(0xFF3D9E3D),
+          cardBorderColor: Color(0xFFD4D0C8),
+          glowColor: Color(0xFF245EDC),
           glowBlur: 0,
           titleShadows: const [],
           subtitleShadows: const [],
@@ -802,8 +815,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
       textTheme: textTheme,
       scaffoldBackgroundColor: backgroundColor,
       canvasColor: backgroundColor,
-      splashFactory:
-          (ios || platform == TargetPlatform.android)
+      splashFactory: (ios || platform == TargetPlatform.android)
           ? NoSplash.splashFactory
           : null,
       cupertinoOverrideTheme: NoDefaultCupertinoThemeData(
@@ -898,9 +910,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
         side: BorderSide.none,
         shape: ios
             ? const StadiumBorder()
-            : RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
+            : RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         labelStyle: TextStyle(
           fontSize: 12,
@@ -960,17 +970,12 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
         style: TextButton.styleFrom(
           shape: const StadiumBorder(),
           foregroundColor: primaryColor,
-          textStyle: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
+          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
         ),
       ),
       listTileTheme: ListTileThemeData(
         iconColor: textSecondary,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         titleTextStyle: TextStyle(
           fontSize: 12,
           letterSpacing: 0,

@@ -5,6 +5,9 @@
 /// 与本地服务的接线仍在 runner/store 里。
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 
 /// SQLite 文件魔数：`SQLite format 3\0`。
@@ -469,3 +472,345 @@ String pickSniffedVideoUrl(
   }
   return '';
 }
+
+/// 页面沉浸与播放器全屏取“或”：任一为真就藏状态栏
+/// （SystemUiMode.immersiveSticky），否则 edgeToEdge。
+bool haikuoImmersiveUi({
+  required bool pageImmersive,
+  required bool inlineFullscreen,
+}) =>
+    pageImmersive || inlineFullscreen;
+
+/// 下载中心/分享落盘用的安全文件名：只取 basename，禁路径穿越。
+/// 名字为空、`.`、`..` 时返回 null（调用方拒绝该请求）。
+String? haikuoSafeFileName(String name) {
+  final base = name.replaceAll('\\', '/').split('/').last.trim();
+  if (base.isEmpty || base == '.' || base == '..') return null;
+  return base;
+}
+
+/// `share://` 的目标是否指向规则本地文件（`hiker://files/…`）。
+bool haikuoIsHikerFilesTarget(String target) =>
+    target.startsWith('hiker://files/');
+
+/// `hiker://files/…` 目标的文件键：去掉前缀与查询串/片段并解码。
+/// 非 files 目标返回空串。
+String haikuoShareFileKey(String target) {
+  if (!haikuoIsHikerFilesTarget(target)) return '';
+  var rest = target.substring('hiker://files/'.length);
+  final cut = rest.indexOf(RegExp('[?#]'));
+  if (cut >= 0) rest = rest.substring(0, cut);
+  try {
+    return Uri.decodeComponent(rest);
+  } catch (_) {
+    return rest;
+  }
+}
+
+/// 下载条目排序：mtime 新的在前，同时间按名字升序。返回新列表。
+List<Map<String, dynamic>> sortHaikuoDownloadEntries(
+  List<Map<String, dynamic>> entries,
+) {
+  final sorted = [...entries];
+  sorted.sort((a, b) {
+    final aTime = (a['mtime'] as num?)?.toInt() ?? 0;
+    final bTime = (b['mtime'] as num?)?.toInt() ?? 0;
+    if (aTime != bTime) return bTime.compareTo(aTime);
+    return '${a['name'] ?? ''}'.compareTo('${b['name'] ?? ''}');
+  });
+  return sorted;
+}
+
+/// E33 会话变量表：putVar/getVar/clearVar 的 Dart 侧进程内存储。
+/// 随进程生死，重启即失（指南语义），绝不写盘。运行页持有一个
+/// 静态实例供全部规则页共享；JS 侧镜像经 `/__vars` 同步。
+class HaikuoSessionVars {
+  final Map<String, String> _vars = {};
+
+  /// 整表快照（新 Map，调用方改不动原表）。
+  Map<String, String> snapshot() => Map<String, String>.from(_vars);
+
+  /// 应用一条写操作：`set`（key/value）、`clear`（key）、
+  /// `clearAll`。未知 op 忽略，不抛错。
+  void apply(Map<String, dynamic> payload) {
+    final op = '${payload['op'] ?? ''}';
+    if (op == 'set') {
+      _vars['${payload['key'] ?? ''}'] = '${payload['value'] ?? ''}';
+    } else if (op == 'clear') {
+      _vars.remove('${payload['key'] ?? ''}');
+    } else if (op == 'clearAll') {
+      _vars.clear();
+    }
+  }
+}
+
+/// GZIP 压缩（`/__crypto` 的 `gzip` op 用，Java GZIPOutputStream 走它）。
+/// SDK 的 gzip 在 dart:io（GZipCodec），dart:convert 里没有。
+List<int> haikuoGzipBytes(List<int> bytes) => GZipCodec().encode(bytes);
+
+/// GZIP 解压（`/__crypto` 的 `gunzip` op 用，Java GZIPInputStream 走它）。
+/// 输入不是合法 gzip 时抛 FormatException，调用方转为空结果。
+List<int> haikuoGunzipBytes(List<int> bytes) => GZipCodec().decode(bytes);
+
+/// Raw deflate 解压（`/__crypto` 的 `inflate` op 用，Java
+/// InflaterInputStream 走它）。输入不是合法 raw deflate 流时抛
+/// FormatException，调用方转为空结果。
+List<int> haikuoInflateBytes(List<int> bytes) =>
+    ZLibDecoder(raw: true).convert(bytes);
+
+/// E111-F1：从请求头里拆出 User-Agent（大小写不敏感，只取第一个
+/// 非空值）。WebView 的 `loadRequest` headers 改不了 UA，须走
+/// `setUserAgent`，拆出的头不再进 `loadRequest`（避免重复）。
+({String userAgent, Map<String, String> headers}) haikuoSplitUserAgent(
+  Map<String, String> headers,
+) {
+  var ua = '';
+  final rest = <String, String>{};
+  headers.forEach((key, value) {
+    if (key.toLowerCase() == 'user-agent') {
+      if (ua.isEmpty) ua = value;
+    } else {
+      rest[key] = value;
+    }
+  });
+  return (userAgent: ua, headers: rest);
+}
+
+/// E111-F3：checkJs 通过哨兵。checkJs 求值结果为 null/undefined/
+/// false/"" 时回空串，其余一律回此哨兵（不再 `String(__r)`，空数组
+/// 之类的边角不再误判为不通过）。
+const haikuoCheckJsPassSentinel = '__HK_PASS__';
+
+/// E111-F2：嗅探与 WebView 取码共用的网页桥垫片（同一构造，两处
+/// 不得各写一份）。注入后页面里有：`window._getUrls()`（资源地址
+/// 数组）、`window.fy_bridge_app`/`window.fba`（`getUrls` 数组形态、
+/// `log` 空实现、`getCookie` 回注入时的 Cookie 串——值滞后至多一拍、
+/// `writeFile` 推入 `__hkWriteFiles` 待 Dart 侧收走、`getUa` 回
+/// `navigator.userAgent`、`setWebTitle` 空实现）。
+/// `__hkWriteFiles` 用 `||[]` 保留已攒的条目，重复注入不丢。
+String haikuoBridgePadScript(String pageCookies) {
+  final cookiesJson = jsonEncode(pageCookies);
+  return 'window.__hkPageCookies=$cookiesJson;'
+      'window.__hkWriteFiles=window.__hkWriteFiles||[];'
+      'window._getUrls=function(){try{return performance.getEntriesByType('
+      '"resource").map(function(e){return e.name;});}catch(e){return [];}};'
+      'window.fy_bridge_app={getUrls:window._getUrls,'
+      'log:function(){},'
+      'getCookie:function(){return window.__hkPageCookies||"";},'
+      'writeFile:function(p,c){window.__hkWriteFiles.push({path:String(p||""),'
+      'content:String(c==null?"":c)});},'
+      'getUa:function(){return navigator.userAgent;},'
+      'setWebTitle:function(){}};'
+      'window.fba=window.fy_bridge_app;';
+}
+
+/// G11：x5 单行网页的 Dart 侧布局换算，照搬运行时 `parseX5Desc` 的
+/// 分段语义（`&&` 切段、去空白，`list` 忽略、`float`/`top` 置模式位、
+/// `auto`→240、`video`→宽 9/16 高、`screen`→视口高、`100%`→视口高、
+/// `screen-N`→视口高减 N、纯数字→像素、`N%`→视口高占比；后出现的
+/// 高度段覆盖前者，与 JS 循环一致）。
+/// `viewportHeight` 是规则 WebView 区的可用高（屏高减内容顶偏移），
+/// `viewportWidth` 是区宽，`topOffset` 是实测顶栏高（top 模式无显式
+/// 高度时，行高 = 可用高减顶栏高，即贴着顶栏下方铺到底，与旧 CSS
+/// `top:120px;bottom:0` 同形、偏移改实测）。高度夹在 0 与可用高之间。
+/// `auto` 保持 240（0 条规则用真自适应，指南算法无定义，不猜）。
+({double height, bool floatMode, bool topMode, bool videoMode})
+haikuoX5RowLayout({
+  required String desc,
+  required double viewportHeight,
+  required double viewportWidth,
+  required double topOffset,
+}) {
+  // 负尺寸输入一律按 0 计（调用方已夹取，此处再兜一层，防负高进布局）。
+  final vh = viewportHeight < 0 ? 0.0 : viewportHeight;
+  final vw = viewportWidth < 0 ? 0.0 : viewportWidth;
+  final top = topOffset < 0 ? 0.0 : topOffset;
+  var floatMode = false;
+  var topMode = false;
+  var videoMode = false;
+  double? heightPx;
+  for (final rawPart in desc.split('&&')) {
+    final p = rawPart.trim();
+    if (p.isEmpty || p == 'list') continue;
+    if (p == 'float') {
+      floatMode = true;
+      continue;
+    }
+    if (p == 'top') {
+      topMode = true;
+      floatMode = true;
+      continue;
+    }
+    if (p == 'auto') {
+      heightPx = 240;
+      continue;
+    }
+    if (p == 'video') {
+      videoMode = true;
+      heightPx = null;
+      continue;
+    }
+    if (p == 'screen' || p == '100%') {
+      heightPx = vh;
+      continue;
+    }
+    final screenMinus = RegExp(r'^screen-(\d+)$').firstMatch(p);
+    if (screenMinus != null) {
+      heightPx =
+          vh - (double.tryParse(screenMinus.group(1)!) ?? 0);
+      continue;
+    }
+    if (RegExp(r'^\d+$').hasMatch(p)) {
+      heightPx = double.parse(p);
+      continue;
+    }
+    if (RegExp(r'^\d+%$').hasMatch(p)) {
+      heightPx =
+          vh * (double.parse(p.substring(0, p.length - 1)) / 100);
+      continue;
+    }
+  }
+  double height;
+  if (videoMode) {
+    height = vw * 9 / 16;
+  } else if (heightPx != null) {
+    height = heightPx;
+  } else if (topMode) {
+    height = vh - top;
+  } else {
+    height = 240;
+  }
+  if (height < 0) height = 0;
+  if (height > vh) height = vh;
+  return (
+    height: height,
+    floatMode: floatMode,
+    topMode: topMode,
+    videoMode: videoMode,
+  );
+}
+
+/// G11：`window.__haikuoUrlInterceptor` 回值的决策解析。规则求值回
+/// 的 JSON 串只能是 `{d:"allow"}`、`{d:"block"}`、
+/// `{d:"exec",code:"…"}` 三种；解析失败、未知 d 值、exec 带空代码
+/// 一律按放行处理（fail-open，导航不受壳子解析故障牵连）。
+/// 入参须是已剥掉 Android 侧 JSON 引号的正文（见 `_sniffResultText`）。
+({String action, String code}) haikuoParseX5Intercept(String text) {
+  try {
+    final decoded = jsonDecode(text);
+    if (decoded is! Map) return (action: 'allow', code: '');
+    final action = '${decoded['d'] ?? ''}';
+    if (action == 'block') return (action: 'block', code: '');
+    if (action == 'exec') {
+      final code = '${decoded['code'] ?? ''}';
+      if (code.isEmpty) return (action: 'allow', code: '');
+      return (action: 'exec', code: code);
+    }
+    return (action: 'allow', code: '');
+  } catch (_) {
+    return (action: 'allow', code: '');
+  }
+}
+
+/// G11/R6§14：原生 x5 行的页内桥脚本（紧跟 [haikuoBridgePadScript]
+/// 之后注入同一页面，垫片每次重建 `fy_bridge_app` 对象，桥方法须
+/// 每次都重新挂上去，故两者永远拼成一次注入）。
+///
+/// 内容：`HaikuoX5Bridge` 通道投递（JSON `{method,args,id}`，仅异步）、
+/// `$$$` 页内序列化器（镜像规则侧链式构造器，只产字符串，不访问
+/// `lazyMap`——`lazyRule` 产 `url@lazyRule=IIFE` 串供规则侧求值）、
+/// `fy_bridge_app`/`fba` 上的通道方法（`open`/`playVideo`/
+/// `parseLazyRule`/`parseLazyRuleAsync`/只写四方法/`setWebUa`/
+/// `hideLoading`/`refreshPage`/`back`/`toast`/`fetch`）与
+/// `base64Encode`（与规则侧同义的 UTF-8 安全版）。
+///
+/// 故意不提供的 4 个方法（R6 UNFILLABLE，不伪造）：`getHeaderUrl`
+/// （无契约）、`getVar`（同步读无异步通道可满足）、`getInternalJs`
+/// （语义未知）、`openThirdApp`（无启动路径，规则均有 `&&` 守卫）。
+/// `fetch` 回 Promise（异步通道无同步返回值可给），60 秒无回传则
+/// 按空串兑现。脚本内只用双引号字符串（供 Node 抽取测试按
+/// `r'…'` 段拼回原文），不得引入单引号。
+String haikuoX5BridgeScript() {
+  return r'window.__hkX5Seq=window.__hkX5Seq||0;'
+      r'window.__hkX5Fetches=window.__hkX5Fetches||{};'
+      r'window.__hkX5Post=function(m,a,id){try{window.HaikuoX5Bridge.postMessage(JSON.stringify({method:m,args:a||[],id:(id===undefined?0:id)}));}catch(e){}};'
+      r'window.__hkX5ResolveFetch=function(id,res){try{var r=window.__hkX5Fetches[id];delete window.__hkX5Fetches[id];if(r)r(res);}catch(e){}};'
+      r'window.__hkX5Base64Encode=function(t){try{return btoa(unescape(encodeURIComponent(String(t==null?"":t))));}catch(e){return "";}};'
+      r'if(typeof window.base64Encode!=="function"){window.base64Encode=window.__hkX5Base64Encode;}'
+      r'window.$$$=function(sel,headers,titleArg){'
+      r'var url=(typeof sel==="string")?sel:"";'
+      r'var selectOptions=null;var selectCol;var selectTitle;'
+      r'if(Array.isArray(sel)){selectOptions=sel.map(function(v){return String(v);});if(typeof headers==="number")selectCol=headers;if(typeof titleArg==="string")selectTitle=titleArg;}'
+      r'function fnSrc(fn){return (typeof fn==="function")?String(fn):String(fn==null?"":fn);}'
+      r'function serArg(a){if(typeof a==="function")return fnSrc(a);if(a===undefined)return "undefined";try{var s=JSON.stringify(a);return (s===undefined)?JSON.stringify(String(a)):s;}catch(e){return JSON.stringify(String(a));}}'
+      r'function toStr(fn){var a=[];for(var i=1;i<arguments.length;i++)a.push(serArg(arguments[i]));return "("+fnSrc(fn)+")("+a.join(",")+")";}'
+      r'var chained={};'
+      r'chained.rule=function(fn){return url+"@rule=.js:("+fnSrc(fn)+")()";};'
+      r'chained.lazyRule=function(fn){var a=[];for(var i=1;i<arguments.length;i++)a.push(arguments[i]);if(!a.length)a.push(url);else if(a[0]===undefined)a[0]=url;return url+"@lazyRule="+toStr.apply(null,[fn].concat(a));};'
+      r'chained.image=function(fn,s1,s2){var a=[];if(s1!==undefined)a.push(serArg(s1));if(s2!==undefined)a.push(serArg(s2));if(!a.length)a.push("input");return url+"@headers="+JSON.stringify(headers||{})+"@js=("+fnSrc(fn)+")("+a.join(",")+")";};'
+      r'chained.x5Rule=function(fn){return "javascript:("+fnSrc(fn)+")()";};'
+      r'chained.input=function(fn){return "input://"+JSON.stringify({value:url,js:"("+fnSrc(fn)+")(input)"});};'
+      r'chained.confirm=function(fn){return "confirm://"+url+".js:("+fnSrc(fn)+")()";};'
+      r'chained.select=function(fn){var a=[];for(var i=1;i<arguments.length;i++)a.push(arguments[i]);var cfg={options:(selectOptions?selectOptions.slice():[url]),js:toStr.apply(null,[fn].concat(a))};if(selectTitle!==undefined)cfg.title=selectTitle;if(typeof selectCol==="number")cfg.col=selectCol;return "select://"+JSON.stringify(cfg);};'
+      r'chained.b64=function(){return chained;};'
+      r'return chained;};'
+      r'(function(){var b=window.fy_bridge_app||{};window.fy_bridge_app=b;window.fba=b;'
+      r'b.base64Encode=window.__hkX5Base64Encode;'
+      r'b.open=function(arg){var s=(typeof arg==="string")?arg:JSON.stringify(arg||{});window.__hkX5Post("open",[s]);};'
+      r'b.playVideo=function(u){window.__hkX5Post("playVideo",[String(u||"")]);};'
+      r'b.parseLazyRule=function(s){window.__hkX5Post("parseLazyRule",[String(s==null?"":s)]);};'
+      r'b.parseLazyRuleAsync=function(s){window.__hkX5Post("parseLazyRuleAsync",[String(s==null?"":s)]);};'
+      r'b.putVar=function(k,v){window.__hkX5Post("putVar",[String(k==null?"":k),String(v==null?"":v)]);};'
+      r'b.clearVar=function(k){window.__hkX5Post("clearVar",[(k===undefined||k===null)?null:String(k)]);};'
+      r'b.putMyVar=function(k,v){window.__hkX5Post("putMyVar",[String(k==null?"":k),String(v==null?"":v)]);};'
+      r'b.clearMyVar=function(k){window.__hkX5Post("clearMyVar",[(k===undefined||k===null)?null:String(k)]);};'
+      r'b.setWebUa=function(ua){window.__hkX5Post("setWebUa",[String(ua||"")]);};'
+      r'b.hideLoading=function(){window.__hkX5Post("hideLoading",[]);};'
+      r'b.refreshPage=function(){window.__hkX5Post("refreshPage",[]);};'
+      r'b.back=function(){window.__hkX5Post("back",[]);};'
+      r'b.toast=function(m){window.__hkX5Post("toast",[String(m==null?"":m)]);};'
+      r'b.fetch=function(u,o){return new Promise(function(resolve){var id=++window.__hkX5Seq;window.__hkX5Fetches[id]=resolve;window.__hkX5Post("fetch",[String(u||""),o||null],id);setTimeout(function(){if(window.__hkX5Fetches[id]){delete window.__hkX5Fetches[id];resolve("");}},60000);});};'
+      r'})();';
+}
+
+
+/// W6 floatVideo：嗅探资源枚举脚本——与 `_sniffTick` video 形态同一
+/// 串抽成共享常量，两路不得各写一份（枚举口径一致，改一处即两处）。
+/// 回 `performance` 资源记录的地址数组；页内无 performance 时回空数组。
+const haikuoResourceEntriesScript =
+    '(function(){try{return performance.getEntriesByType("resource")'
+    '.map(function(e){return e.name;});}catch(e){return [];}})()';
+
+/// W6 floatVideo：暂停页内全部 `<video>` 元素的脚本——与 `_hideX5Row`
+/// 同一串抽成共享常量；求值失败静默（try/catch 在串内）。
+const haikuoPausePageVideosScript =
+    'try{document.querySelectorAll("video").forEach(function(v){v.pause();});}catch(e){}';
+
+/// W6 floatVideo 门控：只有严格的 `true` 才开（对应规则侧
+/// `extra.floatVideo === true`；`1`、`'true'`、缺失一律不开）。
+bool haikuoFloatVideoGate(Object? value) => value == true;
+
+/// W6 floatVideo：连续求值失败达此次数即停轮询，静默回落只显示网页
+/// （单拍失败跳过即可，页未加载完是常态；持续失败才停，避免空转）。
+const haikuoFloatVideoMaxFailures = 10;
+
+/// W6 floatVideo：是否应继续轮询。门控/可见/未检出/未关闭/
+/// 失败未超上限五项全满足才轮询；任一项不满足即停（静默回落）。
+bool haikuoFloatVideoShouldPoll({
+  required bool floatVideo,
+  required bool visible,
+  required bool hasVideo,
+  required bool dismissed,
+  required int consecutiveFailures,
+}) =>
+    floatVideo &&
+    visible &&
+    !hasVideo &&
+    !dismissed &&
+    consecutiveFailures < haikuoFloatVideoMaxFailures;
+
+/// W6 floatVideo：从资源地址里挑可播地址。复用嗅探现成件
+/// [pickSniffedVideoUrl]（不另写嗅探器）：无 include 规则（x5 行
+/// extra 无 videoRules），`blockRules` 作排除规则（广告地址不进浮层）。
+String haikuoFloatVideoPick(List<String> entries, List<String> blockRules) =>
+    pickSniffedVideoUrl(entries, excludeRules: blockRules);

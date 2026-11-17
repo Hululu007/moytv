@@ -896,7 +896,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
-  /// 当前全局主题（13 套固定主题之一），默认 Win7。
+  /// 当前全局主题（14 套固定主题之一），默认 Win7。
   AppThemeMode get appTheme {
     final value = _configurationError == null
         ? _string('appThemeMode')

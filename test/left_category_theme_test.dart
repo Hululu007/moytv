@@ -12,7 +12,7 @@ import 'fixtures.dart';
 
 /// 第 9 套主题“左侧分类”测试：三层结构、空数据隐藏、卡堆手势、
 ///
-/// 切主题布局跟变、13 套固定映射。只写代码不运行，由父代理统一验证。
+/// 切主题布局跟变、14 套固定映射。只写代码不运行，由父代理统一验证。
 
 class _LeftCategoryRepository extends FixtureRepository {
   @override
@@ -68,9 +68,7 @@ void main() {
       CatalogFilterOption('action', '动作'),
       CatalogFilterOption('love', '爱情'),
     ]),
-    CatalogFilterGroup('area', '地区', [
-      CatalogFilterOption('cn', '大陆'),
-    ]),
+    CatalogFilterGroup('area', '地区', [CatalogFilterOption('cn', '大陆')]),
   ];
 
   Future<void> mountLayout(
@@ -143,10 +141,7 @@ void main() {
     await mountLayout(tester, subs: const [], filters: const []);
     expect(find.byKey(const ValueKey('left-category-rail')), findsOneWidget);
     expect(find.text('真人剧'), findsWidgets);
-    expect(
-      find.byKey(const ValueKey('left-category-sublevel')),
-      findsNothing,
-    );
+    expect(find.byKey(const ValueKey('left-category-sublevel')), findsNothing);
     expect(find.text('喜剧'), findsNothing);
     expect(find.text('类型'), findsNothing);
     expect(find.text('动作'), findsNothing);
@@ -232,10 +227,7 @@ void main() {
       find.descendant(of: top, matching: find.text('翻页剧乙')),
       findsOneWidget,
     );
-    expect(
-      find.descendant(of: top, matching: find.text('翻页剧甲')),
-      findsNothing,
-    );
+    expect(find.descendant(of: top, matching: find.text('翻页剧甲')), findsNothing);
     // 反向拖回上一张。
     await tester.drag(top, const Offset(200, 0));
     await tester.pump();
@@ -306,8 +298,8 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  test('13 套主题导航与列表样式固定映射', () {
-    expect(AppThemeMode.values.length, 13);
+  test('14 套主题导航与列表样式固定映射', () {
+    expect(AppThemeMode.values.length, 14);
     for (final mode in AppThemeMode.values) {
       expect(navStyleForTheme(mode), NavStyle.bottomTabs, reason: '$mode 导航');
       expect(
@@ -318,10 +310,7 @@ void main() {
         reason: '$mode 列表样式',
       );
     }
-    expect(
-      navStyleForTheme(AppThemeMode.leftCategories),
-      NavStyle.bottomTabs,
-    );
+    expect(navStyleForTheme(AppThemeMode.leftCategories), NavStyle.bottomTabs);
     expect(
       siteListStyleForTheme(AppThemeMode.leftCategories),
       SiteListStyle.normal,

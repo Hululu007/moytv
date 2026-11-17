@@ -4,7 +4,6 @@ var X = {};
 X.HOST = 'https://xqxq22.cc';
 X.UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-// 19 分类（已剔除 66 学生萝莉）
 X.CATS = [
   {name: '日本av', id: '44'},
   {name: '口交自慰', id: '62'},
@@ -66,7 +65,6 @@ X._items = function (html) {
     var im = seg.match(/data-src="([^"]+)"/);
     var at = seg.match(/alt="([^"]*)"/);
     var du = seg.match(/<span class="text-sm">([^<]+)<\/span>/);
-    // 去重：同一 vid 只取一次（取带 poster class 的）
     seen[vid] = 1;
     out.push({
       id: vid,
@@ -142,6 +140,9 @@ X.detail = function (vid) {
   if (!playUrl) {
     var mm = html.match(/(https?:\/\/[^\s"']+\.m3u8[^\s"']*)/);
     if (mm) playUrl = mm[1];
+  }
+  if (playUrl && /\.m3u8(\?|#|$)/.test(playUrl)) {
+    try { playUrl = clearM3u8AdLazy(playUrl); } catch (e) {}
   }
   $.require('uiavxq').renderDetail({
     vod_id: vid, vod_name: title, vod_pic: pic,

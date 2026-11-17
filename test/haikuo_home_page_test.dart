@@ -124,7 +124,7 @@ void main() {
     expect(find.textContaining('规则'), findsWidgets);
   });
 
-  testWidgets('长按弹出操作菜单，点详情显示来源与脚本长度', (tester) async {
+  testWidgets('长按弹出官方操作表，点分享规则出分享弹窗', (tester) async {
     await tester.runAsync(
       () => store.importText(
         jsonEncode([
@@ -141,15 +141,15 @@ void main() {
     await tester.longPress(find.text('详情源'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('详情'));
+    expect(find.text('请选择操作'), findsOneWidget);
+    await tester.tap(find.text('分享规则'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('类型：规则'), findsOneWidget);
-    expect(find.text('来源：口令'), findsOneWidget);
-    expect(find.textContaining('脚本长度'), findsOneWidget);
+    expect(find.text('分享「详情源」'), findsOneWidget);
+    expect(find.text('复制口令'), findsOneWidget);
   });
 
-  testWidgets('已导入的规则以网格平铺，长按菜单含五项操作、无角标按钮', (tester) async {
+  testWidgets('已导入的规则以网格平铺，长按菜单含九项操作、无角标按钮', (tester) async {
     await tester.runAsync(
       () => store.importText(
         jsonEncode([
@@ -171,11 +171,18 @@ void main() {
     expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     await tester.longPress(find.text('测试海阔源'));
     await tester.pumpAndSettle();
-    expect(find.text('打开'), findsOneWidget);
-    expect(find.text('详情'), findsOneWidget);
-    expect(find.text('复制 JSON'), findsOneWidget);
-    expect(find.text('生成口令分享'), findsOneWidget);
-    expect(find.text('删除'), findsOneWidget);
+    expect(find.text('请选择操作'), findsOneWidget);
+    expect(find.text('编辑规则'), findsOneWidget);
+    expect(find.text('搜索内容'), findsOneWidget);
+    expect(find.text('分享规则'), findsOneWidget);
+    expect(find.text('更多分享'), findsOneWidget);
+    expect(find.text('网站首页'), findsOneWidget);
+    expect(find.text('删除规则'), findsOneWidget);
+    expect(find.text('清除缓存'), findsOneWidget);
+    expect(find.text('Web编辑'), findsOneWidget);
+    expect(find.text('重生恢复'), findsOneWidget);
+    expect(find.text('打开'), findsNothing);
+    expect(find.text('详情'), findsNothing);
   });
 
   Future<HaikuoDuplicateDecision?> pumpDuplicateDialog(
@@ -217,18 +224,30 @@ void main() {
   }
 
   testWidgets('重复提示：选替换返回 replace', (tester) async {
-    expect(await pumpDuplicateDialog(tester, '替换'), HaikuoDuplicateDecision.replace);
+    expect(
+      await pumpDuplicateDialog(tester, '替换'),
+      HaikuoDuplicateDecision.replace,
+    );
   });
 
   testWidgets('重复提示：选保留两者返回 keepBoth', (tester) async {
-    expect(await pumpDuplicateDialog(tester, '保留两者'), HaikuoDuplicateDecision.keepBoth);
+    expect(
+      await pumpDuplicateDialog(tester, '保留两者'),
+      HaikuoDuplicateDecision.keepBoth,
+    );
   });
 
   testWidgets('重复提示：选取消返回 cancel', (tester) async {
-    expect(await pumpDuplicateDialog(tester, '取消'), HaikuoDuplicateDecision.cancel);
+    expect(
+      await pumpDuplicateDialog(tester, '取消'),
+      HaikuoDuplicateDecision.cancel,
+    );
   });
 
   testWidgets('重复提示：点遮罩关掉也算取消', (tester) async {
-    expect(await pumpDuplicateDialog(tester, 'dismiss'), HaikuoDuplicateDecision.cancel);
+    expect(
+      await pumpDuplicateDialog(tester, 'dismiss'),
+      HaikuoDuplicateDecision.cancel,
+    );
   });
 }

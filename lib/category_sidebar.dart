@@ -26,8 +26,9 @@ class CategorySidebarFilter {
 
 /// 动态分类侧边栏：按当前主题绑定的样式自动切换 9 种形态。
 ///
-/// 宽度取演示代码的 72–140 逻辑宽，并收敛到屏宽的 36% 以内，
-/// 竖屏手机上不挤占右侧内容区。
+/// 宽度取演示代码的 64–112 逻辑宽，并收敛到屏宽的 30% 以内，
+/// 竖屏手机上不挤占右侧内容区。分类字一律居中、12 字（迷你款
+/// 11 字），分类块是横向扁长条（最小高 36，字多可折行长高）。
 class CategorySidebar extends StatelessWidget {
   const CategorySidebar({
     super.key,
@@ -46,30 +47,27 @@ class CategorySidebar extends StatelessWidget {
 
   /// 演示宽度（逻辑宽）。
   static double demoWidthFor(CategoryNavStyle style) => switch (style) {
-    CategoryNavStyle.darkSidebar => 110,
-    CategoryNavStyle.colorBlockSidebar => 120,
-    CategoryNavStyle.miniIconSidebar => 72,
-    CategoryNavStyle.foldFilterSidebar => 140,
-    CategoryNavStyle.lightSidebar => 110,
-    CategoryNavStyle.goldSidebar => 120,
-    CategoryNavStyle.cyberSidebar => 110,
-    CategoryNavStyle.tvWideSidebar => 140,
-    CategoryNavStyle.leftCategorySidebar => 110,
+    CategoryNavStyle.darkSidebar => 88,
+    CategoryNavStyle.colorBlockSidebar => 96,
+    CategoryNavStyle.miniIconSidebar => 64,
+    CategoryNavStyle.foldFilterSidebar => 112,
+    CategoryNavStyle.lightSidebar => 88,
+    CategoryNavStyle.goldSidebar => 96,
+    CategoryNavStyle.cyberSidebar => 88,
+    CategoryNavStyle.tvWideSidebar => 112,
+    CategoryNavStyle.leftCategorySidebar => 88,
   };
 
-  /// 实际宽度：演示宽与屏宽 36% 取小。
+  /// 实际宽度：演示宽与屏宽 30% 取小。
   static double widthFor(CategoryNavStyle style, double screenWidth) {
     final demo = demoWidthFor(style);
-    final cap = screenWidth * 0.36;
+    final cap = screenWidth * 0.30;
     return demo < cap ? demo : cap;
   }
 
   @override
   Widget build(BuildContext context) {
-    final width = widthFor(
-      config.navStyle,
-      MediaQuery.sizeOf(context).width,
-    );
+    final width = widthFor(config.navStyle, MediaQuery.sizeOf(context).width);
     if (items.isEmpty) {
       return SizedBox(
         width: width,
@@ -208,8 +206,8 @@ class _DarkSidebar extends StatelessWidget {
                 final selected = index == selectedIndex;
                 return Container(
                   margin: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
+                    horizontal: 8,
+                    vertical: 3,
                   ),
                   decoration: BoxDecoration(
                     gradient: selected ? theme.selectedGradient : null,
@@ -219,26 +217,28 @@ class _DarkSidebar extends StatelessWidget {
                   ),
                   child: Material(
                     color: Colors.transparent,
-                    child: ListTile(
+                    child: InkWell(
                       key: _itemKey(item.id),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    leading: Icon(
-                      Icons.category,
-                      color: selected
-                          ? theme.selectedText
-                          : theme.unselectedText,
-                      size: 18,
-                    ),
-                    title: Text(
-                      item.name,
-                      style: TextStyle(
-                        color: selected
-                            ? theme.selectedText
-                            : theme.unselectedText,
-                        fontSize: 13,
+                      onTap: () => onTap(index),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 36),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 6,
+                        ),
+                        child: Text(
+                          item.name,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: selected
+                                ? theme.selectedText
+                                : theme.unselectedText,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
-                    ),
-                    onTap: () => onTap(index),
                     ),
                   ),
                 );
@@ -273,8 +273,11 @@ class _ColorBlockSidebar extends StatelessWidget {
     // 色块取色：主色→辅色 6 档取样，色块缤纷但不出当前主题色系。
     Color blockTint(int index) {
       final t = (index % 6) / 5;
-      return Color.lerp(theme.primaryColor, theme.secondaryColor, t)!
-          .withValues(alpha: 0.35);
+      return Color.lerp(
+        theme.primaryColor,
+        theme.secondaryColor,
+        t,
+      )!.withValues(alpha: 0.35);
     }
 
     return Container(
@@ -305,19 +308,17 @@ class _ColorBlockSidebar extends StatelessWidget {
                   key: _itemKey(item.id),
                   onTap: () => onTap(index),
                   child: Container(
-                    constraints: const BoxConstraints(minHeight: 46),
+                    constraints: const BoxConstraints(minHeight: 36),
                     alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(
-                      vertical: 8,
+                      vertical: 6,
                       horizontal: 6,
                     ),
                     decoration: BoxDecoration(
                       color: selected ? theme.selectedBg : blockTint(index),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: selected
-                            ? theme.selectedBg
-                            : Colors.transparent,
+                        color: selected ? theme.selectedBg : Colors.transparent,
                         width: 2,
                       ),
                       boxShadow: selected ? [neonGlow(theme)] : null,
@@ -329,6 +330,7 @@ class _ColorBlockSidebar extends StatelessWidget {
                         color: selected
                             ? theme.selectedText
                             : theme.textPrimary,
+                        fontSize: 12,
                         fontWeight: selected
                             ? FontWeight.bold
                             : FontWeight.normal,
@@ -383,7 +385,7 @@ class _MiniIconSidebar extends StatelessWidget {
                   key: _itemKey(item.id),
                   onTap: () => onTap(index),
                   child: Container(
-                    constraints: const BoxConstraints(minHeight: 56),
+                    constraints: const BoxConstraints(minHeight: 46),
                     margin: const EdgeInsets.symmetric(vertical: 6),
                     padding: const EdgeInsets.symmetric(
                       vertical: 8,
@@ -479,9 +481,7 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
                 GestureDetector(
                   onTap: () => setState(() => _expanded = !_expanded),
                   child: Icon(
-                    _expanded
-                        ? Icons.arrow_drop_up
-                        : Icons.arrow_drop_down,
+                    _expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
                     color: theme.textSecondary,
                   ),
                 ),
@@ -490,10 +490,7 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
           ),
           const SizedBox(height: 8),
           if (showFilters)
-            SizedBox(
-              height: 140,
-              child: _categoryList(theme),
-            )
+            SizedBox(height: 140, child: _categoryList(theme))
           else
             Expanded(child: _categoryList(theme)),
           if (showFilters) ...[
@@ -557,7 +554,8 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
           key: _itemKey(cat.id),
           onTap: () => widget.onTap(index),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 12),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: selected ? theme.selectedBg : Colors.transparent,
               border: selected
@@ -568,8 +566,10 @@ class _FoldFilterSidebarState extends State<_FoldFilterSidebar> {
             ),
             child: Text(
               cat.name,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: selected ? theme.selectedText : theme.unselectedText,
+                fontSize: 12,
               ),
             ),
           ),
@@ -622,13 +622,11 @@ class _LightSidebar extends StatelessWidget {
                       horizontal: 10,
                     ),
                     padding: const EdgeInsets.symmetric(
-                      vertical: 10,
+                      vertical: 7,
                       horizontal: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: selected
-                          ? theme.selectedBg
-                          : theme.unselectedBg,
+                      color: selected ? theme.selectedBg : theme.unselectedBg,
                       borderRadius: BorderRadius.circular(10),
                       boxShadow: selected ? [neonGlow(theme)] : null,
                     ),
@@ -640,6 +638,7 @@ class _LightSidebar extends StatelessWidget {
                           color: selected
                               ? theme.selectedText
                               : theme.unselectedText,
+                          fontSize: 12,
                           fontWeight: selected
                               ? FontWeight.bold
                               : FontWeight.normal,
@@ -706,41 +705,42 @@ class _GoldSidebar extends StatelessWidget {
                 final selected = index == selectedIndex;
                 return Container(
                   margin: const EdgeInsets.symmetric(
-                    vertical: 6,
-                    horizontal: 10,
+                    vertical: 3,
+                    horizontal: 8,
                   ),
                   decoration: BoxDecoration(
                     gradient: selected ? theme.selectedGradient : null,
                     color: selected ? null : theme.unselectedBg,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: selected
-                          ? theme.selectedBg
-                          : Colors.transparent,
+                      color: selected ? theme.selectedBg : Colors.transparent,
                     ),
                     boxShadow: selected ? [neonGlow(theme)] : null,
                   ),
                   child: Material(
                     color: Colors.transparent,
-                    child: ListTile(
+                    child: InkWell(
                       key: _itemKey(item.id),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    leading: Icon(
-                      Icons.stars,
-                      color: selected
-                          ? theme.selectedText
-                          : theme.unselectedText,
-                      size: 18,
-                    ),
-                    title: Text(
-                      item.name,
-                      style: TextStyle(
-                        color: selected
-                            ? theme.selectedText
-                            : theme.unselectedText,
+                      onTap: () => onTap(index),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 36),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 6,
+                        ),
+                        child: Text(
+                          item.name,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: selected
+                                ? theme.selectedText
+                                : theme.unselectedText,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
-                    ),
-                    onTap: () => onTap(index),
                     ),
                   ),
                 );
@@ -797,15 +797,13 @@ class _CyberSidebar extends StatelessWidget {
                 final selected = index == selectedIndex;
                 return Container(
                   margin: const EdgeInsets.symmetric(
-                    vertical: 6,
-                    horizontal: 10,
+                    vertical: 3,
+                    horizontal: 8,
                   ),
                   decoration: BoxDecoration(
                     color: selected ? theme.selectedBg : Colors.transparent,
                     border: Border.all(
-                      color: selected
-                          ? theme.selectedBg
-                          : theme.dividerColor,
+                      color: selected ? theme.selectedBg : theme.dividerColor,
                     ),
                     borderRadius: BorderRadius.circular(6),
                     boxShadow: selected
@@ -819,25 +817,28 @@ class _CyberSidebar extends StatelessWidget {
                   ),
                   child: Material(
                     color: Colors.transparent,
-                    child: ListTile(
+                    child: InkWell(
                       key: _itemKey(item.id),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    leading: Icon(
-                      Icons.memory,
-                      color: selected
-                          ? theme.selectedText
-                          : theme.unselectedText,
-                      size: 18,
-                    ),
-                    title: Text(
-                      item.name,
-                      style: TextStyle(
-                        color: selected
-                            ? theme.selectedText
-                            : theme.unselectedText,
+                      onTap: () => onTap(index),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 36),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 6,
+                        ),
+                        child: Text(
+                          item.name,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: selected
+                                ? theme.selectedText
+                                : theme.unselectedText,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
-                    ),
-                    onTap: () => onTap(index),
                     ),
                   ),
                 );
@@ -893,8 +894,8 @@ class _TvWideSidebar extends StatelessWidget {
                 final selected = index == selectedIndex;
                 return Container(
                   margin: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 12,
+                    vertical: 4,
+                    horizontal: 8,
                   ),
                   decoration: BoxDecoration(
                     gradient: selected ? theme.selectedGradient : null,
@@ -904,28 +905,31 @@ class _TvWideSidebar extends StatelessWidget {
                   ),
                   child: Material(
                     color: Colors.transparent,
-                    child: ListTile(
+                    child: InkWell(
                       key: _itemKey(item.id),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                    leading: Icon(
-                      Icons.tv,
-                      color: selected
-                          ? theme.selectedText
-                          : theme.unselectedText,
-                    ),
-                    title: Text(
-                      item.name,
-                      style: TextStyle(
-                        color: selected
-                            ? theme.selectedText
-                            : theme.unselectedText,
-                        fontSize: 15,
-                        fontWeight: selected
-                            ? FontWeight.bold
-                            : FontWeight.normal,
+                      onTap: () => onTap(index),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 36),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 6,
+                        ),
+                        child: Text(
+                          item.name,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: selected
+                                ? theme.selectedText
+                                : theme.unselectedText,
+                            fontSize: 12,
+                            fontWeight: selected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
                       ),
-                    ),
-                    onTap: () => onTap(index),
                     ),
                   ),
                 );

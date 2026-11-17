@@ -30,7 +30,6 @@ X._fix = function (u) {
   return String(u || '').replace(/&amp;/g, '&').trim();
 };
 
-// 整数参数：优先 URL 参数（翻页/分类导航），读不到回落 myVar
 X._intParam = function (name, def) {
   var v = '';
   try { v = getParam(name) || ''; } catch (e) {}
@@ -78,7 +77,6 @@ X._detailHtml = function (vid) {
   return X._get(X.BASE + '/play-' + vid + '-1-1.html');
 };
 
-// ---------------- 入口 ----------------
 X.home = function () {
   try { if (/[?&]vod_id=/.test(String(MY_URL || ''))) { X.detail(); return; } } catch (e0) {}
   var catIdx = X._intParam('cat', 0);
@@ -103,7 +101,6 @@ X.home = function () {
   try { $.require('uiaveyp').render(data); } catch (e2) { setResult([]); }
 };
 
-// ---------------- 搜索（fypage 子页，奇优 v4 规范） ----------------
 X._kw = function () {
   var kw = '';
   try { kw = getParam('kw') || ''; } catch (e) {}
@@ -127,7 +124,6 @@ X.search = function () {
     var html = X._get(X.BASE + '/search/wd/' + encodeURIComponent(kw) + '.html');
     cards = X._cards(html);
     if (!cards.length) {
-      // 两级兜底：先访首页建会话重试
       X._get(X.BASE + '/');
       html = X._get(X.BASE + '/search/wd/' + encodeURIComponent(kw) + '.html');
       cards = X._cards(html);
@@ -137,7 +133,6 @@ X.search = function () {
   catch (e2) { setResult([]); }
 };
 
-// ---------------- 详情 ----------------
 X.detail = function (vidArg) {
   var vid = '';
   try {
@@ -147,12 +142,16 @@ X.detail = function (vidArg) {
     var m2 = /(\d+)/.exec(vid);
     if (m2) vid = m2[1];
   } catch (e) {}
-  var data = { vod_id: vid, vod_name: '', vod_pic: '', vod_content: '', lines: [] };
+  var data = { vod_id: vid, vod_name: '', vod_pic: '', vod_content: '', vod_remarks: '', lines: [] };
   if (vid) {
     var html = X._detailHtml(vid);
     if (html) {
       var tm = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
-      if (tm) data.vod_name = tm[1].split('-')[0].split('&')[0].replace(/&nbsp;/g, ' ').trim();
+      if (tm) {
+        var segs = tm[1].split('&nbsp;-&nbsp;');
+        data.vod_name = segs[0].replace(/&nbsp;/g, ' ').trim();
+        if (segs.length > 1) data.vod_remarks = segs[1].replace(/&nbsp;/g, ' ').trim();
+      }
       var pm = /data-original="([^"]+)"/i.exec(html);
       if (pm) {
         var pic = X._fix(pm[1]);

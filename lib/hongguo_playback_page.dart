@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import 'app_layout.dart';
+import 'app_orientation.dart';
 import 'app_page_route.dart';
 import 'core_bridge.dart';
 import 'hongguo_account_store.dart';
@@ -298,6 +301,8 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   bool _usedStartPosition = false;
   bool _synopsisExpanded = false;
   bool _fullscreen = false;
+  AppOrientationController? _orientationController;
+  bool _television = false;
   bool _playbackServiceHeld = false;
   String? _commentDramaId;
   HongguoCommentPage? _commentPage;
@@ -341,6 +346,13 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _television = AppLayout.isTelevision(context);
+    _orientationController = AppOrientationScope.maybeOf(context);
+  }
+
+  @override
   void dispose() {
     _cancelSeasonCountdown();
     _recoveryTimer?.cancel();
@@ -354,7 +366,57 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
       _playbackServiceHeld = false;
       unawaited(PlaybackForeground.release());
     }
+    if (_fullscreen) {
+      _fullscreen = false;
+      unawaited(
+        (_orientationController?.releasePlayback(this) ??
+                SystemChrome.setPreferredOrientations(
+                  AppOrientationController.orientations(
+                    television: _television,
+                  ),
+                ))
+            .catchError((Object _) {}),
+      );
+    }
     super.dispose();
+  }
+
+  /// 全屏唯一入口：所有改 _fullscreen 的地方都走这里，布局翻转的
+  /// 同时把方向也驱动了（只做旋转，不动系统栏与布局）。
+  void _setFullscreen(bool value) {
+    if (_fullscreen == value) return;
+    setState(() => _fullscreen = value);
+    unawaited(_driveOrientation(value));
+  }
+
+  Future<void> _driveOrientation(bool fullscreen) async {
+    final mode = widget.store.playbackPreferences.orientationMode;
+    try {
+      if (fullscreen) {
+        final aspect = hongguoVideoAspect(_player);
+        await (_orientationController?.setPlayback(
+              this,
+              fullscreen: true,
+              aspectRatio: aspect,
+              mode: mode,
+            ) ??
+            SystemChrome.setPreferredOrientations(
+              AppOrientationController.orientations(
+                television: _television,
+                fullscreen: true,
+                aspectRatio: aspect,
+                mode: mode,
+              ),
+            ));
+      } else {
+        await (_orientationController?.releasePlayback(this) ??
+            SystemChrome.setPreferredOrientations(
+              AppOrientationController.orientations(
+                television: _television,
+              ),
+            ));
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadCommentCounts(PlaybackPlan plan) async {
@@ -1304,7 +1366,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
           tooltip: '返回',
           onPressed: () {
             if (_fullscreen) {
-              setState(() => _fullscreen = false);
+              _setFullscreen(false);
             } else {
               Navigator.of(context).pop();
             }
@@ -1392,7 +1454,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
                     onError: (_) {},
                     onRetry: _manualRetry,
                     onFullscreen: _fullscreen
-                        ? () => setState(() => _fullscreen = false)
+                        ? () => _setFullscreen(false)
                         : null,
                     isFullscreen: _fullscreen,
                   ),
@@ -1511,7 +1573,7 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
           children: [
             Center(
               child: GestureDetector(
-                onTap: () => setState(() => _fullscreen = true),
+                onTap: () => _setFullscreen(true),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,

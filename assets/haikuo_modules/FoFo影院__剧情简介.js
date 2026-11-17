@@ -14,7 +14,6 @@ function substr(str, maxLength) {
 }
 
 function setDesc(arr, desc, num) {
-  //log(desc)
   if (desc == undefined) {
     return;
   }
@@ -77,5 +76,3 @@ function setDesc(arr, desc, num) {
     }
   })
 }
-
-//setDesc(d, desc);

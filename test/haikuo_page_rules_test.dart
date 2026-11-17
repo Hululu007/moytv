@@ -97,13 +97,13 @@ void main() {
   });
 
   group('内置规则不受影响', () {
-    test('内置规则文件 md5 钉住、158 条、含鉴黄师', () {
+    test('内置规则文件 md5 钉住、146 条、含鉴黄师', () {
       final file = File('assets/haikuo_builtin_rules.json');
       expect(file.existsSync(), isTrue);
       final bytes = file.readAsBytesSync();
-      expect(md5.convert(bytes).toString(), 'a7dbf907b02142d261a930d2e51bb204');
+      expect(md5.convert(bytes).toString(), '68f0bd9c740cf3b70b26adf32974439b');
       final decoded = jsonDecode(utf8.decode(bytes)) as List;
-      expect(decoded, hasLength(158));
+      expect(decoded, hasLength(146));
       final titles = [for (final item in decoded) (item as Map)['title']];
       expect(titles, contains('🔞鉴黄师'));
       // 鉴黄师仍是 js: 首页脚本 + hiker://empty 入口，修复没动过它。

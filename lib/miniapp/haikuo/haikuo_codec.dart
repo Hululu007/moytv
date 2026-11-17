@@ -117,7 +117,12 @@ abstract final class HaikuoCodec {
     // gzip
     if (bytes.length > 2 && bytes[0] == 0x1F && bytes[1] == 0x8B) {
       final raw = GZipDecoder().decodeBytes(bytes);
-      return parseBytes(raw, origin: origin, depth: depth + 1, dropped: dropped);
+      return parseBytes(
+        raw,
+        origin: origin,
+        depth: depth + 1,
+        dropped: dropped,
+      );
     }
     final text = decodeText(bytes).trim();
     final head = text.isEmpty ? '' : text.codeUnitAt(0);
@@ -128,14 +133,17 @@ abstract final class HaikuoCodec {
     final decoded = tryBase64(text);
     if (decoded != null && decoded.isNotEmpty) {
       try {
-        return parseBytes(decoded, origin: origin, depth: depth + 1, dropped: dropped);
+        return parseBytes(
+          decoded,
+          origin: origin,
+          depth: depth + 1,
+          dropped: dropped,
+        );
       } on HaikuoFormatException {
         // 落到下面按口令再试一次
       }
     }
-    throw const HaikuoFormatException(
-      '没认出这个格式，海阔小程序需要 JSON、压缩包或有效口令',
-    );
+    throw const HaikuoFormatException('没认出这个格式，海阔小程序需要 JSON、压缩包或有效口令');
   }
 
   /// 剥掉开头的 UTF-8 BOM（U+FEFF），可能有多个时一并剥掉。
@@ -308,13 +316,7 @@ abstract final class HaikuoCodec {
     int depth = 0,
   }) {
     final out = <HaikuoProgram>[];
-    _collect(
-      decoded,
-      out,
-      origin: origin,
-      rawText: rawText,
-      depth: depth,
-    );
+    _collect(decoded, out, origin: origin, rawText: rawText, depth: depth);
     return out;
   }
 
@@ -347,13 +349,7 @@ abstract final class HaikuoCodec {
     }
     if (node is List) {
       for (final item in node) {
-        _collect(
-          item,
-          out,
-          origin: origin,
-          rawText: rawText,
-          depth: depth + 1,
-        );
+        _collect(item, out, origin: origin, rawText: rawText, depth: depth + 1);
       }
       return;
     }
@@ -414,11 +410,24 @@ abstract final class HaikuoCodec {
     final entries = _countEntries(map);
 
     if (name != null && script != null) {
-      final icon = _firstText(map, const ['icon', 'img', 'logo', 'cover', 'pic']);
-      final author = _firstText(map, const ['author', 'user', '作者', 'nick']) ?? '';
+      final icon = _firstText(map, const [
+        'icon',
+        'img',
+        'logo',
+        'cover',
+        'pic',
+      ]);
+      final author =
+          _firstText(map, const ['author', 'user', '作者', 'nick']) ?? '';
       final version = _firstText(map, const ['version', 'ver', '版本']) ?? '';
       final description =
-          _firstText(map, const ['desc', 'description', 'intro', '简介', 'remark']) ??
+          _firstText(map, const [
+            'desc',
+            'description',
+            'intro',
+            '简介',
+            'remark',
+          ]) ??
           '';
       final group =
           _firstText(map, const ['group', 'group_lpcolumn', '分组']) ?? '';
@@ -463,10 +472,23 @@ abstract final class HaikuoCodec {
         map.containsKey('searchFind');
     // 规则 / 清单形态：有名字、有链接或有一批子条目，但没有脚本主体。
     if (name != null && looksLikeRule) {
-      final icon = _firstText(map, const ['icon', 'img', 'logo', 'cover', 'pic']);
-      final author = _firstText(map, const ['author', 'user', '作者', 'nick']) ?? '';
+      final icon = _firstText(map, const [
+        'icon',
+        'img',
+        'logo',
+        'cover',
+        'pic',
+      ]);
+      final author =
+          _firstText(map, const ['author', 'user', '作者', 'nick']) ?? '';
       final description =
-          _firstText(map, const ['desc', 'description', 'intro', '简介', 'remark']) ??
+          _firstText(map, const [
+            'desc',
+            'description',
+            'intro',
+            '简介',
+            'remark',
+          ]) ??
           '';
       final group =
           _firstText(map, const ['group', 'group_lpcolumn', '分组']) ?? '';
@@ -499,18 +521,19 @@ abstract final class HaikuoCodec {
     for (final key in _wrapperKeys) {
       final child = map[key];
       if (child == null) continue;
-      _collect(
-        child,
-        out,
-        origin: origin,
-        rawText: rawText,
-        depth: depth + 1,
-      );
+      _collect(child, out, origin: origin, rawText: rawText, depth: depth + 1);
     }
   }
 
   static int _countEntries(Map<String, dynamic> map) {
-    for (final key in const ['data', 'list', 'items', 'sites', 'rules', 'sources']) {
+    for (final key in const [
+      'data',
+      'list',
+      'items',
+      'sites',
+      'rules',
+      'sources',
+    ]) {
       final value = map[key];
       if (value is List && value.isNotEmpty) return value.length;
     }
@@ -638,16 +661,19 @@ abstract final class HaikuoCodec {
 
   /// 云口令短码：`云<N>oooole/<短码>`（海阔官方云剪贴板分享的简写）。
   ///
-  /// 已验证的映射（2026-11-11 实测）：
+  /// 已验证的映射（2026-11-11 实测取回、2026-11-16 实测上传）：
   /// 云 6 = 摆烂剪贴板 pasteme.tyrantg.com，取法
   /// `GET https://pasteme.tyrantg.com/api/getContent/<短码>`，
   /// 短码取 `云6oooole/xxxxxx/<短码>` 里最后一个 `/` 后面的那段
-  /// （`xxxxxx/` 前缀不能带进接口地址，会 500）；
+  /// （`xxxxxx/` 前缀不能带进接口地址，会 500）；带密码的分享短码段
+  /// 含 `@密码`（如 `ibjcvgj9yq2mjhpp@vqSHNl`），@ 及密码须原样带进
+  /// 取回地址，缺了、错了都报 4001，无密码的条子则绝不能带 @；
   /// 接口回 `{"return_code":0,"data":"<标准口令文本>"}`，
-  /// 再按普通口令解析。其他云编号的服务端地址未公开
+  /// 再按普通口令解析。上传见 haikuo_cloud6.dart 的 uploadCloud6ShareCode。
+  /// 其他云编号的服务端地址未公开
   /// （官方导入器 RuleImporterManager 闭源），不硬猜，报明原因。
   static final _cloudCodePattern = RegExp(
-    r'云\s*(\d+)\s*oooole\s*/\s*([A-Za-z0-9_.\-/]+)',
+    r'云\s*(\d+)\s*oooole\s*/\s*([A-Za-z0-9_.\-/@]+)',
     caseSensitive: false,
   );
 
@@ -665,10 +691,9 @@ abstract final class HaikuoCodec {
     if (match == null) return null;
     final cloud = int.tryParse(match.group(1) ?? '') ?? 0;
     final tail = match.group(2) ?? '';
-    final code = tail.split('/').lastWhere(
-      (segment) => segment.isNotEmpty,
-      orElse: () => '',
-    );
+    final code = tail
+        .split('/')
+        .lastWhere((segment) => segment.isNotEmpty, orElse: () => '');
     if (code.isEmpty) return null;
     if (cloud == 6) {
       return 'https://pasteme.tyrantg.com/api/getContent/$code';
@@ -691,15 +716,19 @@ abstract final class HaikuoCodec {
       throw const HaikuoFormatException('云剪贴板返回的内容无法解析');
     }
     if (decoded['return_code'] != 0) {
-      throw const HaikuoFormatException(
-        '云剪贴板没找到这条内容，可能已过期或被删除',
-      );
+      // 4001 = 密码不对：带密码的分享取回时须带上 @密码；4004 = 没找到
+      // （过期/删除/读满自毁）；其余沿用旧的通用说法。
+      if (decoded['return_code'] == 4001) {
+        throw const HaikuoFormatException(
+          '云剪贴板 6 密码不对：这条分享带密码，取回时须带上 @密码，'
+          '请确认分享文本完整复制（含 @ 后面那段）',
+        );
+      }
+      throw const HaikuoFormatException('云剪贴板没找到这条内容，可能已过期或被删除');
     }
     final data = decoded['data'];
     if (data is! String || data.trim().isEmpty) {
-      throw const HaikuoFormatException(
-        '云剪贴板没找到这条内容，可能已过期或被删除',
-      );
+      throw const HaikuoFormatException('云剪贴板没找到这条内容，可能已过期或被删除');
     }
     return data;
   }
@@ -711,8 +740,8 @@ abstract final class HaikuoCodec {
   ///
   /// 载荷优先用规则的原始 JSON（rawJson，含 class/sort 等声明）；
   /// 没有原始 JSON 时按导入器认的字段重建一份最小规则对象。
-  /// 云剪贴板 6 的上传接口未公开（官网无文档），这里不编假短码，
-  /// 只出本地口令：对方在口令导入里粘贴即可。
+  /// 云剪贴板 6 真上传见 haikuo_cloud6.dart 的 uploadCloud6ShareCode：
+  /// 上传的 content 就是这里出的这段口令文本。
   static String buildShareCode(HaikuoProgram program) {
     final payload = base64Encode(utf8.encode(shareJson(program)));
     return '海阔视界规则分享，当前分享的是：小程序￥home_rule￥$payload￥';

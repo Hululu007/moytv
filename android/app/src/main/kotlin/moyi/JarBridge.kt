@@ -25,6 +25,7 @@ object JarBridge {
     private val loaders = ConcurrentHashMap<String, DexClassLoader>()
     private val spiders = ConcurrentHashMap<String, Any>()
     private val initialized = ConcurrentHashMap.newKeySet<String>()
+    private val guardInitialized = ConcurrentHashMap.newKeySet<String>()
 
     fun register(messenger: BinaryMessenger, context: Context) {
         Init.init(context)
@@ -165,6 +166,7 @@ object JarBridge {
         }
         JarFilePrep.replaceTarget(temp, target)
         loaders.remove(configId)
+        guardInitialized.remove(configId)
         val stale = spiders.keys.filter { it.startsWith("jar:$configId:") }
         stale.forEach { releaseSpider(it) }
         return mapOf("path" to target.absolutePath, "md5" to actual)
@@ -480,12 +482,127 @@ object JarBridge {
         }
     }
 
+    /**
+     * Guard jar 专用加载器：壳内自带同名兼容层 Init，父优先会让 jar 内的
+     * Guard 类拿到壳的 Init，构造时字段初始化直接抛错。专属名子优先
+     * （先在 jar 内找，找不到回落父优先），其余一律父优先，与普通
+     * DexClassLoader 行为一致。
+     */
+    private class GuardDexClassLoader(
+        dexPath: String,
+        optimizedDirectory: String?,
+        librarySearchPath: String?,
+        parent: ClassLoader
+    ) : DexClassLoader(dexPath, optimizedDirectory, librarySearchPath, parent) {
+
+        override fun loadClass(name: String, resolve: Boolean): Class<*> {
+            return synchronized(getClassLoadingLock(name)) {
+                var loaded = findLoadedClass(name)
+                if (loaded == null) {
+                    loaded = if (isGuardOwnedClass(name)) {
+                        try {
+                            findClass(name)
+                        } catch (ignored: ClassNotFoundException) {
+                            super.loadClass(name, false)
+                        }
+                    } else {
+                        super.loadClass(name, false)
+                    }
+                }
+                if (resolve) resolveClass(loaded)
+                loaded
+            }
+        }
+
+        private fun isGuardOwnedClass(name: String): Boolean {
+            if (!name.startsWith("com.github.catvod.spider.")) return false
+            val simple = name.substringAfterLast('.').substringBefore('$')
+            return simple == "Init" || simple == "DexNative" || simple == "NativeFile" ||
+                simple.endsWith("Guard")
+        }
+    }
+
+    /**
+     * 判别 Guard jar：jar 内同时含 com.github.catvod.spider.DexNative
+     * 与至少一个 com.github.catvod.spider.*Guard 类。任何异常都返回
+     * false，走普通路径，绝不影响现有 jar。
+     */
+    @Suppress("DEPRECATION")
+    private fun isGuardJar(jarFile: File, optimizedDir: File): Boolean {
+        return try {
+            val dexFile = DexFile.loadDex(
+                jarFile.absolutePath,
+                File(optimizedDir, jarFile.name + ".odex").absolutePath,
+                0
+            )
+            try {
+                var hasDexNative = false
+                var hasGuardClass = false
+                val entries = dexFile.entries()
+                while (entries.hasMoreElements()) {
+                    val name = entries.nextElement()
+                    if (name == "com.github.catvod.spider.DexNative") hasDexNative = true
+                    if (name.startsWith("com.github.catvod.spider.") &&
+                        name.substringAfterLast('.').substringBefore('$').endsWith("Guard")
+                    ) {
+                        hasGuardClass = true
+                    }
+                    if (hasDexNative && hasGuardClass) break
+                }
+                hasDexNative && hasGuardClass
+            } finally {
+                runCatching { dexFile.close() }
+            }
+        } catch (error: Throwable) {
+            false
+        }
+    }
+
     private fun loaderFor(context: Context, configId: String, jarPath: String): DexClassLoader {
         return loaders.computeIfAbsent(configId) {
-            JarFilePrep.sealForLoad(File(jarPath))
+            val jar = File(jarPath)
+            JarFilePrep.sealForLoad(jar)
             val optimized = File(context.codeCacheDir, "jarbridge_$configId")
             if (!optimized.exists()) optimized.mkdirs()
-            DexClassLoader(jarPath, optimized.absolutePath, null, context.classLoader)
+            if (isGuardJar(jar, optimized)) {
+                GuardDexClassLoader(jarPath, optimized.absolutePath, null, context.classLoader)
+            } else {
+                DexClassLoader(jarPath, optimized.absolutePath, null, context.classLoader)
+            }
+        }
+    }
+
+    /**
+     * Guard jar 的 Init 初始化：每配置只跑一次，失败清标记以便下次重试。
+     * 反射调用 jar 内 Init.init(Context)，且只认定义加载器是本 Guard
+     * 加载器的 Init，绝不误调壳内兼容层 Init。jar 的 Init.init 会触发
+     * DexNative 静态块（解密 .guard、加载 .so），必须在 Guard 类实例化
+     * 之前跑完。
+     */
+    private fun ensureGuardInit(context: Context, configId: String, loader: GuardDexClassLoader) {
+        synchronized(guardInitialized) {
+            if (guardInitialized.add(configId)) {
+                try {
+                    val initType = loader.loadClass("com.github.catvod.spider.Init")
+                    if (initType.classLoader !== loader) {
+                        throw IllegalStateException("Guard jar 初始化失败：Init 未由 Guard 加载器定义，无法建立 Guard 链")
+                    }
+                    try {
+                        initType.getMethod("init", Context::class.java)
+                            .invoke(null, context.applicationContext)
+                    } catch (error: InvocationTargetException) {
+                        throw IllegalStateException(
+                            "Guard jar 初始化失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}"
+                        )
+                    }
+                } catch (error: IllegalStateException) {
+                    guardInitialized.remove(configId)
+                    throw error
+                } catch (error: Throwable) {
+                    guardInitialized.remove(configId)
+                    throw IllegalStateException("Guard jar 初始化失败：${error.message ?: error.javaClass.simpleName}")
+                }
+            }
         }
     }
 
@@ -494,10 +611,14 @@ object JarBridge {
         synchronized(spiders) {
             spiders[siteId]?.let { return it }
             val loader = loaderFor(context, configId, jarPath)
+            if (loader is GuardDexClassLoader) {
+                ensureGuardInit(context, configId, loader)
+            }
             val type = try {
                 loader.loadClass(className)
             } catch (error: ClassNotFoundException) {
                 loaders.remove(configId)
+                guardInitialized.remove(configId)
                 runCatching {
                     File(context.codeCacheDir, "jarbridge_$configId").deleteRecursively()
                 }
@@ -635,6 +756,29 @@ object JarBridge {
         }
     }
 
+    /**
+     * Guard 回落代理：Guard 站点类没有静态 proxy 方法，改调 jar 内
+     * Init.proxyInvoke(Map)。只认定义加载器是本 Guard 加载器的 Init。
+     * 返回值与普通 proxy 相同，调用方按三元组解析。
+     */
+    private fun guardProxyInvoke(loader: GuardDexClassLoader, args: HashMap<String, String>): Any? {
+        val initType = try {
+            loader.loadClass("com.github.catvod.spider.Init")
+        } catch (error: ClassNotFoundException) {
+            throw IllegalStateException("Guard jar 代理失败：jar 内未找到 Init 类")
+        }
+        if (initType.classLoader !== loader) {
+            throw IllegalStateException("Guard jar 代理失败：Init 未由 Guard 加载器定义，拒绝调用壳内 Init")
+        }
+        return try {
+            initType.getMethod("proxyInvoke", Map::class.java).invoke(null, args)
+        } catch (error: NoSuchMethodException) {
+            throw IllegalStateException("Guard jar 的 Init 未实现 proxyInvoke，无法处理本地代理请求")
+        } catch (error: InvocationTargetException) {
+            throw IllegalStateException("Guard jar proxyInvoke 执行失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}")
+        }
+    }
+
     private fun jarProxy(
         context: Context,
         configId: String,
@@ -643,6 +787,9 @@ object JarBridge {
         param: Map<String, Any?>
     ): Map<String, Any?> {
         val loader = loaderFor(context, configId, jarPath)
+        if (loader is GuardDexClassLoader) {
+            ensureGuardInit(context, configId, loader)
+        }
         val type = try {
             loader.loadClass(className)
         } catch (error: ClassNotFoundException) {
@@ -659,7 +806,11 @@ object JarBridge {
             }
             method.invoke(null, args)
         } catch (error: NoSuchMethodException) {
-            throw IllegalStateException("jar 类 $className 未实现静态 proxy 方法，无法处理本地代理请求")
+            if (loader is GuardDexClassLoader) {
+                guardProxyInvoke(loader, args)
+            } else {
+                throw IllegalStateException("jar 类 $className 未实现静态 proxy 方法，无法处理本地代理请求")
+            }
         } catch (error: InvocationTargetException) {
             throw IllegalStateException("jar 类 $className.proxy 执行失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}")
         }

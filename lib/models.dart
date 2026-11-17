@@ -193,6 +193,12 @@ class SourceSite {
     '短剧 · 漫剧 · AI 剧 · 小说 · 听书',
     section: sectionDrama,
   );
+  static const hongguoNew = SourceSite(
+    'hongguo_new',
+    '红果(新)',
+    '红果短剧全集 + 五档清晰度',
+    section: sectionDrama,
+  );
   static const dsd = SourceSite('dsd', '帝果', '分类视频 · 在线搜索');
   static const guipian = SourceSite(
     'guipian',
@@ -727,6 +733,7 @@ class SourceSite {
   ];
   static const knownValues = [
     hongguo,
+    hongguoNew,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
     SourceSite(
       'hgtvmirror',
@@ -756,6 +763,7 @@ class SourceSite {
   ];
   static const allValues = [
     hongguo,
+    hongguoNew,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
     SourceSite(
       'hgtvmirror',

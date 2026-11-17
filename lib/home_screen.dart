@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'actress/actress_list_page.dart';
 import 'app_layout.dart';
+import 'auto_refresh_gate.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
 import 'home_zone.dart';
@@ -70,6 +72,7 @@ import 'content_registry.dart';
 import 'miniapp/mini_app_store.dart';
 import 'miniapp/mini_app_manifest.dart';
 import 'win7_desktop.dart';
+import 'xp_desktop.dart';
 
 bool shouldSilentRefreshOnRestore(DateTime? fetchedAt, DateTime now) {
   if (fetchedAt == null) return true;
@@ -113,14 +116,23 @@ class _Win7Window {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository, required this.store});
+  const HomeScreen({
+    super.key,
+    required this.repository,
+    required this.store,
+    this.autoRefreshGate,
+  });
   final AppRepository repository;
   final LocalStore store;
+
+  /// 自动刷新节流门：测试注入旧时间戳以驱动前台触发；为空时新建。
+  final AutoRefreshGate? autoRefreshGate;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with RouteAware {
+class _HomeScreenState extends State<HomeScreen>
+    with RouteAware, WidgetsBindingObserver {
   static const _recommendationCategory = 'app:recommendations';
   // 返回保护期：上方路由弹出后 400ms 内到达的返回，视为同一手势的
   // 重复投递，不吞区历史（播放页弹出过渡 220ms，留足余量；人有意
@@ -128,6 +140,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   static const _returnGrace = Duration(milliseconds: 400);
   bool _justReturned = false;
   Timer? _returnGraceTimer;
+
+  /// 自动刷新节流门：前台回首页/切回首页页签时节流判断用；手动刷新
+  /// 完成时重置计时。initState 里落定（测试可经 widget 注入旧门）。
+  late final AutoRefreshGate _autoRefreshGate;
   final _search = TextEditingController();
   final _scroll = ScrollController();
   bool _resetScrollOnNextLoad = false;
@@ -162,6 +178,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _retryCompleter = null;
     if (completer != null && !completer.isCompleted) completer.complete();
   }
+
   late SourceSite _source;
   bool _allSources = false;
   List<Drama> _items = [];
@@ -176,7 +193,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   HomeZone _lastListenReadZone = HomeZone.audio;
   final _zoneHistory = BackHistory<HomeZone>();
 
-  // ---- Win7 窗口管理器（仅 Win7 主题手机端生效）-----------------
+  // ---- Win7 窗口管理器（Win7 与 XP 两套桌面主题手机端共用）-----
+  // XP 主题复用同一套状态机与语义（最小化保状态、关闭丢状态、任
+  // 务栏切窗），只换外观件（见 _win7Shell 的 xp 分支）；_win7* 名字
+  // 保留不改，避免无谓重命名牵连既有测试。
   // 一个窗口位一种区：同种区只开一个窗口，再点只是切到前台。
   // 最小化的窗口留在树里（Offstage 包着），State 不销毁、状态保留；
   // 关闭的窗口从树里摘掉，State 销毁、重开即全新。片库/短剧两窗
@@ -408,6 +428,44 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _maybeAutoRefresh();
+  }
+
+  /// 戏剧首页是否正显示在前台：与 build 里的分支口径一致（通用壳：
+  /// 片库区 + 红果组/钉住；Win7/XP 壳：前台窗口是片库/短剧窗）。
+  /// 电视/宽屏桌面布局不走戏剧首页分支，一律为假。
+  bool get _dramaHomeVisible {
+    if (_selectionMode) return false;
+    if (!(isHongguoDramaGroup(_group.id) || _dramaHomePinned)) return false;
+    if (AppLayout.isTelevision(context)) return false;
+    final wide =
+        Theme.of(context).platform != TargetPlatform.iOS &&
+        MediaQuery.sizeOf(context).width >= 840;
+    if (wide) return false;
+    final theme = widget.store.appTheme;
+    if (theme == AppThemeMode.win7 || theme == AppThemeMode.xpWindows) {
+      final foreground = _win7Foreground;
+      return foreground == Win7WindowKind.library ||
+          foreground == Win7WindowKind.drama;
+    }
+    return _zone == HomeZone.library;
+  }
+
+  /// 自动刷新：后台静默重抓，缓存内容先留着显示、新数据到了再更新，
+  /// 不闪白、不弹全屏转圈。只在戏剧首页正显示在前台时触发；加载中
+  /// 或节流窗内直接跳过（跳过不重置计时）。
+  void _maybeAutoRefresh() {
+    if (!mounted) return;
+    // 播放器/详情页等在上方的路由在前台时不触发。
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    if (!_dramaHomeVisible) return;
+    if (_loading || _loadingMore || _categoriesLoading) return;
+    if (!_autoRefreshGate.tryClaim()) return;
+    unawaited(_refreshCatalog());
+  }
+
   Future<void> _refreshCatalog() async {
     // 实时口径：手动刷新（下拉/按钮）直接强制现抓当前分类与当前页，
     // 对全部站源类型（含 py/jar 导入站）一致生效；sourceJob 只保留在
@@ -415,6 +473,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // 也不再因 job 忙碌而把刷新变成无操作。
     await _loadCategories(force: true);
     if (mounted) await _load(force: true);
+    // 手动刷新完成重置自动刷新计时（自动刷新经 tryClaim 已记过，
+    // 再记一次是同一时刻，无害）。
+    _autoRefreshGate.markRefreshed();
   }
 
   /// 内容档锁定的分类在本站不存在时的诚实空态：只说明事实，
@@ -797,6 +858,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  /// 女优模块入口（用户 2026-11-17 令）：片库顶栏一 tap 到达，
+  /// 与榜单钮并列；模块内含浏览、详情、排行榜与本地同步。
+  void _openActressLibrary() {
+    _pauseCatalog();
+    Navigator.push<void>(
+      context,
+      appPageRoute(
+        builder: (_) => ActressListPage(
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
+  }
+
   Future<void> _manageSources() async {
     _pauseCatalog();
     // 统一站点区（站源管理页）点“进站浏览”会带回站源 id：先把该站设为
@@ -889,6 +965,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   void initState() {
     super.initState();
+    _autoRefreshGate = widget.autoRefreshGate ?? AutoRefreshGate();
+    WidgetsBinding.instance.addObserver(this);
     _scroll.addListener(_onCatalogScroll);
     _contentBinding = ContentZoneBinding(
       readPersisted: (key) => widget.store.preferences.getString(key),
@@ -932,6 +1010,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void dispose() {
     _cancelRetryDelay();
     _returnGraceTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     homeRouteObserver.unsubscribe(this);
     _updater.removeListener(_updateChanged);
     _updater.dispose();
@@ -1549,10 +1628,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         .firstOrNull;
     if (site == null) return;
     unawaited(
-      saveUserChange(
-        context,
-        () => widget.store.setSiteVisible(site.id, true),
-      ),
+      saveUserChange(context, () => widget.store.setSiteVisible(site.id, true)),
     );
     _setZone(HomeZone.library);
     _changeSource(site);
@@ -1908,6 +1984,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         onPressed: widget.store.visibleSources.isEmpty ? null : _openRankings,
         icon: const Icon(Icons.leaderboard_outlined),
       ),
+      // 女优库入口：与榜单钮并列，只在片库顶栏出现。
+      IconButton(
+        key: const ValueKey('open-actress-library'),
+        tooltip: '女优库',
+        onPressed: _openActressLibrary,
+        icon: const Icon(Icons.people_alt_outlined),
+      ),
       IconButton(
         key: const ValueKey('open-fullscreen-feed'),
         tooltip: '全屏流',
@@ -1941,14 +2024,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           key: const ValueKey('catalog-refresh'),
           loading: _catalogBusy,
           tooltip: '更新剧库',
-          onPressed:
-              widget.store.visibleSources.isEmpty ? null : _refreshCatalog,
+          onPressed: widget.store.visibleSources.isEmpty
+              ? null
+              : _refreshCatalog,
         ),
       if (!_showRecommendations && maxWidth < 400)
         IconButton(
           tooltip: '更新剧库',
-          onPressed:
-              widget.store.visibleSources.isEmpty ? null : _refreshCatalog,
+          onPressed: widget.store.visibleSources.isEmpty
+              ? null
+              : _refreshCatalog,
           icon: const Icon(Icons.refresh_rounded),
         ),
       // 站源选择只留标题上的一个（source-switch）：原这里的下拉按钮
@@ -2041,9 +2126,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           key: const ValueKey('open-rankings'),
           icon: LucideIcons.trophy,
           tooltip: '榜单',
-          onPressed: widget.store.visibleSources.isEmpty
-              ? null
-              : _openRankings,
+          onPressed: widget.store.visibleSources.isEmpty ? null : _openRankings,
+        ),
+        // 女优库入口：与榜单钮并列，只在片库顶栏胶囊里出现。
+        GlassGroupItem(
+          key: const ValueKey('open-actress-library'),
+          icon: LucideIcons.users,
+          tooltip: '女优库',
+          onPressed: _openActressLibrary,
         ),
         GlassGroupItem(
           key: const ValueKey('open-fullscreen-feed'),
@@ -2178,13 +2268,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String? _win7DefaultSourceId(Win7WindowKind kind) => switch (kind) {
     Win7WindowKind.library => _source.id,
     Win7WindowKind.drama => _hongguoSource()?.id ?? _source.id,
-    Win7WindowKind.live => _liveEntrySourceId.isEmpty
-        ? null
-        : _liveEntrySourceId,
-    Win7WindowKind.audio =>
-      _contentBinding.selectedIdFor(ContentSection.audio),
-    Win7WindowKind.novel =>
-      _contentBinding.selectedIdFor(ContentSection.novel),
+    Win7WindowKind.live =>
+      _liveEntrySourceId.isEmpty ? null : _liveEntrySourceId,
+    Win7WindowKind.audio => _contentBinding.selectedIdFor(ContentSection.audio),
+    Win7WindowKind.novel => _contentBinding.selectedIdFor(ContentSection.novel),
     Win7WindowKind.miniApp => null,
     Win7WindowKind.multimedia => null,
   };
@@ -2312,9 +2399,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// 两层，演示任意层级展开。空组挂一行“暂无可用站点”（点按无动作）。
   List<Win7TreeNode> _win7TreeGroups() {
     List<Win7TreeNode> orEmpty(List<Win7TreeNode> children) =>
-        children.isEmpty
-            ? const [Win7TreeNode(label: '暂无可用站点')]
-            : children;
+        children.isEmpty ? const [Win7TreeNode(label: '暂无可用站点')] : children;
     return [
       Win7TreeNode(
         label: '片库',
@@ -2475,10 +2560,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Widget _win7LibraryBody({required bool glass, required double maxWidth}) {
     if (!_selectionMode &&
         (isHongguoDramaGroup(_group.id) || _dramaHomePinned)) {
-      return SafeArea(
-        bottom: !glass,
-        child: _dramaHome(hideCapsuleBar: true),
-      );
+      return SafeArea(bottom: !glass, child: _dramaHome(hideCapsuleBar: true));
     }
     return Scaffold(
       appBar: _homeAppBar(television: false, maxWidth: maxWidth),
@@ -2501,6 +2583,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     required bool isForeground,
     required bool glass,
     required double maxWidth,
+    required bool xp,
   }) {
     final slotKey = ValueKey('win7-window-${window.kind.name}');
     if ((window.kind == Win7WindowKind.library ||
@@ -2508,22 +2591,50 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         !isForeground) {
       return SizedBox.shrink(key: slotKey);
     }
+    final body = MediaQuery.removePadding(
+      context: context,
+      removeTop: true,
+      removeBottom: true,
+      child: _win7WindowBody(window, glass: glass, maxWidth: maxWidth),
+    );
     return Offstage(
       key: slotKey,
       offstage: !isForeground,
-      child: Win7WindowFrame(
-        kind: window.kind,
-        onMinimize: () => _win7Minimize(window.kind),
-        onClose: () => _win7Close(window.kind),
-        child: _win7WindowBody(window, glass: glass, maxWidth: maxWidth),
+      // 窗口顶边从状态栏/挖孔下方开始：标题栏（区名 + 最小化 + 关闭）
+      // 完整可见可点；窗口体内的 SafeArea 一律不再重复加边——标题栏
+      // 与任务栏已各占一份安全边距，内容紧跟标题栏，不留死空。
+      // XP 与 Win7 同一安全区口径，只换标题栏外观。
+      child: SafeArea(
+        top: true,
+        bottom: false,
+        child: xp
+            ? XpWindowFrame(
+                kind: window.kind,
+                onMinimize: () => _win7Minimize(window.kind),
+                onClose: () => _win7Close(window.kind),
+                child: body,
+              )
+            : Win7WindowFrame(
+                kind: window.kind,
+                onMinimize: () => _win7Minimize(window.kind),
+                onClose: () => _win7Close(window.kind),
+                child: body,
+              ),
       ),
     );
   }
 
-  /// Win7 外壳：桌面/窗口区 + 常驻任务栏。胶囊栏整个不出现。
+  /// 桌面外壳（Win7 / XP 共用）：桌面/窗口区 + 常驻任务栏。胶囊栏
+  /// 整个不出现。[xp] 为真时用 XP 外观件（山丘桌面、Luna 任务栏、
+  /// XP 开始菜单、蓝渐变标题栏），窗口管理器状态机与语义与 Win7
+  /// 完全一致。
   /// 系统返回：先关菜单，再退选片/搜索，最后把前台窗口最小化
   /// 回桌面；桌面上的返回才退出应用。
-  Widget _win7Shell({required bool glass, required double maxWidth}) {
+  Widget _win7Shell({
+    required bool glass,
+    required double maxWidth,
+    required bool xp,
+  }) {
     final foregroundKind = _win7Foreground;
     final foregroundWindow = foregroundKind == null
         ? null
@@ -2556,7 +2667,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               child: Stack(
                 children: [
                   if (foregroundWindow == null)
-                    Win7Desktop(onIconTap: (kind) => _win7Open(kind)),
+                    xp
+                        ? XpDesktop(onIconTap: (kind) => _win7Open(kind))
+                        : Win7Desktop(onIconTap: (kind) => _win7Open(kind)),
                   // 已开窗口各占一个 key 固定的槽位：前台显示、其余
                   // Offstage，状态保留靠 key 稳定 + 不换父级。
                   for (final entry in _win7Windows.entries)
@@ -2565,23 +2678,44 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       isForeground: entry.key == foregroundKind,
                       glass: glass,
                       maxWidth: maxWidth,
+                      xp: xp,
                     ),
                   if (_win7MenuOpen)
-                    Win7StartMenu(
-                      groups: _win7TreeGroups(),
-                      onLeafTap: (kind, siteId) =>
-                          _win7Open(kind, sourceId: siteId),
-                      onDismiss: () =>
-                          setState(() => _win7MenuOpen = false),
-                    ),
+                    xp
+                        ? XpStartMenu(
+                            groups: _win7TreeGroups(),
+                            onLeafTap: (kind, siteId) =>
+                                _win7Open(kind, sourceId: siteId),
+                            onDismiss: () =>
+                                setState(() => _win7MenuOpen = false),
+                          )
+                        : Win7StartMenu(
+                            groups: _win7TreeGroups(),
+                            onLeafTap: (kind, siteId) =>
+                                _win7Open(kind, sourceId: siteId),
+                            onDismiss: () =>
+                                setState(() => _win7MenuOpen = false),
+                          ),
                 ],
               ),
             ),
-            Win7Taskbar(
-              openWindows: _win7Windows.keys.toList(),
-              foreground: foregroundKind,
-              onStartTap: _win7ToggleMenu,
-              onEntryTap: _win7ToggleEntry,
+            // 任务栏落在手势条上方，不被系统手势小横条压住底边。
+            SafeArea(
+              top: false,
+              bottom: true,
+              child: xp
+                  ? XpTaskbar(
+                      openWindows: _win7Windows.keys.toList(),
+                      foreground: foregroundKind,
+                      onStartTap: _win7ToggleMenu,
+                      onEntryTap: _win7ToggleEntry,
+                    )
+                  : Win7Taskbar(
+                      openWindows: _win7Windows.keys.toList(),
+                      foreground: foregroundKind,
+                      onStartTap: _win7ToggleMenu,
+                      onEntryTap: _win7ToggleEntry,
+                    ),
             ),
           ],
         ),
@@ -2623,6 +2757,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       onOpenSaved: _openSaved,
       onSettingsPressed: _openZoneSettings,
       onOpenFeatured: _openFeaturedDrama,
+      onRefresh: _refreshCatalog,
+      onHomeTabSelected: _maybeAutoRefresh,
       requestedTab: _multimediaRequested
           ? HongguoDramaHome.multimediaTabIndex
           : _miniAppRequested
@@ -2648,11 +2784,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       automaticallyImplyLeading: false,
       leading: _appBarLeading(),
       title: _selectionMode
-          ? const Text(
-              '选择视频',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            )
+          ? const Text('选择视频', maxLines: 1, overflow: TextOverflow.ellipsis)
           : _multimediaRequested
           ? const Text('多媒体')
           : _miniAppRequested
@@ -2662,9 +2794,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           : _showCatalogHeader
           ? InkWell(
               key: const ValueKey('source-switch'),
-              onTap: _canSwitchSource
-                  ? () => unawaited(_pickSource())
-                  : null,
+              onTap: _canSwitchSource ? () => unawaited(_pickSource()) : null,
               child: SizedBox(
                 height: 48,
                 child: Row(
@@ -2677,8 +2807,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
                     ),
-                    if (_canSwitchSource)
-                      const Icon(Icons.expand_more_rounded),
+                    if (_canSwitchSource) const Icon(Icons.expand_more_rounded),
                   ],
                 ),
               ),
@@ -2708,8 +2837,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         const SizedBox(width: 8),
       ],
       // 窄屏第二行：目录操作组横排独占一行，不再盖住站源条。
-      bottom:
-          _showCatalogHeader && !_selectionMode && maxWidth < 840
+      bottom: _showCatalogHeader && !_selectionMode && maxWidth < 840
           ? PreferredSize(
               preferredSize: const Size.fromHeight(56),
               child: Align(
@@ -2753,12 +2881,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           final desktop =
               Theme.of(context).platform != TargetPlatform.iOS &&
               constraints.maxWidth >= 840;
-          // Win7 主题手机端：首页外壳换成桌面 + 窗口管理器 + 任务栏，
-          // 霓虹胶囊栏整个不出现；电视与宽屏桌面布局不受影响。
+          // Win7 / XP 主题手机端：首页外壳换成桌面 + 窗口管理器 +
+          // 任务栏，霓虹胶囊栏整个不出现；电视与宽屏桌面布局不受影响。
+          // 两套桌面主题共用同一套窗口管理器，只换外观件。
           if (!television &&
               !desktop &&
-              widget.store.appTheme == AppThemeMode.win7) {
-            return _win7Shell(glass: glass, maxWidth: constraints.maxWidth);
+              (widget.store.appTheme == AppThemeMode.win7 ||
+                  widget.store.appTheme == AppThemeMode.xpWindows)) {
+            return _win7Shell(
+              glass: glass,
+              maxWidth: constraints.maxWidth,
+              xp: widget.store.appTheme == AppThemeMode.xpWindows,
+            );
           }
           // 底部标签栏：两个分支共用同一份（戏剧首页分支挂外层
           // Scaffold，与通用分支同一结构，点按可命中；挂内层
@@ -3136,30 +3270,30 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         if (!leftCategoryLayout)
           CatalogFilters(
             key: ValueKey('filters-${_group.id}'),
-          remoteKey: _filtersKey,
-          onExitDown: television
-              ? () => _gridKey.currentState?.focusCurrent()
-              : null,
-          categories: _displayCategories,
-          category: _displayCategory,
-          error: _categoriesError,
-          onCategory: _changeCategory,
-          onRetry: () => _loadCategories(force: true),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_supportsVipFilter)
-                IconButton(
-                  tooltip: widget.store.hideVip ? 'VIP：隐藏' : 'VIP：显示',
-                  onPressed: () => saveUserChange(
-                    context,
-                    () => widget.store.setHideVip(!widget.store.hideVip),
+            remoteKey: _filtersKey,
+            onExitDown: television
+                ? () => _gridKey.currentState?.focusCurrent()
+                : null,
+            categories: _displayCategories,
+            category: _displayCategory,
+            error: _categoriesError,
+            onCategory: _changeCategory,
+            onRetry: () => _loadCategories(force: true),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_supportsVipFilter)
+                  IconButton(
+                    tooltip: widget.store.hideVip ? 'VIP：隐藏' : 'VIP：显示',
+                    onPressed: () => saveUserChange(
+                      context,
+                      () => widget.store.setHideVip(!widget.store.hideVip),
+                    ),
+                    icon: VipIcon(hidden: widget.store.hideVip),
                   ),
-                  icon: VipIcon(hidden: widget.store.hideVip),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
         if (!leftCategoryLayout &&
             !_allSources &&
             _drillStack.isEmpty &&
@@ -3544,10 +3678,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         message: _error!,
         onRetry: () => _load(force: true),
         secondaryAction: widget.repository.supportsSourceManagement
-            ? TextButton(
-                onPressed: _manageSources,
-                child: const Text('站源诊断'),
-              )
+            ? TextButton(onPressed: _manageSources, child: const Text('站源诊断'))
             : null,
         icon: Icons.wifi_off_rounded,
       );
@@ -3569,10 +3700,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             : null,
         action: '加载更多',
         secondaryAction: widget.repository.supportsSourceManagement
-            ? TextButton(
-                onPressed: _manageSources,
-                child: const Text('站源诊断'),
-              )
+            ? TextButton(onPressed: _manageSources, child: const Text('站源诊断'))
             : null,
       );
     } else {

@@ -5,7 +5,7 @@ import 'package:moyi/app_theme_config.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('13 套主题配置', () {
+  group('14 套主题配置', () {
     test('名字与关键配色与用户文件一致', () {
       final expected = {
         AppThemeMode.purpleNeon: (
@@ -148,7 +148,7 @@ void main() {
   });
 
   group('存储值', () {
-    test('13 套主题存储值往返', () {
+    test('14 套主题存储值往返', () {
       for (final mode in AppThemeMode.values) {
         expect(
           AppThemeMode.fromStorageValue(mode.storageValue),
@@ -168,10 +168,7 @@ void main() {
         AppThemeMode.fromStorageValue('purpleNeon'),
         AppThemeMode.purpleNeon,
       );
-      expect(
-        AppThemeMode.fromStorageValue('goldVip'),
-        AppThemeMode.goldVip,
-      );
+      expect(AppThemeMode.fromStorageValue('goldVip'), AppThemeMode.goldVip);
     });
   });
 

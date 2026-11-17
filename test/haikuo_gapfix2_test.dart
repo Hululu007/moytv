@@ -359,13 +359,40 @@ void main() {
       expect(haikuoRuntimeHtml, contains('crypto-java.js'));
     });
 
+    test('fyAll 两处取分类值、聚合搜索仍置空', () {
+      expect(
+        haikuoRuntimeHtml,
+        contains("out.replace(/fyAll/g, String(selectedCls || ''))"),
+      );
+      expect(
+        haikuoRuntimeHtml,
+        contains("myUrl.replace(/fyAll/g, String(selectedCls || ''))"),
+      );
+      expect(
+        haikuoRuntimeHtml,
+        contains(".replace(/fyAll/g, '').replace(/\\bfyclass\\b/g, '')"),
+      );
+    });
+
+    test('getResCode 回正文、PBE 垫片已挂接', () {
+      expect(
+        haikuoRuntimeHtml,
+        contains('function getResCode() { try { return fetchPageHtml(); }'),
+      );
+      expect(haikuoRuntimeHtml, contains('PBEKeySpec: JavaPBEKeySpec'));
+      expect(
+        haikuoRuntimeHtml,
+        contains('SecretKeyFactory: JavaSecretKeyFactory'),
+      );
+    });
+
     test('规则文件 md5 未变', () {
       final bytes = File(
         'assets/haikuo_builtin_rules.json',
       ).readAsBytesSync();
       expect(
         md5.convert(bytes).toString(),
-        'a7dbf907b02142d261a930d2e51bb204',
+        '68f0bd9c740cf3b70b26adf32974439b',
       );
     });
   });

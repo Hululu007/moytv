@@ -8,31 +8,23 @@ import 'package:moyi/source_picker_sheet.dart';
 void main() {
   group('siteIconCandidates', () {
     test('普通地址派生 origin + 三个站标路径', () {
-      expect(
-        siteIconCandidates('https://example.com/foo/bar?x=1'),
-        [
-          'https://example.com/apple-touch-icon.png',
-          'https://example.com/favicon.png',
-          'https://example.com/favicon.ico',
-        ],
-      );
+      expect(siteIconCandidates('https://example.com/foo/bar?x=1'), [
+        'https://example.com/apple-touch-icon.png',
+        'https://example.com/favicon.png',
+        'https://example.com/favicon.ico',
+      ]);
     });
 
     test('带端口的 origin 保留端口', () {
-      expect(
-        siteIconCandidates('http://example.com:8080/a'),
-        [
-          'http://example.com:8080/apple-touch-icon.png',
-          'http://example.com:8080/favicon.png',
-          'http://example.com:8080/favicon.ico',
-        ],
-      );
+      expect(siteIconCandidates('http://example.com:8080/a'), [
+        'http://example.com:8080/apple-touch-icon.png',
+        'http://example.com:8080/favicon.png',
+        'http://example.com:8080/favicon.ico',
+      ]);
     });
 
     test('地址本身是图片时放第一位', () {
-      final candidates = siteIconCandidates(
-        'https://cdn.example.com/logo.png',
-      );
+      final candidates = siteIconCandidates('https://cdn.example.com/logo.png');
       expect(candidates.first, 'https://cdn.example.com/logo.png');
       expect(candidates.length, 4);
     });
@@ -46,14 +38,11 @@ void main() {
 
   group('jarSiteIconCandidates', () {
     test('ext 里有公开 host 时派生候选', () {
-      expect(
-        jarSiteIconCandidates('jar:zakatv:ZakaSe8'),
-        [
-          'https://8se.me/apple-touch-icon.png',
-          'https://8se.me/favicon.png',
-          'https://8se.me/favicon.ico',
-        ],
-      );
+      expect(jarSiteIconCandidates('jar:zakatv:ZakaSe8'), [
+        'https://8se.me/apple-touch-icon.png',
+        'https://8se.me/favicon.png',
+        'https://8se.me/favicon.ico',
+      ]);
     });
 
     test('ext 为空、无此 key、非 jar id 时返回空', () {
@@ -64,25 +53,60 @@ void main() {
     });
   });
 
-  group('siteIconGlyph', () {
-    test('跳过开头的 🔞 取第一个字母或数字', () {
-      expect(siteIconGlyph('🔞河马AV'), '河');
-      expect(siteIconGlyph('MissAV'), 'M');
-      expect(siteIconGlyph('91短视频'), '9');
+  group('图案标', () {
+    test('同站 id 永远同一渐变与图案', () {
+      expect(siteIconPatternColors('hmav'), siteIconPatternColors('hmav'));
+      expect(siteIconPatternIcon('hmav'), siteIconPatternIcon('hmav'));
+      expect(siteIconPatternColors(''), isNotNull);
+      expect(siteIconPatternIcon(''), isNotNull);
     });
 
-    test('空名回落“站”', () {
-      expect(siteIconGlyph(''), '站');
-      expect(siteIconGlyph('   '), '站');
+    test('不同站分散到各渐变与图案', () {
+      const ids = [
+        'hmav',
+        'abjav',
+        'ai2026',
+        'ai4k',
+        'aidj',
+        'aiduanju',
+        'aimove',
+        'aisxpc',
+        'asextv',
+        'avhwa',
+        'avtoday',
+        'badyi',
+        'caoliu',
+        'chinax',
+        'danai',
+        'dj69',
+        'dj91',
+        'djwo',
+        'duanjuone',
+        'duoduo',
+        'fuchou',
+        'heitao',
+        'jinguo',
+        'javmenu',
+        'avdb',
+        'memojav',
+        'chaoliu',
+        'xhsapp',
+        'v_missav',
+        'v_javdb',
+        'v_km',
+        'legado_8059_0',
+        'legado_8078_0',
+      ];
+      final gradients = ids
+          .map((id) => siteIconPatternColors(id).join(','))
+          .toSet();
+      final icons = ids.map(siteIconPatternIcon).toSet();
+      expect(gradients.length, greaterThanOrEqualTo(6));
+      expect(icons.length, greaterThanOrEqualTo(6));
     });
   });
 
-  test('siteIconColor 同一站名永远同一色', () {
-    expect(siteIconColor('黄果'), siteIconColor('黄果'));
-    expect(siteIconColor(''), isNotNull);
-  });
-
-  testWidgets('无候选地址时显示首字彩色块，不联网不崩溃', (tester) async {
+  testWidgets('无候选地址时显示图案标（无文字），不联网不崩溃', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -91,10 +115,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle(const Duration(seconds: 10));
-    expect(find.text('河'), findsOneWidget);
+    expect(find.byType(Icon), findsOneWidget);
+    expect(find.text('河'), findsNothing);
+    final icon = tester.widget<Icon>(find.byType(Icon));
+    expect(icon.icon, siteIconPatternIcon('plain'));
+    expect(icon.color, Colors.white);
+    // 30 像素默认尺寸下图案可辨（图标不小于 16）。
+    expect(icon.size, greaterThanOrEqualTo(16));
   });
 
-  testWidgets('站标取不到时回落字块，不崩溃', (tester) async {
+  testWidgets('站标取不到时回落图案标，不崩溃', (tester) async {
     final temp = Directory.systemTemp.createTempSync('site_icon_test');
     addTearDown(() => temp.deleteSync(recursive: true));
     final cache = SiteIconCache(
@@ -120,17 +150,79 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
     });
-    expect(find.text('测'), findsOneWidget);
+    expect(find.byType(Icon), findsOneWidget);
+    expect(find.text('测'), findsNothing);
   });
 
   testWidgets('站标取到时显示图片并写入磁盘缓存', (tester) async {
     const png = <int>[
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-      0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
-      0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-      0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+      0x89,
+      0x50,
+      0x4E,
+      0x47,
+      0x0D,
+      0x0A,
+      0x1A,
+      0x0A,
+      0x00,
+      0x00,
+      0x00,
+      0x0D,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x08,
+      0x06,
+      0x00,
+      0x00,
+      0x00,
+      0x1F,
+      0x15,
+      0xC4,
+      0x89,
+      0x00,
+      0x00,
+      0x00,
+      0x0A,
+      0x49,
+      0x44,
+      0x41,
+      0x54,
+      0x78,
+      0x9C,
+      0x63,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x05,
+      0x00,
+      0x01,
+      0x0D,
+      0x0A,
+      0x2D,
+      0xB4,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x49,
+      0x45,
+      0x4E,
+      0x44,
+      0xAE,
+      0x42,
+      0x60,
+      0x82,
     ];
     final temp = Directory.systemTemp.createTempSync('site_icon_test');
     addTearDown(() => temp.deleteSync(recursive: true));
@@ -187,7 +279,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle(const Duration(seconds: 10));
-    // 每站一块图标（无地址时为首字块），站名只出现一次，选中站打勾。
+    // 每站一块图标（无地址时为图案标），站名只出现一次，选中站打勾。
     expect(find.byType(SiteIcon), findsNWidgets(3));
     expect(find.text('A站'), findsOneWidget);
     expect(find.text('B站'), findsOneWidget);
@@ -217,10 +309,7 @@ void main() {
     );
     await tester.pumpAndSettle(const Duration(seconds: 10));
     expect(find.byType(SiteIcon), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('site-picker-delete-a')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('site-picker-delete-a')), findsOneWidget);
     expect(find.byIcon(Icons.check), findsNothing);
   });
 }

@@ -148,6 +148,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
             child: NeonTopBar(
               brand: widget.brand,
               subtitle: widget.sourceLabel,
+              onTitleTap: widget.onSourceTap,
               leading: widget.onAvatar == null
                   ? null
                   : GestureDetector(
@@ -188,10 +189,12 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                   onTap: widget.onSearch,
                 ),
                 NeonIconButton(
-                  key: const ValueKey('neon-top-source'),
+                  key: const ValueKey('neon-top-refresh'),
                   icon: LucideIcons.refreshCw,
-                  tooltip: '切换/更新站源',
-                  onTap: widget.onSourceTap,
+                  tooltip: '刷新',
+                  onTap: widget.onRefresh == null
+                      ? null
+                      : () => unawaited(widget.onRefresh!()),
                 ),
               ],
             ),

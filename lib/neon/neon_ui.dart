@@ -544,6 +544,9 @@ class NeonBadge extends StatelessWidget {
 }
 
 /// 顶部品牌栏：品牌名 + 右侧圆形图标按钮。
+///
+/// [onTitleTap] 非空时品牌名 + 副标题整列可点（点按换站源），副标题
+/// 右侧加一个小 chevron 以示可点；为空时渲染与原来完全一致。
 class NeonTopBar extends StatelessWidget {
   const NeonTopBar({
     super.key,
@@ -551,43 +554,82 @@ class NeonTopBar extends StatelessWidget {
     required this.actions,
     this.subtitle,
     this.leading,
+    this.onTitleTap,
   });
 
   final String brand;
   final String? subtitle;
   final List<Widget> actions;
   final Widget? leading;
+  final VoidCallback? onTitleTap;
 
   @override
   Widget build(BuildContext context) {
     final config = AppThemeConfig.of(context);
+    final onTitleTap = this.onTitleTap;
+    final title = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ShaderMask(
+          shaderCallback: (rect) => LinearGradient(
+            colors: [config.textPrimary, config.secondaryColor],
+          ).createShader(rect),
+          child: Text(
+            brand,
+            style: Neon.brandStyle.copyWith(color: config.textPrimary),
+          ),
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 3),
+          if (onTitleTap == null)
+            Text(
+              subtitle!,
+              style: TextStyle(fontSize: 10, color: config.textSecondary),
+            )
+          else
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    subtitle!,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: config.textSecondary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(
+                  LucideIcons.chevronDown,
+                  size: 12,
+                  color: config.textSecondary,
+                ),
+              ],
+            ),
+        ],
+      ],
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 6, 12, 2),
       child: Row(
         children: [
           if (leading != null) ...[leading!, const SizedBox(width: 10)],
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ShaderMask(
-                shaderCallback: (rect) => LinearGradient(
-                  colors: [config.textPrimary, config.secondaryColor],
-                ).createShader(rect),
-                child: Text(
-                  brand,
-                  style: Neon.brandStyle.copyWith(color: config.textPrimary),
-                ),
+          if (onTitleTap == null)
+            title
+          else
+            Semantics(
+              label: '切换站源',
+              button: true,
+              child: GestureDetector(
+                key: const ValueKey('neon-top-source'),
+                behavior: HitTestBehavior.opaque,
+                onTap: onTitleTap,
+                child: title,
               ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  subtitle!,
-                  style: TextStyle(fontSize: 10, color: config.textSecondary),
-                ),
-              ],
-            ],
-          ),
+            ),
           const Spacer(),
           for (final action in actions) ...[action, const SizedBox(width: 8)],
         ],

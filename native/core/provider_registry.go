@@ -10,6 +10,7 @@ var nativeProviderRegistry = []providerDescriptor{
 	{ID: sourceHGTV, SupportsFilters: true},
 	{ID: sourceHGTVMirror, FilterNote: "镜站分类页无筛选组"},
 	{ID: sourceHongguo, SupportsFilters: true},
+	{ID: sourceHongguoNew, SupportsFilters: true},
 	{ID: "youtube", SupportsFilters: true},
 	{ID: sourceHuangdou, FilterNote: "目录接口未返回筛选组"},
 	{ID: sourceHuangguoAI, FilterNote: "目录接口未返回筛选组"},
