@@ -496,7 +496,9 @@ object JarBridge {
     ) : DexClassLoader(dexPath, optimizedDirectory, librarySearchPath, parent) {
 
         override fun loadClass(name: String, resolve: Boolean): Class<*> {
-            return synchronized(getClassLoadingLock(name)) {
+            // getClassLoadingLock 不在 Android 编译 SDK 里；DexClassLoader
+            // 未注册并行加载，类加载锁语义上就是 this，直接锁 this。
+            return synchronized(this) {
                 var loaded = findLoadedClass(name)
                 if (loaded == null) {
                     loaded = if (isGuardOwnedClass(name)) {
