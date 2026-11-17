@@ -24,10 +24,14 @@ void main() {
       expect(navStyleForTheme(AppThemeMode.win7), NavStyle.bottomTabs);
     });
 
-    test('默认主题断言：无偏好时 Win7，有偏好时偏好优先', () {
-      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.win7);
-      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.win7);
+    test('默认主题断言：无偏好时 XP，有偏好时偏好优先', () {
+      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.xpWindows);
+      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.xpWindows);
       expect(AppThemeMode.fromStorageValue('win7'), AppThemeMode.win7);
+      expect(
+        AppThemeMode.fromStorageValue('xpWindows'),
+        AppThemeMode.xpWindows,
+      );
       expect(
         AppThemeMode.fromStorageValue('purpleNeon'),
         AppThemeMode.purpleNeon,

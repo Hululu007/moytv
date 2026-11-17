@@ -15,9 +15,9 @@ void main() {
     return LocalStore(await SharedPreferences.getInstance());
   }
 
-  test('主题偏好经 LocalStore 往返，默认 Win7', () async {
+  test('主题偏好经 LocalStore 往返，默认 XP', () async {
     final store = await localStore();
-    expect(store.appTheme, AppThemeMode.win7);
+    expect(store.appTheme, AppThemeMode.xpWindows);
     await store.setAppTheme(AppThemeMode.goldVip);
     expect(store.appTheme, AppThemeMode.goldVip);
     final restored = LocalStore(store.preferences);
@@ -36,13 +36,13 @@ void main() {
       'themeBackgroundImage': 'bg.jpg',
     });
     expect(store.hasLegacyThemeSettings, isTrue);
-    // 旧值不影响新主题：仍是默认 Win7。
-    expect(store.appTheme, AppThemeMode.win7);
+    // 旧值不影响新主题：仍是默认 XP。
+    expect(store.appTheme, AppThemeMode.xpWindows);
     await store.migrateLegacyThemeSettings();
     expect(store.hasLegacyThemeSettings, isFalse);
     final restored = LocalStore(store.preferences);
     expect(restored.hasLegacyThemeSettings, isFalse);
-    expect(restored.appTheme, AppThemeMode.win7);
+    expect(restored.appTheme, AppThemeMode.xpWindows);
     store.dispose();
     restored.dispose();
   });
@@ -51,7 +51,7 @@ void main() {
     final store = await localStore();
     expect(store.hasLegacyThemeSettings, isFalse);
     await store.migrateLegacyThemeSettings();
-    expect(store.appTheme, AppThemeMode.win7);
+    expect(store.appTheme, AppThemeMode.xpWindows);
     store.dispose();
   });
 
@@ -78,7 +78,7 @@ void main() {
     store.dispose();
   });
 
-  testWidgets('恢复默认主题回到 Win7', (tester) async {
+  testWidgets('恢复默认主题回到 XP', (tester) async {
     final store = await localStore();
     await store.setAppTheme(AppThemeMode.cyberBlue);
     await tester.pumpWidget(
@@ -94,7 +94,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(resetButton);
     await tester.pumpAndSettle();
-    expect(store.appTheme, AppThemeMode.win7);
+    expect(store.appTheme, AppThemeMode.xpWindows);
     store.dispose();
   });
 }

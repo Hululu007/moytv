@@ -49,7 +49,6 @@ CATS = [
     ('240', '直播主播'),
     ('241', '欧美精品'),
     ('242', '激情动漫'),
-    ('243', '萝莉少女'),
     ('244', '明星换脸'),
     ('245', '伦理三级'),
     ('246', '抖阴视频'),
@@ -69,7 +68,6 @@ CATS = [
     ('261', '台湾辣妹'),
     ('262', 'SM调教'),
     ('263', '韩国御姐'),
-    ('264', '萝莉少女'),
     ('265', '唯美港姐'),
     ('267', '东南亚AV'),
     ('268', '女同性恋'),
@@ -99,6 +97,14 @@ CATS = [
     ('294', 'VR视角'),
 ]
 
+_FLAG_WORDS = ('loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年', '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉')
+
+
+def _flagged(name):
+    low = (name or '').lower()
+    return any(w in low for w in _FLAG_WORDS)
+
+
 CARD_RE = re.compile(r'<a href="/info/id/(\d+)\.html"[^>]*>\s*<img[^>]*src="([^"]+)"', re.S)
 TITLE_RE = re.compile(r'<h3 class="video-title">.*?<text>([^<]+)</text>', re.S)
 CAT_RE = re.compile(r'href="/type/id/(\d+)\.html"[^>]*title="([^"]+)"')
@@ -123,7 +129,81 @@ def _unescape(s):
     return _html.unescape(s).replace('&nbsp;', ' ').strip()
 
 
-def _http_get(url, referer=None, timeout=30):
+def _client_fetch(url, hdr, timeout, method='GET', data=None):
+    proxies = urllib.request.getproxies()
+    for _hop in range(6):
+        parts = urllib.parse.urlsplit(url)
+        scheme = (parts.scheme or 'https').lower()
+        host = parts.hostname or ''
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == 'https' else 80)
+        path = urllib.parse.urlunsplit(('', '', parts.path or '/', parts.query, ''))
+        proxy = None
+        try:
+            if not urllib.request.proxy_bypass(host):
+                proxy = proxies.get(scheme)
+        except Exception:
+            proxy = proxies.get(scheme)
+        conn = None
+        try:
+            if proxy:
+                pp = urllib.parse.urlsplit(proxy)
+                phost = pp.hostname or ''
+                pport = pp.port or 8080
+                if not phost:
+                    return None
+                if scheme == 'https':
+                    conn = http.client.HTTPSConnection(phost, pport, context=_ctx(), timeout=timeout)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    path = url
+            elif scheme == 'https':
+                conn = http.client.HTTPSConnection(host, port, context=_ctx(), timeout=timeout)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            hdrs = dict(hdr)
+            hdrs['Connection'] = 'keep-alive'
+            conn.request(method, path, body=data, headers=hdrs)
+            resp = conn.getresponse()
+            status = resp.status
+            if status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if not loc:
+                    return None
+                url = urllib.parse.urljoin(url, loc)
+                if status in (301, 302, 303):
+                    method = 'GET'
+                    data = None
+                continue
+            try:
+                body_bytes = resp.read()
+            except http.client.IncompleteRead as ie:
+                body_bytes = ie.partial or b''
+            enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or body_bytes[:2] == b'\x1f\x8b':
+                try:
+                    body_bytes = gzip.decompress(body_bytes)
+                except Exception:
+                    pass
+            return (status, body_bytes.decode('utf-8', 'replace'))
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+    return None
+
+
+def _http_get(url, referer=None, timeout=60):
     h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Accept-Encoding': 'gzip, deflate'}
     if referer:
         h['Referer'] = referer
@@ -136,9 +216,18 @@ def _http_get(url, referer=None, timeout=30):
             except Exception:
                 pass
         try:
+            got = _client_fetch(url, h, timeout)
+            if got is not None and got[0] == 200 and got[1].strip():
+                return got[1]
+        except Exception:
+            pass
+        try:
             req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
-                data = resp.read()
+                try:
+                    data = resp.read()
+                except http.client.IncompleteRead as ie:
+                    data = ie.partial or b''
                 enc = (resp.headers.get('Content-Encoding') or '').lower()
                 if enc == 'gzip' or data[:2] == b'\x1f\x8b':
                     try:
@@ -188,7 +277,7 @@ def _parse_categories(html):
     for m in CAT_RE.finditer(html or ''):
         cid = m.group(1)
         name = _unescape(m.group(2))
-        if not name or cid in seen:
+        if not name or cid in seen or _flagged(name):
             continue
         seen.add(cid)
         out.append((cid, name))

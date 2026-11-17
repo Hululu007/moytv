@@ -98,7 +98,7 @@ class NeonChannelView extends StatelessWidget {
 
   Widget _header(AppThemeConfig config) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(14, 4, 12, 2),
       child: Row(
         children: [
           NeonIconButton(

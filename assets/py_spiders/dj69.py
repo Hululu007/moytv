@@ -53,13 +53,20 @@ CATS = [
     ('26', '日本无码'),
     ('27', '强奸乱伦'),
     ('28', '制服诱惑'),
-    ('29', '萝莉少女'),
     ('30', 'AV解说'),
     ('31', '欧美无码'),
     ('32', '人妖系列'),
 ]
 
 CARD_RE = re.compile(r'<a href="/voddetail/(\d+)\.html">.*?<img src="([^"]+)"[^>]*>.*?<span><text>([^<]+)</text></span>', re.S)
+_FLAG_WORDS = ('loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年', '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉')
+
+
+def _flagged(name):
+    low = (name or '').lower()
+    return any(w in low for w in _FLAG_WORDS)
+
+
 CAT_RE = re.compile(r'<a[^>]*href="/vodtype/(\d+)\.html"[^>]*>(.*?)</a>', re.S)
 H1_RE = re.compile(r'<h1[^>]*>(.*?)</h1>', re.S)
 COVER_RE = re.compile(r'<img class="detail-cover"[^>]*src="([^"]+)"')
@@ -97,7 +104,7 @@ def _fix_url(raw, base):
     return u
 
 
-def _http_get(url, referer=None, timeout=25):
+def _http_get(url, referer=None, timeout=60):
     h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Accept-Encoding': 'gzip, deflate'}
     if referer:
         h['Referer'] = referer
@@ -146,15 +153,15 @@ def _resolve_base():
         return _BASE_CACHE['base']
     base = FALLBACK_BASE
     try:
-        entry = _http_get(ENTRY)
+        entry = _http_get(ENTRY, timeout=100)
         d1 = _next_domain(entry)
         if d1:
             hop1 = 'https://%s.%s/' % (_rand_sub(7), d1)
-            h1 = _http_get(hop1)
+            h1 = _http_get(hop1, timeout=100)
             d2 = _next_domain(h1)
             if d2:
                 cand = 'https://%s.%s' % (_rand_sub(6), d2)
-                home = _http_get(cand + '/')
+                home = _http_get(cand + '/', timeout=100)
                 if home and '69短剧' in home:
                     base = cand
     except Exception:
@@ -190,7 +197,7 @@ def _parse_categories(html):
     for m in CAT_RE.finditer(html or ''):
         cid = m.group(1)
         name = _strip_tags(_unescape(m.group(2)))
-        if not name or '更多' in name or cid in seen:
+        if not name or '更多' in name or cid in seen or _flagged(name):
             continue
         seen.add(cid)
         out.append((cid, name))

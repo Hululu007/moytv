@@ -89,8 +89,8 @@ void main() {
       expect(byKey['javtiful']?.name, '🔞Javtiful┃JAV视频');
       expect(byKey.containsKey('ZakaLnkl'), isFalse);
       expect(byKey.containsKey('zakajavverse'), isFalse);
-      expect(zakatvBuiltinSites.length, 148);
-      expect(zakatvJarMd5, 'da3d99184174dfd4fc9322a6c8edfb4d');
+      expect(zakatvBuiltinSites.length, 142);
+      expect(zakatvJarMd5, '09ee47224268ed3d90fd1ece455ce70c');
     });
   });
 }

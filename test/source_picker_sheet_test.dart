@@ -21,6 +21,7 @@ Widget _host({
   required void Function(String?) onResult,
   bool editMode = false,
   Future<bool> Function(SourcePickerEntry entry)? onDelete,
+  Future<void> Function()? onImport,
 }) => MaterialApp(
   home: Builder(
     builder: (context) => Scaffold(
@@ -34,6 +35,7 @@ Widget _host({
               groups: _groups,
               initialEditMode: editMode,
               onDeleteSite: onDelete,
+              onImport: onImport,
             );
             onResult(picked);
           },
@@ -206,5 +208,39 @@ void main() {
       find.byKey(const ValueKey('site-picker-row-s30')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('不传 onImport 时右上角没有 + 号', (tester) async {
+    await _open(tester);
+    expect(find.byKey(const ValueKey('site-picker-add')), findsNothing);
+  });
+
+  testWidgets('点 + 号先关弹窗再调导入回调，不切站', (tester) async {
+    var imports = 0;
+    String? picked = 'unset';
+    await tester.pumpWidget(
+      _host(
+        onResult: (value) => picked = value,
+        onImport: () async {
+          imports++;
+        },
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+
+    final addButton = find.byKey(const ValueKey('site-picker-add'));
+    expect(addButton, findsOneWidget);
+    // + 号在标题同一行、靠右：横坐标大于标题。
+    expect(
+      tester.getRect(addButton).left,
+      greaterThan(tester.getRect(find.text('切换短剧源')).left),
+    );
+
+    await tester.tap(addButton);
+    await tester.pumpAndSettle();
+    expect(imports, 1);
+    expect(picked, isNull);
+    expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
   });
 }

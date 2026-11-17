@@ -1,4 +1,5 @@
 import gzip
+import http.client
 import re
 import ssl
 import time
@@ -42,6 +43,17 @@ CATS = [
 ]
 ENC = dict(CATS)
 
+FLAG_WORDS = [
+    'loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+    '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉',
+]
+
+
+def _is_flagged(name):
+    low = (name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
+
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE
@@ -51,6 +63,77 @@ TIMEOUT = 30
 
 def _now():
     return time.time()
+
+
+def _client_fetch(url, hdr, timeout, method='GET', data=None):
+    proxies = urllib.request.getproxies()
+    for _hop in range(6):
+        parts = urllib.parse.urlsplit(url)
+        scheme = (parts.scheme or 'https').lower()
+        host = parts.hostname or ''
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == 'https' else 80)
+        path = urllib.parse.urlunsplit(('', '', parts.path or '/', parts.query, ''))
+        proxy = None
+        try:
+            if not urllib.request.proxy_bypass(host):
+                proxy = proxies.get(scheme)
+        except Exception:
+            proxy = proxies.get(scheme)
+        conn = None
+        try:
+            if proxy:
+                pp = urllib.parse.urlsplit(proxy)
+                phost = pp.hostname or ''
+                pport = pp.port or 8080
+                if not phost:
+                    return None
+                if scheme == 'https':
+                    conn = http.client.HTTPSConnection(phost, pport, context=CTX, timeout=timeout)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    path = url
+            elif scheme == 'https':
+                conn = http.client.HTTPSConnection(host, port, context=CTX, timeout=timeout)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            hdrs = dict(hdr)
+            hdrs['Connection'] = 'keep-alive'
+            conn.request(method, path, body=data, headers=hdrs)
+            resp = conn.getresponse()
+            status = resp.status
+            if status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if not loc:
+                    return None
+                url = urllib.parse.urljoin(url, loc)
+                if status in (301, 302, 303):
+                    method = 'GET'
+                    data = None
+                continue
+            body_bytes = resp.read()
+            enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or body_bytes[:2] == b'\x1f\x8b':
+                try:
+                    body_bytes = gzip.decompress(body_bytes)
+                except Exception:
+                    pass
+            return (status, body_bytes.decode('utf-8', 'replace'))
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+    return None
 
 
 def _http_get(url, referer=None, timeout=TIMEOUT):
@@ -70,6 +153,13 @@ def _http_get(url, referer=None, timeout=TIMEOUT):
                 resp = _requests.get(url, headers=hdr, timeout=timeout)
                 if resp.status_code == 200:
                     text = resp.content.decode('utf-8', 'replace')
+            except Exception:
+                text = None
+        if text is None:
+            try:
+                got = _client_fetch(url, hdr, timeout)
+                if got is not None and got[0] == 200:
+                    text = got[1]
             except Exception:
                 text = None
         if text is None:
@@ -229,7 +319,8 @@ class Spider(BaseSpider):
         pass
 
     def homeContent(self, filter=False):
-        cats = [{'type_id': name, 'type_name': name} for name, _ in CATS]
+        cats = [{'type_id': name, 'type_name': name}
+                for name, _ in CATS if not _is_flagged(name)]
         return {'class': cats, 'filters': {}}
 
     def homeVideoContent(self):
@@ -242,6 +333,8 @@ class Spider(BaseSpider):
         pg = _norm_pg(pg)
         if pg < 1:
             pg = 1
+        if _is_flagged(tid):
+            return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         enc = ENC.get(tid)
         if not enc:
             enc = ENC.get('巨乳')

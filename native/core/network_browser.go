@@ -23,13 +23,12 @@ type browserHTTPClient interface {
 
 type huangguoBrowserTransport struct {
 	base      http.RoundTripper
-	router    *proxyRouter
 	hosts     map[string]bool
 	insecure  bool
 	record    func(diagnosticEvent)
 	mu        sync.Mutex
 	clients   map[string]browserHTTPClient
-	newClient func(string) (browserHTTPClient, error)
+	newClient func() (browserHTTPClient, error)
 	// custom 是运行期登记的自定义源 host（registerHost）。这类站点形态各异，
 	// 浏览器指纹并非总是更优：实测部分站点（如 hanjuds 一类普通 CMS）对 utls
 	// 指纹直接返回 403 Cloudflare 验证页，而标准 Go 传输可以正常拿到 200。
@@ -43,7 +42,7 @@ type huangguoBrowserTransport struct {
 func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader) *huangguoBrowserTransport {
 	configured, _ := url.Parse(downloader.providerBaseURL(sourceHuangguoVideo))
 	transport := &huangguoBrowserTransport{
-		base: base, router: downloader.proxyRouter, hosts: browserTransportHosts(configured.Host),
+		base: base, hosts: browserTransportHosts(configured.Host),
 		insecure: downloader.cfg.InsecureTLS, record: downloader.recordDiagnostic,
 		clients: make(map[string]browserHTTPClient), custom: make(map[string]bool),
 		upgraded: make(map[string]bool),
@@ -144,7 +143,7 @@ func (transport *huangguoBrowserTransport) registerHost(host string) {
 	transport.mu.Unlock()
 }
 
-func (transport *huangguoBrowserTransport) createClient(proxy string) (browserHTTPClient, error) {
+func (transport *huangguoBrowserTransport) createClient() (browserHTTPClient, error) {
 	idleTimeout := 90 * time.Second
 	options := []tlsclient.HttpClientOption{
 		tlsclient.WithClientProfile(profiles.Chrome_150),
@@ -152,7 +151,6 @@ func (transport *huangguoBrowserTransport) createClient(proxy string) (browserHT
 		tlsclient.WithDisableHttp3(),
 		tlsclient.WithNotFollowRedirects(),
 		tlsclient.WithTimeoutSeconds(45),
-		tlsclient.WithProxyUrl(proxy),
 		tlsclient.WithCookieJar(tlsclient.NewCookieJar()),
 		tlsclient.WithTransportOptions(&tlsclient.TransportOptions{
 			IdleConnTimeout: &idleTimeout, MaxIdleConns: 8, MaxIdleConnsPerHost: 4,
@@ -173,19 +171,11 @@ func (transport *huangguoBrowserTransport) createClient(proxy string) (browserHT
 func (transport *huangguoBrowserTransport) client(request *http.Request) (browserHTTPClient, error) {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	proxy, err := transport.router.proxy(request)
-	if err != nil {
-		return nil, err
-	}
-	proxyURL := ""
-	if proxy != nil {
-		proxyURL = proxy.String()
-	}
-	key := request.URL.Scheme + "://" + strings.ToLower(request.URL.Host) + "|" + proxyURL
+	key := request.URL.Scheme + "://" + strings.ToLower(request.URL.Host)
 	if client := transport.clients[key]; client != nil {
 		return client, nil
 	}
-	client, err := transport.newClient(proxyURL)
+	client, err := transport.newClient()
 	if err != nil {
 		return nil, err
 	}

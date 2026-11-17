@@ -17,10 +17,13 @@ package seku
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const xhyBase = "https://www.xhy11.cc"
@@ -35,16 +38,62 @@ func xhyHeaders() map[string]string {
 	}
 }
 
+// xhyCoverFetch serves cover bytes with the site headers and the same
+// 60s direct client as xhyFetch: the cover CDN's TTFB measured 23s
+// through the verification egress (2026-11-17), past the default
+// 20s cover timeout. Covers are plain images, no transform.
+func xhyCoverFetch(u string) ([]byte, error) {
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range crackMergedHeaders(u, xhyHeaders()) {
+		req.Header.Set(k, v)
+	}
+	resp, err := xhyClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 || len(body) == 0 {
+		return nil, fmt.Errorf("xhy cover http %d", resp.StatusCode)
+	}
+	return body, nil
+}
+
 var xhyShellRe = regexp.MustCompile(`atob\(\s*"([A-Za-z0-9+/=]{200,})"\s*\)`)
 
 // xhyFetch GETs a page and unwraps the document.write shell when present.
+// Direct client with a 60s timeout: the site's TTFB measured 43s through
+// the verification egress (2026-11-17), so the shared 20s client timed
+// out on nearly every request. Direct fetch also skips the shared
+// transport's external-reader fallback, which must not be triggered
+// for this provider. crackMergedHeaders is still applied, as before.
+var xhyClient = &http.Client{Timeout: 60 * time.Second}
+
 func xhyFetch(u string) (string, error) {
-	body, code, _, err := httpGet(u, xhyHeaders())
+	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return "", err
 	}
-	if code != 200 {
-		return "", fmt.Errorf("xhy http %d for %s", code, u)
+	for k, v := range crackMergedHeaders(u, xhyHeaders()) {
+		req.Header.Set(k, v)
+	}
+	resp, err := xhyClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("xhy http %d for %s", resp.StatusCode, u)
 	}
 	html := string(body)
 	for _, m := range xhyShellRe.FindAllStringSubmatch(html, -1) {
@@ -313,6 +362,7 @@ func init() {
 	}
 	impl.Detail = xhyDetail
 	impl.Resolve = xhyResolve
+	impl.CoverFetch = xhyCoverFetch
 	impl.Search = func(slot, kw string) ([]interface{}, error) {
 		u := xhyBase + "/index.php/vod/search/wd/" + url.PathEscape(kw) + ".html"
 		html, err := xhyFetch(u)

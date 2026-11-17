@@ -23,6 +23,7 @@ var nativeProviderRegistry = []providerDescriptor{
 	{ID: sourceA123, FilterNote: "目录接口未返回筛选组"},
 	{ID: sourceHuangguoVideo, FilterNote: "目录为固定列表接口，未返回筛选组"},
 	{ID: sourceCloudFront, FilterNote: "旧版目录接口，未返回筛选组"},
+	{ID: sourceFanqie, FilterNote: "排行榜单流，无筛选组"},
 }
 
 func providerSupportsFilters(source string) bool {

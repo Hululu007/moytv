@@ -128,10 +128,10 @@ var yhSex8IV = []byte("1234567890123456")
 
 func yhSex8Headers() map[string]string {
 	return map[string]string{
-		"User-Agent":   yhSex8UA,
-		"APPIMAGE":     "100",
-		"VERSIONNAME":  "1.0.0",
-		"Accept":       "application/json, text/plain, */*",
+		"User-Agent":      yhSex8UA,
+		"APPIMAGE":        "100",
+		"VERSIONNAME":     "1.0.0",
+		"Accept":          "application/json, text/plain, */*",
 		"Accept-Language": "zh-CN,zh;q=0.9",
 	}
 }

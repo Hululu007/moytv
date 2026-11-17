@@ -142,4 +142,27 @@ void main() {
       'pics://https://a.example/1.jpg&&https://a.example/2.jpg',
     );
   });
+
+  test('comic pages keep image headers for the first headed row', () {
+    final fromString = legadoPagesWithHeaders({
+      'content': '',
+      'images':
+          '[{"url":"https://a.example/1.jpg","headers":{"Referer":"https://manwa.me/"}},{"url":"https://a.example/2.jpg","headers":{"Referer":"https://manwa.me/"}}]',
+    });
+    expect(fromString.urls, [
+      'https://a.example/1.jpg',
+      'https://a.example/2.jpg',
+    ]);
+    expect(fromString.headers, {'Referer': 'https://manwa.me/'});
+    final headless = legadoPagesWithHeaders({
+      'content': '',
+      'images': [
+        {'url': 'https://a.example/3.jpg'},
+      ],
+    });
+    expect(headless.urls, ['https://a.example/3.jpg']);
+    expect(headless.headers, isEmpty);
+    expect(legadoPagesWithHeaders(null).urls, isEmpty);
+    expect(legadoPagesWithHeaders(null).headers, isEmpty);
+  });
 }

@@ -90,7 +90,6 @@ void main() {
         'avdb',
         'memojav',
         'chaoliu',
-        'xhsapp',
         'v_missav',
         'v_javdb',
         'v_km',

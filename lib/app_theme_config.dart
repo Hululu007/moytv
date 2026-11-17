@@ -14,7 +14,7 @@ import 'liquid_glass.dart';
 ///
 /// 配色与名字与用户文件逐字一致；每套主题绑定一种分类侧边栏样式。
 /// 亮暗由各主题自身底色决定，不再跟随系统、不再套旧的 light/dark 两套。
-/// 默认主题是 Win7（用户 2026-11-16 令）：读不到已存偏好时回落 Win7，
+/// 默认主题是 XP（用户 2026-11-17 令）：读不到已存偏好时回落 XP，
 /// 已存偏好不受影响。
 enum AppThemeMode {
   purpleNeon,
@@ -37,7 +37,7 @@ enum AppThemeMode {
   static AppThemeMode fromStorageValue(String? value) =>
       AppThemeMode.values.firstWhere(
         (mode) => mode.name == value,
-        orElse: () => AppThemeMode.win7,
+        orElse: () => AppThemeMode.xpWindows,
       );
 }
 
@@ -269,7 +269,7 @@ class AppThemeConfig extends ThemeExtension<AppThemeConfig> {
 
   static AppThemeConfig of(BuildContext context) =>
       Theme.of(context).extension<AppThemeConfig>() ??
-      AppThemeConfig.forTheme(AppThemeMode.win7);
+      AppThemeConfig.forTheme(AppThemeMode.xpWindows);
 
   factory AppThemeConfig.forTheme(AppThemeMode mode) {
     switch (mode) {

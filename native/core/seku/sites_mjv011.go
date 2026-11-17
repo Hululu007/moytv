@@ -537,7 +537,25 @@ func mjvResolve(slot, rawID string) (map[string]interface{}, error) {
 		if len(detailParts) != 3 {
 			return nil, fmt.Errorf("mjv011 bad video id")
 		}
-		return nil, fmt.Errorf("mjv011 video player needs JS player parsing, not connected")
+		// Drama-id form: resolve via the detail page's first chapter.
+		// The shell normally resolves chapter episodeIds, but direct
+		// drama-id resolves (downloader fallback, verification probe)
+		// need this path; the episodeId forms (novel://, pics://,
+		// video|, num|slug|pid|res) never re-enter this branch.
+		det, derr := mjvDetail(slot, rawID)
+		if derr != nil {
+			return nil, derr
+		}
+		chs, _ := det["chapters"].([]interface{})
+		if len(chs) == 0 {
+			return nil, fmt.Errorf("mjv011 video player needs JS player parsing, not connected")
+		}
+		chm, _ := chs[0].(map[string]interface{})
+		ep, _ := chm["episodeId"].(string)
+		if ep == "" || ep == rawID {
+			return nil, fmt.Errorf("mjv011 video player needs JS player parsing, not connected")
+		}
+		return mjvResolve(slot, ep)
 	}
 	num, slug, pid, res := parts[0], parts[1], parts[2], parts[3]
 	text, err := mjvGet(mjvHost + "/js/player/play.php?numresolution=" + res + "&lo=on&id=" + pid)

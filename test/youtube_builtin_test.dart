@@ -12,11 +12,11 @@ void main() {
     );
   });
 
-  test('go_tingshu builtin is audio-only', () {
-    final tingshu = zakatvBuiltinSites.singleWhere(
-      (site) => site.key == 'go_tingshu',
+  test('deleted go_tingshu site is gone from the builtin list', () {
+    expect(
+      zakatvBuiltinSites.any((site) => site.key == 'go_tingshu'),
+      isFalse,
     );
-    expect(tingshu.audioOnly, isTrue);
   });
 
   test('merged zakatv jar md5 matches the asset on disk', () {

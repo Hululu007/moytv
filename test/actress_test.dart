@@ -1346,6 +1346,32 @@ void main() {
       expect(find.text('男演员乙'), findsNothing);
     });
 
+    testWidgets('内嵌模式顶栏不重复女优库标题、只留人数', (tester) async {
+      await seedPerson('女演员甲', works: 30);
+      await seedPerson('男演员乙', sex: 'male', works: 100);
+      final sync = ActressSyncService(
+        db: db,
+        sources: const [],
+        fetch: _unusedFetch,
+      );
+      addTearDown(sync.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ActressListPage(
+            repository: repository,
+            store: store,
+            database: db,
+            syncService: sync,
+            showTitle: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('2 位演员'), findsOneWidget);
+      expect(find.text('女优库 2 位演员'), findsNothing);
+      expect(find.text('女优库'), findsNothing);
+    });
+
     testWidgets('列表页第二排按册别标签筛选', (tester) async {
       await seedPerson('有码女', tags: ['有码']);
       await seedPerson('无码男', sex: 'male', tags: ['无码']);

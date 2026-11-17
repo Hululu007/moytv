@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Win7 主题的桌面外壳：墙纸 + 左侧图标列 + 底部任务栏 + 开始菜单
 /// + 窗口标题栏。数值全部取用户 2026-11-16 发来的桌面设计稿精确值
@@ -17,7 +22,9 @@ enum Win7WindowKind {
   audio,
   novel,
   miniApp,
-  multimedia;
+  multimedia,
+  mine,
+  actress;
 
   /// 窗口标题栏与任务栏条目上显示的区名（取桌面图标叫法）。
   String get title => switch (this) {
@@ -28,6 +35,8 @@ enum Win7WindowKind {
     Win7WindowKind.novel => '阅读',
     Win7WindowKind.miniApp => '小程序',
     Win7WindowKind.multimedia => '我的电脑',
+    Win7WindowKind.mine => '我的',
+    Win7WindowKind.actress => '女优库',
   };
 
   IconData get icon => switch (this) {
@@ -38,19 +47,75 @@ enum Win7WindowKind {
     Win7WindowKind.novel => Icons.menu_book,
     Win7WindowKind.miniApp => Icons.apps,
     Win7WindowKind.multimedia => Icons.computer,
+    Win7WindowKind.mine => LucideIcons.user,
+    Win7WindowKind.actress => Icons.people_alt_outlined,
   };
 }
 
-/// 桌面图标顺序与内容（设计稿固定 6 个，直播没有桌面图标、只在
-/// 开始菜单树里）。
-/// 桌面图标：短剧不在此列（桌面有片库即够用）；短剧窗只走开始菜单。
+/// 桌面图标默认顺序与内容：7 个。短剧、多媒体（我的电脑）没有
+/// 桌面图标、只在开始菜单树里。顺序口径（用户 2026-11-17 令）：
+/// 女优库排在“我的”上面；直播图标在片库图标后面（与现有图标同
+/// 风格）。用户长按拖拽换过顺序后，以存下来的顺序为准（见
+/// [loadDesktopIconOrder]），这份默认顺序只作没存过时的回落。
 const List<Win7WindowKind> win7DesktopIcons = [
   Win7WindowKind.audio,
   Win7WindowKind.novel,
   Win7WindowKind.library,
+  Win7WindowKind.live,
   Win7WindowKind.miniApp,
-  Win7WindowKind.multimedia,
+  Win7WindowKind.actress,
+  Win7WindowKind.mine,
 ];
+
+/// 桌面图标顺序存 SharedPreferences 的键（Win7/XP 共用同一份顺序）。
+const String desktopIconOrderKey = 'moyi_desktop_icon_order';
+
+/// 把存下来的名字表解析成图标顺序：未知名字、重复名字、已不在
+/// 桌面列表里的种类一律丢弃；默认列表里有但存表里没有的种类
+/// （新加的图标）按默认相对顺序追加到末尾。空/没存过时回默认顺序。
+List<Win7WindowKind> resolveDesktopIconOrder(List<String>? stored) {
+  final resolved = <Win7WindowKind>[];
+  if (stored != null) {
+    for (final name in stored) {
+      Win7WindowKind? match;
+      for (final kind in Win7WindowKind.values) {
+        if (kind.name == name) {
+          match = kind;
+          break;
+        }
+      }
+      if (match == null) continue;
+      if (!win7DesktopIcons.contains(match)) continue;
+      if (resolved.contains(match)) continue;
+      resolved.add(match);
+    }
+  }
+  for (final kind in win7DesktopIcons) {
+    if (!resolved.contains(kind)) resolved.add(kind);
+  }
+  return resolved;
+}
+
+/// 读存下来的桌面图标顺序；读不到/读失败时回默认顺序。
+Future<List<Win7WindowKind>> loadDesktopIconOrder() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    return resolveDesktopIconOrder(prefs.getStringList(desktopIconOrderKey));
+  } catch (_) {
+    return List.of(win7DesktopIcons);
+  }
+}
+
+/// 存桌面图标顺序；存失败静默忽略（下次打开回默认顺序）。
+Future<void> saveDesktopIconOrder(List<Win7WindowKind> order) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      desktopIconOrderKey,
+      order.map((kind) => kind.name).toList(),
+    );
+  } catch (_) {}
+}
 
 /// 开始菜单树节点：组节点只有 [label] 与 [children]，叶子节点带
 /// 目标窗口种类 [kind] 与站点 id [siteId]（点叶子开对应窗口并选站）。
@@ -85,7 +150,114 @@ abstract final class Win7Theme {
   ];
 }
 
-/// 桌面：蓝渐变墙纸 + 左侧竖排 6 图标。桌面本身没有任何导航。
+/// 桌面图标列（Win7/XP 共用）：竖排图标，点按开窗口，长按拖拽
+/// 换位置；换完的顺序立刻存下来，下次打开还在。图标本体（图标 +
+/// 标题两行）由调用方按各自风格提供；拖拽手势、顺序状态与持久化
+/// 都收在这里，两边行为一致。
+class DesktopIconColumn extends StatefulWidget {
+  const DesktopIconColumn({
+    super.key,
+    required this.keyPrefix,
+    required this.onIconTap,
+    required this.iconBuilder,
+  });
+
+  /// 图标 InkWell 的 key 前缀：Win7 用 'win7-desktop-icon'，XP 用
+  /// 'xp-desktop-icon'（旧测试按 key 点图标，前缀不能变）。
+  final String keyPrefix;
+
+  final ValueChanged<Win7WindowKind> onIconTap;
+
+  /// 图标本体：图标 + 标题两行（Win7 素色、XP 带阴影，各自画法）。
+  final Widget Function(Win7WindowKind kind) iconBuilder;
+
+  @override
+  State<DesktopIconColumn> createState() => _DesktopIconColumnState();
+}
+
+class _DesktopIconColumnState extends State<DesktopIconColumn> {
+  List<Win7WindowKind> _order = List.of(win7DesktopIcons);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrder();
+  }
+
+  Future<void> _loadOrder() async {
+    final order = await loadDesktopIconOrder();
+    if (!mounted) return;
+    setState(() => _order = order);
+  }
+
+  /// 把 [dragged] 挪到 [target] 所在的位置（目标及之后的图标顺延），
+  /// 立刻存盘。拖到自己身上不做事。
+  void _move(Win7WindowKind dragged, Win7WindowKind target) {
+    if (dragged == target) return;
+    final order = List.of(_order);
+    final from = order.indexOf(dragged);
+    if (from < 0) return;
+    order.removeAt(from);
+    final to = order.indexOf(target);
+    if (to < 0) return;
+    order.insert(to, dragged);
+    setState(() => _order = order);
+    unawaited(saveDesktopIconOrder(order));
+  }
+
+  Widget _item(Win7WindowKind kind, {required bool hovered}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Container(
+        decoration: hovered
+            ? BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(8),
+              )
+            : null,
+        child: InkWell(
+          key: ValueKey('${widget.keyPrefix}-${kind.name}'),
+          onTap: () => widget.onIconTap(kind),
+          child: widget.iconBuilder(kind),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        for (final kind in _order)
+          DragTarget<Win7WindowKind>(
+            onWillAcceptWithDetails: (details) => details.data != kind,
+            onAcceptWithDetails: (details) => _move(details.data, kind),
+            builder: (context, candidateData, rejectedData) {
+              return LongPressDraggable<Win7WindowKind>(
+                data: kind,
+                onDragStarted: HapticFeedback.mediumImpact,
+                feedback: Material(
+                  color: Colors.transparent,
+                  child: Opacity(
+                    opacity: 0.85,
+                    child: widget.iconBuilder(kind),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: 0.3,
+                  child: _item(kind, hovered: false),
+                ),
+                child: _item(kind, hovered: candidateData.isNotEmpty),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// 桌面：蓝渐变墙纸 + 左侧竖排 7 图标。桌面本身没有任何导航。
 class Win7Desktop extends StatelessWidget {
   const Win7Desktop({super.key, required this.onIconTap});
 
@@ -107,31 +279,19 @@ class Win7Desktop extends StatelessWidget {
           Positioned(
             top: 40,
             left: 16,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                for (final kind in win7DesktopIcons)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 24),
-                    child: InkWell(
-                      key: ValueKey('win7-desktop-icon-${kind.name}'),
-                      onTap: () => onIconTap(kind),
-                      child: Column(
-                        children: [
-                          Icon(kind.icon, size: 42, color: Colors.white),
-                          const SizedBox(height: 4),
-                          Text(
-                            kind.title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+            child: DesktopIconColumn(
+              keyPrefix: 'win7-desktop-icon',
+              onIconTap: onIconTap,
+              iconBuilder: (kind) => Column(
+                children: [
+                  Icon(kind.icon, size: 42, color: Colors.white),
+                  const SizedBox(height: 4),
+                  Text(
+                    kind.title,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -140,7 +300,7 @@ class Win7Desktop extends StatelessWidget {
   }
 }
 
-/// 任务栏：56 高半透明条，左起 Windows 开始钮，后跟已开窗口条目。
+/// 任务栏：48 高半透明条，左起 Windows 开始钮，后跟已开窗口条目。
 /// 点已在前台的窗口条目会把它最小化回桌面（Windows 习惯）。
 class Win7Taskbar extends StatelessWidget {
   const Win7Taskbar({
@@ -164,7 +324,7 @@ class Win7Taskbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       key: const ValueKey('win7-taskbar'),
-      height: 56,
+      height: 48,
       color: Win7Theme.taskBarBg,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -337,7 +497,7 @@ class _Win7StartMenuState extends State<Win7StartMenu> {
           child: Container(
             height: MediaQuery.of(context).size.height * 0.65,
             width: MediaQuery.of(context).size.width * 0.92,
-            margin: const EdgeInsets.only(bottom: 64),
+            margin: const EdgeInsets.only(bottom: 56),
             decoration: BoxDecoration(
               color: Win7Theme.startMenuBg,
               borderRadius: BorderRadius.circular(16),
@@ -382,7 +542,7 @@ class Win7WindowFrame extends StatelessWidget {
     return Column(
       children: [
         Container(
-          height: 40,
+          height: 32,
           decoration: const BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
@@ -437,11 +597,7 @@ class Win7WindowFrame extends StatelessWidget {
                     color: const Color(0xFFE81123).withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Icon(
-                    Icons.close,
-                    size: 16,
-                    color: Colors.white,
-                  ),
+                  child: const Icon(Icons.close, size: 16, color: Colors.white),
                 ),
               ),
             ],

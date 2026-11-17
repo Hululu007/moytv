@@ -61,6 +61,8 @@ func validNativeCategory(source, category string) bool {
 		return hgtvMirrorCategoryID.MatchString(category)
 	case sourceHongguoNew:
 		return validHongguoNewCategory(category)
+	case sourceFanqie:
+		return validFanqieCategory(category)
 	case sourceHongguo:
 		for _, genre := range hongguoAppGenres {
 			if category == genre.key {
@@ -115,6 +117,9 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 		for _, entry := range hongguoNewCategories {
 			all = append(all, entry)
 		}
+		return all, nil
+	case sourceFanqie:
+		// 番茄只有一条排行榜单流，只返回“全部”。
 		return all, nil
 	case sourceHongguo:
 		for _, genre := range hongguoAppGenres {

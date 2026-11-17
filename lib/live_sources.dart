@@ -10,7 +10,6 @@ class LiveSource {
     this.script = '',
     this.headers = const {},
     this.epg = '',
-    this.proxies = const [],
     this.group = '',
     this.adult = false,
     this.builtin = true,
@@ -31,9 +30,6 @@ class LiveSource {
   String get endpoint => endpoints.isEmpty ? '' : endpoints.first;
   final Map<String, String> headers;
   final String epg;
-
-  /// 取流代理前缀。源站直连被拒时按顺序作为候选线路拼在原始地址前。
-  final List<String> proxies;
 
   /// 列表型源没有分组信息时的默认分组名。
   final String group;
@@ -357,7 +353,6 @@ class LiveSource {
     script: script,
     headers: headers,
     epg: epg,
-    proxies: proxies,
     group: group,
     adult: adult,
     builtin: builtin,

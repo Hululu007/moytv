@@ -65,10 +65,10 @@ class _MinePageState extends State<MinePage> {
     final config = AppThemeConfig.of(context);
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 6, 4, 14),
+            padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
             child: Row(
               children: [
                 CircleAvatar(

@@ -164,45 +164,14 @@ def _norm_timeout(timeout):
 
 _cf_disguise_enabled = True
 
-# Egress proxy pushed by the Dart decision point (proxy_egress.dart):
-# full URL such as "http://127.0.0.1:7890", or None for direct.
-# Applied three ways so every HTTP stack spiders may use follows it:
-# explicit urllib opener (the cached global opener snapshots env vars,
-# so env vars alone cannot change it), proxy env vars (real `requests`
-# reads them per request), and explicit curl_cffi Session proxies.
-_egress_proxy_url = None
-_EGRESS_NO_PROXY = "localhost,127.0.0.1,::1"
-
-
-class _EgressProxyHandler(urllib.request.ProxyHandler):
-    # Loopback targets never go through the proxy: they are local
-    # services (kernel controller, forwarder, local proxy). Returning
-    # None lets the next handler in the chain open the URL directly.
-    def proxy_open(self, req, proxy, type):
-        host = (urllib.parse.urlsplit(req.full_url).hostname or "").lower()
-        if host in ("localhost", "127.0.0.1", "::1"):
-            return None
-        return super().proxy_open(req, proxy, type)
-
-
-def set_egress_proxy(proxy_url):
-    global _egress_proxy_url
-    proxy_url = (proxy_url or "").strip() or None
-    _egress_proxy_url = proxy_url
-    if proxy_url:
-        proxies = {"http": proxy_url, "https": proxy_url}
-        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-            os.environ[key] = proxy_url
-    else:
-        proxies = {}
-        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-            os.environ.pop(key, None)
-    os.environ["no_proxy"] = _EGRESS_NO_PROXY
-    os.environ["NO_PROXY"] = _EGRESS_NO_PROXY
-    urllib.request.install_opener(
-        urllib.request.build_opener(_EgressProxyHandler(proxies))
-    )
-    return True
+# Direct connection only: drop any proxy env vars so `requests` cannot pick
+# them up, and install an opener with an empty ProxyHandler so urllib
+# never routes through a proxy regardless of environment.
+for _proxy_env_key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+    os.environ.pop(_proxy_env_key, None)
+urllib.request.install_opener(
+    urllib.request.build_opener(urllib.request.ProxyHandler({}))
+)
 
 
 def _pick_impersonate(hdrs):
@@ -269,11 +238,6 @@ def _do_http_curl(method, url, hdrs, data, timeout):
     try:
         session = Session(
             impersonate=_pick_impersonate(hdrs),
-            proxies=(
-                {"http": _egress_proxy_url, "https": _egress_proxy_url}
-                if _egress_proxy_url
-                else None
-            ),
         )
         try:
             resp = session.request(
@@ -704,6 +668,172 @@ def _ensure_base_spider_stub():
             sys.modules["spider"] = plain_module
 
 
+# Optional HTML fetching module ("moyi_html"), injected into sys.modules the
+# same way the base spider stub is. Spiders opt in with an explicit import;
+# spiders that never import it behave exactly as before.
+#
+# Android: calls moyi.HtmlPageRunner.fetch (Chaquopy direct call, JSON in/out).
+# Any other platform (iOS, desktop): the "java" import fails, the module stays
+# in unsupported mode, and load_page returns an "unsupported" result dict
+# instead of raising. Spiders must check html_supported() first; they must not
+# guess capability with try/except around the import.
+#
+# load_page never raises for bad input or runner failure: it always returns a
+# result dict with the same shape as the Java HtmlResult JSON.
+def _ensure_moyi_html_module():
+    if "moyi_html" in sys.modules:
+        return
+    module = types.ModuleType("moyi_html")
+
+    state_lock = threading.Lock()
+    state = {"runner": False, "locks": {}, "shared_lock": threading.Lock()}
+
+    def _resolve_runner():
+        if state["runner"] is not False:
+            return state["runner"]
+        with state_lock:
+            if state["runner"] is not False:
+                return state["runner"]
+            runner = None
+            try:
+                from java import jclass
+
+                candidate = jclass("moyi.HtmlPageRunner")
+                if callable(getattr(candidate, "fetch", None)):
+                    runner = candidate
+            except Exception:
+                runner = None
+            state["runner"] = runner
+            return runner
+
+    def html_supported():
+        return _resolve_runner() is not None
+
+    def _failure(error, message):
+        return {
+            "ok": False,
+            "html": "",
+            "cookies": "",
+            "ua": "",
+            "sniffed": [],
+            "eval": None,
+            "error": error,
+            "message": message,
+            "title": "",
+            "url": "",
+            "truncated": False,
+        }
+
+    def _caller_key():
+        try:
+            frame = inspect.currentframe()
+            outer = None
+            if frame is not None and frame.f_back is not None:
+                outer = frame.f_back.f_back
+            if outer is not None:
+                name = outer.f_globals.get("__file__") or outer.f_globals.get("__name__")
+                if name:
+                    return str(name)
+        except Exception:
+            pass
+        return ""
+
+    def _lock_for(key):
+        if not key:
+            return state["shared_lock"]
+        with state_lock:
+            lock = state["locks"].get(key)
+            if lock is None:
+                lock = threading.Lock()
+                state["locks"][key] = lock
+            return lock
+
+    def _normalize_wait(wait):
+        if wait is None:
+            return {}
+        if isinstance(wait, dict):
+            out = {}
+            if wait.get("js"):
+                out["js"] = str(wait["js"])
+            elif wait.get("selector"):
+                out["selector"] = str(wait["selector"])
+            if "delayMs" in wait:
+                try:
+                    out["delayMs"] = int(wait["delayMs"])
+                except Exception:
+                    pass
+            elif wait.get("delay") is not None:
+                try:
+                    out["delayMs"] = int(float(wait["delay"]) * 1000)
+                except Exception:
+                    pass
+            return out
+        if isinstance(wait, (int, float)) and not isinstance(wait, bool):
+            return {"delayMs": int(wait * 1000)}
+        if isinstance(wait, str) and wait.strip():
+            return {"selector": wait.strip()}
+        return {}
+
+    def _normalize_timeout(timeout):
+        try:
+            seconds = float(timeout)
+        except Exception:
+            return 30000
+        if seconds <= 0:
+            return 30000
+        return max(1000, min(120000, int(seconds * 1000)))
+
+    def load_page(url, headers=None, referer="", user_agent="", cookies="",
+                  wait=None, script="", sniff=True, timeout=30):
+        if not isinstance(url, str) or not url.strip():
+            return _failure("network", "empty url")
+        target = url.strip()
+        if not (target.startswith("http://") or target.startswith("https://")):
+            return _failure("network", "only http/https urls are supported")
+        runner = _resolve_runner()
+        if runner is None:
+            result = _failure(
+                "unsupported", "HTML fetching is not available on this platform")
+            result["url"] = target
+            return result
+        request = {
+            "url": target,
+            "headers": dict(headers) if isinstance(headers, dict) else {},
+            "referer": str(referer or ""),
+            "userAgent": str(user_agent or ""),
+            "cookies": str(cookies or ""),
+            "wait": _normalize_wait(wait),
+            "script": str(script or ""),
+            "sniff": bool(sniff),
+            "timeoutMs": _normalize_timeout(timeout),
+        }
+        lock = _lock_for(_caller_key())
+        with lock:
+            try:
+                raw = runner.fetch(json.dumps(request))
+            except Exception as error:
+                result = _failure("network", "runner call failed: %s" % error)
+                result["url"] = target
+                return result
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            result = _failure("network", "runner returned invalid JSON")
+            result["url"] = target
+            return result
+        if not isinstance(parsed, dict):
+            result = _failure("network", "runner returned a non-object result")
+            result["url"] = target
+            return result
+        parsed.setdefault("url", target)
+        return parsed
+
+    module.html_supported = html_supported
+    module.load_page = load_page
+    module.__all__ = ["html_supported", "load_page"]
+    sys.modules["moyi_html"] = module
+
+
 def _default_is_video_format(url=None):
     path = str(url or "").split("?")[0].lower()
     return path.endswith(
@@ -897,6 +1027,7 @@ def _load_spider(path):
     if cached is not None and cached[0] == mtime:
         return cached[1]
     _ensure_base_spider_stub()
+    _ensure_moyi_html_module()
     _ensure_crypto_shim()
     stubbed = []
     if _ensure_requests_stub():
@@ -1091,12 +1222,6 @@ def handle(path, request_json):
                 _cf_disguise_enabled = request["enabled"]
             return json.dumps(
                 {"ok": True, "data": {"cfDisguise": _cf_disguise_enabled}},
-                ensure_ascii=False,
-            )
-        if action == "setEgressProxy":
-            set_egress_proxy(request.get("proxyUrl") or "")
-            return json.dumps(
-                {"ok": True, "data": {"egressProxy": _egress_proxy_url or ""}},
                 ensure_ascii=False,
             )
         if isinstance(request.get("cfDisguise"), bool):

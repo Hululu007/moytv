@@ -4,7 +4,6 @@ import 'dart:io';
 import 'content_http.dart';
 import 'core_bridge.dart';
 import 'models.dart';
-import 'proxy_kernel_service.dart';
 
 /// 全屏流成人条目验播：取流并验真后才放进流里。
 ///
@@ -42,7 +41,7 @@ typedef FeedProbeFetch =
     );
 
 /// 默认探针：HttpClient GET + Range bytes=0-2047，只读首个数据块
-/// 就取消订阅（直链大文件不会整段下载），走代理内核的 findProxy。
+/// 就取消订阅（直链大文件不会整段下载），直连。
 Future<FeedProbeResponse> probeStreamHead(
   String url,
   Map<String, String> headers,
@@ -52,9 +51,7 @@ Future<FeedProbeResponse> probeStreamHead(
   if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
     throw AppFailure('验播地址无效');
   }
-  final client = HttpClient()
-    ..connectionTimeout = timeout
-    ..findProxy = ProxyKernelTraffic.findProxy;
+  final client = HttpClient()..connectionTimeout = timeout;
   try {
     final request = await client.getUrl(uri).timeout(timeout);
     request.followRedirects = true;
@@ -71,7 +68,8 @@ Future<FeedProbeResponse> probeStreamHead(
     final head = await _firstChunk(response, timeout);
     final responseHeaders = <String, String>{};
     response.headers.forEach((name, values) {
-      if (values.isNotEmpty) responseHeaders[name.toLowerCase()] = values.join(', ');
+      if (values.isNotEmpty)
+        responseHeaders[name.toLowerCase()] = values.join(', ');
     });
     return FeedProbeResponse(
       statusCode: response.statusCode,
@@ -124,8 +122,7 @@ bool feedProbePlayable(Uri uri, FeedProbeResponse response) {
   }
   if (status == 206) return true;
   if (status == 200) {
-    return response.headBytes.isNotEmpty &&
-        !contentType.contains('text/html');
+    return response.headBytes.isNotEmpty && !contentType.contains('text/html');
   }
   return false;
 }
@@ -180,9 +177,8 @@ class FeedPlayabilityVerifier {
         results[index] = await verifyOne(candidates[index]);
       }
     }
-    await Future.wait([
-      for (var w = 0; w < concurrency; w++) worker(),
-    ]);
+
+    await Future.wait([for (var w = 0; w < concurrency; w++) worker()]);
     return _collect(candidates, results);
   }
 
@@ -200,9 +196,7 @@ class FeedPlayabilityVerifier {
     final key = _key(drama);
     final cached = _cache[key];
     if (cached != null) return cached;
-    final ok = await _probe(
-      drama,
-    ).timeout(itemTimeout, onTimeout: () => false);
+    final ok = await _probe(drama).timeout(itemTimeout, onTimeout: () => false);
     _cache[key] = ok;
     return ok;
   }

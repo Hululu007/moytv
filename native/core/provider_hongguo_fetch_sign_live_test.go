@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Live 冒烟：HG_FETCH_SIGN_LIVE=1 时才跑。验 GET 首选 leg、同剧两集取流、
+// Live 冒烟：HG_FETCH_SIGN_LIVE=1 时才跑。验 V5 单腿、同剧两集取流、
 // 扫码取码（只取码、不登录）。发码接口绝不在此调用。
 func TestHongguoFetchSignLiveSmoke(t *testing.T) {
 	if os.Getenv("HG_FETCH_SIGN_LIVE") != "1" {
@@ -30,11 +30,11 @@ func TestHongguoFetchSignLiveSmoke(t *testing.T) {
 		strings.TrimPrefix(entry.Chapters[0].VideoURL, "hongguo-cenc://"),
 		strings.TrimPrefix(entry.Chapters[1].VideoURL, "hongguo-cenc://"),
 	}
-	// GET 首选 leg 单独验一次。
-	if media, err := engine.downloader.resolveHongguoVideoTabModel(ctx, videos[0]); err != nil {
-		t.Logf("GET leg: err=%v (empty is a known server-side window outcome)", err)
+	// V5 单腿单独验一次。
+	if media, err := engine.downloader.resolveHongguoAppMedia(ctx, videos[0]); err != nil {
+		t.Logf("V5 leg: err=%v (empty is a known server-side window outcome)", err)
 	} else {
-		t.Logf("GET leg: urlPrefix=%q variants=%d cencKeyLen=%d", urlPrefix(media.URL), len(media.Variants), len(media.CENCKey))
+		t.Logf("V5 leg: urlPrefix=%q variants=%d cencKeyLen=%d", urlPrefix(media.URL), len(media.Variants), len(media.CENCKey))
 	}
 	// 同剧两集全链取流。
 	for i, video := range videos {

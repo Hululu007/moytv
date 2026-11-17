@@ -6,7 +6,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:moyi/mine_page.dart';
 import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/app_theme.dart';
-import 'package:moyi/content_source_screen.dart';
 import 'package:moyi/detail_screen.dart';
 import 'package:moyi/downloads_screen.dart';
 import 'package:moyi/fullscreen_feed_screen.dart';
@@ -37,7 +36,7 @@ import 'player_fixtures.dart';
 const previewDir = '/home/hatch/workspace/huoyi_new/previews';
 
 Future<LocalStore> previewStore(Map<String, Object> seeds) async {
-  // 默认主题已改 Win7：首页预览验通用外壳，默认钉住紫蓝霓虹，
+  // 默认主题已改 XP：首页预览验通用外壳，默认钉住紫蓝霓虹，
   // 调用方传了 appThemeMode 时以调用方为准。
   SharedPreferences.setMockInitialValues({
     'appThemeMode': 'purpleNeon',
@@ -508,14 +507,5 @@ void main() {
     Directory(previewDir).createSync(recursive: true);
     File('$previewDir/preview_mine_page.png').writeAsBytesSync(bytes);
     print('preview landed: preview_mine_page');
-  });
-
-  testWidgets('preview content sources', (tester) async {
-    final store = await previewStore({});
-    await capturePreview(
-      tester,
-      ContentSourceScreen(repository: FixtureRepository(), store: store),
-      'preview_content_sources',
-    );
   });
 }

@@ -99,6 +99,10 @@ class RosterPerson {
     this.tags = const [],
     this.worksHint = 0,
     this.recommended = false,
+    this.rating,
+    this.exactWorks = 0,
+    this.aliases = const [],
+    this.about = const {},
   });
 
   final ActressRosterSourceId source;
@@ -119,16 +123,42 @@ class RosterPerson {
 
   /// 潮流名册 c 字段含“推荐”：编辑推荐，计入名气分。
   final bool recommended;
+
+  /// whos 卡片/详情评分（0–10）；其余源没有，为 null。
+  final double? rating;
+
+  /// whos 卡片“ N 部作品”的精确数；0 = 未知，与 [worksHint]
+  /// 分开存，互不覆盖。
+  final int exactWorks;
+
+  /// whos 卡片上的别名（独立字段，不在名字里）；合并时并入别名集。
+  final List<String> aliases;
+
+  /// whos 人物页的简介键值对（生日/身高/三围/出道年等）；whos 独有。
+  final Map<String, String> about;
 }
 
 /// 名册拉回的一部作品（单源视角）。
 class RosterFilm {
-  const RosterFilm({required this.code, this.title = '', this.date = ''});
+  const RosterFilm({
+    required this.code,
+    this.title = '',
+    this.date = '',
+    this.coverUrl = '',
+    this.detailUrl = '',
+  });
 
   /// 原始番号文本（可能为空，如 whos 标题里提不到番号的条目）。
   final String code;
   final String title;
   final String date;
+
+  /// whos 封面直链（仅 XOR 开关打开时解析）：写入作品行作封面，
+  /// 开关关闭时恒为空，行为与此前一字不差。
+  final String coverUrl;
+
+  /// 作品详情相对地址（whos 影片页路径），封面解析内部用。
+  final String detailUrl;
 
   String get codeKey => normalizeAvCode(code);
   String get titleKey => actressTitleKey(title.isEmpty ? code : title);
@@ -156,6 +186,10 @@ class ActressPerson {
     this.recommended = false,
     this.filmsSyncedAt,
     this.enrichedAt,
+    this.rating,
+    this.exactWorks = 0,
+    this.about = const {},
+    this.whosRank,
   });
 
   final int localId;
@@ -189,6 +223,19 @@ class ActressPerson {
 
   /// 全站搜索补封面完成时间，null = 还没补过（下次打开继续补）。
   final int? enrichedAt;
+
+  /// whos 评分（0–10）；三家都没有时为 null。
+  final double? rating;
+
+  /// whos 精确作品数；0 = 未知，与 [rosterWorks] 分开存。
+  final int exactWorks;
+
+  /// whos 人物页简介键值对；whos 独有，其余源不写。
+  final Map<String, String> about;
+
+  /// whos 日榜名次（1 起）：MissAV 无名次时的名气分后备信号，
+  /// 只由排行阶段写，名册合并永不碰它（与 missavRank 同口径）。
+  final int? whosRank;
 
   /// 界面显示的作品数：取实际行数与名册提示的最大值——同步未完成
   /// 时不低估（名册提示是总数），同步完成后与实际行数一致；
@@ -224,6 +271,10 @@ class ActressPerson {
     bool? recommended,
     int? filmsSyncedAt,
     int? enrichedAt,
+    double? rating,
+    int? exactWorks,
+    Map<String, String>? about,
+    int? whosRank,
   }) => ActressPerson(
     localId: localId ?? this.localId,
     displayName: displayName ?? this.displayName,
@@ -243,6 +294,10 @@ class ActressPerson {
     recommended: recommended ?? this.recommended,
     filmsSyncedAt: filmsSyncedAt ?? this.filmsSyncedAt,
     enrichedAt: enrichedAt ?? this.enrichedAt,
+    rating: rating ?? this.rating,
+    exactWorks: exactWorks ?? this.exactWorks,
+    about: about ?? this.about,
+    whosRank: whosRank ?? this.whosRank,
   );
 }
 
@@ -250,7 +305,9 @@ class ActressPerson {
 /// - 命中条件：任一名字变体键相同即同一人；
 /// - 显示名优先级：潮流 > whos > MissAV（潮流名字最规范、带别名）；
 /// - 别名/标签取并集；头像取优先级最高的非空；性别取第一个非空；
-/// - 作品提示取最大值；推荐取或；排行取最好名次；来源身份各自保留。
+/// - 作品提示取最大值；推荐取或；排行取最好名次；来源身份各自保留；
+/// - 评分取第一个非空；精确作品数取最大值；简介并集、已有键优先；
+/// - whos 别名并入别名集；whos 排行只由排行阶段写，合并永不碰。
 ActressPerson mergeRosterIntoPerson(
   ActressPerson? existing,
   RosterPerson roster,
@@ -258,9 +315,17 @@ ActressPerson mergeRosterIntoPerson(
   final variants = actressNameVariants(roster.name);
   final primary = variants.isEmpty ? roster.name.trim() : variants.first;
   if (existing == null) {
+    final aliases = <String>[];
+    final aliasKeys = <String>{actressNameKey(primary)};
+    for (final candidate in [
+      ...variants.skip(1),
+      ...roster.aliases,
+    ]) {
+      if (aliasKeys.add(actressNameKey(candidate))) aliases.add(candidate);
+    }
     return ActressPerson(
       displayName: primary,
-      aliases: variants.length > 1 ? variants.sublist(1) : const [],
+      aliases: aliases,
       sex: roster.sex,
       avatarUrl: roster.avatarUrl,
       tags: roster.tags,
@@ -278,6 +343,9 @@ ActressPerson mergeRosterIntoPerson(
           ? roster.sourceId
           : '',
       recommended: roster.recommended,
+      rating: roster.rating,
+      exactWorks: roster.exactWorks,
+      about: Map<String, String>.of(roster.about),
     );
   }
   // 显示名：已有名字来自低优先级源、且新名字来自更高优先级源时替换。
@@ -294,13 +362,14 @@ ActressPerson mergeRosterIntoPerson(
   final displayName = incomingPriority < priority(existing)
       ? primary
       : existing.displayName;
-  // 别名 = 旧显示名 + 旧别名 + 新变体，排除新显示名自身、按键去重。
+  // 别名 = 旧显示名 + 旧别名 + 新变体 + whos 别名，排除新显示名自身、按键去重。
   final aliases = <String>[];
   final aliasKeys = <String>{actressNameKey(displayName)};
   for (final candidate in [
     existing.displayName,
     ...existing.aliases,
     ...variants,
+    ...roster.aliases,
   ]) {
     if (aliasKeys.add(actressNameKey(candidate))) aliases.add(candidate);
   }
@@ -316,6 +385,11 @@ ActressPerson mergeRosterIntoPerson(
     rosterWorks: roster.worksHint > existing.rosterWorks
         ? roster.worksHint
         : existing.rosterWorks,
+    rating: existing.rating ?? roster.rating,
+    exactWorks: roster.exactWorks > existing.exactWorks
+        ? roster.exactWorks
+        : existing.exactWorks,
+    about: {...roster.about, ...existing.about},
     fromChaoliu:
         existing.fromChaoliu || roster.source == ActressRosterSourceId.chaoliu,
     fromWhos: existing.fromWhos || roster.source == ActressRosterSourceId.whos,
@@ -335,14 +409,15 @@ ActressPerson mergeRosterIntoPerson(
 }
 
 /// 排行榜综合分（名气为主、作品数为辅，榜内口径一致）：
-/// - 名气分：MissAV 排行名次换算，第 1 名 1000 分，每后一名减 1 分，
-/// 1000 名开外 0 分；潮流“推荐”加 50 分；
+/// - 名气分：排行名次换算，第 1 名 1000 分，每后一名减 1 分，
+/// 1000 名开外 0 分；MissAV 名次优先，无 MissAV 名次时用 whos
+/// 日榜名次（同一换算尺）；潮流“推荐”加 50 分；
 /// - 作品分：显示作品数，封顶 500 分（避免超多产一人压过全部名气分，
 /// 同分时再按实际作品数排）；
 /// - 总分 = 名气分 + 作品分。
 int actressRankScore(ActressPerson person) {
   var fame = 0;
-  final rank = person.missavRank;
+  final rank = person.missavRank ?? person.whosRank;
   if (rank != null && rank >= 1 && rank <= 1000) fame += 1001 - rank;
   if (person.recommended) fame += 50;
   final works = person.displayWorks.clamp(0, 500);

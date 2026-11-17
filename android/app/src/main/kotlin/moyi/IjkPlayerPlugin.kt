@@ -15,15 +15,6 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import tv.danmaku.ijk.media.player.IjkMediaPlayer
 
-/**
- * ijk 出口地址：由 `moyi/device` 通道的 setEgressProxy/clearEgressProxy 写，
- * 每次 open() 时读。FFmpeg 在打开流时读选项，播中途改地址下次开流才生效。
- */
-object IjkEgress {
-    @Volatile
-    var proxyUrl: String? = null
-}
-
 const val IJK_PLAYER_VIEW_TYPE = "moyi/ijkplayer"
 
 internal class IjkPlayerView(
@@ -212,14 +203,6 @@ internal class IjkPlayerView(
         }
         val current = IjkMediaPlayer()
         current.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", 1L)
-        // 出口代理：FFmpeg http 选项名在不同版本里是 http_proxy 或 http-proxy，
-        // 两个都设（不认识的选项 FFmpeg 会忽略）。只接 http(s) 出口地址。
-        IjkEgress.proxyUrl
-            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-            ?.let { proxy ->
-                current.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http_proxy", proxy)
-                current.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-proxy", proxy)
-            }
         current.setOnPreparedListener { mp ->
             sendDuration()
             channel.invokeMethod("onBuffering", false)

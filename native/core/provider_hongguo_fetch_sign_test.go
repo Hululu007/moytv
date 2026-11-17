@@ -95,8 +95,12 @@ func TestHongguoMedusaProcessFixed(t *testing.T) {
 	}
 }
 
+// V5 口径：业务码 110001 仍以 errHongguoDeviceRejected 信号上抛，
+// 但不再换设备重试——上游 V5 只在 HTTP 401/403 时换设备，业务码失败是终局。
 func TestHongguoDeviceRejected(t *testing.T) {
+	var requests []string
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request.URL.Path)
 		if strings.Contains(request.URL.Path, "device_register") {
 			return sourceFixtureResponse(request, http.StatusOK, `{"device_id_str":"1001","install_id_str":"10019"}`), nil
 		}
@@ -109,8 +113,11 @@ func TestHongguoDeviceRejected(t *testing.T) {
 	if !errors.Is(err, errHongguoDeviceRejected) {
 		t.Fatalf("110001 must surface as device-rejected, got %v", err)
 	}
-	if state := d.hongguoCatalogSnapshot(); state.DeviceID == "7" {
-		t.Fatal("device-rejected must rotate the device before giving up")
+	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "7" {
+		t.Fatal("device-rejected must not rotate the device under V5", state)
+	}
+	if len(requests) != 1 {
+		t.Fatal("device-rejected must cost exactly one request", requests)
 	}
 }
 
@@ -132,11 +139,9 @@ func TestHongguoPrefetchCacheTakeDeletes(t *testing.T) {
 	}
 }
 
+// V5 单腿同样一次取回多集模型进预取缓存（1004 数组里带 upcoming ID）。
 func TestHongguoMultiModelPrefetch(t *testing.T) {
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		if strings.Contains(request.URL.Path, "video_tab") {
-			return sourceFixtureResponse(request, http.StatusOK, ``), nil
-		}
 		body := `{"code":0,"data":{
 			"12345":{"video_model":{"video_list":[{"main_url":"https://media.example.test/high.mp4","video_meta":{"codec_type":"h264","definition":"1080p"}}],"video_duration":"60"}},
 			"12346":{"video_model":{"video_list":[{"main_url":"https://media.example.test/next.mp4","video_meta":{"codec_type":"h264","definition":"720p"}}],"video_duration":"60"}}
@@ -146,7 +151,7 @@ func TestHongguoMultiModelPrefetch(t *testing.T) {
 	d.cfg.Retries = 1
 	client := d.hongguoClient()
 	client.state.DeviceID, client.state.InstallID, client.state.Registered = "7", "8", true
-	media, err := d.resolveHongguoMultiModelWithUpcoming(context.Background(), "12345", []string{"12346"})
+	media, err := d.resolveHongguoAppMediaWithUpcoming(context.Background(), "12345", []string{"12346"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,24 +168,6 @@ func TestHongguoMultiModelPrefetch(t *testing.T) {
 	}
 	if !strings.HasSuffix(selected.URL, "next.mp4") {
 		t.Fatalf("cached next episode must resolve, got %q", selected.URL)
-	}
-}
-
-func TestHongguoVideoTabModel(t *testing.T) {
-	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		if request.URL.Query().Get("video_id") != "12345" || request.URL.Query().Get("video_platform") != "1024" {
-			t.Errorf("GET leg must carry video_id/video_platform, got %q", request.URL.RawQuery)
-		}
-		body := `{"code":0,"data":{"video_model_data":{"12345":{"video_model":{"video_list":[{"main_url":"https://media.example.test/tab1080.mp4","video_meta":{"codec_type":"h264","definition":"1080p"}}],"video_duration":"60"}}}}}`
-		return sourceFixtureResponse(request, http.StatusOK, body), nil
-	})
-	d.cfg.Retries = 1
-	media, err := d.resolveHongguoVideoTabModel(context.Background(), "12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(media.URL, "tab1080.mp4") {
-		t.Fatalf("GET leg must resolve, got %q", media.URL)
 	}
 }
 

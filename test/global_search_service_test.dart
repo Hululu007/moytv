@@ -120,7 +120,6 @@ void main() {
       'tingyou',
       'hysxs',
       'asmrmoon',
-      'jar_tingshu',
     ]);
     expect(novel.length, 71);
     expect(
@@ -132,7 +131,8 @@ void main() {
       containsAll(ContentRegistry.novelJsonBuiltins.map((s) => s.id)),
     );
     // 无门禁：成人源 id 都在列；全表 id 不重复。
-    expect(targets.map((t) => t.source.id).toSet().length, 80);
+    // 听书 8 个 + 阅读 73 个（实测），id 无重叠，去重后 81。
+    expect(targets.map((t) => t.source.id).toSet().length, 81);
   });
 
   test('去重：同 id 两区都出现只留一个，听书优先', () {
@@ -338,5 +338,141 @@ void main() {
     ];
     await searchReadingTargets('神瞳', targets, concurrency: 2);
     expect(peak, 2);
+  });
+
+  test('渐进：快站的组先回调，不等慢站回完', () async {
+    final targets = [
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'slow',
+          name: '慢站',
+          section: ContentSection.audio,
+          delay: const Duration(milliseconds: 500),
+          items: [_book('1', '神瞳·慢')],
+        ),
+        section: ContentSection.audio,
+      ),
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'fast',
+          name: '快站',
+          section: ContentSection.novel,
+          delay: const Duration(milliseconds: 10),
+          items: [_book('2', '神瞳·快')],
+        ),
+        section: ContentSection.novel,
+      ),
+    ];
+    final delivered = <String>[];
+    final watch = Stopwatch()..start();
+    var firstElapsedMs = -1;
+    await searchReadingTargetsProgressive(
+      '神瞳',
+      targets,
+      onGroup: (group) {
+        if (delivered.isEmpty) firstElapsedMs = watch.elapsedMilliseconds;
+        delivered.add(group.source.id);
+      },
+    );
+    // 按完成顺序回调：快站先到，且首组在慢站回完前很久就已回调；
+    // 返回的 Future 在全部站结束后才完成。
+    expect(delivered, ['fast', 'slow']);
+    expect(firstElapsedMs, lessThan(200));
+    expect(watch.elapsedMilliseconds, greaterThanOrEqualTo(500));
+  });
+
+  test('渐进：超时 / 抛错 / 空结果站不回调，已出的组不受影响', () async {
+    final targets = [
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'good',
+          name: '好站',
+          section: ContentSection.audio,
+          items: [_book('1', '神瞳')],
+        ),
+        section: ContentSection.audio,
+      ),
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'boom',
+          name: '抛错站',
+          section: ContentSection.audio,
+          error: StateError('boom'),
+        ),
+        section: ContentSection.audio,
+      ),
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'slow',
+          name: '超时站',
+          section: ContentSection.novel,
+          delay: const Duration(seconds: 5),
+          items: [_book('2', '神瞳·慢')],
+        ),
+        section: ContentSection.novel,
+      ),
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'empty',
+          name: '空结果站',
+          section: ContentSection.novel,
+        ),
+        section: ContentSection.novel,
+      ),
+    ];
+    final delivered = <String>[];
+    await searchReadingTargetsProgressive(
+      '神瞳',
+      targets,
+      onGroup: (group) => delivered.add(group.source.id),
+      perSiteTimeout: const Duration(milliseconds: 100),
+    );
+    expect(delivered, ['good']);
+  });
+
+  test('渐进：空查询 / 空目标表直接完成，不回调', () async {
+    var called = false;
+    void onGroup(GlobalSearchBookGroup _) => called = true;
+    final targets = [
+      GlobalSearchBookTarget(
+        source: _FakeSource(
+          id: 'v1',
+          name: '站',
+          section: ContentSection.audio,
+          error: StateError('must not search'),
+        ),
+        section: ContentSection.audio,
+      ),
+    ];
+    await searchReadingTargetsProgressive('   ', targets, onGroup: onGroup);
+    await searchReadingTargetsProgressive('神瞳', const [], onGroup: onGroup);
+    expect(called, isFalse);
+  });
+
+  test('渐进：有界并发同样 6 路封顶，12 站全回调', () async {
+    var inflight = 0;
+    var peak = 0;
+    final targets = [
+      for (var i = 0; i < 12; i++)
+        GlobalSearchBookTarget(
+          source: _CountingSource(
+            id: 's$i',
+            onEnter: () {
+              inflight++;
+              if (inflight > peak) peak = inflight;
+            },
+            onExit: () => inflight--,
+          ),
+          section: ContentSection.audio,
+        ),
+    ];
+    final delivered = <String>[];
+    await searchReadingTargetsProgressive(
+      '神瞳',
+      targets,
+      onGroup: (group) => delivered.add(group.source.id),
+    );
+    expect(peak, 6);
+    expect(delivered, hasLength(12));
   });
 }

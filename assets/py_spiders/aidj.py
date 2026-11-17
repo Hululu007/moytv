@@ -1,4 +1,5 @@
 import gzip
+import http.client
 import json
 import re
 import ssl
@@ -26,9 +27,18 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 FALLBACK_CATS = [
     ('25', 'AI成人短剧'),
     ('26', 'AI成人漫剧'),
-    ('27', 'AI换脸'),
-    ('28', 'AI魔改'),
 ]
+
+FLAG_WORDS = [
+    'loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+    '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉',
+]
+
+
+def _is_flagged(name):
+    low = (name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
 
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
@@ -51,6 +61,80 @@ def _get_session():
 
 def _now():
     return time.time()
+
+
+def _http_via_client(url, hdr, timeout):
+    proxies = urllib.request.getproxies()
+    for _hop in range(6):
+        parts = urllib.parse.urlsplit(url)
+        scheme = (parts.scheme or 'https').lower()
+        host = parts.hostname or ''
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == 'https' else 80)
+        path = urllib.parse.urlunsplit(('', '', parts.path or '/', parts.query, ''))
+        proxy = None
+        try:
+            if not urllib.request.proxy_bypass(host):
+                proxy = proxies.get(scheme)
+        except Exception:
+            proxy = proxies.get(scheme)
+        conn = None
+        try:
+            if proxy:
+                pp = urllib.parse.urlsplit(proxy)
+                phost = pp.hostname or ''
+                pport = pp.port or 8080
+                if not phost:
+                    return None
+                if scheme == 'https':
+                    conn = http.client.HTTPSConnection(phost, pport, context=CTX, timeout=timeout)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    path = url
+            elif scheme == 'https':
+                conn = http.client.HTTPSConnection(host, port, context=CTX, timeout=timeout)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            hdrs = dict(hdr)
+            hdrs['Connection'] = 'keep-alive'
+            conn.request('GET', path, headers=hdrs)
+            resp = conn.getresponse()
+            status = resp.status
+            if status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if not loc:
+                    return None
+                url = urllib.parse.urljoin(url, loc)
+                continue
+            if status != 200:
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                return None
+            data = resp.read()
+            enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or data[:2] == b'\x1f\x8b':
+                try:
+                    data = gzip.decompress(data)
+                except Exception:
+                    pass
+            return data.decode('utf-8', 'replace')
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+    return None
 
 
 def _http_get(url, referer=None, timeout=25, extra_headers=None):
@@ -80,6 +164,11 @@ def _http_get(url, referer=None, timeout=25, extra_headers=None):
                 resp = _requests.get(url, headers=hdr, timeout=timeout)
                 if resp.status_code == 200:
                     text = resp.content.decode('utf-8', 'replace')
+            except Exception:
+                text = None
+        if text is None:
+            try:
+                text = _http_via_client(url, hdr, timeout)
             except Exception:
                 text = None
         if text is None:
@@ -203,6 +292,7 @@ def _fetch_categories():
     if not cats:
         cats = list(FALLBACK_CATS)
         ttl = 300
+    cats = [(cid, name) for cid, name in cats if not _is_flagged(name)]
     if len(CACHE) > 20:
         CACHE.clear()
     CACHE['cats'] = (_now(), cats, ttl)
@@ -304,6 +394,9 @@ class Spider(BaseSpider):
         pg = _norm_pg(pg)
         if pg < 1:
             pg = 1
+        for cid, name in _fetch_categories():
+            if cid == tid and _is_flagged(name):
+                return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         if pg <= 1:
             path = '/aidj/%s/' % tid
         else:

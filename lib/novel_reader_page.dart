@@ -418,6 +418,7 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                     title: chapterTitle,
                     initialIndex: _initialPage,
                     onIndexChanged: _onReaderPageChanged,
+                    verticalScroll: true,
                   )
                 : NovelReaderView(
                     content: _content!,

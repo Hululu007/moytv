@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +17,10 @@ const hongguoWebSessionTTL = 25 * time.Minute
 const hongguoWebMediaCacheTTL = 50 * time.Minute
 const hongguoWebMediaCacheMax = 300
 const hongguoWebPublicMinBytes = 65536
+
+// hongguoWebFallbackWaitBudget：一次兜底里等待限流倒计时的总预算；
+// 倒计时超出预算即如实报未开放，不再无限等。var 供测试收紧预算。
+var hongguoWebFallbackWaitBudget = 120 * time.Second
 
 var hongguoWebPublicDefinitions = []string{"720p", "480p", "360p"}
 
@@ -60,16 +65,25 @@ func (downloader *Downloader) resolveHongguoWebFallback(ctx context.Context, ser
 	}
 	var lastErr error
 	sawUnavailable := false
-	for attempt := 0; attempt < hongguoWebFallbackAttempts; attempt++ {
+	// 尝试次数按“发出的兜底 POST”计；限流等待不占尝试次数、只耗等待预算，
+	// 等完倒计时换新游客会话再试。预算耗尽即停，不再烧请求。
+	waitBudget := hongguoWebFallbackWaitBudget
+	posts := 0
+	for posts < hongguoWebFallbackAttempts {
 		if err := ctx.Err(); err != nil {
 			return providerMedia{}, err
 		}
-		session, err := downloader.hongguoWebSession(ctx, attempt > 0)
+		session, err := downloader.hongguoWebSession(ctx, posts > 0)
 		if err != nil {
+			if hongguoWebWaitForBackoff(ctx, err, &waitBudget) {
+				downloader.hongguoWebDiscardSession()
+				continue
+			}
 			lastErr = err
 			break
 		}
 		mediaURL, err := downloader.hongguoWebFallbackPost(ctx, videoID, session)
+		posts++
 		if err == nil && mediaURL != "" {
 			downloader.hongguoWebCacheMedia(key, mediaURL)
 			return providerMedia{URL: mediaURL, Referer: hongguoBaseURL + "/"}, nil
@@ -78,6 +92,15 @@ func (downloader *Downloader) resolveHongguoWebFallback(ctx context.Context, ser
 			lastErr = err
 			if errors.Is(err, errHongguoWebFallbackUnavailable) {
 				sawUnavailable = true
+			}
+			if hongguoWebWaitForBackoff(ctx, err, &waitBudget) {
+				downloader.hongguoWebDiscardSession()
+				continue
+			}
+			// 退避错但预算不足：等不起就停，不再烧掉剩余尝试。
+			var backoff *requestBackoff
+			if errors.As(err, &backoff) {
+				break
 			}
 		}
 		downloader.hongguoWebDiscardSession()
@@ -105,6 +128,50 @@ func (downloader *Downloader) resolveHongguoWebFallback(ctx context.Context, ser
 	return providerMedia{}, errors.New("红果网页兜底未返回该集播放地址")
 }
 
+// hongguoHostBackoff：取限流器里该域名的现行退避（403/429 响应后由
+// observe 按 Retry-After 或默认 60 秒记下），供兜底链按倒计时等待。
+// 无现行退避返回 nil。返回的是副本，调用方可安全持有。
+func (downloader *Downloader) hongguoHostBackoff(host string) *requestBackoff {
+	limiter := downloader.limiter
+	if limiter == nil {
+		return nil
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	backoff := limiter.backoffs[strings.ToLower(host)]
+	if backoff == nil || !time.Now().Before(backoff.until) {
+		return nil
+	}
+	copied := *backoff
+	return &copied
+}
+
+// hongguoWebWaitForBackoff：err 是限流退避错时等待到退避结束（受总预算
+// 约束），返回是否已等待、可换新会话重试。非退避错、预算不足、ctx 取消
+// 时返回 false。已过期的退避直接返回 true，不扣预算。
+func hongguoWebWaitForBackoff(ctx context.Context, err error, budget *time.Duration) bool {
+	var backoff *requestBackoff
+	if !errors.As(err, &backoff) || backoff == nil {
+		return false
+	}
+	wait := time.Until(backoff.until)
+	if wait <= 0 {
+		return true
+	}
+	if budget == nil || wait > *budget {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		*budget -= wait
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (downloader *Downloader) hongguoWebSession(ctx context.Context, forceRefresh bool) (string, error) {
 	state := downloader.hongguoWebFallbackState()
 	if !forceRefresh {
@@ -130,6 +197,14 @@ func (downloader *Downloader) hongguoWebSession(ctx context.Context, forceRefres
 	defer response.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, providerMaxBodyBytes+1)); err != nil {
 		return "", err
+	}
+	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests {
+		// 首页也被限流：把限流器记下的退避错交回调用方按倒计时等待，
+		// 而不是当成“无会话”直接放弃。
+		if backoff := downloader.hongguoHostBackoff(request.URL.Hostname()); backoff != nil {
+			return "", backoff
+		}
+		return "", errHongguoWebSessionUnavailable
 	}
 	cookie := ""
 	for _, item := range response.Cookies() {
@@ -180,7 +255,12 @@ func (downloader *Downloader) hongguoWebFallbackPost(ctx context.Context, videoI
 		return "", err
 	}
 	if response.StatusCode != http.StatusOK {
-		if response.StatusCode == http.StatusForbidden {
+		if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests {
+			// 403/429 是限流不是“该集未开放”：把退避错与未开放哨兵双包，
+			// 调用方既能按倒计时等待、换新会话重试，预算耗尽时也能如实报未开放。
+			if backoff := downloader.hongguoHostBackoff(request.URL.Hostname()); backoff != nil {
+				return "", fmt.Errorf("%w：%w", errHongguoWebFallbackUnavailable, backoff)
+			}
 			return "", errHongguoWebFallbackUnavailable
 		}
 		return "", fmt.Errorf("红果网页兜底 HTTP %d", response.StatusCode)

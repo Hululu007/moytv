@@ -15,6 +15,7 @@ import 'core_bridge.dart';
 import 'novel_cover.dart';
 import 'novel_source_store.dart';
 import 'reading_bookshelf_screen.dart';
+import 'site_icon.dart';
 import 'source_picker_sheet.dart';
 
 /// 听书 / 漫画 / 小说共用的分区页：源切换 + 分类 + 搜索 + 卡片列表，
@@ -520,35 +521,33 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
           child: Row(
             children: [
-              InkWell(
-                key: const ValueKey('content-source-switch'),
-                onTap: _pickSource,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 6,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _source?.name ?? '',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.expand_more_rounded,
-                        size: 20,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ],
+              // 站名文字已去掉：行首是当前源图标，点它弹源选择。
+              Tooltip(
+                message: '切换源',
+                child: InkWell(
+                  key: const ValueKey('content-source-switch'),
+                  onTap: _pickSource,
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: Center(
+                      child: _source == null
+                          ? Icon(
+                              Icons.swap_horiz_rounded,
+                              size: 24,
+                              color: colors.onSurfaceVariant,
+                            )
+                          : SiteIcon(
+                              siteId: _source!.id,
+                              siteName: _source!.name,
+                              size: 28,
+                              borderRadius: 8,
+                            ),
+                    ),
                   ),
                 ),
               ),

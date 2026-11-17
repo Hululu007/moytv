@@ -1,12 +1,10 @@
 package core
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 )
@@ -32,26 +30,16 @@ func (transport *cdnTransport) RoundTrip(request *http.Request) (*http.Response,
 	if request.URL.Scheme != "https" || (!protectedCDNHost(request.URL.Hostname()) && request.Context().Value(nativeCoverNetworkKey{}) != true) || (request.Method != http.MethodGet && request.Method != http.MethodHead) {
 		return transport.base.RoundTrip(request)
 	}
-	var proxyURL *url.URL
-	var err error
-	if transport.base.Proxy != nil {
-		proxyURL, err = transport.base.Proxy(request)
-		if err != nil {
-			return nil, err
-		}
-	}
 	routeKey := request.URL.Host
-	if proxyURL != nil {
-		routeKey += "|" + proxyURL.String()
-	}
 	transport.mu.Lock()
 	preferred := transport.preferred[routeKey]
 	transport.mu.Unlock()
 	tried := map[string]bool{}
 	var response *http.Response
+	var err error
 	if preferred.address != "" && time.Now().Before(preferred.expires) {
 		tried[preferred.address] = true
-		response, err = transport.roundTripAddress(request, proxyURL, routeKey, preferred.address)
+		response, err = transport.roundTripAddress(request, routeKey, preferred.address)
 		if err == nil {
 			return response, nil
 		}
@@ -79,7 +67,7 @@ func (transport *cdnTransport) RoundTrip(request *http.Request) (*http.Response,
 				continue
 			}
 			tried[address] = true
-			response, err = transport.roundTripAddress(request, proxyURL, routeKey, address)
+			response, err = transport.roundTripAddress(request, routeKey, address)
 			if err == nil {
 				transport.mu.Lock()
 				transport.preferred[routeKey] = cdnRoute{address: address, expires: entry.expires}
@@ -95,8 +83,8 @@ func (transport *cdnTransport) RoundTrip(request *http.Request) (*http.Response,
 	return nil, fmt.Errorf("资源 %s 连接失败（已尝试备用 DNS 地址）: %w", request.URL.Hostname(), publicError(lastErr))
 }
 
-func (transport *cdnTransport) roundTripAddress(request *http.Request, proxyURL *url.URL, routeKey, address string) (*http.Response, error) {
-	pinned := transport.pinnedTransport(request.URL.Hostname(), proxyURL, routeKey, address)
+func (transport *cdnTransport) roundTripAddress(request *http.Request, routeKey, address string) (*http.Response, error) {
+	pinned := transport.pinnedTransport(request.URL.Hostname(), routeKey, address)
 	upstream := request.Clone(request.Context())
 	upstream.Host = request.Host
 	if upstream.Host == "" {
@@ -113,7 +101,7 @@ func (transport *cdnTransport) roundTripAddress(request *http.Request, proxyURL 
 	return response, err
 }
 
-func (transport *cdnTransport) pinnedTransport(host string, proxyURL *url.URL, routeKey, address string) *http.Transport {
+func (transport *cdnTransport) pinnedTransport(host string, routeKey, address string) *http.Transport {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	key := routeKey + "|" + address
@@ -125,16 +113,8 @@ func (transport *cdnTransport) pinnedTransport(host string, proxyURL *url.URL, r
 		pinned.TLSClientConfig = &tls.Config{}
 	}
 	pinned.TLSClientConfig.ServerName = host
-	pinned.Proxy = http.ProxyURL(proxyURL)
-	if proxyURL != nil && proxyURL.Scheme == "https" {
-		plainProxy := *proxyURL
-		plainProxy.Scheme = "http"
-		if plainProxy.Port() == "" {
-			plainProxy.Host = net.JoinHostPort(proxyURL.Hostname(), "443")
-		}
-		pinned.Proxy = http.ProxyURL(&plainProxy)
-		pinned.DialContext = transport.tlsProxyDialer(proxyURL.Hostname())
-	}
+	// 直连：显式置 nil，不继承任何环境代理。
+	pinned.Proxy = nil
 	if len(transport.transports) >= 32 {
 		for expiredKey, expiredTransport := range transport.transports {
 			expiredTransport.CloseIdleConnections()
@@ -144,37 +124,6 @@ func (transport *cdnTransport) pinnedTransport(host string, proxyURL *url.URL, r
 	}
 	transport.transports[key] = pinned
 	return pinned
-}
-
-func (transport *cdnTransport) tlsProxyDialer(host string) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		dial := transport.base.DialContext
-		if dial == nil {
-			dialer := &net.Dialer{Timeout: 10 * time.Second}
-			dial = dialer.DialContext
-		}
-		connection, err := dial(ctx, network, address)
-		if err != nil {
-			return nil, err
-		}
-		config := &tls.Config{}
-		if transport.base.TLSClientConfig != nil {
-			config = transport.base.TLSClientConfig.Clone()
-		}
-		config.ServerName = host
-		config.NextProtos = []string{"http/1.1"}
-		secured := tls.Client(connection, config)
-		if transport.base.TLSHandshakeTimeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, transport.base.TLSHandshakeTimeout)
-			defer cancel()
-		}
-		if err := secured.HandshakeContext(ctx); err != nil {
-			connection.Close()
-			return nil, err
-		}
-		return secured, nil
-	}
 }
 
 func (transport *cdnTransport) CloseIdleConnections() {

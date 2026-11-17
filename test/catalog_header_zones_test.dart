@@ -24,7 +24,7 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'source': 'missav',
       'hiddenSites': '[]',
-      // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+      // 默认主题已改 XP：本测试验通用外壳，显式钉住紫蓝霓虹。
       'appThemeMode': 'purpleNeon',
     });
     store = LocalStore(await SharedPreferences.getInstance());
@@ -63,43 +63,48 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
   }
 
-  testWidgets('narrow library: single source selector, capsule below title', (
+  testWidgets('narrow library: single-row icon bar, site icon first', (
     tester,
   ) async {
     await pumpHome(tester, const Size(390, 844));
-    // 只留标题上的一个站源选择器；旧的站源胶囊与下拉盒已删。
+    // 站名文字行已去掉：站图标是胶囊第一位，点它弹站点选择；
+    // 旧的站源胶囊与下拉盒已删。
     final selector = find.byKey(const ValueKey('source-switch'));
     expect(selector, findsOneWidget);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
     expect(find.byKey(const ValueKey('source-dropdown')), findsNothing);
     final capsules = find.byType(GlassButtonGroup);
-    expect(capsules, findsWidgets);
-    final titleRect = tester.getRect(selector);
-    for (final capsule in capsules.evaluate()) {
-      final rect = tester.getRect(find.byWidget(capsule.widget));
-      expect(rect.overlaps(titleRect), isFalse);
-    }
-    // 至少一个胶囊在第二行（顶在标题下方）。
-    final tops = capsules.evaluate().map(
-      (e) => tester.getRect(find.byWidget(e.widget)).top,
+    expect(capsules, findsOneWidget);
+    final capsuleRect = tester.getRect(capsules);
+    final selectorRect = tester.getRect(selector);
+    // 单行 44 高：胶囊就是标题行，站图标在胶囊内第一位。
+    expect(capsuleRect.height, 44);
+    expect(capsuleRect.top, 0);
+    expect(selectorRect.top, capsuleRect.top);
+    expect(selectorRect.left, closeTo(capsuleRect.left + 4, 0.5));
+    final mineRect = tester.getRect(
+      find.byKey(const ValueKey('open-mine-page')),
     );
-    expect(tops.any((top) => top >= titleRect.bottom), isTrue);
+    expect(mineRect.left, closeTo(selectorRect.right, 0.5));
+    final appBar = tester.widget<AppBar>(find.byType(AppBar));
+    expect(appBar.preferredSize.height, 44);
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('wide library: capsule shares the actions row', (tester) async {
+  testWidgets('wide library: same single-row icon bar', (tester) async {
     await pumpHome(tester, const Size(900, 844));
     final selector = find.byKey(const ValueKey('source-switch'));
     expect(selector, findsOneWidget);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
     expect(find.byKey(const ValueKey('source-dropdown')), findsNothing);
     final capsules = find.byType(GlassButtonGroup);
-    expect(capsules, findsWidgets);
-    final titleRect = tester.getRect(selector);
-    for (final capsule in capsules.evaluate()) {
-      final rect = tester.getRect(find.byWidget(capsule.widget));
-      expect(rect.overlaps(titleRect), isFalse);
-    }
+    expect(capsules, findsOneWidget);
+    final capsuleRect = tester.getRect(capsules);
+    final selectorRect = tester.getRect(selector);
+    expect(capsuleRect.height, 44);
+    expect(selectorRect.left, closeTo(capsuleRect.left + 4, 0.5));
+    final appBar = tester.widget<AppBar>(find.byType(AppBar));
+    expect(appBar.preferredSize.height, 44);
     debugDefaultTargetPlatformOverride = null;
   });
 

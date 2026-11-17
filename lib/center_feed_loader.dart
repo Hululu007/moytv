@@ -93,7 +93,7 @@ class CenterFeedLoader {
     try {
       final sites = sampleAdultSites(
         store.sources
-            .where((site) => store.siteVisible(site.id))
+            .where((site) => store.siteVisible(site.id) && !site.isHtmlSite)
             .toList(),
         random: _random,
         count: feedAdultMaxSites,

@@ -18,7 +18,7 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = 'da3d99184174dfd4fc9322a6c8edfb4d';
+const String zakatvJarMd5 = '09ee47224268ed3d90fd1ece455ce70c';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';
@@ -397,24 +397,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'ZakaHgdjApp',
     '🔞🆕黄果短剧App┃App网关',
     'com.github.catvod.spider.ZakaHgdjAppAmns',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'zakaseku',
-    '🔞阅妹阁┃App原版62站',
-    'com.github.catvod.spider.ZakaSekuAmns',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'zakakp14',
-    '🔞看片站群┃App挖出14站',
-    'com.github.catvod.spider.ZakaYueMGeAmns',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'zaka-yue2',
-    '🔞阅妹阁模块2┃JavDB+51吃瓜',
-    'com.github.catvod.spider.ZakaYueMGe2Amns',
     '',
   ),
   ZakatvBuiltinSite(
@@ -815,12 +797,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '',
   ),
   ZakatvBuiltinSite(
-    'hongguo',
-    '🍎红果短剧·听书┃官方直采+自建朗读',
-    'com.github.catvod.spider.ZakaHongguoAmns',
-    '{"host":"https://hongguoduanju.com"}',
-  ),
-  ZakatvBuiltinSite(
     'ZakaLiveTv',
     '🔞📡电视直播┃110台',
     'com.github.catvod.spider.ZakaLiveTvAmns',
@@ -887,20 +863,7 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'com.github.catvod.spider.Chengren91',
     '',
   ),
-  ZakatvBuiltinSite(
-    'go_tingshu',
-    '飞卢听书',
-    'com.github.catvod.spider.TingShu',
-    '{}',
-    audioOnly: true,
-  ),
   ZakatvBuiltinSite('hstv', '🔞HSTV', 'com.github.catvod.spider.Hstv', '{}'),
-  ZakatvBuiltinSite(
-    'Xhs',
-    '🔞小红薯APP(JAR)',
-    'com.github.catvod.spider.Xhs',
-    '{}',
-  ),
   ZakatvBuiltinSite(
     'ZakaChaoliu',
     '🔞潮流AV(JAR)',

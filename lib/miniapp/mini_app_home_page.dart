@@ -508,7 +508,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
         appBar: AppBar(
           // 紧凑单行顶栏：标签页与动作钮并作一行（对标官方密度），
           // “小程序”标题字不再单占一行（窗口标题/底部标签已有）。
-          toolbarHeight: 48,
+          toolbarHeight: 42,
           titleSpacing: 0,
           title: TabBar(
             tabAlignment: TabAlignment.start,
@@ -526,9 +526,9 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
               fontWeight: FontWeight.w500,
             ),
             tabs: const [
-              Tab(text: '已安装'),
-              Tab(text: '市场'),
-              Tab(text: '海阔'),
+              Tab(text: '已安装', height: 38),
+              Tab(text: '市场', height: 38),
+              Tab(text: '海阔', height: 38),
             ],
           ),
           actions: [

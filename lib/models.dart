@@ -97,6 +97,10 @@ class SourceSite {
   final String importExt;
   bool get isVideoSection => section == sectionVideo;
   bool get isDramaSection => section != sectionVideo;
+
+  /// HTML 导入站：点选进宿主页面，不走目录/搜索/聚合链路。
+  /// 与 ImportedSiteRecord.typeHtml 同值（importType 由登记 asSite 填入）。
+  bool get isHtmlSite => importType == 'html';
   String get coreSlotId => slotId.isEmpty ? id : slotId;
   bool get onlineSearch =>
       isVideoSection || id == 'hongguo' || pagedSearch || duanjuOnlineSearch;
@@ -197,6 +201,12 @@ class SourceSite {
     'hongguo_new',
     '红果(新)',
     '红果短剧全集 + 五档清晰度',
+    section: sectionDrama,
+  );
+  static const fanqie = SourceSite(
+    'fanqie',
+    '番茄',
+    '番茄短剧 · 排行榜单流',
     section: sectionDrama,
   );
   static const dsd = SourceSite('dsd', '帝果', '分类视频 · 在线搜索');
@@ -734,6 +744,7 @@ class SourceSite {
   static const knownValues = [
     hongguo,
     hongguoNew,
+    fanqie,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
     SourceSite(
       'hgtvmirror',
@@ -764,6 +775,7 @@ class SourceSite {
   static const allValues = [
     hongguo,
     hongguoNew,
+    fanqie,
     SourceSite('hgtv', 'HGTV', '短剧 · 漫剧 · AI 剧', section: sectionDrama),
     SourceSite(
       'hgtvmirror',
@@ -811,6 +823,9 @@ class SourceSite {
   static final Map<String, String> importedJsFiles = {};
   static final Map<String, String> importedPyRemoteUrls = {};
   static final Map<String, String> importedJsRemoteUrls = {};
+
+  /// HTML 导入站的文件名（同一 imported_spiders/ 目录），key 为站点 id。
+  static final Map<String, String> importedHtmlFiles = {};
   static bool isCustomId(String id) => id.startsWith('custom:');
   static bool isAvailable(String id) =>
       values.any((site) => site.id == id) ||

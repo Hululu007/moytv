@@ -6,7 +6,6 @@ import 'package:html/parser.dart' as html_parser;
 import 'content_http.dart';
 import 'core_bridge.dart';
 import 'nexhub_scraper/scraper/verification_detector.dart';
-import 'socks5_proxy.dart';
 
 /// 探站失败：面向用户的中文原因。调用方直接展示 [message]，不编造结构。
 class ProbeFailure implements Exception {
@@ -74,8 +73,7 @@ class UrlSiteProbe {
   UrlSiteProbe({ProbeFetch? fetchHtml}) : _fetchHtml = fetchHtml;
 
   final ProbeFetch? _fetchHtml;
-  final ContentHttp _http =
-      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
+  final ContentHttp _http = ContentHttp();
 
   static const _fetchTimeout = Duration(seconds: 15);
 
@@ -111,9 +109,7 @@ class UrlSiteProbe {
     final categories = _extractCategories(doc, startUrl);
     final template = _detectCategoryTemplate(categories, origin);
     if (template == null) {
-      throw const ProbeFailure(
-        '未能从首页识别出分类结构：未找到两个以上同规律的分类链接。',
-      );
+      throw const ProbeFailure('未能从首页识别出分类结构：未找到两个以上同规律的分类链接。');
     }
     evidence.add('分类 ${template.categories.length} 个');
 
@@ -216,18 +212,12 @@ class UrlSiteProbe {
         statusCode: response.statusCode,
         body: body,
       )) {
-        throw const ProbeFailure(
-          '该站拒绝了当前网络地址（边缘 IP 限制），换网络或稍后重试。',
-        );
+        throw const ProbeFailure('该站拒绝了当前网络地址（边缘 IP 限制），换网络或稍后重试。');
       }
-      throw const ProbeFailure(
-        '该站当前显示验证页（需人机验证），无法自动识别。请先在浏览器中完成验证后再试。',
-      );
+      throw const ProbeFailure('该站当前显示验证页（需人机验证），无法自动识别。请先在浏览器中完成验证后再试。');
     }
     if (response.statusCode != 200) {
-      throw ProbeFailure(
-        '站点返回 HTTP ${response.statusCode}，无法识别。',
-      );
+      throw ProbeFailure('站点返回 HTTP ${response.statusCode}，无法识别。');
     }
     if (body.trim().isEmpty) {
       throw const ProbeFailure('页面内容为空，无法识别。');
@@ -237,9 +227,7 @@ class UrlSiteProbe {
 
   Future<bool> _isMacCMS(String origin) async {
     try {
-      final response = await _get(
-        '$origin/api.php/provide/vod/?ac=list&pg=1',
-      );
+      final response = await _get('$origin/api.php/provide/vod/?ac=list&pg=1');
       if (response.statusCode != 200) return false;
       final decoded = jsonDecode(
         decodeContentBytes(
@@ -425,14 +413,8 @@ class UrlSiteProbe {
           a.substring(prefix.length),
           b.substring(prefix.length),
         );
-        final midA = a.substring(
-          prefix.length,
-          a.length - suffix.length,
-        );
-        final midB = b.substring(
-          prefix.length,
-          b.length - suffix.length,
-        );
+        final midA = a.substring(prefix.length, a.length - suffix.length);
+        final midB = b.substring(prefix.length, b.length - suffix.length);
         if (midA.isEmpty || midB.isEmpty || midA == midB) continue;
         if (!_looksLikeId(midA) || !_looksLikeId(midB)) continue;
         final key = '$prefix\x00$suffix';
@@ -471,7 +453,9 @@ class UrlSiteProbe {
     final id = middle.replaceAll(RegExp(r'^/+|/+$'), '');
     if (!_validXbpqId(id)) return;
     if (members.any((m) => m.id == id)) return;
-    members.add(_TemplateMember(id: id, name: candidate.name, url: candidate.url));
+    members.add(
+      _TemplateMember(id: id, name: candidate.name, url: candidate.url),
+    );
   }
 
   bool _looksLikeId(String middle) {
@@ -560,10 +544,7 @@ class UrlSiteProbe {
       prefix.length,
       current.length - suffix.length,
     );
-    final midNext = next.substring(
-      prefix.length,
-      next.length - suffix.length,
-    );
+    final midNext = next.substring(prefix.length, next.length - suffix.length);
     if (midCurrent.isEmpty || midNext.isEmpty || midCurrent == midNext) {
       return null;
     }
@@ -586,7 +567,16 @@ class UrlSiteProbe {
 
   String? _detectSearch(Document doc, String pageUrl) {
     final base = Uri.parse(pageUrl);
-    const knownNames = {'wd', 'q', 'keyword', 'searchword', 'key', 's', 'kw', 'word'};
+    const knownNames = {
+      'wd',
+      'q',
+      'keyword',
+      'searchword',
+      'key',
+      's',
+      'kw',
+      'word',
+    };
     for (final form in doc.querySelectorAll('form')) {
       final method = (form.attributes['method'] ?? 'get').toLowerCase();
       if (method != 'get') continue;
@@ -658,7 +648,10 @@ class _CategoryTemplate {
 }
 
 class _PaginationResult {
-  const _PaginationResult({required this.template, required this.hasPagination});
+  const _PaginationResult({
+    required this.template,
+    required this.hasPagination,
+  });
   final String template;
   final bool hasPagination;
 }

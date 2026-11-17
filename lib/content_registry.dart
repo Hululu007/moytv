@@ -1,7 +1,6 @@
 import 'builtin_legado_sources.dart';
 import 'content_audio.dart';
 import 'content_http.dart';
-import 'content_jar_audio.dart';
 import 'content_lrts.dart';
 import 'content_models.dart';
 import 'content_py.dart';
@@ -47,7 +46,6 @@ class ContentRegistry {
       name: '🔞ASMR MOON',
       assetPath: 'assets/audio_spiders/asmrmoon.py',
     ),
-    JarAudioContentSource(),
   ];
 
   static final List<ContentSource> _novelBuiltins = [

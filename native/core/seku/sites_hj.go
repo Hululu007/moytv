@@ -45,6 +45,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -651,10 +652,11 @@ func hjSearch(slot, kw string) ([]interface{}, error) {
 	if kw == "" {
 		return []interface{}{}, nil
 	}
-	q := "tag=" + strings.ReplaceAll(strings.TrimSpace(kw), " ", "%20") + "&page=1&limit=20"
+	esc := url.QueryEscape(strings.TrimSpace(kw))
+	q := "tag=" + esc + "&page=1&limit=20"
 	v, err := hjAPI("/topic/search_topic_by_tag?" + q)
 	if err != nil {
-		v, err = hjAPI("/topic/search?keyword=" + strings.ReplaceAll(strings.TrimSpace(kw), " ", "%20") + "&page=1&limit=20")
+		v, err = hjAPI("/topic/search?keyword=" + esc + "&page=1&limit=20")
 		if err != nil {
 			return nil, err
 		}

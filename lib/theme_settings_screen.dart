@@ -75,7 +75,7 @@ class _ThemeSettingsScreenState extends State<ThemeSettingsScreen> {
   }
 
   Future<void> _reset() async {
-    await widget.store.setAppTheme(AppThemeMode.win7);
+    await widget.store.setAppTheme(AppThemeMode.xpWindows);
     if (mounted) setState(() {});
   }
 

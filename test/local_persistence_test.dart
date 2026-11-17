@@ -92,12 +92,12 @@ void main() {
           await expectLater(change(), throwsStateError);
           expect(store.favorites.map((entry) => entry.id), [drama.id]);
           expect(store.watched(drama.id)?.position, 15);
-          expect(store.appTheme, AppThemeMode.win7);
+          expect(store.appTheme, AppThemeMode.xpWindows);
           expect(store.playbackPreferences.speed, 1);
           final restored = await restart(platform);
           expect(restored.favorites.single.id, drama.id);
           expect(restored.watched(drama.id)?.position, 15);
-          expect(restored.appTheme, AppThemeMode.win7);
+          expect(restored.appTheme, AppThemeMode.xpWindows);
           expect(
             restored.preferences.getString('plugin_secret'),
             'outside-the-backup',

@@ -355,6 +355,7 @@ class LocalStore extends ChangeNotifier {
       SourceSite.importedSites.remove(id);
       SourceSite.importedPyFiles.remove(id);
       SourceSite.importedJsFiles.remove(id);
+      SourceSite.importedHtmlFiles.remove(id);
     }
     _registeredImportIds.clear();
     for (final record in _importedSiteRecords) {
@@ -366,6 +367,9 @@ class LocalStore extends ChangeNotifier {
       }
       if (record.type == ImportedSiteRecord.typeJs) {
         SourceSite.importedJsFiles[record.id] = record.fileName;
+      }
+      if (record.type == ImportedSiteRecord.typeHtml) {
+        SourceSite.importedHtmlFiles[record.id] = record.fileName;
       }
     }
   }
@@ -896,7 +900,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlayer(String value) => {'guo', 'xigua'}.contains(value)
       ? _setting('player', value)
       : Future.value();
-  /// 当前全局主题（14 套固定主题之一），默认 Win7。
+  /// 当前全局主题（14 套固定主题之一），默认 XP。
   AppThemeMode get appTheme {
     final value = _configurationError == null
         ? _string('appThemeMode')

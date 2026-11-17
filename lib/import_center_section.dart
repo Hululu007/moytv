@@ -15,8 +15,6 @@ import 'local_store.dart';
 import 'm3u_subscriptions.dart';
 import 'plugin_market_screen.dart';
 import 'py_bridge.dart';
-import 'socks5_proxy.dart';
-import 'socks5_proxy_picker.dart';
 import 'subscription_entries.dart';
 
 const _maxImportBytes = 32 * 1024 * 1024;
@@ -276,7 +274,9 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除导入站'),
-        content: Text('确定删除「${record.name}」吗？导入的蜘蛛文件副本将一并删除。'),
+        content: Text(
+          '确定删除「${record.name}」吗？${record.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -369,13 +369,13 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
               onPressed: _busy
                   ? null
                   : () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => PluginMarketScreen(
-                            store: widget.store,
-                            repository: widget.repository,
-                          ),
+                      MaterialPageRoute<void>(
+                        builder: (_) => PluginMarketScreen(
+                          store: widget.store,
+                          repository: widget.repository,
                         ),
                       ),
+                    ),
               icon: const Icon(Icons.extension_outlined, size: 20),
               label: const Text('安装插件'),
             ),
@@ -597,10 +597,7 @@ class _M3uImportSectionState extends State<M3uImportSection> {
     try {
       final String text;
       if (sub.isUrl) {
-        text = await M3uSubscriptionService.fetchText(
-          sub.url,
-          resourceKey: socks5M3uResourceKey(sub.id),
-        );
+        text = await M3uSubscriptionService.fetchText(sub.url);
       } else {
         text = await M3uFileStore.readText(sub.fileName);
       }
@@ -730,17 +727,23 @@ class _M3uImportSectionState extends State<M3uImportSection> {
                       children: [
                         IconButton(
                           tooltip: '刷新',
-                          onPressed: _busy ? null : () => unawaited(_refresh(sub)),
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(_refresh(sub)),
                           icon: const Icon(Icons.refresh_rounded),
                         ),
                         IconButton(
                           tooltip: '改名',
-                          onPressed: _busy ? null : () => unawaited(_rename(sub)),
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(_rename(sub)),
                           icon: const Icon(Icons.edit_outlined),
                         ),
                         IconButton(
                           tooltip: '删除',
-                          onPressed: _busy ? null : () => unawaited(_remove(sub)),
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(_remove(sub)),
                           icon: Icon(Icons.delete_outline, color: colors.error),
                         ),
                       ],
@@ -752,13 +755,6 @@ class _M3uImportSectionState extends State<M3uImportSection> {
                     onEnterVideo: (_) {},
                     onEnterLive: (sourceId) =>
                         enterSubscriptionLive(context, widget.store, sourceId),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, right: 16),
-                    child: Socks5ResourceProxyPicker(
-                      resourceKey: socks5M3uResourceKey(sub.id),
-                      label: '刷新走代理',
-                    ),
                   ),
                 ],
               ),

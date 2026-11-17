@@ -107,11 +107,7 @@ void main() {
   group('接入红线', () {
     test('接口表只用提取出的公开地址，不含原 App 中继与令牌接口', () {
       for (final spec in liveApiSpecs.values) {
-        for (final url in [
-          spec.listUrl,
-          spec.playUrl,
-          spec.platformsUrl,
-        ]) {
+        for (final url in [spec.listUrl, spec.playUrl, spec.platformsUrl]) {
           expect(url, isNot(contains('51777')));
           expect(url, isNot(contains('bg6zkb5')));
           expect(url, isNot(contains('39ogrmw')));
@@ -127,7 +123,10 @@ void main() {
       for (final id in pendingLiveApiSources.keys) {
         expect(LiveSource.byId(id), isNull);
       }
-      expect(LiveSource.values, hasLength(27)); // 5 个原有（4 修仙 + 哔哩哔哩）+ 22 个内置 m3u 清单。
+      expect(
+        LiveSource.values,
+        hasLength(27),
+      ); // 5 个原有（4 修仙 + 哔哩哔哩）+ 22 个内置 m3u 清单。
       expect(LiveSource.visible(true), hasLength(1));
     });
   });
@@ -143,7 +142,6 @@ class _FakeLiveHttp extends LiveHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration? timeout,
-    String? proxyResourceKey,
   }) async {
     final text = _responses[url];
     if (text == null) throw StateError('unexpected url: $url');

@@ -82,6 +82,14 @@ abstract class ActressDatabase {
   /// 记录 MissAV 排行名次：只保留最好（最小）名次。
   Future<void> setMissavRank(int personId, int rank);
 
+  /// 记录 whos 日榜名次：只保留最好（最小）名次；与 MissAV 列
+  /// 互不覆盖（名气分主链 MissAV、后备 whos）。
+  Future<void> setWhosRank(int personId, int rank);
+
+  /// 写入 whos 人物页简介：与已有键值合并，已有键优先；含硬线词
+  /// 的键或值整条丢弃（不写该键），不影响其它键。
+  Future<void> setPersonAbout(int personId, Map<String, String> about);
+
   Future<List<ActressWork>> worksForPerson(
     int personId, {
     required int offset,
@@ -163,8 +171,27 @@ Map<String, Object?> _personToRow(ActressPerson person, int now) => {
   'recommended': person.recommended ? 1 : 0,
   'films_synced_at': person.filmsSyncedAt,
   'enriched_at': person.enrichedAt,
+  'whos_rank': person.whosRank,
+  'rating': person.rating,
+  'exact_works': person.exactWorks,
+  'about': jsonEncode(person.about),
   'updated_at': now,
 };
+
+Map<String, String> _decodeAbout(Object? value) {
+  if (value is! String || value.isEmpty) return const {};
+  try {
+    final decoded = jsonDecode(value);
+    if (decoded is! Map) return const {};
+    final out = <String, String>{};
+    decoded.forEach((key, item) {
+      if (item != null) out[key.toString()] = item.toString();
+    });
+    return out;
+  } catch (_) {
+    return const {};
+  }
+}
 
 ActressPerson _personFromRow(Map<String, Object?> row) {
   List<String> decodeList(Object? value) {
@@ -193,6 +220,10 @@ ActressPerson _personFromRow(Map<String, Object?> row) {
     recommended: (row['recommended'] as num?)?.toInt() == 1,
     filmsSyncedAt: (row['films_synced_at'] as num?)?.toInt(),
     enrichedAt: (row['enriched_at'] as num?)?.toInt(),
+    whosRank: (row['whos_rank'] as num?)?.toInt(),
+    rating: (row['rating'] as num?)?.toDouble(),
+    exactWorks: (row['exact_works'] as num?)?.toInt() ?? 0,
+    about: _decodeAbout(row['about']),
   );
 }
 
@@ -217,107 +248,132 @@ class SqfliteActressDatabase implements ActressDatabase {
   static final SqfliteActressDatabase instance = SqfliteActressDatabase._();
 
   Database? _db;
-  bool _opening = false;
+
+  /// 正在进行的开库 Future：并发调用共用同一份结果，不轮询自旋
+  /// （旧的 10ms 自旋在开库挂起时越转越久，还会留 pending Timer）。
+  Future<Database>? _openFuture;
 
   Future<Database> _open() async {
     final existing = _db;
     if (existing != null && existing.isOpen) return existing;
-    while (_opening) {
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+    var pending = _openFuture;
+    if (pending == null) {
+      pending = _openNow();
+      _openFuture = pending;
     }
-    final ready = _db;
-    if (ready != null && ready.isOpen) return ready;
-    _opening = true;
     try {
-      final documents = await getApplicationDocumentsDirectory();
-      final filePath = path.join(documents.path, 'actress.db');
-      final db = await openDatabase(
-        filePath,
-        version: 1,
-        onCreate: (db, version) async {
-          await db.execute(
-            'CREATE TABLE persons('
-            'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-            'display_name TEXT NOT NULL, '
-            'aliases TEXT NOT NULL DEFAULT \'[]\', '
-            'sex TEXT NOT NULL DEFAULT \'\', '
-            'avatar_url TEXT NOT NULL DEFAULT \'\', '
-            'tags TEXT NOT NULL DEFAULT \'[]\', '
-            'works_count INTEGER NOT NULL DEFAULT 0, '
-            'roster_works INTEGER NOT NULL DEFAULT 0, '
-            'from_chaoliu INTEGER NOT NULL DEFAULT 0, '
-            'from_whos INTEGER NOT NULL DEFAULT 0, '
-            'from_missav INTEGER NOT NULL DEFAULT 0, '
-            'chaoliu_id TEXT NOT NULL DEFAULT \'\', '
-            'whos_slug TEXT NOT NULL DEFAULT \'\', '
-            'missav_path TEXT NOT NULL DEFAULT \'\', '
-            'missav_rank INTEGER, '
-            'recommended INTEGER NOT NULL DEFAULT 0, '
-            'films_synced_at INTEGER, '
-            'enriched_at INTEGER, '
-            'updated_at INTEGER NOT NULL)',
-          );
-          await db.execute(
-            'CREATE TABLE person_names('
-            'name_key TEXT NOT NULL PRIMARY KEY, '
-            'person_id INTEGER NOT NULL)',
-          );
-          await db.execute(
-            'CREATE INDEX idx_persons_works ON persons(works_count DESC)',
-          );
-          await db.execute(
-            'CREATE TABLE works('
-            'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-            'person_id INTEGER NOT NULL, '
-            'code_key TEXT NOT NULL DEFAULT \'\', '
-            'title_key TEXT NOT NULL DEFAULT \'\', '
-            'code_display TEXT NOT NULL DEFAULT \'\', '
-            'title TEXT NOT NULL DEFAULT \'\', '
-            'date TEXT NOT NULL DEFAULT \'\', '
-            'cover_source TEXT NOT NULL DEFAULT \'\', '
-            'cover_drama_id TEXT NOT NULL DEFAULT \'\', '
-            'cover_url TEXT NOT NULL DEFAULT \'\', '
-            'from_cross_site INTEGER NOT NULL DEFAULT 0)',
-          );
-          // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突。
-          await db.execute(
-            'CREATE UNIQUE INDEX idx_works_code '
-            'ON works(person_id, code_key) WHERE code_key <> \'\'',
-          );
-          await db.execute(
-            'CREATE UNIQUE INDEX idx_works_title '
-            'ON works(person_id, title_key) '
-            'WHERE code_key = \'\' AND title_key <> \'\'',
-          );
-          await db.execute(
-            'CREATE INDEX idx_works_person ON works(person_id, id)',
-          );
-          await db.execute(
-            'CREATE TABLE source_films('
-            'person_id INTEGER NOT NULL, '
-            'source TEXT NOT NULL, '
-            'synced_at INTEGER, '
-            'failed INTEGER NOT NULL DEFAULT 0, '
-            'PRIMARY KEY(person_id, source))',
-          );
-          await db.execute(
-            'CREATE TABLE sync_state('
-            'source TEXT NOT NULL, '
-            'phase TEXT NOT NULL, '
-            'cursor TEXT NOT NULL DEFAULT \'\', '
-            'total INTEGER NOT NULL DEFAULT 0, '
-            'finished INTEGER NOT NULL DEFAULT 0, '
-            'error TEXT NOT NULL DEFAULT \'\', '
-            'updated_at INTEGER NOT NULL, '
-            'PRIMARY KEY(source, phase))',
-          );
-        },
-      );
+      final db = await pending;
       _db = db;
       return db;
-    } finally {
-      _opening = false;
+    } catch (_) {
+      if (identical(_openFuture, pending)) _openFuture = null;
+      rethrow;
     }
+  }
+
+  Future<Database> _openNow() async {
+    final documents = await getApplicationDocumentsDirectory();
+    final filePath = path.join(documents.path, 'actress.db');
+    final db = await openDatabase(
+      filePath,
+      version: 2,
+      onCreate: (db, version) async {
+        await db.execute(
+          'CREATE TABLE persons('
+          'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+          'display_name TEXT NOT NULL, '
+          'aliases TEXT NOT NULL DEFAULT \'[]\', '
+          'sex TEXT NOT NULL DEFAULT \'\', '
+          'avatar_url TEXT NOT NULL DEFAULT \'\', '
+          'tags TEXT NOT NULL DEFAULT \'[]\', '
+          'works_count INTEGER NOT NULL DEFAULT 0, '
+          'roster_works INTEGER NOT NULL DEFAULT 0, '
+          'from_chaoliu INTEGER NOT NULL DEFAULT 0, '
+          'from_whos INTEGER NOT NULL DEFAULT 0, '
+          'from_missav INTEGER NOT NULL DEFAULT 0, '
+          'chaoliu_id TEXT NOT NULL DEFAULT \'\', '
+          'whos_slug TEXT NOT NULL DEFAULT \'\', '
+          'missav_path TEXT NOT NULL DEFAULT \'\', '
+          'missav_rank INTEGER, '
+          'recommended INTEGER NOT NULL DEFAULT 0, '
+          'films_synced_at INTEGER, '
+          'enriched_at INTEGER, '
+          'whos_rank INTEGER, '
+          'rating REAL, '
+          'exact_works INTEGER NOT NULL DEFAULT 0, '
+          'about TEXT NOT NULL DEFAULT \'{}\', '
+          'updated_at INTEGER NOT NULL)',
+        );
+        await db.execute(
+          'CREATE TABLE person_names('
+          'name_key TEXT NOT NULL PRIMARY KEY, '
+          'person_id INTEGER NOT NULL)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_persons_works ON persons(works_count DESC)',
+        );
+        await db.execute(
+          'CREATE TABLE works('
+          'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+          'person_id INTEGER NOT NULL, '
+          'code_key TEXT NOT NULL DEFAULT \'\', '
+          'title_key TEXT NOT NULL DEFAULT \'\', '
+          'code_display TEXT NOT NULL DEFAULT \'\', '
+          'title TEXT NOT NULL DEFAULT \'\', '
+          'date TEXT NOT NULL DEFAULT \'\', '
+          'cover_source TEXT NOT NULL DEFAULT \'\', '
+          'cover_drama_id TEXT NOT NULL DEFAULT \'\', '
+          'cover_url TEXT NOT NULL DEFAULT \'\', '
+          'from_cross_site INTEGER NOT NULL DEFAULT 0)',
+        );
+        // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突。
+        await db.execute(
+          'CREATE UNIQUE INDEX idx_works_code '
+          'ON works(person_id, code_key) WHERE code_key <> \'\'',
+        );
+        await db.execute(
+          'CREATE UNIQUE INDEX idx_works_title '
+          'ON works(person_id, title_key) '
+          'WHERE code_key = \'\' AND title_key <> \'\'',
+        );
+        await db.execute(
+          'CREATE INDEX idx_works_person ON works(person_id, id)',
+        );
+        await db.execute(
+          'CREATE TABLE source_films('
+          'person_id INTEGER NOT NULL, '
+          'source TEXT NOT NULL, '
+          'synced_at INTEGER, '
+          'failed INTEGER NOT NULL DEFAULT 0, '
+          'PRIMARY KEY(person_id, source))',
+        );
+        await db.execute(
+          'CREATE TABLE sync_state('
+          'source TEXT NOT NULL, '
+          'phase TEXT NOT NULL, '
+          'cursor TEXT NOT NULL DEFAULT \'\', '
+          'total INTEGER NOT NULL DEFAULT 0, '
+          'finished INTEGER NOT NULL DEFAULT 0, '
+          'error TEXT NOT NULL DEFAULT \'\', '
+          'updated_at INTEGER NOT NULL, '
+          'PRIMARY KEY(source, phase))',
+        );
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // v1 → v2：whos 兜底四列（排行后备、评分、精确作品数、简介）。
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE persons ADD COLUMN whos_rank INTEGER');
+          await db.execute('ALTER TABLE persons ADD COLUMN rating REAL');
+          await db.execute(
+            'ALTER TABLE persons ADD COLUMN exact_works INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute(
+            'ALTER TABLE persons ADD COLUMN about TEXT NOT NULL DEFAULT \'{}\'',
+          );
+        }
+      },
+    );
+    return db;
   }
 
   @override
@@ -325,7 +381,12 @@ class SqfliteActressDatabase implements ActressDatabase {
     final variants = actressNameVariants(roster.name);
     if (variants.isEmpty) return null;
     if (variants.any(actressTextBlocked) ||
-        roster.tags.any(actressTextBlocked)) {
+        roster.tags.any(actressTextBlocked) ||
+        roster.aliases.any(actressTextBlocked) ||
+        roster.about.entries.any(
+          (entry) =>
+              actressTextBlocked(entry.key) || actressTextBlocked(entry.value),
+        )) {
       return null;
     }
     final db = await _open();
@@ -507,6 +568,48 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<void> setWhosRank(int personId, int rank) async {
+    final db = await _open();
+    await db.rawUpdate(
+      'UPDATE persons SET whos_rank = '
+      'CASE WHEN whos_rank IS NULL OR ? < whos_rank THEN ? '
+      'ELSE whos_rank END, updated_at = ? WHERE id = ?',
+      [rank, rank, DateTime.now().millisecondsSinceEpoch, personId],
+    );
+  }
+
+  @override
+  Future<void> setPersonAbout(int personId, Map<String, String> about) async {
+    final clean = <String, String>{};
+    for (final entry in about.entries) {
+      if (actressTextBlocked(entry.key) || actressTextBlocked(entry.value)) {
+        continue;
+      }
+      clean[entry.key] = entry.value;
+    }
+    if (clean.isEmpty) return;
+    final db = await _open();
+    final rows = await db.query(
+      'persons',
+      columns: ['about'],
+      where: 'id = ?',
+      whereArgs: [personId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final merged = {...clean, ..._decodeAbout(rows.first['about'])};
+    await db.update(
+      'persons',
+      {
+        'about': jsonEncode(merged),
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [personId],
+    );
+  }
+
+  @override
   Future<List<ActressWork>> worksForPerson(
     int personId, {
     required int offset,
@@ -558,6 +661,15 @@ class SqfliteActressDatabase implements ActressDatabase {
         if (codeKey.isEmpty && titleKey.isEmpty) continue;
         final codeDisplay = film.code.trim();
         final title = film.title.trim();
+        // whos XOR 封面（开关打开时才有）：只在新建行时写入，
+        // 开关关闭时三字段恒为空，与此前行为一字不差。
+        final coverFields = film.coverUrl.isEmpty
+            ? const <String, Object?>{}
+            : <String, Object?>{
+                'cover_source': 'whos',
+                'cover_drama_id': film.detailUrl,
+                'cover_url': film.coverUrl,
+              };
         if (codeKey.isNotEmpty) {
           await txn.insert('works', {
             'person_id': personId,
@@ -566,6 +678,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'code_display': codeDisplay,
             'title': title == codeDisplay ? '' : title,
             'date': film.date.trim(),
+            ...coverFields,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
         } else {
           await txn.insert('works', {
@@ -575,6 +688,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'code_display': '',
             'title': title,
             'date': film.date.trim(),
+            ...coverFields,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
         }
       }
@@ -814,7 +928,12 @@ class MemoryActressDatabase implements ActressDatabase {
     final variants = actressNameVariants(roster.name);
     if (variants.isEmpty) return null;
     if (variants.any(actressTextBlocked) ||
-        roster.tags.any(actressTextBlocked)) {
+        roster.tags.any(actressTextBlocked) ||
+        roster.aliases.any(actressTextBlocked) ||
+        roster.about.entries.any(
+          (entry) =>
+              actressTextBlocked(entry.key) || actressTextBlocked(entry.value),
+        )) {
       return null;
     }
     ActressPerson? existing;
@@ -929,6 +1048,33 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<void> setWhosRank(int personId, int rank) async {
+    final person = _persons[personId];
+    if (person == null) return;
+    final current = person.whosRank;
+    if (current == null || rank < current) {
+      _persons[personId] = person.copyWith(whosRank: rank);
+    }
+  }
+
+  @override
+  Future<void> setPersonAbout(int personId, Map<String, String> about) async {
+    final person = _persons[personId];
+    if (person == null) return;
+    final clean = <String, String>{};
+    for (final entry in about.entries) {
+      if (actressTextBlocked(entry.key) || actressTextBlocked(entry.value)) {
+        continue;
+      }
+      clean[entry.key] = entry.value;
+    }
+    if (clean.isEmpty) return;
+    _persons[personId] = person.copyWith(
+      about: {...clean, ...person.about},
+    );
+  }
+
+  @override
   Future<List<ActressWork>> worksForPerson(
     int personId, {
     required int offset,
@@ -979,6 +1125,10 @@ class MemoryActressDatabase implements ActressDatabase {
         codeDisplay: codeDisplay,
         title: title == codeDisplay ? '' : title,
         date: film.date.trim(),
+        // whos XOR 封面（开关打开时才有）：开关关闭时三字段恒为空。
+        coverSource: film.coverUrl.isEmpty ? '' : 'whos',
+        coverDramaId: film.coverUrl.isEmpty ? '' : film.detailUrl,
+        coverUrl: film.coverUrl,
       );
     }
     _refreshWorksCount(personId);

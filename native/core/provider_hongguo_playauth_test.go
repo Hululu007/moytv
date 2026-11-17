@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,40 +150,21 @@ func TestHongguoApplyPlayAuth(t *testing.T) {
 	}
 }
 
+// V5 口径：单腿直取，不再分 tab/multi 全签、video_model 免签三腿；
+// 请求只带 V5 签名头（无 X-Gorgon），匿名直取不带播放鉴权、设备不轮换。
 func TestHongguoVideoModelPlayerOnlyDirect(t *testing.T) {
 	var requests []string
-	registered := 0
-	sawPlayerOnlyModel := false
-	sawSignedTab := false
-	sawSignedMulti := false
+	sawV5Headers := false
+	sawLegacySigning := false
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		if strings.Contains(request.URL.Path, "device_register") {
-			registered++
-			requests = append(requests, "register")
-			id := strconv.Itoa(1000 + registered)
-			return sourceFixtureResponse(request, http.StatusOK, `{"device_id_str":"`+id+`","install_id_str":"`+id+`9"}`), nil
-		}
 		requests = append(requests, "model@"+request.URL.Query().Get("device_id"))
-		if strings.Contains(request.URL.Path, "video_tab") {
-			if request.Header.Get("X-Gorgon") != "" {
-				sawSignedTab = true
-			}
-			return sourceFixtureResponse(request, http.StatusOK, `{"code":0,"data":{}}`), nil
+		if request.Header.Get("X-Helios") != "" && request.Header.Get("X-Medusa") != "" {
+			sawV5Headers = true
 		}
-		if strings.Contains(request.URL.Path, "multi_video_model") {
-			if request.Header.Get("X-Gorgon") != "" {
-				sawSignedMulti = true
-			}
-			return sourceFixtureResponse(request, http.StatusOK, `{"code":0,"data":{}}`), nil
+		if request.Header.Get("X-Gorgon") != "" || request.Header.Get("X-Argus") != "" {
+			sawLegacySigning = true
 		}
-		if strings.Contains(request.URL.Path, "video_model") {
-			if request.Header.Get("X-Gorgon") == "" {
-				sawPlayerOnlyModel = true
-				return sourceFixtureResponse(request, http.StatusOK, hongguoRotationModelOK), nil
-			}
-			return sourceFixtureResponse(request, http.StatusOK, ""), nil
-		}
-		return sourceFixtureResponse(request, http.StatusOK, `{"code":0,"data":{}}`), nil
+		return sourceFixtureResponse(request, http.StatusOK, hongguoRotationModelOK), nil
 	})
 	d.cfg.Retries = 1
 	client := d.hongguoClient()
@@ -194,18 +174,21 @@ func TestHongguoVideoModelPlayerOnlyDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(media.URL, "high.mp4") {
-		t.Fatal("video_model direct with player-only signing must return the stream", media)
+		t.Fatal("V5 direct must return the stream", media)
 	}
 	if media.PlayAuthToken != "" || media.PlayAuthExpires != 0 {
 		t.Fatalf("anonymous direct must carry no play auth token: %+v", media)
 	}
-	if !sawPlayerOnlyModel {
-		t.Fatal("video_model direct must go out without X-Gorgon", requests)
+	if !sawV5Headers {
+		t.Fatal("V5 request must carry helios/medusa headers", requests)
 	}
-	if !sawSignedTab || !sawSignedMulti {
-		t.Fatalf("tab/multi legs must keep full signing: tab=%v multi=%v requests=%v", sawSignedTab, sawSignedMulti, requests)
+	if sawLegacySigning {
+		t.Fatal("V5 request must not carry legacy gorgon/argus headers", requests)
+	}
+	if len(requests) != 1 || requests[0] != "model@7" {
+		t.Fatal("V5 success must cost exactly one request on the current device", requests)
 	}
 	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "7" {
-		t.Fatal("player-only direct must not burn device rotations", state)
+		t.Fatal("V5 direct must not burn device rotations", state)
 	}
 }

@@ -34,7 +34,7 @@ void main() {
     'theme survives restart',
     () async {
       final store = await localStore();
-      expect(store.appTheme, AppThemeMode.win7);
+      expect(store.appTheme, AppThemeMode.xpWindows);
       await store.setAppTheme(AppThemeMode.lightClean);
       final restored = LocalStore(store.preferences);
       expect(restored.appTheme, AppThemeMode.lightClean);
@@ -44,7 +44,7 @@ void main() {
   );
 
   testWidgets(
-    'default theme is purple neon and switching applies without restart',
+    'default theme is XP and switching applies without restart',
     (tester) async {
       phone(tester);
       addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
@@ -54,29 +54,29 @@ void main() {
       await tester.pump();
       expect(
         tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
-        ThemeMode.dark,
+        ThemeMode.light,
       );
       final store = await localStore();
       await tester.pumpWidget(MoyiApp(repository: repository, store: store));
       await tester.pumpAndSettle();
-      // 系统亮暗不影响主题：亮暗由主题自身底色定。
+      // 系统亮暗不影响主题：亮暗由主题自身底色定（默认 XP 是亮色）。
       for (final brightness in [Brightness.dark, Brightness.light]) {
         tester.platformDispatcher.platformBrightnessTestValue = brightness;
         await tester.pumpAndSettle();
         expect(
           Theme.of(tester.element(find.byType(HomeScreen))).brightness,
-          Brightness.dark,
+          Brightness.light,
         );
       }
-      await store.setAppTheme(AppThemeMode.lightClean);
+      await store.setAppTheme(AppThemeMode.win7);
       await tester.pumpAndSettle();
       expect(
         Theme.of(tester.element(find.byType(HomeScreen))).brightness,
-        Brightness.light,
+        Brightness.dark,
       );
       expect(
         LocalStore(store.preferences).appTheme,
-        AppThemeMode.lightClean,
+        AppThemeMode.win7,
       );
       await tester.pumpWidget(const SizedBox.shrink());
       // 让收尾时挂起的单次定时器（如 100ms 缓存刷新）在测试结束前跑完，
@@ -91,7 +91,7 @@ void main() {
   ) async {
     phone(tester);
     final store = await localStore();
-    // 默认主题已改 Win7：本测试验“当前主题名回显”，显式钉住紫蓝霓虹。
+    // 默认主题已改 XP：本测试验“当前主题名回显”，显式钉住紫蓝霓虹。
     await store.setAppTheme(AppThemeMode.purpleNeon);
     final repository = FixtureRepository();
     await tester.pumpWidget(

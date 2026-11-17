@@ -47,6 +47,11 @@ Future<String?> showSitePickerDialog(
   bool initialEditMode = false,
   Future<bool> Function(SourcePickerEntry entry)? onDeleteSite,
 
+  /// 非空时弹窗顶部右上角显示 + 号导入钮：点 + 先关弹窗、再调
+  /// 此回调（调用方打开导入分流、导完刷新站源）。不传则无 + 号
+  /// （直播/阅读区不传，只在片库区接导入）。
+  Future<void> Function()? onImport,
+
   /// 取各站首页海报用的仓库：非空且当前主题列表样式为方块时，
   /// 弹窗改渲染 3D 方块列；为空时永远是普通列表（直播/阅读区
   /// 不传，方块只在片库区出现）。
@@ -59,6 +64,7 @@ Future<String?> showSitePickerDialog(
     groups: groups,
     initialEditMode: initialEditMode,
     onDeleteSite: onDeleteSite,
+    onImport: onImport,
     repository: repository,
   ),
 );
@@ -71,6 +77,7 @@ class SitePickerDialog extends StatefulWidget {
     required this.groups,
     this.initialEditMode = false,
     this.onDeleteSite,
+    this.onImport,
     this.repository,
   });
 
@@ -79,6 +86,7 @@ class SitePickerDialog extends StatefulWidget {
   final List<SourcePickerGroup> groups;
   final bool initialEditMode;
   final Future<bool> Function(SourcePickerEntry entry)? onDeleteSite;
+  final Future<void> Function()? onImport;
   final AppRepository? repository;
 
   @override
@@ -148,6 +156,16 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     super.dispose();
   }
 
+  /// + 号：先关弹窗（回 null，调用方不切站），再调导入回调。
+  /// 回调是调用方的闭包、用调用方的 context 打开导入分流，
+  /// 本弹窗已关、不存在旧分组过期问题。
+  Future<void> _onAddPressed() async {
+    final handler = widget.onImport;
+    if (handler == null) return;
+    Navigator.pop(context);
+    await handler();
+  }
+
   Future<void> _delete(SourcePickerEntry entry) async {
     final handler = widget.onDeleteSite;
     if (handler == null) return;
@@ -198,9 +216,24 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                '切换${widget.sectionName}源',
-                style: theme.textTheme.titleMedium,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '切换${widget.sectionName}源',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                  if (widget.onImport != null) ...[
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      key: const ValueKey('site-picker-add'),
+                      tooltip: '导入站点',
+                      onPressed: _onAddPressed,
+                      icon: const Icon(Icons.add_rounded),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 12),
               TextField(

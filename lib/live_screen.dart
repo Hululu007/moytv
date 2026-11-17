@@ -892,12 +892,12 @@ class _LiveScreenState extends State<LiveScreen> {
         ? channel.subtitle
         : _caption();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
       child: Material(
         color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(14),
         child: SizedBox(
-          height: 86,
+          height: 78,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 8, 10, 8),
             child: Row(

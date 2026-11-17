@@ -24,10 +24,15 @@ class ActressListPage extends StatefulWidget {
     required this.store,
     this.database,
     this.syncService,
+    this.showTitle = true,
   });
 
   final AppRepository repository;
   final LocalStore store;
+
+  /// 内嵌进区域/窗口/内层页签时宿主已有“女优库”标题，页内顶栏不再
+  /// 重复标题字（只留人数），与 MiniAppHomePage 的做法同口径。
+  final bool showTitle;
 
   /// 测试/预览注入：不传时用 sqflite 真库 + 默认三家名册源。
   @visibleForTesting
@@ -235,7 +240,16 @@ class _ActressListPageState extends State<ActressListPage> {
     final overview = _overview;
     return Scaffold(
       appBar: AppBar(
-        title: Text(overview == null ? '女优库' : '女优库 ${overview.persons} 位演员'),
+        toolbarHeight: 48,
+        title: widget.showTitle
+            ? Text(
+                overview == null
+                    ? '女优库'
+                    : '女优库 ${overview.persons} 位演员',
+              )
+            : overview == null
+            ? null
+            : Text('${overview.persons} 位演员'),
         actions: [
           IconButton(
             key: const ValueKey('open-actress-ranking'),
@@ -255,7 +269,7 @@ class _ActressListPageState extends State<ActressListPage> {
         children: [
           _buildSyncBanner(colors),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
             child: TextField(
               key: const ValueKey('actress-search'),
               controller: _searchController,

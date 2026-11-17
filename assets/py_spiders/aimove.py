@@ -1,4 +1,5 @@
 import gzip
+import http.client
 import json
 import re
 import ssl
@@ -21,8 +22,20 @@ except Exception:
     _requests = None
 
 BASE = 'https://aimove.click'
+IMG_BASE = 'https://img.mfantasy.net'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 PAGE_SIZE = 24
+
+FLAG_WORDS = [
+    'loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+    '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉',
+]
+
+
+def _is_flagged(name):
+    low = (name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
 
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
@@ -35,6 +48,77 @@ _GUEST_TOKEN = [None]
 
 def _now():
     return time.time()
+
+
+def _http_via_client(url, hdr, timeout, method='GET', data=None):
+    proxies = urllib.request.getproxies()
+    for _hop in range(6):
+        parts = urllib.parse.urlsplit(url)
+        scheme = (parts.scheme or 'https').lower()
+        host = parts.hostname or ''
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == 'https' else 80)
+        path = urllib.parse.urlunsplit(('', '', parts.path or '/', parts.query, ''))
+        proxy = None
+        try:
+            if not urllib.request.proxy_bypass(host):
+                proxy = proxies.get(scheme)
+        except Exception:
+            proxy = proxies.get(scheme)
+        conn = None
+        try:
+            if proxy:
+                pp = urllib.parse.urlsplit(proxy)
+                phost = pp.hostname or ''
+                pport = pp.port or 8080
+                if not phost:
+                    return None
+                if scheme == 'https':
+                    conn = http.client.HTTPSConnection(phost, pport, context=CTX, timeout=timeout)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    path = url
+            elif scheme == 'https':
+                conn = http.client.HTTPSConnection(host, port, context=CTX, timeout=timeout)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            hdrs = dict(hdr)
+            hdrs['Connection'] = 'keep-alive'
+            conn.request(method, path, body=data, headers=hdrs)
+            resp = conn.getresponse()
+            status = resp.status
+            if status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if not loc:
+                    return None
+                url = urllib.parse.urljoin(url, loc)
+                if status in (301, 302, 303):
+                    method = 'GET'
+                    data = None
+                continue
+            body_bytes = resp.read()
+            enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or body_bytes[:2] == b'\x1f\x8b':
+                try:
+                    body_bytes = gzip.decompress(body_bytes)
+                except Exception:
+                    pass
+            return (status, body_bytes.decode('utf-8', 'replace'))
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+    return None
 
 
 def _http_json(url, method='GET', token=None, timeout=25):
@@ -67,6 +151,29 @@ def _http_json(url, method='GET', token=None, timeout=25):
                         raise
                     except Exception:
                         raise RuntimeError('HTTP %d' % resp.status_code)
+            except RuntimeError:
+                raise
+            except Exception:
+                text = None
+        if text is None:
+            try:
+                if method == 'POST':
+                    hdr3 = dict(hdr)
+                    hdr3['Content-Type'] = 'application/json'
+                    got = _http_via_client(url, hdr3, timeout, 'POST', b'{}')
+                else:
+                    got = _http_via_client(url, hdr, timeout, 'GET', None)
+                if got is not None:
+                    status, text = got
+                    if status != 200:
+                        try:
+                            data = json.loads(text)
+                            msg = str(data.get('message') or '')
+                            raise RuntimeError('HTTP %d %s' % (status, msg))
+                        except RuntimeError:
+                            raise
+                        except Exception:
+                            raise RuntimeError('HTTP %d' % status)
             except RuntimeError:
                 raise
             except Exception:
@@ -160,6 +267,19 @@ def _abs_url(raw):
     return BASE + '/' + u
 
 
+def _img_url(raw):
+    u = (raw or '').strip()
+    if not u:
+        return ''
+    if u.startswith('http://') or u.startswith('https://'):
+        return u
+    if u.startswith('//'):
+        return 'https:' + u
+    if u.startswith('/'):
+        return IMG_BASE + u
+    return IMG_BASE + '/' + u
+
+
 def _drama_card(v):
     if not isinstance(v, dict):
         return None
@@ -172,7 +292,7 @@ def _drama_card(v):
     title = str(v.get('title') or '').strip()
     if not title:
         return None
-    cover = _abs_url(str(v.get('coverUrl') or ''))
+    cover = _img_url(str(v.get('coverUrl') or ''))
     try:
         total = int(v.get('totalEpisodes') or 0)
     except Exception:
@@ -221,7 +341,7 @@ def _fetch_categories():
             except Exception:
                 continue
             name = str(item.get('name') or '').strip()
-            if cid != 0 and name:
+            if cid != 0 and name and not _is_flagged(name):
                 cats.append((str(cid), name))
     except Exception:
         pass
@@ -350,6 +470,9 @@ class Spider(BaseSpider):
         pg = _norm_pg(pg)
         if pg < 1:
             pg = 1
+        for cid, name in _fetch_categories():
+            if cid == tid and _is_flagged(name):
+                return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         try:
             if not tid or tid == 'all':
                 url = BASE + '/api/dramas'
@@ -377,7 +500,7 @@ class Spider(BaseSpider):
         title = str(data.get('title') or '').strip()
         if not title:
             return _empty_detail(nid)
-        cover = _abs_url(str(data.get('coverUrl') or ''))
+        cover = _img_url(str(data.get('coverUrl') or ''))
         synopsis = str(data.get('intro') or '').strip()
         try:
             total = int(data.get('totalEpisodes') or 0)

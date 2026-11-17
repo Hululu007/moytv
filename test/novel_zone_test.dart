@@ -1,6 +1,7 @@
 import 'package:moyi/content_models.dart';
 import 'package:moyi/content_registry.dart';
 import 'package:moyi/content_zone_screen.dart';
+import 'package:moyi/site_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,7 +32,9 @@ void main() {
     }
     expect(find.text('小说暂无可用源'), findsNothing);
     expect(find.byKey(const ValueKey('content-source-switch')), findsOneWidget);
-    expect(find.text('🔞疯情书库'), findsOneWidget);
+    // 源切换已图标化：行首是当前源图标，不再显示源名字符串。
+    expect(find.byType(SiteIcon), findsOneWidget);
+    expect(find.text('🔞疯情书库'), findsNothing);
     expect(find.byKey(const ValueKey('novel-import-py')), findsOneWidget);
   });
 }

@@ -360,6 +360,7 @@ class GlassButtonGroup extends StatelessWidget {
                                 HapticFeedback.selectionClick();
                                 item.onPressed!();
                               },
+                        onLongPress: item.onLongPress,
                         child: SizedBox(
                           width: 40,
                           height: 44,
@@ -396,6 +397,7 @@ class GlassGroupItem {
     this.child,
     required this.tooltip,
     required this.onPressed,
+    this.onLongPress,
     this.highlighted = false,
     this.focusNode,
     this.autofocus = false,
@@ -405,6 +407,7 @@ class GlassGroupItem {
   final Widget? child;
   final String tooltip;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final bool highlighted;
   final FocusNode? focusNode;
   final bool autofocus;

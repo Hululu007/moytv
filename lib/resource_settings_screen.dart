@@ -90,12 +90,10 @@ class ResourceSettingsScreen extends StatefulWidget {
 }
 
 class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
-  final _proxy = TextEditingController();
   late final int _epoch = widget.store.profileEpoch;
   ResourceSettings? _settings;
-  String _mode = 'auto';
   int _catalog = 3, _interval = 250, _downloads = 2;
-  bool _folders = false, _busy = false, _showProxy = false;
+  bool _folders = false, _busy = false;
   String? _error;
   bool get _allowed =>
       widget.store.profileEpoch == _epoch &&
@@ -109,20 +107,12 @@ class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _proxy.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
     try {
       final settings = await widget.repository.resourceSettings();
       if (!mounted || !_allowed) return;
       setState(() {
         _settings = settings;
-        _mode = settings.proxyMode;
-        _proxy.text = settings.proxyUrl;
         _catalog = settings.catalogConcurrency;
         _interval = settings.catalogIntervalMs;
         _downloads = settings.downloadConcurrency;
@@ -143,8 +133,6 @@ class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
     try {
       final settings = await widget.repository.saveResourceSettings(
         ResourceSettings(
-          proxyMode: _mode,
-          proxyUrl: _proxy.text.trim(),
           catalogConcurrency: _catalog,
           catalogIntervalMs: _interval,
           downloadConcurrency: _downloads,
@@ -207,54 +195,10 @@ class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
                       padding: const EdgeInsets.only(bottom: 16),
                       child: Text(_settings!.warning),
                     ),
-                  DropdownButtonFormField<String>(
-                    initialValue: _mode,
-                    decoration: const InputDecoration(labelText: '连接方式'),
-                    items: const [
-                      DropdownMenuItem(value: 'auto', child: Text('自动')),
-                      DropdownMenuItem(value: 'direct', child: Text('直连')),
-                      DropdownMenuItem(value: 'manual', child: Text('手动代理')),
-                    ],
-                    onChanged: _busy
-                        ? null
-                        : (value) => setState(() => _mode = value ?? 'auto'),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 16),
+                    child: Text('网络一律直连；手机系统 VPN 在系统层生效。'),
                   ),
-                  if (_mode == 'auto')
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Text(
-                        _settings!.systemProxyStatus.isEmpty
-                            ? '使用系统静态代理；未配置时使用环境变量或直连。'
-                            : _settings!.systemProxyStatus,
-                      ),
-                    ),
-                  if (_mode == 'manual')
-                    Padding(
-                      padding: const EdgeInsets.only(top: 16),
-                      child: TextField(
-                        controller: _proxy,
-                        obscureText: !_showProxy,
-                        enableSuggestions: false,
-                        autocorrect: false,
-                        decoration: InputDecoration(
-                          labelText: '代理地址',
-                          hintText: 'http://127.0.0.1:7890',
-                          helperText: '支持 HTTP、HTTPS、SOCKS5；仅保存在本机，不进入配置备份。',
-                          helperMaxLines: 3,
-                          suffixIcon: IconButton(
-                            tooltip: _showProxy ? '隐藏代理地址' : '显示代理地址',
-                            onPressed: () =>
-                                setState(() => _showProxy = !_showProxy),
-                            icon: Icon(
-                              _showProxy
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 28),
                   _count('目录请求并发', _catalog, (value) => _catalog = value),
                   const SizedBox(height: 16),
                   Text('目录请求间隔 · $_interval 毫秒'),

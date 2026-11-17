@@ -30,21 +30,15 @@ import 'profiles_screen.dart';
 import 'cloud_drive/cloud_credential_store.dart';
 import 'cloud_drive/cloud_drive_stations.dart';
 import 'package_smoke.dart';
-import 'proxy_kernel_service.dart';
-import 'proxy_egress.dart';
-import 'proxy_egress_wiring.dart';
 import 'signature_check.dart';
-import 'socks5_proxy.dart';
 import 'video_enhancement_assets.dart';
 import 'xp_boot_screen.dart';
 import 'boot_video.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 全局 HTTP 出口：所有未显式指定 findProxy 的 HttpClient（封面图、
-  // 取数、海阔等）默认走出口决策点；回环目标永远直连。
-  // 显式指定过 findProxy 的客户端不受影响（规则自带 proxy 优先于全局）。
-  HttpOverrides.global = ProxyEgressHttpOverrides();
+  // 网络直连：应用内代理机件已删，所有请求走直连（手机系统 VPN 在系统层
+  // 生效，不受影响）。海阔规则自带 proxy 字段的仍由规则自己的客户端处理。
   unawaited(PlaybackForeground.clearStaleFlag());
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -156,17 +150,11 @@ class _AppBootstrapState extends State<AppBootstrap>
       unawaited(ensureHongguoAccountLoaded());
       await _refreshDevice();
       await repository.initialize();
-      // 出口接线：必须在内核自启与 SOCKS5 加载之前绑好，这样启停/
-      // 加载触发的决策变化能同步到 Go 核、py、原生层；绑定时先读
-      // 一次存量手填地址做初始同步。
-      await ProxyEgressWiring.bind(repository: repository);
       // 冷启动恢复红果账号会话：把持久化的会话交回 Go 核再确认
       // 状态（HongguoAccountStore.load 内做，空 Cookie 不交回）。
       // 恢复失败不阻塞启动；打开账号页时 load() 会再试一次。
       unawaited(_restoreHongguoAccount(preferences));
       unawaited(AppUpdateChecker.maybeCheckSilently());
-      unawaited(ProxyKernelService.maybeAutostart());
-      unawaited(Socks5ProxyService.maybeLoadRouter());
       // 插件化首次启动：装好全部未被用户卸载的内置插件
       //（整个内置 jar 一个插件 + 44 个 py 插件），行为与以前一致。
       await PluginManager.ensureBuiltinPlugins(preferences);
@@ -286,7 +274,7 @@ class _MoyiAppState extends State<MoyiApp> {
     // 同步给全局通知器，抽屉、内容区等深层组件据此决定是否走霓虹视觉。
     final store = widget.store;
     final config = AppThemeConfig.forTheme(
-      store?.appTheme ?? AppThemeMode.win7,
+      store?.appTheme ?? AppThemeMode.xpWindows,
     );
     appThemeNotifier.value = config.mode;
     final themeData = config.toThemeData();

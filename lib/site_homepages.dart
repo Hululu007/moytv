@@ -7,8 +7,8 @@
 /// - Go 核站：Go 核 slot 注册的 HomeURL（native/core/seku），按 Dart
 ///   站的 slotId 连接；镜像槽位取的是实际供源 origin 的站标；
 /// - 阅读 JSON 源：源文件自身的 bookSourceUrl。
-/// 无主页可取的站（chaoliu 只有 feed 地址、xhsapp 无固定地址、音频
-/// 站、用户自己导入的站）不在表里，一律回落图案标。
+/// 无主页可取的站（chaoliu 只有 feed 地址、音频站、用户自己导入的站）
+/// 不在表里，一律回落图案标。
 /// 值全部归一为 origin（协议 + 主机 + 端口），favicon 派生只用它。
 /// 测试逐条核对：py 值的主机名确在对应蜘蛛文件里、Go 值的主机名
 /// 确在 Go 核源码里、JSON 值确与源文件 bookSourceUrl 同 origin。
@@ -152,7 +152,7 @@ const Map<String, String> goSiteHomepages = {
 
 /// 阅读 JSON 源（legado id → bookSourceUrl origin）。
 const Map<String, String> legadoSiteHomepages = {
-  'legado_7621_0': 'https://manwapm.cc',
+  'legado_7621_0': 'https://manwa.me',
   'legado_7713_0': 'https://m.uaa.com',
   'legado_7813_0': 'https://www.mowan.lol',
   'legado_7968_0': 'https://hd.huadudm.com',

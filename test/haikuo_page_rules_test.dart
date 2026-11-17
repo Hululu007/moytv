@@ -101,7 +101,7 @@ void main() {
       final file = File('assets/haikuo_builtin_rules.json');
       expect(file.existsSync(), isTrue);
       final bytes = file.readAsBytesSync();
-      expect(md5.convert(bytes).toString(), '68f0bd9c740cf3b70b26adf32974439b');
+      expect(md5.convert(bytes).toString(), 'b1d3cb7835ceddd1a380e4945ac5c344');
       final decoded = jsonDecode(utf8.decode(bytes)) as List;
       expect(decoded, hasLength(146));
       final titles = [for (final item in decoded) (item as Map)['title']];

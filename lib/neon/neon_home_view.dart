@@ -30,6 +30,7 @@ class NeonHomeView extends StatefulWidget {
     this.onFeaturedPlay,
     this.featuredItems,
     this.onOpenFeatured,
+    this.hideTopBar = false,
     this.loading = false,
     this.loadingMore = false,
     this.hasMore = false,
@@ -57,6 +58,12 @@ class NeonHomeView extends StatefulWidget {
   /// 轮播位点按：混入的其它站源幻灯片由此打开（调用方先切区切
   /// 源）；为空时轮播点按走 [onOpen]。两排点按恒走 [onOpen]。
   final ValueChanged<Drama>? onOpenFeatured;
+
+  /// 顶栏是否已并进外层固定导航行：为真时不画滚动区内的品牌顶栏
+  /// （品牌、头像、搜索、刷新改由外层合并行承载，见
+  /// HongguoDramaHome 的合并顶栏），避免同一排出现两次。默认不隐藏。
+  final bool hideTopBar;
+
   final bool loading;
   final bool loadingMore;
   final bool hasMore;
@@ -144,61 +151,46 @@ class _NeonHomeViewState extends State<NeonHomeView> {
           parent: BouncingScrollPhysics(),
         ),
         slivers: [
-          SliverToBoxAdapter(
-            child: NeonTopBar(
-              brand: widget.brand,
-              subtitle: widget.sourceLabel,
-              onTitleTap: widget.onSourceTap,
-              leading: widget.onAvatar == null
-                  ? null
-                  : GestureDetector(
-                      key: const ValueKey('neon-avatar'),
-                      onTap: widget.onAvatar,
-                      child: Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient:
-                              config.selectedGradient ??
-                              LinearGradient(
-                                colors: [
-                                  config.primaryColor,
-                                  config.secondaryColor,
-                                ],
-                              ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: config.accentColor.withValues(alpha: .45),
-                              blurRadius: 16,
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          LucideIcons.user,
-                          size: 18,
-                          color: Colors.white,
+          if (!widget.hideTopBar)
+            SliverToBoxAdapter(
+              child: NeonTopBar(
+                brand: widget.brand,
+                subtitle: widget.sourceLabel,
+                onTitleTap: widget.onSourceTap,
+                leading: widget.onAvatar == null
+                    ? null
+                    : GestureDetector(
+                        key: const ValueKey('neon-avatar'),
+                        onTap: widget.onAvatar,
+                        // 品牌旁的头像换成软件图标（机械蚂蚁启动图），
+                        // 与“我的”页头像同一张图（用户 2026-11-17 令）。
+                        child: ClipOval(
+                          child: Image.asset(
+                            'assets/ant_logo.png',
+                            width: 38,
+                            height: 38,
+                            fit: BoxFit.cover,
+                          ),
                         ),
                       ),
-                    ),
-              actions: [
-                NeonIconButton(
-                  key: const ValueKey('neon-top-search'),
-                  icon: LucideIcons.search,
-                  tooltip: '搜索',
-                  onTap: widget.onSearch,
-                ),
-                NeonIconButton(
-                  key: const ValueKey('neon-top-refresh'),
-                  icon: LucideIcons.refreshCw,
-                  tooltip: '刷新',
-                  onTap: widget.onRefresh == null
-                      ? null
-                      : () => unawaited(widget.onRefresh!()),
-                ),
-              ],
+                actions: [
+                  NeonIconButton(
+                    key: const ValueKey('neon-top-search'),
+                    icon: LucideIcons.search,
+                    tooltip: '搜索',
+                    onTap: widget.onSearch,
+                  ),
+                  NeonIconButton(
+                    key: const ValueKey('neon-top-refresh'),
+                    icon: LucideIcons.refreshCw,
+                    tooltip: '刷新',
+                    onTap: widget.onRefresh == null
+                        ? null
+                        : () => unawaited(widget.onRefresh!()),
+                  ),
+                ],
+              ),
             ),
-          ),
           if (featured.isNotEmpty)
             SliverToBoxAdapter(
               child: SizedBox(
@@ -208,10 +200,8 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                   controller: _pages,
                   itemCount: featured.length,
                   onPageChanged: (page) => setState(() => _page = page),
-                  itemBuilder: (context, index) => _heroCard(
-                    featured[index],
-                    index == _page,
-                  ),
+                  itemBuilder: (context, index) =>
+                      _heroCard(featured[index], index == _page),
                 ),
               ),
             ),
@@ -257,9 +247,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
               ),
             ),
           ),
-          const SliverToBoxAdapter(
-            child: NeonSectionHeader(title: '猜你想看'),
-          ),
+          const SliverToBoxAdapter(child: NeonSectionHeader(title: '猜你想看')),
           if (widget.loading && gridItems.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
@@ -290,29 +278,26 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                   mainAxisSpacing: 12,
                   childAspectRatio: .60,
                 ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final drama = gridItems[index];
-                    return NeonPoster(
-                      cover: DramaCover(
-                        drama: drama,
-                        repository: widget.repository,
-                        radius: 12,
-                      ),
-                      title: drama.title,
-                      subtitle: _subtitleOf(drama),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final drama = gridItems[index];
+                  return NeonPoster(
+                    cover: DramaCover(
+                      drama: drama,
+                      repository: widget.repository,
                       radius: 12,
-                      titleSize: 10,
-                      showTitle: false,
-                      // showTitle 为 false 时 NeonPoster 不画文字，封面集数标
-                      // 是唯一文字，保留默认 showEpisodeLabel:true，不重影。
-                      tiltAngle: index.isEven ? 0.1 : -0.1,
-                      onTap: () => widget.onOpen(drama),
-                      onLongPress: () => widget.onLongPress(drama),
-                    );
-                  },
-                  childCount: gridItems.length,
-                ),
+                    ),
+                    title: drama.title,
+                    subtitle: _subtitleOf(drama),
+                    radius: 12,
+                    titleSize: 10,
+                    showTitle: false,
+                    // showTitle 为 false 时 NeonPoster 不画文字，封面集数标
+                    // 是唯一文字，保留默认 showEpisodeLabel:true，不重影。
+                    tiltAngle: index.isEven ? 0.1 : -0.1,
+                    onTap: () => widget.onOpen(drama),
+                    onLongPress: () => widget.onLongPress(drama),
+                  );
+                }, childCount: gridItems.length),
               ),
             ),
           SliverToBoxAdapter(child: _footer()),
@@ -394,9 +379,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                             decoration: BoxDecoration(
                               color: config.surfaceColor.withValues(alpha: .82),
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: config.dividerColor,
-                              ),
+                              border: Border.all(color: config.dividerColor),
                             ),
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
@@ -435,9 +418,10 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                                 NeonActionButton(
                                   label: '马上看',
                                   height: 34,
-                                  onTap: () => (widget.onFeaturedPlay ??
-                                          widget.onOpenFeatured ??
-                                          widget.onOpen)(drama),
+                                  onTap: () =>
+                                      (widget.onFeaturedPlay ??
+                                      widget.onOpenFeatured ??
+                                      widget.onOpen)(drama),
                                 ),
                               ],
                             ),

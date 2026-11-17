@@ -9,7 +9,6 @@ import 'core_bridge.dart';
 import 'live_models.dart';
 import 'live_repository.dart';
 import 'live_sources.dart';
-import 'mpv_egress.dart';
 import 'screen_awake.dart';
 import 'video_output_size.dart';
 import 'sleep_timer.dart';
@@ -118,8 +117,6 @@ class LivePlaybackController extends ChangeNotifier {
     if (_player != null || _disposed) return;
     final player = Player();
     _player = player;
-    // MPV 出口：按当前决策设 http-proxy，决策变化时自动重设。
-    bindMpvEgress(player);
     // 直播流对 mpv 是非可寻址（non-seekable）源，demuxer 打开时会在 OSD/日志里
     // 打印 “not seekable … you can force it with -force -seekable=yes”。设为 yes
     // 后 mpv 用缓存强行可寻址，既消除该提示也支持直播内拖动。仅原生 mpv 生效，
@@ -366,8 +363,6 @@ class LivePlaybackController extends ChangeNotifier {
     }
     _subscriptions.clear();
     _screenAwake.disable();
-    final player = _player;
-    if (player != null) unbindMpvEgress(player);
     _player?.dispose();
     _player = null;
     _controller = null;

@@ -72,8 +72,7 @@ class PyBridge {
   static Duration? _testTimeout;
   static DateTime Function()? _testClock;
 
-  static Duration get _effectiveProbeTimeout =>
-      _testTimeout ?? probeTimeout;
+  static Duration get _effectiveProbeTimeout => _testTimeout ?? probeTimeout;
   static Duration get _effectiveValidateTimeout =>
       _testTimeout ?? validateTimeout;
   static DateTime _now() => _testClock?.call() ?? DateTime.now();
@@ -128,10 +127,8 @@ class PyBridge {
     try {
       return await _probe().timeout(
         _effectiveProbeTimeout,
-        onTimeout: () => const PyRuntimeStatus(
-          available: false,
-          detail: '桥状态探测超时',
-        ),
+        onTimeout: () =>
+            const PyRuntimeStatus(available: false, detail: '桥状态探测超时'),
       );
     } catch (error) {
       return PyRuntimeStatus(available: false, detail: error.toString());
@@ -221,9 +218,7 @@ class PyBridge {
       return decoded['data'];
     } on TimeoutException {
       unawaited(dispose(path));
-      throw AppFailure(
-        'py 蜘蛛执行超时（70 秒，步骤=$path/$action）：蜘蛛可能在等上游响应，请重试或换集',
-      );
+      throw AppFailure('py 蜘蛛执行超时（70 秒，步骤=$path/$action）：蜘蛛可能在等上游响应，请重试或换集');
     } on PlatformException catch (error) {
       throw AppFailure(
         'py 蜘蛛执行失败（步骤=$path/$action）：${error.message ?? error.code}',
@@ -234,17 +229,6 @@ class PyBridge {
   static Future<void> setCfDisguise(bool enabled) async {
     try {
       await callRaw('', {'action': 'setCfDisguise', 'enabled': enabled});
-    } catch (_) {}
-  }
-
-  /// 把出口决策同步进 py 运行时：非空时蜘蛛的 urllib/requests/curl 请求
-  /// 走该代理，null 时清掉恢复直连。失败静默（桥不可用时蜘蛛本来也跑不了）。
-  static Future<void> setEgressProxy(String? httpProxyUrl) async {
-    try {
-      await callRaw('', {
-        'action': 'setEgressProxy',
-        'proxyUrl': httpProxyUrl ?? '',
-      });
     } catch (_) {}
   }
 

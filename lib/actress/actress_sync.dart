@@ -66,7 +66,8 @@ class ActressSyncResult {
 /// 一次性全量同步服务：名册 + 全部作品清单存本地，断点续跑。
 ///
 /// - 顺序：潮流 → whos → MissAV（潮流最可靠，先落库为合并打底）；
-/// - 每源三阶段：名册 → 作品 → 排行（排行只有 MissAV 有内容）；
+/// - 每源三阶段：名册 → 作品 → 排行（排行主链 MissAV；whos 日榜
+///   作后备信号，开关打开时才拉，名次写入 whos_rank 列）；
 /// - 断点：名册/排行记下一页页码，作品记已完成人物（整人取完再记点，
 ///   失败重取靠 upsert 幂等，不会重复入库）；
 /// - 单源整体失败（被盾挡、域名不通）只记失败，不拖垮其余源；
@@ -367,7 +368,12 @@ class ActressSyncService {
         for (var i = 0; i < result.persons.length; i++) {
           final stored = await db.upsertRosterPerson(result.persons[i]);
           if (stored != null) {
-            await db.setMissavRank(stored.localId, ranked + i + 1);
+            // 名次写入各自的列：MissAV 主链与 whos 后备互不覆盖。
+            if (source.id == ActressRosterSourceId.whos) {
+              await db.setWhosRank(stored.localId, ranked + i + 1);
+            } else {
+              await db.setMissavRank(stored.localId, ranked + i + 1);
+            }
           }
         }
         ranked += result.persons.length;

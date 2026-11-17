@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var jackProfile = &htmlProfile{
@@ -174,7 +175,9 @@ func guruPlayFromPlayerPage(slot, rawID, detailURL, html string) (map[string]int
 func guruResolve(slot, rawID string) (map[string]interface{}, error) {
 	p := guruProfile
 	detailURL := p.Base + "/" + rawID + "/"
-	body, code, _, err := httpGet(detailURL, p.headers())
+	// 三跳均放宽到 90 秒：慢路上详情/网关/播放页任一跳超 20 秒都会
+	// 触发 jina 兜底或直接失败（实测详情 32 秒、播放链 46 秒）。
+	body, code, _, err := httpGetTimeout(detailURL, p.headers(), 90*time.Second)
 	if err != nil || code != 200 {
 		return nil, fmt.Errorf("javguru detail http %d err %v", code, err)
 	}
@@ -198,7 +201,7 @@ func guruResolve(slot, rawID string) (map[string]interface{}, error) {
 	}
 	h := p.headers()
 	h["Referer"] = detailURL
-	b2, c2, _, e2 := httpGet(gateway, h)
+	b2, c2, _, e2 := httpGetTimeout(gateway, h, 90*time.Second)
 	if e2 != nil || c2 != 200 {
 		return nil, fmt.Errorf("javguru gateway http %d err %v", c2, e2)
 	}
@@ -206,7 +209,10 @@ func guruResolve(slot, rawID string) (map[string]interface{}, error) {
 	if playerURL == "" {
 		return nil, fmt.Errorf("javguru: searcho gateway token not found")
 	}
-	b3, c3, _, e3 := httpGet(playerURL, h)
+	// 2026-11-17: searcho→302→嵌入页整链在慢路上可达 46 秒，共享
+	// 20 秒超时一断就触发 jina 兜底，而兜底拿到的嵌入页是“域名受限”
+	// 占位页（无流），遂误报无流。90 秒直取成功、兜底不再毒化结果。
+	b3, c3, _, e3 := httpGetTimeout(playerURL, h, 90*time.Second)
 	if e3 != nil || c3 != 200 {
 		return nil, fmt.Errorf("javguru player http %d err %v", c3, e3)
 	}

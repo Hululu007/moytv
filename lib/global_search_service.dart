@@ -49,7 +49,12 @@ List<GlobalSearchBookTarget> globalSearchBookTargets({
 }
 
 /// 单站搜索预算：单个源超时只回空组，不拖垮整轮搜索。
-const globalSearchPerSiteTimeout = Duration(seconds: 30);
+///
+/// 10 秒的依据：正常搜索往返 1–3 秒，10 秒已覆盖冷启动与慢站；
+/// 树内站源搜索预算已有 10 秒先例（adult_scrape_service 的
+/// perSiteTimeout）。原先 30 秒时 28 个目标站 6 路并发，最坏尾巴
+/// 约 150 秒；现最坏约 50 秒，且渐进显示下尾巴不再挡住已出结果。
+const globalSearchPerSiteTimeout = Duration(seconds: 10);
 
 /// 并行搜索并发上限：原先 Future.wait 一次打出去全部 28 个目标站，
 /// 同时挤占 py 桥与网络；现与 Go 核聚合搜索同款 6 路有界并发，
@@ -67,7 +72,41 @@ Future<List<GlobalSearchBookGroup>> searchReadingTargets(
 }) async {
   final trimmed = query.trim();
   if (trimmed.isEmpty || targets.isEmpty) return const [];
-  final results = await fanoutOrdered(
+  final results = await fanoutOrdered(targets, (target) async {
+    try {
+      final page = await target.source
+          .search(trimmed, 1)
+          .timeout(perSiteTimeout);
+      if (page.items.isEmpty) return null;
+      return GlobalSearchBookGroup(
+        section: target.section,
+        source: target.source,
+        items: page.items,
+      );
+    } catch (_) {
+      return null;
+    }
+  }, concurrency: concurrency);
+  return [for (final result in results) ?result];
+}
+
+/// 渐进版阅读搜索（执行层，可单测）：与 [searchReadingTargets] 同款
+/// 单站超时 / 报错 / 无结果隔离，但每站出结果立即调 [onGroup]
+/// （按完成顺序），不等全部站回完；返回的 Future 在全部目标站
+/// 结束后完成，供调用方收尾（撤下“搜索中”提示）。
+///
+/// 全局搜索页用它实现“回来一个显示一个”；展示层收到组后自行
+/// 排序，回调顺序不保证与目标站表一致。
+Future<void> searchReadingTargetsProgressive(
+  String query,
+  List<GlobalSearchBookTarget> targets, {
+  required void Function(GlobalSearchBookGroup group) onGroup,
+  Duration perSiteTimeout = globalSearchPerSiteTimeout,
+  int concurrency = globalSearchConcurrency,
+}) async {
+  final trimmed = query.trim();
+  if (trimmed.isEmpty || targets.isEmpty) return;
+  await fanoutEach(
     targets,
     (target) async {
       try {
@@ -84,7 +123,9 @@ Future<List<GlobalSearchBookGroup>> searchReadingTargets(
         return null;
       }
     },
+    onResult: (_, group) {
+      if (group != null) onGroup(group);
+    },
     concurrency: concurrency,
   );
-  return [for (final result in results) ?result];
 }

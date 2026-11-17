@@ -47,57 +47,45 @@ class XpDesktop extends StatelessWidget {
       child: Stack(
         children: [
           Positioned.fill(
-            child: Image.asset(
-              'assets/xp_wallpaper.jpg',
-              fit: BoxFit.cover,
-            ),
+            child: Image.asset('assets/xp_wallpaper.jpg', fit: BoxFit.cover),
           ),
           Positioned(
             top: 40,
             left: 16,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                for (final kind in win7DesktopIcons)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 24),
-                    child: InkWell(
-                      key: ValueKey('xp-desktop-icon-${kind.name}'),
-                      onTap: () => onIconTap(kind),
-                      child: Column(
-                        children: [
-                          Icon(
-                            kind.icon,
-                            size: 42,
-                            color: Colors.white,
-                            shadows: const [
-                              Shadow(
-                                color: Colors.black54,
-                                blurRadius: 4,
-                                offset: Offset(0, 1),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            kind.title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.black54,
-                                  blurRadius: 4,
-                                  offset: Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+            child: DesktopIconColumn(
+              keyPrefix: 'xp-desktop-icon',
+              onIconTap: onIconTap,
+              iconBuilder: (kind) => Column(
+                children: [
+                  Icon(
+                    kind.icon,
+                    size: 42,
+                    color: Colors.white,
+                    shadows: const [
+                      Shadow(
+                        color: Colors.black54,
+                        blurRadius: 4,
+                        offset: Offset(0, 1),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    kind.title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black54,
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
                     ),
                   ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -106,7 +94,7 @@ class XpDesktop extends StatelessWidget {
   }
 }
 
-/// 任务栏：56 高 Luna 蓝渐变条，左起绿色“开始”钮（圆角右缘、
+/// 任务栏：48 高 Luna 蓝渐变条，左起绿色“开始”钮（圆角右缘、
 /// 四格小窗格代码色块），后跟已开窗口条目。点已在前台的窗口条目
 /// 会把它最小化回桌面（与 Win7 同一语义）。
 class XpTaskbar extends StatelessWidget {
@@ -131,7 +119,7 @@ class XpTaskbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       key: const ValueKey('xp-taskbar'),
-      height: 56,
+      height: 48,
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -379,7 +367,7 @@ class _XpStartMenuState extends State<XpStartMenu> {
           child: Container(
             height: MediaQuery.of(context).size.height * 0.65,
             width: MediaQuery.of(context).size.width * 0.92,
-            margin: const EdgeInsets.only(bottom: 64),
+            margin: const EdgeInsets.only(bottom: 56),
             decoration: BoxDecoration(
               color: XpTheme.menuBody,
               borderRadius: BorderRadius.circular(12),
@@ -463,7 +451,7 @@ class XpWindowFrame extends StatelessWidget {
     return Column(
       children: [
         Container(
-          height: 40,
+          height: 32,
           decoration: const BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.centerLeft,

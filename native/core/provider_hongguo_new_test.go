@@ -236,3 +236,41 @@ func TestHongguoNewTopicOptionsFromPage(t *testing.T) {
 		t.Fatalf("empty page: %+v", got)
 	}
 }
+
+func TestHongguoNewHomeItems(t *testing.T) {
+	// 实测行形：首页 SSR 的 homeSections（2026-11-17 真站存页 hg_home_real_20261117.html，
+	// 4 个区各 9 行，全蛇形字段）；video_list 是列表，旧 nestedMap 写法恒 0 条。
+	// 行 1/2 取自“热播短剧”区前两行（逐字），行 3 取自“热播真人剧”区首行（逐字），
+	// 另加一行重复（去重）与一行驼峰（py _item_home 回落）。
+	row1 := map[string]any{"series_id": "7704532495357725721", "series_title": "持械入宋：第十一季", "series_cover": "https://p3-novel.byteimg.com/novel-pic/a5d74075608a35b1f34ca608f8e98ba8~tplv-shrink:640:0.image", "episode_cnt": 113, "episode_right_text": "全113集"}
+	row2 := map[string]any{"series_id": "7705824595416190014", "series_title": "穿越八零，我把娘俩宠成宝", "series_cover": "https://p6-novel.byteimg.com/novel-pic/898c39547d16b1ddb3c5ab399559ecc1~tplv-shrink:640:0.image", "episode_cnt": 317, "episode_right_text": "全317集"}
+	row3 := map[string]any{"series_id": "7706512650816982040", "series_title": "少夫人来自东北3", "series_cover": "https://p3-novel.byteimg.com/novel-pic/899ba52ee34a534d9be948a093468ed1~tplv-shrink:640:0.image", "episode_cnt": 96, "episode_right_text": "全96集"}
+	camel := map[string]any{"seriesId": "7700000000000000001", "title": "驼峰行", "cover": "https://x/camel.jpg", "episodeCount": 20}
+	data := map[string]any{"loaderData": map[string]any{"page": map[string]any{"homeSections": []any{
+		map[string]any{"tab_name": "热播短剧", "video_list": []any{row1, row2}},
+		map[string]any{"tab_name": "热播真人剧", "video_list": []any{row3, row1, camel}},
+		map[string]any{"tab_name": "无列表区"},
+	}}}}
+	items := hongguoNewHomeItems(data)
+	if len(items) != 4 {
+		t.Fatalf("home items: got %d want 4: %+v", len(items), items)
+	}
+	if items[0].Title != "持械入宋：第十一季" || items[1].Title != "穿越八零，我把娘俩宠成宝" ||
+		items[2].Title != "少夫人来自东北3" || items[3].Title != "驼峰行" {
+		t.Fatalf("home titles: %+v", items)
+	}
+	for _, item := range items {
+		if item.Source != sourceHongguoNew || item.Cover == "" || item.SourceID == "" {
+			t.Fatalf("home item not relabelled: %+v", item)
+		}
+	}
+	if items[0].Remark != "全113集" || items[3].Remark != "全20集" {
+		t.Fatalf("home remarks: %+v", items)
+	}
+	if got := hongguoNewHomeItems(nil); len(got) != 0 {
+		t.Fatalf("nil data: %+v", got)
+	}
+	if got := hongguoNewHomeItems(map[string]any{}); len(got) != 0 {
+		t.Fatalf("empty data: %+v", got)
+	}
+}

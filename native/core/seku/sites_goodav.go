@@ -27,11 +27,11 @@ const gaHost = "https://goodav17.com"
 const gaUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 var (
-	gaBlockID  = regexp.MustCompile(`goodav17\.com/(vr_html/|local_html/|html/)(\d+)/`)
-	gaTitleRe  = regexp.MustCompile(`<a href="https://goodav17\.com/(?:vr_html/|local_html/|html/)\d+/">([^<]+)</a>`)
+	gaBlockID  = regexp.MustCompile(`(?:goodav17\.com/)?(vr_html/|local_html/|html/)(\d+)/`)
+	gaTitleRe  = regexp.MustCompile(`<a href="(?:https://goodav17\.com)?/(?:vr_html/|local_html/|html/)\d+/">([^<]+)</a>`)
 	gaLargeRe  = regexp.MustCompile(`large_image='([^']+)'`)
 	gaSrcRe    = regexp.MustCompile(`<img\s+src='([^']+)'`)
-	gaNavRe    = regexp.MustCompile(`goodav17\.com/(type|actor)/([^/<>"\s][^/<>" ]*?)/1/["<>]*>([^<]{1,40})<`)
+	gaNavRe    = regexp.MustCompile(`(?:goodav17\.com/)?(type|actor)/([^/<>"\s][^/<>" ]*?)/1/["<>]*>([^<]{1,40})<`)
 	gaGGRe     = regexp.MustCompile(`https://ggjav\.com/main/embed\?u=([A-Za-z0-9_\-=+/%]+)`)
 	gaIframeRe = regexp.MustCompile(`(?i)<iframe[^>]+src="([^"]+)"`)
 	gaVRMedia  = regexp.MustCompile(`https://vr\.goodav17\.com/media/[A-Za-z0-9_\-]+\.(?:mp4|m3u8)`)
@@ -39,8 +39,8 @@ var (
 	gaMp4Re    = regexp.MustCompile(`https?://[^\s"'<>\\\)]+\.mp4[^\s"'<>\\\)]*`)
 	gaFileRe   = regexp.MustCompile(`"(?:file|src|source|url)"\s*:\s*"(https?://[^"]+)"`)
 	gaTitleTag = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	gaActorLnk = regexp.MustCompile(`goodav17\.com/actor/([^/"]+)/1/["<>]*>([^<]{1,40})<`)
-	gaTypeLnk  = regexp.MustCompile(`goodav17\.com/type/([^/"]+)/1/["<>]*>([^<]{1,40})<`)
+	gaActorLnk = regexp.MustCompile(`(?:goodav17\.com/)?actor/([^/"]+)/1/["<>]*>([^<]{1,40})<`)
+	gaTypeLnk  = regexp.MustCompile(`(?:goodav17\.com/)?type/([^/"]+)/1/["<>]*>([^<]{1,40})<`)
 )
 
 var gaState = struct {

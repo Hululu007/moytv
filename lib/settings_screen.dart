@@ -34,12 +34,9 @@ import 'profiles_screen.dart';
 import 'remote_widgets.dart';
 import 'site_check_screen.dart';
 import 'sources_screen.dart';
-import 'content_source_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'viewing_experience_screen.dart';
-import 'torrent/torrent_home_screen.dart';
-import 'proxy_kernel_screen.dart';
 import 'rule_editor_screen.dart';
 import 'theme_settings_screen.dart';
 import 'hongguo_device_screen.dart';
@@ -312,9 +309,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             icon: Icons.picture_in_picture_alt_rounded,
             lucide: LucideIcons.pictureInPicture2,
             title: '听书胶囊悬浮窗',
-            detail: _capsuleGranted
-                ? '已开启 · 切后台听书时显示胶囊'
-                : '未开启 · 点此打开系统授权页',
+            detail: _capsuleGranted ? '已开启 · 切后台听书时显示胶囊' : '未开启 · 点此打开系统授权页',
             onTap: _requestCapsulePermission,
           ),
         // 未成年保护：一次性动作（与原片库设置页一致），开关本身不保持
@@ -363,7 +358,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             icon: Icons.settings_ethernet_rounded,
             lucide: LucideIcons.network,
             title: '网络与资源',
-            detail: '代理、请求间隔与站源目录',
+            detail: '请求间隔、并发与下载设置',
             onTap: () => _push(
               ResourceSettingsScreen(
                 repository: widget.repository,
@@ -371,14 +366,6 @@ class _SettingsScreenState extends State<SettingsScreen>
               ),
             ),
           ),
-        _SettingsItem(
-          keyName: 'proxy-kernel-entry',
-          icon: Icons.shield_outlined,
-          lucide: LucideIcons.shield,
-          title: '代理内核',
-          detail: 'mihomo 本地代理 · 订阅与选节点',
-          onTap: () => _push(ProxyKernelScreen(repository: widget.repository)),
-        ),
         _SettingsItem(
           keyName: 'clearance-entry',
           icon: Icons.verified_user_outlined,
@@ -407,16 +394,6 @@ class _SettingsScreenState extends State<SettingsScreen>
           title: '网盘登录',
           detail: '115 · 夸克 · 阿里云盘 · 百度网盘',
           onTap: () => _push(CloudDriveScreen(store: store)),
-        ),
-        _SettingsItem(
-          keyName: 'content-sources-entry',
-          icon: Icons.layers_outlined,
-          lucide: LucideIcons.libraryBig,
-          title: '内容源管理',
-          detail: '远程配置 / py 站 / 蜘蛛源 / 书源',
-          onTap: () => _push(
-            ContentSourceScreen(repository: widget.repository, store: store),
-          ),
         ),
         _SettingsItem(
           keyName: 'plugin-market-entry',
@@ -475,16 +452,6 @@ class _SettingsScreenState extends State<SettingsScreen>
           detail: 'TVBox 远程配置与 jar 直导入',
           onTap: () => _push(
             ImportCenterScreen(repository: widget.repository, store: store),
-          ),
-        ),
-        _SettingsItem(
-          keyName: 'torrent-entry',
-          icon: Icons.download_outlined,
-          lucide: LucideIcons.download,
-          title: '种子',
-          detail: '磁力解析、文件导入与播放',
-          onTap: () => _push(
-            TorrentHomePage(repository: widget.repository, store: widget.store),
           ),
         ),
       ]),
@@ -608,6 +575,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       onChanged: onChanged,
     );
   }
+
   Widget _glassIcon(IconData icon) =>
       NeonIconTile(icon: icon, size: 30, iconSize: 18, radius: 8);
 
@@ -687,10 +655,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       ),
       subtitle: detail == null
           ? null
-          : Text(
-              detail,
-              style: TextStyle(color: colors.onSurfaceVariant),
-            ),
+          : Text(detail, style: TextStyle(color: colors.onSurfaceVariant)),
       trailing:
           trailing ?? (onTap == null ? null : const CupertinoListTileChevron()),
       backgroundColorActivated: colors.surfaceContainerHigh,

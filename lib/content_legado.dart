@@ -134,8 +134,17 @@ String legadoNovelUrl(String title, String text) =>
 
 String legadoPicsUrl(List<String> urls) => 'pics://${urls.join('&&')}';
 
-List<String> legadoPages(dynamic result) {
-  if (result is! Map) return const [];
+List<String> legadoPages(dynamic result) =>
+    legadoPagesWithHeaders(result).urls;
+
+/// 图片列表 + 请求头：Go 核回的图片行自带 headers（一般是 Referer），
+///
+/// 全章图共用同一套头时取首个非空的；头丢了图站会 403，绝不能只取 url。
+/// 返回记录：urls 为图地址列，headers 为首个非空头（没有则空表）。
+({List<String> urls, Map<String, String> headers}) legadoPagesWithHeaders(
+  dynamic result,
+) {
+  if (result is! Map) return (urls: const [], headers: const {});
   final map = Map<String, dynamic>.from(result);
   final images = map['images'];
   final rows = <dynamic>[];
@@ -148,15 +157,25 @@ List<String> legadoPages(dynamic result) {
     rows.addAll(images);
   }
   final urls = <String>[];
+  var headers = const <String, String>{};
   for (final row in rows) {
     if (row is String) {
       if (row.trim().isNotEmpty) urls.add(row.trim());
     } else if (row is Map) {
-      final url = Map<String, dynamic>.from(row)['url']?.toString() ?? '';
+      final rowMap = Map<String, dynamic>.from(row);
+      final url = rowMap['url']?.toString() ?? '';
       if (url.trim().isNotEmpty) urls.add(url.trim());
+      if (headers.isEmpty && rowMap['headers'] is Map) {
+        final parsed = <String, String>{};
+        for (final entry in (rowMap['headers'] as Map).entries) {
+          final value = entry.value?.toString() ?? '';
+          if (value.isNotEmpty) parsed[entry.key.toString()] = value;
+        }
+        if (parsed.isNotEmpty) headers = parsed;
+      }
     }
   }
-  return urls;
+  return (urls: urls, headers: headers);
 }
 
 class JsonContentSource extends ContentSource {
@@ -271,8 +290,12 @@ class JsonContentSource extends ContentSource {
     ContentChapter chapter,
   ) async {
     if (isComic) {
-      final pages = await chapterPages(bookId, chapter);
-      return ContentAudioTrack(url: legadoPicsUrl(pages));
+      final pages = legadoPagesWithHeaders(await _run('content', chapter.id));
+      if (pages.urls.isEmpty) throw AppFailure('该章节无图片');
+      return ContentAudioTrack(
+        url: legadoPicsUrl(pages.urls),
+        headers: pages.headers,
+      );
     }
     final text = await chapterText(bookId, chapter);
     return ContentAudioTrack(url: legadoNovelUrl(chapter.title, text));

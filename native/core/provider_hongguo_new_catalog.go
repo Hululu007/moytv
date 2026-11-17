@@ -68,21 +68,33 @@ func (downloader *Downloader) fetchHongguoNewHome(ctx context.Context) ([]Drama,
 	if err != nil {
 		return nil, err
 	}
-	data := parseRouterData(body)
+	return hongguoNewHomeItems(parseRouterData(body)), nil
+}
+
+// hongguoNewHomeItems：py _home 的纯解析部分（便于用真站存页单测）。
+// video_list 是列表（2026-11-17 真站实测：4 个区各 9 行，全蛇形字段），
+// 须按列表走：nestedMap 遇列表会判空，旧写法首页恒 0 条，正是红果(新)
+// 片库目录空态的根因。行映射用 _item_home 的 Go 等价物
+// hongguoNewDramaFromRankRow（蛇形/驼峰 id 回落与 py 一致）。
+func hongguoNewHomeItems(data map[string]any) []Drama {
 	page := nestedMap(data, "loaderData", "page")
 	var items []Drama
 	for _, section := range anyList(page["homeSections"]) {
-		for _, row := range anyList(nestedMap(section, "video_list")) {
-			if drama := hongguoDramaFromAny(row, "短剧"); drama.ID != "" {
+		sectionMap, _ := section.(map[string]any)
+		if sectionMap == nil {
+			continue
+		}
+		for _, row := range anyList(sectionMap["video_list"]) {
+			if drama := hongguoNewDramaFromRankRow(row); drama.ID != "" {
 				items = append(items, drama)
 			}
 		}
 	}
-	items = hongguoNewDedupDramas(hongguoNewRelabelDramas(items))
+	items = hongguoNewDedupDramas(items)
 	if len(items) > 60 {
 		items = items[:60]
 	}
-	return items, nil
+	return items
 }
 
 // fetchHongguoNewCategory：py _cat。topic 非空时追加 category_json_ids 服务端筛选。
@@ -141,7 +153,9 @@ func (downloader *Downloader) fetchHongguoNewRank(ctx context.Context, key strin
 		if box == nil {
 			box = m
 		}
-		if len(anyList(nestedMap(m, "content", "rankList"))) > 0 {
+		// rankList 是列表，须按列表判有无：nestedMap 遇列表判空，
+		// 旧守卫恒假、语义优先从未生效（与首页 video_list 同一根因）。
+		if len(anyList(nestedMap(m, "content")["rankList"])) > 0 {
 			box = m
 			break
 		}

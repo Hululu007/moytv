@@ -8,6 +8,7 @@ except Exception:
             pass
 
 
+import base64
 import gzip
 import html as _html
 import http.client
@@ -42,7 +43,6 @@ CATS = [
     ('11', '经典有码'),
     ('12', '性感网红'),
     ('13', '激情H漫'),
-    ('14', '学生萝莉'),
     ('15', '伦理三级'),
     ('16', '日韩精选'),
     ('17', '国产精选'),
@@ -70,7 +70,6 @@ CATS = [
     ('73', 'mini传媒'),
     ('74', '天美传媒'),
     ('75', '大象传媒'),
-    ('76', '萝莉社'),
     ('77', 'PsychoPorn'),
     ('78', '糖心Vlog'),
     ('79', '性视界'),
@@ -108,6 +107,9 @@ CATS = [
     ('116', 'AI短剧'),
 ]
 
+_BLOCKED_CATS = frozenset(('14', '76'))
+
+
 NODES = [
     ('global', '全球加速节点'),
     ('asia', '亚洲加速节点'),
@@ -140,10 +142,113 @@ def _unescape(s):
     return _html.unescape(s).replace('&nbsp;', ' ').strip()
 
 
+def _proxy_target(url):
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or 'http').lower()
+    host = parts.hostname or ''
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get(scheme) or proxies.get('all') or ''
+    if not proxy_url or not host:
+        return None
+    try:
+        if urllib.request.proxy_bypass(host):
+            return None
+    except Exception:
+        pass
+    return urllib.parse.urlsplit(proxy_url)
+
+
+def _http_client_get(url, hdr, timeout):
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or 'http').lower()
+    host = parts.hostname or ''
+    if not host:
+        return None
+    port = parts.port or (443 if scheme == 'https' else 80)
+    path = parts.path or '/'
+    if parts.query:
+        path += '?' + parts.query
+    proxy = _proxy_target(url)
+    try:
+        if proxy and scheme == 'https':
+            conn = http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout)
+            tunnel = {}
+            if proxy.username:
+                raw_auth = urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password or '')
+                tunnel['Proxy-Authorization'] = 'Basic ' + base64.b64encode(raw_auth.encode('utf-8')).decode('ascii')
+            conn.set_tunnel(host, port, headers=tunnel or None)
+            conn.connect()
+            conn.sock = _ctx().wrap_socket(conn.sock, server_hostname=host)
+        elif proxy:
+            conn = http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout)
+            path = url
+            if proxy.username:
+                raw_auth = urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password or '')
+                hdr = dict(hdr)
+                hdr['Proxy-Authorization'] = 'Basic ' + base64.b64encode(raw_auth.encode('utf-8')).decode('ascii')
+        elif scheme == 'https':
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=_ctx())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        try:
+            conn.putrequest('GET', path, skip_host=True, skip_accept_encoding=True)
+            host_hdr = host if (scheme == 'https' and port == 443) or (scheme == 'http' and port == 80) else '%s:%d' % (host, port)
+            conn.putheader('Host', host_hdr)
+            for key, val in hdr.items():
+                conn.putheader(key, val)
+            conn.putheader('Connection', 'keep-alive')
+            conn.endheaders()
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.getheader('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if loc:
+                    nxt = urllib.parse.urljoin(url, loc)
+                    if nxt != url:
+                        return _http_client_get(nxt, hdr, timeout)
+                return None
+            if resp.status != 200:
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                return None
+            chunks = []
+            try:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except Exception as ie:
+                part = getattr(ie, 'partial', b'') or b''
+                if part:
+                    chunks.append(part)
+            data = b''.join(chunks)
+            enc = (resp.getheader('Content-Encoding') or '').lower()
+            if enc == 'gzip' or data[:2] == b'\x1f\x8b':
+                try:
+                    data = gzip.decompress(data)
+                except Exception:
+                    pass
+            return data.decode('utf-8', 'replace')
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        return None
+
+
 def _http_get(url, referer=None, timeout=60):
-    h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Accept-Encoding': 'gzip, deflate'}
+    h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9'}
     if referer:
         h['Referer'] = referer
+    best = ''
     for _ in range(3):
         if _HAS_REQ:
             try:
@@ -152,28 +257,36 @@ def _http_get(url, referer=None, timeout=60):
                     return r.text
             except Exception:
                 pass
-        try:
-            req = urllib.request.Request(url, headers=h)
-            with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
-                data = resp.read()
-                enc = (resp.headers.get('Content-Encoding') or '').lower()
-                if enc == 'gzip' or data[:2] == b'\x1f\x8b':
-                    try:
-                        data = gzip.decompress(data)
-                    except Exception:
-                        pass
-                txt = data.decode('utf-8', 'replace')
-                if txt.strip():
-                    return txt
-        except urllib.error.HTTPError as e:
+        text = _http_client_get(url, h, timeout)
+        if text is None:
             try:
-                return e.read().decode('utf-8', 'ignore')
-            except http.client.IncompleteRead as ie:
-                return ie.partial.decode('utf-8', 'ignore')
-        except Exception:
-            pass
+                req = urllib.request.Request(url, headers=h)
+                with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
+                    try:
+                        data = resp.read()
+                    except http.client.IncompleteRead as ie:
+                        data = ie.partial or b''
+                    enc = (resp.headers.get('Content-Encoding') or '').lower()
+                    if enc == 'gzip' or data[:2] == b'\x1f\x8b':
+                        try:
+                            data = gzip.decompress(data)
+                        except Exception:
+                            pass
+                    text = data.decode('utf-8', 'replace')
+            except urllib.error.HTTPError as e:
+                try:
+                    text = e.read().decode('utf-8', 'ignore')
+                except http.client.IncompleteRead as ie:
+                    text = ie.partial.decode('utf-8', 'ignore')
+            except Exception:
+                text = None
+        if text:
+            if len(text) > len(best):
+                best = text
+            if '</html>' in text:
+                return text
         time.sleep(2)
-    return ''
+    return best
 
 
 def _fix_url(raw):
@@ -273,6 +386,7 @@ class Spider(BaseSpider):
             for c in CATS:
                 if c not in cats:
                     cats.append(c)
+        cats = [c for c in cats if c[0] not in _BLOCKED_CATS]
         cats.sort(key=lambda c: int(c[0]))
         return cats
 

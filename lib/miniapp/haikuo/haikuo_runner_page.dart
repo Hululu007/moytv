@@ -1220,13 +1220,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
     return _savedFiles[key] ??
         (base == null ? null : _savedFiles[base]) ??
         await _persistedFileBytes(key) ??
-        (base == null
-            ? null
-            : await _ruleFileBytes(base, ruleTitle)) ??
+        (base == null ? null : await _ruleFileBytes(base, ruleTitle)) ??
         await _ruleFileBytes(key, ruleTitle) ??
-        (base == null
-            ? null
-            : await _presetModuleBytes(base, ruleTitle)) ??
+        (base == null ? null : await _presetModuleBytes(base, ruleTitle)) ??
         await _presetModuleBytes(key, ruleTitle);
   }
 
@@ -1455,9 +1451,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       if (session.mode == 'webRule' && session.js.isNotEmpty) {
         // 垫片与取码路径共用同一构造（haikuoBridgePadScript）；结果
         // 仍回原字符串（嗅探要的是地址本身，不用 checkJs 哨兵）。
-        final pad = haikuoBridgePadScript(
-          await _pageCookiesFor(session.url),
-        );
+        final pad = haikuoBridgePadScript(await _pageCookiesFor(session.url));
         final script =
             '(function(){try{$pad}catch(e){}var __r="";try{__r=(0,eval)('
             '${jsonEncode(session.js)});}catch(e){__r="";}return typeof __r==='
@@ -1983,8 +1977,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
                 '${jsonEncode(title)}, ${jsonEncode(url)});',
               ),
             );
-          } else if (url.startsWith('http://') ||
-              url.startsWith('https://')) {
+          } else if (url.startsWith('http://') || url.startsWith('https://')) {
             unawaited(_openLink(url, title));
           }
         case 'playVideo':
@@ -2763,9 +2756,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
         if (payload is Map<String, dynamic>) {
           _sessionVars.apply(payload);
         } else if (payload is Map) {
-          _sessionVars.apply(
-            {for (final e in payload.entries) '${e.key}': e.value},
-          );
+          _sessionVars.apply({
+            for (final e in payload.entries) '${e.key}': e.value,
+          });
         }
         response.write(jsonEncode({'ok': true}));
       } else {
@@ -2991,11 +2984,10 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       final payload = decoded is Map<String, dynamic>
           ? decoded
           : decoded is Map
-              ? <String, dynamic>{
-                  for (final entry in decoded.entries)
-                    '${entry.key}': entry.value,
-                }
-              : <String, dynamic>{};
+          ? <String, dynamic>{
+              for (final entry in decoded.entries) '${entry.key}': entry.value,
+            }
+          : <String, dynamic>{};
       final result = await handlePasteBridgeRequest(
         payload,
         upload: uploadCloud6ShareCode,
@@ -3003,9 +2995,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       );
       response.write(jsonEncode(result));
     } catch (_) {
-      response.write(
-        jsonEncode({'ok': false, 'error': '云剪贴板请求无法解析'}),
-      );
+      response.write(jsonEncode({'ok': false, 'error': '云剪贴板请求无法解析'}));
     }
     await response.close();
   }
@@ -3622,10 +3612,9 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
       final client = _httpClient ??= HttpClient()
         ..connectionTimeout = const Duration(seconds: 20)
         ..idleTimeout = const Duration(seconds: 15);
-      // 规则 proxy 字段优先于全局出口：本页一个规则，代理固定写在
-      // 共用客户端上，显式赋值会覆盖全局 HttpOverrides 的默认值。
-      // 规则没有 proxy 字段时不写 findProxy，客户端走全局出口决策
-      //（内核/SOCKS5/手填/系统/直连），决策变化实时生效。
+      // 规则 proxy 字段（规则作者配置）优先于默认直连：本页一个规则，
+      // 代理固定写在共用客户端上。规则没有 proxy 字段时不写 findProxy，
+      // 客户端走默认直连。
       final proxy = _ruleProxy;
       if (proxy != null) {
         client.findProxy = (_) => 'PROXY $proxy';
@@ -4326,11 +4315,7 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
       return;
     }
     unawaited(
-      _danmuController.load(
-        _danmuUrl,
-        _headers,
-        fetcher: widget.danmuFetcher,
-      ),
+      _danmuController.load(_danmuUrl, _headers, fetcher: widget.danmuFetcher),
     );
   }
 

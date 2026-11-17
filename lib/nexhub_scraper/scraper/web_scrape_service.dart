@@ -14,18 +14,11 @@
 library;
 
 import '../../content_http.dart';
-import '../../socks5_proxy.dart';
 import '../utils/html_utils.dart';
 import 'verification_detector.dart';
 
 /// 爬取模式：影响抽取策略与结果展示形态。
-enum ScrapeMode {
-  general,
-  novel,
-  comic,
-  video,
-  article;
-}
+enum ScrapeMode { general, novel, comic, video, article }
 
 /// 通用链接条目（供 general 模式展示）。
 class ScrapeLink {
@@ -63,8 +56,8 @@ class ScrapeResult {
 /// 网页爬取服务——全应用单例。
 class WebScrapeService {
   WebScrapeService._({Future<ContentResponse> Function(String url)? fetchHtml})
-      // ignore: prefer_initializing_formals
-      : _fetchHtml = fetchHtml;
+    // ignore: prefer_initializing_formals
+    : _fetchHtml = fetchHtml;
 
   static final WebScrapeService instance = WebScrapeService._();
 
@@ -74,8 +67,7 @@ class WebScrapeService {
   ) => WebScrapeService._(fetchHtml: fetchHtml);
 
   final Future<ContentResponse> Function(String url)? _fetchHtml;
-  final ContentHttp _http =
-      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
+  final ContentHttp _http = ContentHttp();
 
   /// 抓取 [url] 并按 [mode] 抽取内容。
   ///
@@ -83,9 +75,7 @@ class WebScrapeService {
   /// [VerificationRequiredException]（由调用方决定重试或跳转验证页）。
   Future<ScrapeResult> scrape(String url, ScrapeMode mode) async {
     final fetch = _fetchHtml;
-    final response = fetch != null
-        ? await fetch(url)
-        : await _http.getRaw(url);
+    final response = fetch != null ? await fetch(url) : await _http.getRaw(url);
     final html = decodeContentBytes(
       response.bodyBytes,
       contentType: response.headers['content-type'],
@@ -133,15 +123,16 @@ class WebScrapeService {
 
       case ScrapeMode.novel:
       case ScrapeMode.article:
-        final paragraphs = HtmlUtils.queryAll(html, 'p')
-            .where((s) => s.trim().length > 1)
-            .toList();
+        final paragraphs = HtmlUtils.queryAll(
+          html,
+          'p',
+        ).where((s) => s.trim().length > 1).toList();
         final imageUrls = mode == ScrapeMode.article
             ? _extractImages(html)
-                .map((s) => absolutize(s))
-                .where((s) => s != null)
-                .cast<String>()
-                .toList()
+                  .map((s) => absolutize(s))
+                  .where((s) => s != null)
+                  .cast<String>()
+                  .toList()
             : const <String>[];
         return ScrapeResult(
           url: url,
@@ -156,7 +147,11 @@ class WebScrapeService {
             .where((s) => s != null)
             .cast<String>()
             .toList();
-        return ScrapeResult(url: url, pageTitle: pageTitle, imageUrls: imageUrls);
+        return ScrapeResult(
+          url: url,
+          pageTitle: pageTitle,
+          imageUrls: imageUrls,
+        );
 
       case ScrapeMode.video:
         final videoUrls = _extractVideos(html)
@@ -164,7 +159,11 @@ class WebScrapeService {
             .where((s) => s != null)
             .cast<String>()
             .toList();
-        return ScrapeResult(url: url, pageTitle: pageTitle, videoUrls: videoUrls);
+        return ScrapeResult(
+          url: url,
+          pageTitle: pageTitle,
+          videoUrls: videoUrls,
+        );
     }
   }
 

@@ -28,7 +28,6 @@ import 'py_contract.dart';
 import 'background_downloads.dart';
 import 'local_store.dart';
 import 'playback_parse.dart';
-import 'torrent/torrent_playback_source.dart';
 import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
@@ -38,7 +37,6 @@ import 'cloud_drive/cloud_drive_engine.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
 import 'resource_settings.dart';
-import 'proxy_egress.dart';
 import 'source_fanout.dart';
 
 typedef _NativeRequest = Pointer<Utf8> Function(Pointer<Utf8>);
@@ -97,9 +95,6 @@ abstract class AppRepository {
     ResourceSettings settings,
   ) async => throw AppFailure('当前环境不支持资源设置');
 
-  /// 把出口决策点的覆盖地址同步进 Go 核（null/空表示清除覆盖，
-  /// 恢复用户保存的资源设置）。默认空实现：测试替身不需要 Go 核。
-  Future<void> setEgressProxy(String? goUrl) async {}
   Future<Map<String, dynamic>> crackConfigSet(String content) async => {};
   Future<Map<String, dynamic>> hongguoDeviceStatus() async =>
       throw AppFailure('当前环境不支持设备注册档案');
@@ -776,10 +771,11 @@ class NativeRepository extends AppRepository {
     Duration? searchPerSiteTimeout,
   }) : _tgCatalogCache = tgCatalogCache ?? TgCatalogCache(),
        _searchPerSiteTimeout =
-           searchPerSiteTimeout ?? const Duration(seconds: 30);
+           searchPerSiteTimeout ?? const Duration(seconds: 10);
   final bool background;
 
-  /// 混合搜索里 jar/py/js 单站预算（默认 30 秒，与阅读搜索同口径）：
+  /// 混合搜索里 jar/py/js 单站预算（默认 10 秒，与阅读搜索同口径，
+  /// 树内站源搜索预算已有 10 秒先例，见 adult_scrape_service）：
   /// 构造参数只供测试注入短超时，生产调用一律默认。
   final Duration _searchPerSiteTimeout;
 
@@ -1171,7 +1167,6 @@ class NativeRepository extends AppRepository {
   int _readSequence = 0;
   final _activeReads = <String, int>{};
 
-
   void _adminPermission() {
     if (access != null && (access!.locked || !access!.profile.admin)) {
       throw AppFailure('仅管理员可修改本机资源设置');
@@ -1197,20 +1192,7 @@ class NativeRepository extends AppRepository {
         'settings': settings.toJson(),
       }),
     );
-    // 手填地址变了：刷新出口决策点的手填档（Go 核的覆盖地址由接线层
-    // 按新决策同步，这里只更新决策输入，不直接改 Go 核状态）。
-    unawaited(
-      ProxyEgressController.instance.refreshManualEgress(
-        saved.proxyMode,
-        saved.proxyUrl,
-      ),
-    );
     return saved;
-  }
-
-  @override
-  Future<void> setEgressProxy(String? goUrl) async {
-    await _call({'action': 'setEgressProxy', 'egressProxy': goUrl ?? ''});
   }
 
   @override
@@ -1959,8 +1941,6 @@ class NativeRepository extends AppRepository {
             'release',
             'cancelPlayback',
             'cancelRead',
-            'updateSystemProxy',
-            'setEgressProxy',
           }.contains(action) ||
           action == 'workLease' && input['command'] == 'end';
       final epoch = access?.profileEpoch;
@@ -2087,15 +2067,6 @@ class NativeRepository extends AppRepository {
       throw AppFailure('应用与原生核心的站源版本不一致，请使用完整安装包重新安装');
     }
     if (!background) await BackgroundDownloads.prepare();
-    if (!background) {
-      SystemProxyMonitor.start((value) async {
-        await _call({'action': 'updateSystemProxy', 'systemProxy': value});
-        // 系统代理变了：同步刷新出口决策点的系统档。
-        ProxyEgressController.instance.setSystemAddress(
-          systemProxyAddressFromMap(value),
-        );
-      });
-    }
   }
 
   Future<Map<String, dynamic>> coreInfo() => _call({'action': 'coreInfo'});
@@ -2355,7 +2326,7 @@ class NativeRepository extends AppRepository {
       );
     }
     // 混合搜索：Go 核腿与 jar/py/js 腿并发跑，jar/py/js 腿内部 6 路
-    // 有界并发、每站 30 秒预算。原先三腿串行、每站无预算：站一多，
+    // 有界并发、每站 10 秒预算。原先三腿串行、每站无预算：站一多，
     // 慢站耗时直接加总，整轮搜索能拖上几分钟；且单站异常被吞后
     // 整轮静默回空。现每腿失败只记名不抛错，失败站名挂 warning。
     final failures = <String>[];
@@ -2380,10 +2351,8 @@ class NativeRepository extends AppRepository {
       for (final source in jarSources)
         (
           source: source,
-          run: () => _jarCall(
-            source,
-            (spec) => JarBridge.catalog(spec, query: query),
-          ),
+          run: () =>
+              _jarCall(source, (spec) => JarBridge.catalog(spec, query: query)),
         ),
       for (final target in pyTargets)
         (source: target, run: () => catalog(target, query: query)),
@@ -2662,18 +2631,6 @@ class NativeRepository extends AppRepository {
     int route = 0,
     bool adBlock = true,
   }) async {
-    if (drama.source == torrentPlaybackSourceId) {
-      final url = episode.raw[torrentStreamUrlKey] as String? ?? '';
-      if (url.isEmpty) {
-        throw AppFailure('种子流地址为空，无法播放');
-      }
-      return PlaybackPlan(
-        url: url,
-        originalUrl: url,
-        local: false,
-        needsParse: false,
-      );
-    }
     if (CloudDriveEngine.isCloudSource(drama.source)) {
       final engine = await _cloudDriveEngine();
       return engine.resolve(drama, episode);

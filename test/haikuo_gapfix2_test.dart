@@ -392,7 +392,7 @@ void main() {
       ).readAsBytesSync();
       expect(
         md5.convert(bytes).toString(),
-        '68f0bd9c740cf3b70b26adf32974439b',
+        'b1d3cb7835ceddd1a380e4945ac5c344',
       );
     });
   });

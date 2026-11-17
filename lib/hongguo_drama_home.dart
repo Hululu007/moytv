@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'actress/actress_list_page.dart';
 import 'app_page_route.dart';
 import 'app_theme_config.dart';
 import 'content_tier_filter.dart';
@@ -60,7 +62,7 @@ Future<int?> hongguoFirstPlayableEpisode({
 
 class HongguoDramaHome extends StatefulWidget {
   /// “我的”页的内层页签下标（0 全屏流 / 1 多媒体 / 2 我的 / 3 霓虹首页 /
-  /// 4 频道 / 5 小程序）。
+  /// 4 频道 / 5 小程序 / 6 女优库）。
   static const mineTabIndex = 2;
 
   /// 多媒体页的内层页签下标（原片单位置）。
@@ -69,6 +71,10 @@ class HongguoDramaHome extends StatefulWidget {
   /// 小程序页的内层页签下标（底部标签栏“小程序”由此进入，与抽屉里
   /// 的小程序入口同一页）。
   static const miniAppTabIndex = 5;
+
+  /// 女优库页的内层页签下标（底部标签栏“女优库”由此进入，与通用
+  /// 分支的女优库区同一页）。
+  static const actressTabIndex = 6;
 
   const HongguoDramaHome({
     super.key,
@@ -979,6 +985,14 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   static const _neonHomeTab = 3;
   static const _neonChannelTab = 4;
 
+  /// 内层页签行条目（id、名称、页签号）：页签行与合并顶栏共用。
+  static const _navEntries = [
+    ('home', '首页', _neonHomeTab),
+    ('channel', '频道', _neonChannelTab),
+    ('multimedia', '多媒体', 1),
+    ('feed', '推荐', 0),
+  ];
+
   int get _barIndex => switch (_tab) {
     3 => 0,
     4 => 1,
@@ -1004,12 +1018,14 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     final neonTab = _tab == _neonHomeTab || _tab == _neonChannelTab;
     // 内容档锁定的分类不存在：除“我的”页外，所有内容页签都显示诚实空态。
     // 档位空态只拦站源内容页签：我的页、多媒体页（用户自己的
-    // 网盘库，不参与内容档位过滤）与小程序页（工具页）不受档位限制。
+    // 网盘库，不参与内容档位过滤）、小程序页（工具页）与女优库页
+    // （合并名册，不参与内容档位过滤）不受档位限制。
     final tierGated =
         widget.tierEmpty &&
         _tab != HongguoDramaHome.mineTabIndex &&
         _tab != HongguoDramaHome.multimediaTabIndex &&
-        _tab != HongguoDramaHome.miniAppTabIndex;
+        _tab != HongguoDramaHome.miniAppTabIndex &&
+        _tab != HongguoDramaHome.actressTabIndex;
     final hideCapsuleBar = widget.hideCapsuleBar;
     final body = tierGated
         ? _tierEmptyView()
@@ -1034,6 +1050,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             1 => _multimedia(context),
             2 => _mine(context),
             5 => const MiniAppHomePage(),
+            6 => _actress(context),
             _ => _feed(context),
           };
     return Scaffold(
@@ -1041,15 +1058,18 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           ? Colors.black
           : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
-      // 我的页与小程序页不显示内部导航芯片行：回其它页走外层底栏。
+      // 我的页、小程序页与女优库页不显示内部导航芯片行：回其它页走外层底栏。
+      // 霓虹首页页签显示合并顶栏（品牌 + 页签 + 搜索/刷新一排），其余
+      // 页签仍显示单独的页签行。
       body:
           hideCapsuleBar &&
               _tab != 0 &&
               _tab != HongguoDramaHome.mineTabIndex &&
-              _tab != HongguoDramaHome.miniAppTabIndex
+              _tab != HongguoDramaHome.miniAppTabIndex &&
+              _tab != HongguoDramaHome.actressTabIndex
           ? Column(
               children: [
-                _internalNavRow(),
+                _tab == _neonHomeTab ? _mergedTopBar() : _internalNavRow(),
                 Expanded(child: body),
               ],
             )
@@ -1065,29 +1085,136 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   }
 
   /// 底部标签样式下的内层页签行：胶囊栏藏起后，首页/频道/多媒体/
-  /// 推荐四个内层去向改由这行芯片到达（“我的”走外层底栏经
-  /// requestedTab 驱动，我的页上不显示这行）。全屏流页签不显示此行，
-  /// 改由顶栏返回键退出（全屏流要保持全屏）。
+  /// 推荐四个内层去向改由这行芯片到达（“我的”与“女优库”走外层底栏经
+  /// requestedTab 驱动，那两页上不显示这行）。全屏流页签不显示此行，
+  /// 改由顶栏返回键退出（全屏流要保持全屏）。霓虹首页页签不用这行，
+  /// 改用合并顶栏（见 [_mergedTopBar]）。
   Widget _internalNavRow() {
-    const entries = [
-      ('home', '首页', _neonHomeTab),
-      ('channel', '频道', _neonChannelTab),
-      ('multimedia', '多媒体', 1),
-      ('feed', '推荐', 0),
-    ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
       child: Wrap(
         key: const ValueKey('drama-internal-nav'),
         spacing: 8,
+        children: [for (final entry in _navEntries) _navChip(entry)],
+      ),
+    );
+  }
+
+  Widget _navChip((String, String, int) entry) {
+    return ChoiceChip(
+      key: ValueKey('drama-nav-${entry.$1}'),
+      label: Text(entry.$2),
+      selected: _tab == entry.$3,
+      onSelected: (_) => _selectTab(entry.$3),
+    );
+  }
+
+  /// 合并顶栏（用户 2026-11-17 令）：底部标签样式下，霓虹首页的品牌
+  /// 行与内层页签行并成一排——软件图标 + 魔蚁box/站名 与 首页/频道/
+  /// 多媒体/推荐 同行齐平，搜索与刷新钮同行右置。品牌标题点按仍切
+  /// 换站源、图标点按仍进“我的”页、搜索/刷新与原顶栏同一回调；
+  /// 页签放不下时中间横滑。行高与页签行一致（54），切页签不跳动。
+  /// 配色全部取当前主题，不写死颜色。
+  Widget _mergedTopBar() {
+    final config = AppThemeConfig.of(context);
+    return Padding(
+      key: const ValueKey('drama-merged-topbar'),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
+      child: Row(
         children: [
-          for (final entry in entries)
-            ChoiceChip(
-              key: ValueKey('drama-nav-${entry.$1}'),
-              label: Text(entry.$2),
-              selected: _tab == entry.$3,
-              onSelected: (_) => _selectTab(entry.$3),
+          GestureDetector(
+            key: const ValueKey('neon-avatar'),
+            onTap: widget.onAvatarPressed,
+            child: ClipOval(
+              child: Image.asset(
+                'assets/ant_logo.png',
+                width: 38,
+                height: 38,
+                fit: BoxFit.cover,
+              ),
             ),
+          ),
+          const SizedBox(width: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 120),
+            child: Semantics(
+              label: '切换站源',
+              button: true,
+              child: GestureDetector(
+                key: const ValueKey('neon-top-source'),
+                behavior: HitTestBehavior.opaque,
+                onTap: widget.onPickSource,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ShaderMask(
+                      shaderCallback: (rect) => LinearGradient(
+                        colors: [config.textPrimary, config.secondaryColor],
+                      ).createShader(rect),
+                      child: Text(
+                        '魔蚁box',
+                        style: Neon.brandStyle.copyWith(
+                          color: config.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.sourceLabel,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: config.textSecondary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Icon(
+                          LucideIcons.chevronDown,
+                          size: 12,
+                          color: config.textSecondary,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (var i = 0; i < _navEntries.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    _navChip(_navEntries[i]),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          NeonIconButton(
+            key: const ValueKey('neon-top-search'),
+            icon: LucideIcons.search,
+            tooltip: '搜索',
+            onTap: widget.onOpenGlobalSearch,
+          ),
+          const SizedBox(width: 8),
+          NeonIconButton(
+            key: const ValueKey('neon-top-refresh'),
+            icon: LucideIcons.refreshCw,
+            tooltip: '刷新',
+            onTap: widget.onRefresh == null
+                ? null
+                : () => unawaited(widget.onRefresh!()),
+          ),
         ],
       ),
     );
@@ -1109,6 +1236,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onFeaturedPlay: widget.onOpenFeatured ?? widget.onOpenDrama,
       featuredItems: _heroMixed,
       onOpenFeatured: widget.onOpenFeatured,
+      // 底部标签样式下顶栏已并进固定合并行，滚动区内不再画品牌顶栏。
+      hideTopBar: widget.hideCapsuleBar,
     );
   }
 
@@ -1660,6 +1789,16 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onOpenDrama: widget.onOpenDrama,
       onOpenSaved: widget.onOpenSaved,
       onSettingsPressed: widget.onSettingsPressed,
+    );
+  }
+
+  /// 女优库页：共享的 [ActressListPage]（通用分支点“女优库”进的是
+  /// 同一页）；页顶不显示内部导航芯片行（见 build）。
+  Widget _actress(BuildContext context) {
+    return ActressListPage(
+      repository: widget.repository,
+      store: widget.store,
+      showTitle: false,
     );
   }
 }

@@ -35,17 +35,13 @@ void main() {
     test('已过期的 Expires 不收', () {
       final jar = LiveCookieJar();
       final now = DateTime.utc(2026, 11, 15, 8);
-      jar.record(
-        'a.example.com',
-        ['old=1; Expires=Wed, 01 Jan 2025 00:00:00 GMT'],
-        now: now,
-      );
+      jar.record('a.example.com', [
+        'old=1; Expires=Wed, 01 Jan 2025 00:00:00 GMT',
+      ], now: now);
       expect(jar.headerFor('a.example.com'), isNull);
-      jar.record(
-        'a.example.com',
-        ['fresh=1; Expires=Wed, 01 Jan 2027 00:00:00 GMT'],
-        now: now,
-      );
+      jar.record('a.example.com', [
+        'fresh=1; Expires=Wed, 01 Jan 2027 00:00:00 GMT',
+      ], now: now);
       expect(jar.headerFor('a.example.com'), 'fresh=1');
     });
 
@@ -154,7 +150,6 @@ void main() {
         now: () => fakeNow,
         platformTtl: const Duration(minutes: 10),
         channelTtl: const Duration(minutes: 5),
-        routeOrderTtl: const Duration(minutes: 15),
       );
     });
 
@@ -312,19 +307,18 @@ void main() {
       expect(calls, 2);
     });
 
-    test('带代理的空列表报 AppFailure，不漏 StateError', () async {
-      const proxied = LiveSource(
+    test('空列表报 AppFailure，不漏 StateError', () async {
+      const listSource = LiveSource(
         id: 'lst3',
-        name: '代理列表源',
+        name: '空列表源',
         description: '',
         protocol: LiveProtocol.list,
         endpoints: ['http://list/empty.m3u'],
-        proxies: ['http://proxy/'],
       );
       fake.handler = (url) async => '';
       const platform = LivePlatform(id: 'all', name: '全部频道');
       await expectLater(
-        repository.channels(proxied, platform),
+        repository.channels(listSource, platform),
         throwsA(isA<AppFailure>()),
       );
     });
@@ -381,7 +375,6 @@ class _FakeLiveHttp extends LiveHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration? timeout,
-    String? proxyResourceKey,
   }) {
     final handle = handler;
     if (handle == null) throw StateError('no handler for $url');

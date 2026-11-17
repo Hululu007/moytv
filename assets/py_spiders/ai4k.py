@@ -40,7 +40,6 @@ FALLBACK_CATS = [
     ('26', '伦理三级'),
     ('28', 'AV解说'),
     ('31', 'SM调教'),
-    ('33', '萝莉少女'),
     ('34', '极品媚黑'),
     ('37', '女同性恋'),
     ('39', '网红头条'),
@@ -48,6 +47,17 @@ FALLBACK_CATS = [
     ('45', '韩国主播'),
     ('47', 'VR视角'),
 ]
+
+FLAG_WORDS = [
+    'loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+    '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉',
+]
+
+
+def _is_flagged(name):
+    low = (name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
 
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
@@ -194,6 +204,7 @@ def _fetch_categories():
     if not cats:
         cats = list(FALLBACK_CATS)
         ttl = 300
+    cats = [(cid, name) for cid, name in cats if not _is_flagged(name)]
     if len(CACHE) > 20:
         CACHE.clear()
     CACHE['cats'] = (_now(), cats, ttl)
@@ -303,6 +314,9 @@ class Spider(BaseSpider):
         pg = _norm_pg(pg)
         if pg < 1:
             pg = 1
+        for cid, name in _fetch_categories():
+            if cid == tid and _is_flagged(name):
+                return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         if pg <= 1:
             path = '/type/id/%s.html' % tid
         else:

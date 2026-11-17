@@ -1,6 +1,8 @@
 package core
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -99,23 +101,19 @@ func TestSelectHongguoAppMediaPlainBase64StillWorks(t *testing.T) {
 	}
 }
 
-func hongguoMultiFixture(t *testing.T, multiBody string, singleBody string) (*Downloader, *[]string, *[]string) {
+func hongguoMultiFixture(t *testing.T, multiBody string) (*Downloader, *[]string, *[]string) {
 	var paths []string
 	var bodies []string
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
 		paths = append(paths, request.URL.Path)
 		if request.Body != nil {
-			content, _ := io.ReadAll(request.Body)
-			bodies = append(bodies, string(content))
+			raw, _ := io.ReadAll(request.Body)
+			if decoded, err := gzipDecompress(raw); err == nil {
+				raw = decoded
+			}
+			bodies = append(bodies, string(raw))
 		}
-		if strings.Contains(request.URL.Path, "video_tab") {
-			// GET 首选 leg 在本夹具里回空，走 POST 批量。
-			return sourceFixtureResponse(request, http.StatusOK, ``), nil
-		}
-		if strings.Contains(request.URL.Path, "multi_video_model") {
-			return sourceFixtureResponse(request, http.StatusOK, multiBody), nil
-		}
-		return sourceFixtureResponse(request, http.StatusOK, singleBody), nil
+		return sourceFixtureResponse(request, http.StatusOK, multiBody), nil
 	})
 	d.cfg.Retries = 1
 	client := d.hongguoClient()
@@ -123,46 +121,44 @@ func hongguoMultiFixture(t *testing.T, multiBody string, singleBody string) (*Do
 	return d, &paths, &bodies
 }
 
-func TestHongguoMultiModelSuccessSkipsSingle(t *testing.T) {
+// gzipDecompress：V5 请求体是 gzip 字节，测试里解开验 JSON 形状。
+func gzipDecompress(raw []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(reader)
+}
+
+// V5 单腿取代了旧的三腿：一次 POST 到 player 端点即取回模型，没有
+// tab 首选、multi、single 三腿的先后顺序可言；以下测试钉住单次请求与
+// 请求体形状（mixed_video_id_map + need_all_video_definition）。
+func TestHongguoV5ModelSingleRequest(t *testing.T) {
 	multiBody := `{"code":0,"data":{"12345":{"video_model":{"video_list":[{"main_url":"https://media.example.test/multi1080.mp4","video_meta":{"codec_type":"h264","definition":"1080p"}}],"video_duration":"60"}}}}`
-	d, paths, bodies := hongguoMultiFixture(t, multiBody, hongguoRotationModelOK)
-	media, err := d.resolveHongguoAppMediaLine(context.Background(), "12345")
+	d, paths, bodies := hongguoMultiFixture(t, multiBody)
+	media, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if media.URL != "https://media.example.test/multi1080.mp4" {
-		t.Fatal("multi model did not win", media.URL)
+		t.Fatal("V5 model did not win", media.URL)
 	}
-	if len(*paths) != 2 || !strings.Contains((*paths)[0], "video_tab") || !strings.Contains((*paths)[1], "multi_video_model") {
-		t.Fatal("GET leg must run first, then multi; single must not run after multi success", *paths)
+	if len(*paths) != 1 || !strings.Contains((*paths)[0], "multi_video_model/player/v1") {
+		t.Fatal("V5 must issue exactly one player request", *paths)
 	}
-	if len(*bodies) != 2 || !strings.Contains((*bodies)[1], "1004") || !strings.Contains((*bodies)[1], "12345") || !strings.Contains((*bodies)[1], "need_all_video_definition") {
-		t.Fatal("multi payload must carry mixed_video_id_map and need_all_video_definition", *bodies)
-	}
-}
-
-func TestHongguoMultiModelFallsBackToSingle(t *testing.T) {
-	d, paths, _ := hongguoMultiFixture(t, `{"code":0,"data":{}}`, hongguoRotationModelOK)
-	media, err := d.resolveHongguoAppMediaLine(context.Background(), "12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if media.URL != "https://media.example.test/high.mp4" {
-		t.Fatal("multi failure must fall back to single", media.URL)
-	}
-	if len(*paths) != 3 || !strings.Contains((*paths)[0], "video_tab") || !strings.Contains((*paths)[1], "multi_video_model") || !strings.Contains((*paths)[2], "video_model/v1") {
-		t.Fatal("GET leg first, multi second, single third", *paths)
+	if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "1004") || !strings.Contains((*bodies)[0], "12345") || !strings.Contains((*bodies)[0], "need_all_video_definition") {
+		t.Fatal("V5 payload must carry mixed_video_id_map and need_all_video_definition", *bodies)
 	}
 }
 
-func TestHongguoMultiModelSpadeWithNestedSeed(t *testing.T) {
+func TestHongguoV5ModelSpadeWithNestedSeed(t *testing.T) {
 	multiBody := `{"code":0,"data":{"12345":{"video_model":{"video_list":[{"main_url":"` + hongguoSpadeTestCipher + `","video_meta":{"codec_type":"h264","definition":"1080p"}}],"video_duration":"60"},"video_info":{"data":{"key_seed":"` + hongguoSpadeTestSeed + `"}}}}}`
-	d, _, _ := hongguoMultiFixture(t, multiBody, hongguoRotationModelOK)
-	media, err := d.resolveHongguoAppMediaLine(context.Background(), "12345")
+	d, _, _ := hongguoMultiFixture(t, multiBody)
+	media, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if media.URL != hongguoSpadeTestPlain {
-		t.Fatal("multi spade URL was not decrypted", media.URL)
+		t.Fatal("V5 spade URL was not decrypted", media.URL)
 	}
 }

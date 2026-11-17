@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/local_store.dart';
@@ -16,6 +17,12 @@ void main() {
     WidgetTester tester, {
     String source = 'huangdou',
   }) async {
+    // 7 个桌面图标在默认 600 高视口里排不下（第 7 个中心点在视口外、
+    // 点按命中不了）；用手机尺寸视口（与预览测试一致）。
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     SharedPreferences.setMockInitialValues({
       'source': source,
       'hiddenSites': '[]',
@@ -37,12 +44,12 @@ void main() {
 
   Finder xpKey(String name) => find.byKey(ValueKey(name));
 
-  testWidgets('XP 桌面：山丘墙纸 + 5 图标 + Luna 任务栏 + 无胶囊栏', (tester) async {
+  testWidgets('XP 桌面：山丘墙纸 + 7 图标 + Luna 任务栏 + 无胶囊栏', (tester) async {
     await pumpXpHome(tester);
     expect(xpKey('xp-desktop'), findsOneWidget);
     expect(find.byType(CustomPaint), findsWidgets);
     for (final kind in Win7WindowKind.values) {
-      if (kind == Win7WindowKind.live || kind == Win7WindowKind.drama) {
+      if (kind == Win7WindowKind.drama || kind == Win7WindowKind.multimedia) {
         continue;
       }
       expect(
@@ -51,9 +58,29 @@ void main() {
         reason: kind.name,
       );
     }
-    expect(xpKey('xp-desktop-icon-live'), findsNothing);
     // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
     expect(xpKey('xp-desktop-icon-drama'), findsNothing);
+    // “我的电脑”已从桌面拿掉（改成“我的”图标），多媒体窗只走开始菜单。
+    expect(xpKey('xp-desktop-icon-multimedia'), findsNothing);
+    // 默认顺序与 Win7 同一份：直播在片库后面，女优库在“我的”上面。
+    double top(String name) =>
+        tester.getTopLeft(xpKey('xp-desktop-icon-$name')).dy;
+    final order = [
+      'audio',
+      'novel',
+      'library',
+      'live',
+      'miniApp',
+      'actress',
+      'mine',
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(
+        top(order[i]),
+        greaterThan(top(order[i - 1])),
+        reason: '${order[i - 1]} 应在 ${order[i]} 上面',
+      );
+    }
     expect(xpKey('xp-taskbar'), findsOneWidget);
     expect(xpKey('xp-start-button'), findsOneWidget);
     expect(find.text('开始'), findsOneWidget);
@@ -157,6 +184,23 @@ void main() {
     expect(xpKey('xp-start-menu'), findsNothing);
     expect(tester.widget<Text>(xpKey('xp-window-title')).data, '直播');
     expect(xpKey('xp-taskbar-entry-live'), findsOneWidget);
+  });
+
+  testWidgets('开始菜单女优库单叶开女优库窗口', (tester) async {
+    await pumpXpHome(tester);
+    await tester.tap(xpKey('xp-start-button'));
+    await tester.pump();
+    // 女优库是末尾单叶（第 7 个顶级节点，下标 6）：无须展开，点按
+    // 直接开女优库窗口、菜单关闭。
+    final leaf = xpKey('xp-tree-node-6');
+    expect(leaf, findsOneWidget);
+    await tester.tap(leaf);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(xpKey('xp-start-menu'), findsNothing);
+    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '女优库');
+    expect(find.byType(ActressListPage), findsOneWidget);
+    expect(xpKey('xp-taskbar-entry-actress'), findsOneWidget);
   });
 
   testWidgets('切主题生效：XP 换紫蓝霓虹回胶囊壳', (tester) async {

@@ -71,7 +71,7 @@ CATS = [
 ]
 CAT_URL = "https://javmenu.com/{cateId}"
 SEARCH_URL = "https://javmenu.com/search?wd={wd}"
-DETAIL_HREF_RE = re.compile("/[A-Z]+-[A-Za-z0-9]+")
+DETAIL_HREF_RE = re.compile(r"/[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+/?(?:[?#].*)?$")
 PLAY_HREF_RE = re.compile("")
 MEDIA_RE = re.compile("(?:https?:)?//[^\\s\"'<>]+\\.(?:m3u8|mp4)(?:\\?[^\\s\"'<>]*)?")
 ANCHOR_RE = re.compile("<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.S)
@@ -271,7 +271,7 @@ class Spider(BaseSpider):
         title, cover, synopsis = _detail_fields(html)
         if not title:
             return {'list': []}
-        play_url = '立即播放$' + KEY + ':' + url
+        play_url = '正片$' + KEY + ':' + url
         return {'list': [{'vod_id': url, 'vod_name': title, 'vod_pic': cover, 'vod_actor': '', 'vod_director': '', 'vod_remarks': '', 'vod_year': '', 'vod_area': '', 'vod_content': synopsis, 'type_name': '', 'vod_tag': '', 'vod_play_from': '在线播放', 'vod_play_url': play_url, 'stills': []}]}
 
     def searchContent(self, key, quick=False, pg=1):

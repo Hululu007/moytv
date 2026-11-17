@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/app_build.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/content_models.dart';
@@ -16,8 +17,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
-/// 壳子底部栏的 6 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
-/// 定义）：片库/直播/听读/多媒体/小程序/我的，中间播放键在
+/// 壳子底部栏的 7 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
+/// 定义）：片库/直播/听读/多媒体/小程序/我的/女优库，中间播放键在
 /// 听读之后（centerAfter: 3）。
 const _shellEntries = [
   (LucideIcons.clapperboard, '片库'),
@@ -26,6 +27,7 @@ const _shellEntries = [
   (LucideIcons.hardDrive, '多媒体'),
   (LucideIcons.layoutGrid, '小程序'),
   (LucideIcons.user, '我的'),
+  (LucideIcons.users, '女优库'),
 ];
 
 Future<LocalStore> _makeStore([Map<String, Object> seeds = const {}]) async {
@@ -140,7 +142,7 @@ void main() {
     final config = AppThemeConfig.forTheme(mode);
     testWidgets('底栏颜色随主题走 ${config.themeName}', (tester) async {
       await _pumpBar(tester, mode: mode, index: 1, onSelect: (_) {});
-      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的']) {
+      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的', '女优库']) {
         expect(find.text(label), findsOneWidget);
       }
       // 霓虹胶囊栏：选中 = primaryColor，无选中胶囊/圆点。
@@ -156,7 +158,7 @@ void main() {
     });
   }
 
-  testWidgets('底栏 6 个 Tab 点按回传下标，中间播放键另回', (tester) async {
+  testWidgets('底栏 7 个 Tab 点按回传下标，中间播放键另回', (tester) async {
     final tapped = <int>[];
     var centerTapped = 0;
     await _pumpBar(
@@ -166,25 +168,25 @@ void main() {
       onSelect: tapped.add,
       onCenter: () => centerTapped++,
     );
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < 7; i++) {
       await tester.tap(find.byKey(ValueKey('shell-tab-$i')));
       await tester.pump();
     }
-    expect(tapped, [0, 1, 2, 3, 4, 5]);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
     await tester.tap(find.byKey(const ValueKey('shell-center')));
     await tester.pump();
     expect(centerTapped, 1);
-    expect(tapped, [0, 1, 2, 3, 4, 5]);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
   });
 
-  testWidgets('底栏顺序为片库/直播/听读/[播放键]/多媒体/小程序/我的', (tester) async {
+  testWidgets('底栏顺序为片库/直播/听读/[播放键]/多媒体/小程序/我的/女优库', (tester) async {
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: (_) {},
     );
-    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的'];
+    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的', '女优库'];
     var previousX = -1.0;
     for (final label in order) {
       expect(find.text(label), findsOneWidget);
@@ -266,7 +268,6 @@ void main() {
       return switch (section) {
         ContentSection.audio => HomeZone.audio,
         ContentSection.novel => HomeZone.novel,
-        _ => HomeZone.library,
       };
     }
     return null;
@@ -325,6 +326,32 @@ void main() {
     expect(find.byType(MiniAppHomePage), findsNothing);
   }, skip: !allSourcesEnabled);
 
+  testWidgets('底栏女优库进女优库区、切其它区能离开、点片库能回', (tester) async {
+    await pumpHome(tester);
+    await tapShellTab(tester, 6);
+    expect(find.byType(ActressListPage), findsOneWidget);
+    await tapShellTab(tester, 1);
+    expect(currentZone(tester), HomeZone.live);
+    expect(find.byType(ActressListPage), findsNothing);
+    await tapShellTab(tester, 6);
+    expect(find.byType(ActressListPage), findsOneWidget);
+    await tapShellTab(tester, 0);
+    expect(find.byType(ActressListPage), findsNothing);
+  }, skip: !allSourcesEnabled);
+
+  testWidgets('片库顶栏女优库钮进女优库区（普通壳，不 push 路由）', (tester) async {
+    await pumpHome(tester);
+    await tester.tap(find.byKey(const ValueKey('open-actress-library')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(ActressListPage), findsOneWidget);
+    // 仍在首页路由内：底部标签还在，点片库能回目录。
+    expect(find.byType(NeonCapsuleBar), findsOneWidget);
+    await tapShellTab(tester, 0);
+    expect(find.byType(ActressListPage), findsNothing);
+    expect(find.byKey(const ValueKey('source-switch')), findsOneWidget);
+  }, skip: !allSourcesEnabled);
+
   testWidgets('短剧首页默认页签不是我的页', (tester) async {
     final store = await _makeStore();
     final searchController = TextEditingController();
@@ -363,10 +390,11 @@ void main() {
     expect(find.text('最近观看'), findsNothing);
   });
 
-  // 底部标签 6 个 Tab 逐个点、各进各的页：听读在第 2 位（默认
+  // 底部标签 7 个 Tab 逐个点、各进各的页：听读在第 2 位（默认
   // 听书子区，页内子切换进阅读，再点标签回到上次的子区）、多媒
-  // 体在第 3 位、小程序在第 4 位、我的在第 5 位。红果源走短剧分支。
-  testWidgets('底部标签 6 个 Tab 逐个点各进各的页', (tester) async {
+  // 体在第 3 位、小程序在第 4 位、我的在第 5 位、女优库在第 6 位。
+  // 红果源走短剧分支。
+  testWidgets('底部标签 7 个 Tab 逐个点各进各的页', (tester) async {
     await pumpHome(tester, source: 'hongguo', theme: 'purpleNeon');
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
 
@@ -394,11 +422,14 @@ void main() {
     expect(find.byType(MiniAppHomePage), findsOneWidget);
     await tapShellTab(tester, 5);
     expect(find.text('最近观看'), findsOneWidget);
+    await tapShellTab(tester, 6);
+    expect(find.byType(ActressListPage), findsOneWidget);
     await tapShellTab(tester, 0);
     expect(currentZone(tester), isNull);
     expect(multimediaShown(tester), isFalse);
     expect(find.byType(MiniAppHomePage), findsNothing);
     expect(find.text('最近观看'), findsNothing);
+    expect(find.byType(ActressListPage), findsNothing);
   }, skip: !allSourcesEnabled);
 
   testWidgets('短剧首页 requestedTab 直达我的页', (tester) async {
@@ -487,5 +518,44 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.byType(MiniAppHomePage), findsOneWidget);
+  });
+
+  testWidgets('短剧首页 requestedTab 直达女优库页', (tester) async {
+    final store = await _makeStore();
+    final searchController = TextEditingController();
+    addTearDown(searchController.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HongguoDramaHome(
+          dramas: const [],
+          repository: FixtureRepository(),
+          store: store,
+          onOpenDrama: (_) {},
+          onOpenFeed: () {},
+          onPickSource: () {},
+          sourceLabel: '测试',
+          feedEnabled: false,
+          categories: const [],
+          selectedCategory: '',
+          onCategorySelected: (_) {},
+          searchController: searchController,
+          searchHint: '',
+          onSearchChanged: (_) {},
+          onSearchSubmitted: (_) {},
+          onOpenGlobalSearch: () {},
+          onAvatarPressed: () {},
+          onFilterPressed: () {},
+          onRankingsPressed: () {},
+          onNewPressed: () {},
+          filtersActive: false,
+          newActive: false,
+          onOpenSaved: ({required bool history}) {},
+          requestedTab: HongguoDramaHome.actressTabIndex,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byType(ActressListPage), findsOneWidget);
   });
 }

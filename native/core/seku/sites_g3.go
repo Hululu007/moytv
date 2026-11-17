@@ -22,12 +22,15 @@ package seku
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 func init() {
@@ -81,10 +84,15 @@ func xzHeaders() map[string]string {
 }
 
 // 站内导航模块 1:1 (x小说 is text-only, excluded in py too).
+// Removed 2026-11-17 after live verification: 成年短剧 404s and is
+// absent from site nav; x吃瓜/今日吃瓜 serve only external-link text
+// posts (0 hlsUrl / 0 hasVideo across the aggregator's 8-page scan and
+// direct page fetches), so they are text-only like x小说. The
+// xzPostModules entries are kept so direct calls still aggregate.
 var xzCats = []string{
 	"x视频", "真实自拍", "网红女神", "国产精品", "爱好男同-1",
-	"短剧", "成年短剧", "情感剧场", "古装历史", "年代农村", "穿越重生",
-	"x吃瓜", "今日吃瓜", "海外吃瓜", "娱乐吃瓜", "网红黑料",
+	"短剧", "情感剧场", "古装历史", "年代农村", "穿越重生",
+	"海外吃瓜", "娱乐吃瓜", "网红黑料",
 	"x-av", "日本无码", "国产av", "欧美av", "动漫av",
 }
 
@@ -139,18 +147,40 @@ func xzStr(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+// Direct client with a 60s timeout: the site's TTFB measured 21-24s
+// through the verification egress (2026-11-17), so the shared 20s
+// client timed out on a large share of requests (and the post-module
+// aggregator silently returned empty when page 1 timed out). Direct
+// fetch also skips the shared transport's external-reader fallback,
+// which must not be triggered for this provider. crackMergedHeaders
+// is still applied, as before.
+var xzClient = &http.Client{Timeout: 60 * time.Second}
+
 func xzFetch(rawURL string) (string, error) {
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		body, code, _, err := httpGet(rawURL, xzHeaders())
-		if err == nil && code == 200 {
-			return string(body), nil
+		req, err := http.NewRequest("GET", rawURL, nil)
+		if err != nil {
+			return "", err
 		}
+		for k, v := range crackMergedHeaders(rawURL, xzHeaders()) {
+			req.Header.Set(k, v)
+		}
+		resp, err := xzClient.Do(req)
 		if err != nil {
 			lastErr = err
-		} else {
-			lastErr = fmt.Errorf("http %d", code)
+			continue
 		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == 200 {
+			return string(body), nil
+		}
+		lastErr = fmt.Errorf("http %d", resp.StatusCode)
 	}
 	return "", lastErr
 }

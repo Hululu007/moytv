@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'app_page_route.dart';
@@ -11,6 +13,11 @@ import 'models.dart';
 import 'novel_reader_page.dart';
 import 'novel_source_store.dart';
 
+/// 视频腿整批预算：searchAcross 是整批回（Go 核聚合），Dart 侧此前
+/// 对 Go 腿没有超时——Go 核 6 路 × 25 秒/源，30 个源最坏约 125 秒。
+/// 150 秒只拦桥接卡死，不砍健康腿；超时只记本腿失败，阅读结果不受影响。
+const globalSearchVideoOverallTimeout = Duration(seconds: 150);
+
 class GlobalSearchPage extends StatefulWidget {
   const GlobalSearchPage({
     super.key,
@@ -18,12 +25,28 @@ class GlobalSearchPage extends StatefulWidget {
     required this.store,
     this.initialQuery = '',
     this.onOpenDrama,
+    this.videoSearchOverride,
+    this.bookSearchOverride,
   });
 
   final AppRepository repository;
   final LocalStore store;
   final String initialQuery;
   final void Function(Drama drama)? onOpenDrama;
+
+  /// 视频腿搜索函数（测试注入）：不传时走 repository.searchAcross。
+  @visibleForTesting
+  final Future<CatalogPage> Function(List<String> sources, String query)?
+  videoSearchOverride;
+
+  /// 阅读腿搜索函数（测试注入）：不传时走 searchReadingTargetsProgressive。
+  @visibleForTesting
+  final Future<void> Function(
+    String query,
+    List<GlobalSearchBookTarget> targets,
+    void Function(GlobalSearchBookGroup group) onGroup,
+  )?
+  bookSearchOverride;
 
   @override
   State<GlobalSearchPage> createState() => _GlobalSearchPageState();
@@ -90,7 +113,13 @@ List<GlobalVideoGroup> groupGlobalVideoResults(
 
 class _GlobalSearchPageState extends State<GlobalSearchPage> {
   late final _controller = TextEditingController(text: widget.initialQuery);
-  bool _loading = false;
+
+  /// 两腿各自的待回 / 失败态：任一腿先回就先上屏，另一腿的加载态
+  /// 只占底部一行，已出的结果可点；单腿失败不拖垮另一腿的结果。
+  bool _videoPending = false;
+  bool _bookPending = false;
+  bool _videoFailed = false;
+  bool _bookFailed = false;
   String _error = '';
   bool _searched = false;
   List<GlobalVideoGroup> _videoGroups = const [];
@@ -116,48 +145,140 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
     if (query.isEmpty) return;
     final generation = ++_searchGeneration;
     setState(() {
-      _loading = true;
+      _videoPending = true;
+      _bookPending = true;
+      _videoFailed = false;
+      _bookFailed = false;
       _error = '';
       _searched = true;
+      _videoGroups = const [];
+      _bookGroups = const [];
     });
     try {
       await NovelSourceStore.applyToRegistry();
-      final videoIds = widget.store.visibleSources.map((s) => s.id).toList();
-      // 阅读侧：注册表全量收录，并行搜、单站超时隔离（见
-      // global_search_service.dart）；视频侧仍走 searchAcross。
-      // 两腿并发跑：原先视频搜完才搜阅读，总耗时是两腿之和。
-      final bookTargets = globalSearchBookTargets(
-        audioSources: ContentRegistry.sourcesFor(ContentSection.audio),
-        novelSources: ContentRegistry.sourcesFor(ContentSection.novel),
-      );
-      final videoFuture = widget.repository.searchAcross(videoIds, query);
-      final bookFuture = searchReadingTargets(query, bookTargets);
-      final videoPage = await videoFuture;
-      final bookGroups = await bookFuture;
-      final videoGroups = groupGlobalVideoResults(
-        videoPage.items,
-        widget.store.sources,
-      );
-      if (!mounted || generation != _searchGeneration) return;
-      bookGroups.sort((a, b) {
-        final rank = globalSearchSectionRank(
-          a.section.title,
-        ).compareTo(globalSearchSectionRank(b.section.title));
-        return rank != 0 ? rank : a.source.name.compareTo(b.source.name);
-      });
-      setState(() {
-        _loading = false;
-        _videoGroups = videoGroups;
-        _bookGroups = bookGroups;
-      });
     } catch (_) {
-      if (mounted && generation == _searchGeneration) {
-        setState(() {
-          _loading = false;
-          _error = '搜索失败，请重试';
-        });
-      }
+      if (!mounted || generation != _searchGeneration) return;
+      setState(() {
+        _videoPending = false;
+        _bookPending = false;
+        _error = '搜索失败，请重试';
+      });
+      return;
     }
+    if (!mounted || generation != _searchGeneration) return;
+    final videoIds = widget.store.visibleSources
+        .where((s) => !s.isHtmlSite)
+        .map((s) => s.id)
+        .toList();
+    // 阅读侧：注册表全量收录，逐站回、回来一个显示一个（见
+    // global_search_service.dart）；视频侧仍走 searchAcross 整批回，
+    // 回了就上屏。两腿并发跑，各自失败只记本腿，不拖另一腿。
+    final bookTargets = globalSearchBookTargets(
+      audioSources: ContentRegistry.sourcesFor(ContentSection.audio),
+      novelSources: ContentRegistry.sourcesFor(ContentSection.novel),
+    );
+    unawaited(_runVideoLeg(generation, videoIds, query));
+    unawaited(_runBookLeg(generation, query, bookTargets));
+  }
+
+  /// 视频腿：整批回，回了就上屏；超时 / 报错只记本腿失败。
+  Future<void> _runVideoLeg(
+    int generation,
+    List<String> videoIds,
+    String query,
+  ) async {
+    var failed = false;
+    CatalogPage? videoPage;
+    try {
+      final videoSearch =
+          widget.videoSearchOverride ?? widget.repository.searchAcross;
+      videoPage = await videoSearch(
+        videoIds,
+        query,
+      ).timeout(globalSearchVideoOverallTimeout);
+    } catch (_) {
+      failed = true;
+    }
+    if (!mounted || generation != _searchGeneration) return;
+    setState(() {
+      if (!failed && videoPage != null) {
+        _videoGroups = groupGlobalVideoResults(
+          videoPage.items,
+          widget.store.sources,
+        );
+      }
+      _videoPending = false;
+      _videoFailed = failed;
+    });
+    _settleLeg(generation);
+  }
+
+  /// 阅读腿：逐站回，每组到就追加上屏；整腿报错只记本腿失败。
+  Future<void> _runBookLeg(
+    int generation,
+    String query,
+    List<GlobalSearchBookTarget> bookTargets,
+  ) async {
+    var failed = false;
+    try {
+      final bookSearch = widget.bookSearchOverride;
+      if (bookSearch != null) {
+        await bookSearch(query, bookTargets, (group) {
+          _onBookGroup(generation, group);
+        });
+      } else {
+        await searchReadingTargetsProgressive(
+          query,
+          bookTargets,
+          onGroup: (group) => _onBookGroup(generation, group),
+        );
+      }
+    } catch (_) {
+      failed = true;
+    }
+    if (!mounted || generation != _searchGeneration) return;
+    setState(() {
+      _bookPending = false;
+      _bookFailed = failed;
+    });
+    _settleLeg(generation);
+  }
+
+  void _onBookGroup(int generation, GlobalSearchBookGroup group) {
+    if (!mounted || generation != _searchGeneration) return;
+    setState(() {
+      _bookGroups = [..._bookGroups, group]..sort(_compareBookGroups);
+    });
+  }
+
+  static int _compareBookGroups(
+    GlobalSearchBookGroup a,
+    GlobalSearchBookGroup b,
+  ) {
+    final rank = globalSearchSectionRank(
+      a.section.title,
+    ).compareTo(globalSearchSectionRank(b.section.title));
+    return rank != 0 ? rank : a.source.name.compareTo(b.source.name);
+  }
+
+  /// 一腿收尾：两腿都结算、都失败、又一张结果都没有时，才报整轮失败；
+  /// 只要任一腿出过结果，就只显示结果，不报失败。
+  void _settleLeg(int generation) {
+    if (!mounted || generation != _searchGeneration) return;
+    if (_videoPending || _bookPending) return;
+    if (_videoFailed &&
+        _bookFailed &&
+        _videoGroups.isEmpty &&
+        _bookGroups.isEmpty) {
+      setState(() => _error = '搜索失败，请重试');
+    }
+  }
+
+  /// 底部待回提示：只报还没回完的那条腿。
+  String get _pendingLabel {
+    if (_videoPending && _bookPending) return '正在搜索更多站源…';
+    if (_videoPending) return '正在搜索视频站源…';
+    return '正在搜索阅读站源…';
   }
 
   void _openVideo(Drama drama) {
@@ -182,6 +303,8 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
       (a, b) =>
           globalSearchSectionRank(a).compareTo(globalSearchSectionRank(b)),
     );
+    final stillSearching = _videoPending || _bookPending;
+    final hasResults = _videoGroups.isNotEmpty || _bookGroups.isNotEmpty;
     return Scaffold(
       appBar: AppBar(title: const Text('全局搜索')),
       body: Column(
@@ -208,7 +331,9 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
               ],
             ),
           ),
-          if (_loading)
+          // 全屏转圈只在“一组结果都还没回”时出现；只要有结果上屏，
+          // 待回的腿就只占列表底部一行，已出的结果可点。
+          if (stillSearching && !hasResults && _error.isEmpty)
             const Expanded(child: Center(child: CircularProgressIndicator()))
           else if (_error.isNotEmpty)
             Expanded(
@@ -223,7 +348,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
                 ),
               ),
             )
-          else if (_searched && _videoGroups.isEmpty && _bookGroups.isEmpty)
+          else if (_searched && !hasResults)
             const Expanded(child: Center(child: Text('暂无结果')))
           else
             Expanded(
@@ -292,6 +417,25 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
                       ),
                     ],
                   ],
+                  if (stillSearching)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _pendingLabel,
+                            style: TextStyle(color: colors.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),

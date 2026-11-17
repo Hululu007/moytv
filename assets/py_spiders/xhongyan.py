@@ -1,4 +1,6 @@
+import base64
 import gzip
+import http.client
 import json
 import re
 import ssl
@@ -27,7 +29,106 @@ CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE
 
-TIMEOUT = 30
+TIMEOUT = 70
+
+
+def _proxy_target(url):
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or 'http').lower()
+    host = parts.hostname or ''
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get(scheme) or proxies.get('all') or ''
+    if not proxy_url or not host:
+        return None
+    try:
+        if urllib.request.proxy_bypass(host):
+            return None
+    except Exception:
+        pass
+    return urllib.parse.urlsplit(proxy_url)
+
+
+def _http_client_get(url, hdr, timeout):
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or 'http').lower()
+    host = parts.hostname or ''
+    if not host:
+        return None
+    port = parts.port or (443 if scheme == 'https' else 80)
+    path = parts.path or '/'
+    if parts.query:
+        path += '?' + parts.query
+    proxy = _proxy_target(url)
+    try:
+        if proxy and scheme == 'https':
+            conn = http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout)
+            tunnel = {}
+            if proxy.username:
+                raw_auth = urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password or '')
+                tunnel['Proxy-Authorization'] = 'Basic ' + base64.b64encode(raw_auth.encode('utf-8')).decode('ascii')
+            conn.set_tunnel(host, port, headers=tunnel or None)
+            conn.connect()
+            conn.sock = CTX.wrap_socket(conn.sock, server_hostname=host)
+        elif proxy:
+            conn = http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout)
+            path = url
+            if proxy.username:
+                raw_auth = urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password or '')
+                hdr = dict(hdr)
+                hdr['Proxy-Authorization'] = 'Basic ' + base64.b64encode(raw_auth.encode('utf-8')).decode('ascii')
+        elif scheme == 'https':
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=CTX)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        try:
+            conn.putrequest('GET', path, skip_host=True, skip_accept_encoding=True)
+            host_hdr = host if (scheme == 'https' and port == 443) or (scheme == 'http' and port == 80) else '%s:%d' % (host, port)
+            conn.putheader('Host', host_hdr)
+            for key, val in hdr.items():
+                conn.putheader(key, val)
+            conn.putheader('Connection', 'keep-alive')
+            conn.endheaders()
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.getheader('Location')
+                resp.read()
+                if loc:
+                    nxt = urllib.parse.urljoin(url, loc)
+                    if nxt != url:
+                        return _http_client_get(nxt, hdr, timeout)
+                return None
+            if resp.status != 200:
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                return None
+            chunks = []
+            try:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except Exception as ie:
+                part = getattr(ie, 'partial', b'') or b''
+                if part:
+                    chunks.append(part)
+            data = b''.join(chunks)
+            enc = (resp.getheader('Content-Encoding') or '').lower()
+            if enc == 'gzip' or data[:2] == b'\x1f\x8b':
+                try:
+                    data = gzip.decompress(data)
+                except Exception:
+                    pass
+            return data.decode('utf-8', 'replace')
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        return None
 
 
 def _http_get(url, referer=None, timeout=TIMEOUT):
@@ -35,11 +136,10 @@ def _http_get(url, referer=None, timeout=TIMEOUT):
         'User-Agent': UA,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
     }
     if referer:
         hdr['Referer'] = referer
+    best = None
     for attempt in range(3):
         text = None
         if _requests is not None:
@@ -50,11 +150,16 @@ def _http_get(url, referer=None, timeout=TIMEOUT):
             except Exception:
                 text = None
         if text is None:
+            text = _http_client_get(url, hdr, timeout)
+        if text is None:
             try:
                 req = urllib.request.Request(url, headers=hdr)
                 with urllib.request.urlopen(req, timeout=timeout, context=CTX) as resp:
                     if resp.status == 200:
-                        data = resp.read()
+                        try:
+                            data = resp.read()
+                        except Exception as ie:
+                            data = getattr(ie, 'partial', b'') or b''
                         enc = (resp.headers.get('Content-Encoding') or '').lower()
                         if enc == 'gzip' or data[:2] == b'\x1f\x8b':
                             try:
@@ -65,13 +170,16 @@ def _http_get(url, referer=None, timeout=TIMEOUT):
             except Exception:
                 text = None
         if text is not None:
-            return text
+            if best is None or len(text) > len(best):
+                best = text
+            if '</html>' in text:
+                return text
         if attempt < 2:
             try:
                 time.sleep(1)
             except Exception:
                 pass
-    return None
+    return best
 
 
 def _fetch(path, referer=None):

@@ -33,6 +33,7 @@ void main() {
       AppThemeMode.redBlackNeon: SiteListStyle.normal,
       AppThemeMode.pinkPurpleNeon: SiteListStyle.normal,
       AppThemeMode.win7: SiteListStyle.normal,
+      AppThemeMode.xpWindows: SiteListStyle.normal,
     };
     expect(expected.keys.toSet(), AppThemeMode.values.toSet());
     for (final mode in AppThemeMode.values) {

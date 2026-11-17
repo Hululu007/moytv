@@ -30,7 +30,6 @@ import 'package:moyi/jar_bridge.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/ijk_video_pane.dart';
 import 'package:moyi/models.dart';
-import 'package:moyi/mpv_egress.dart';
 import 'package:moyi/player_core.dart';
 import 'package:moyi/tvbox_video_pane.dart';
 import 'package:moyi/playback_launch_screen.dart';
@@ -349,8 +348,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             logLevel: MPVLogLevel.error,
           ),
         );
-    // MPV 出口：按当前决策设 http-proxy，决策变化时自动重设。
-    bindMpvEgress(_player);
     _speedTracker = NetworkSpeedTracker(
       sample: () => fetchMpvNetworkSpeedSample(_player),
     );
@@ -1417,9 +1414,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
               throw AppFailure('解析接口全部失败（取流地址=$pageUrl）');
             }
           } else {
-            throw AppFailure(
-              '播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）',
-            );
+            throw AppFailure('播放地址是网页、需要解析但未配置解析接口（取流地址=$pageUrl）');
           }
         }
       }
@@ -2086,7 +2081,6 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             await _interactions.pendingRates.catchError((Object _) {});
             await enhancementClosed.catchError((Object _) {});
             await _pictureQuality.dispose().catchError((Object _) {});
-            unbindMpvEgress(_player);
             await _player.dispose();
           }),
     );

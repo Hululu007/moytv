@@ -64,7 +64,6 @@ func TestHuangguoMediaUsesBrowserSessionPageRefererAndPreviewToken(t *testing.T)
 	defer server.Close()
 	d := sourceFixtureDownloader(t, nil)
 	d.cfg.HuangguoVideoURL, d.cfg.InsecureTLS = server.URL, true
-	d.proxyRouter = &proxyRouter{}
 	d.client.Transport = newHuangguoBrowserTransport(http.DefaultTransport, d)
 	t.Cleanup(d.client.CloseIdleConnections)
 	task := Task{DramaID: "huangguo-video:video/fixture", Chapter: Chapter{ID: "fixture", Source: sourceHuangguoVideo, PageURL: "https://huangguo.video/video/fixture"}, Index: 1}

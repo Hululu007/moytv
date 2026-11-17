@@ -280,7 +280,10 @@ func (downloader *Downloader) hongguoLoginFinishRedirect(ctx context.Context, re
 	target = base.ResolveReference(target)
 	transport := downloader.client.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		// 直连：Clone 后显式置 nil，不继承环境变量代理。
+		cloned := http.DefaultTransport.(*http.Transport).Clone()
+		cloned.Proxy = nil
+		transport = cloned
 	}
 	noRedirect := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse

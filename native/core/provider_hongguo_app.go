@@ -106,7 +106,10 @@ type hongguoAppClient struct {
 	catalogMu           sync.Mutex
 	deviceMu            sync.Mutex
 	registerPausedUntil time.Time
-	deviceLimited       bool
+	// registerPauseFailures：连续注册失败次数，决定渐进退避的暂停时长；成功清零。
+	// 只在 deviceMu 保护下读写（ensureHongguoDevice 全程持锁）。
+	registerPauseFailures int
+	deviceLimited         bool
 	// appSuspendedUntil：玩家 App 接口（video_detail / video_model）当前「空 body 未下发
 	// 数据」时的短负缓存窗口。窗口内详情/取流直接跳过这条 3 次重试+退避的慢链、改走网页，
 	// 提速详情与播放页；窗口过后自动重试，App 恢复即可无缝切回。只由 /player/ 端点空 body 触发。

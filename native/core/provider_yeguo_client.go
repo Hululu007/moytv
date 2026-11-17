@@ -260,9 +260,9 @@ func (client *yeguoAPIClient) requestClient() *http.Client {
 			transport.TLSClientConfig = transport.TLSClientConfig.Clone()
 			transport.TLSClientConfig.InsecureSkipVerify = true
 		}
-		if client.downloader.proxyRouter != nil {
-			transport.Proxy = client.downloader.proxyRouter.proxy
-		}
+		// 直连：Clone 会继承 DefaultTransport 的 ProxyFromEnvironment，
+		// 显式置 nil。
+		transport.Proxy = nil
 		client.httpClient = &http.Client{
 			Transport: transport,
 			CheckRedirect: func(request *http.Request, via []*http.Request) error {

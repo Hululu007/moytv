@@ -68,7 +68,7 @@ def _fix_url(raw):
     return u
 
 
-def _http_get(url, referer=None, timeout=25):
+def _http_get(url, referer=None, timeout=60):
     h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Accept-Encoding': 'gzip, deflate'}
     if referer:
         h['Referer'] = referer

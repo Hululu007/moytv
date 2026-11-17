@@ -348,6 +348,9 @@ func jmPic(u string) string {
 	if strings.HasPrefix(u, "//") {
 		return "https:" + u
 	}
+	if strings.HasPrefix(u, "/") {
+		return jmHost + u
+	}
 	return u
 }
 
@@ -1291,6 +1294,8 @@ var (
 	sjDramaAltRe    = regexp.MustCompile(`<img[^>]+alt="([^"]+)"`)
 	sjDramaStateRe  = regexp.MustCompile(`(完结|连载中?|更新至)[^A-Za-z0-9]{0,4}(\d+\s*集)?`)
 	sjRankTitleRe   = regexp.MustCompile(`<a class="rank-title" href="/video/(\d+)/">([^<]+)</a>`)
+	sjRankAIH2Re    = regexp.MustCompile(`<h2>([^<]+)</h2>`)
+	sjRankAIPRe     = regexp.MustCompile(`<p>([^<]+)</p>`)
 	sjStarHrefRe    = regexp.MustCompile(`href="(/star/[A-Za-z0-9\-]+/)"`)
 	sjStarNameRe    = regexp.MustCompile(`<h2[^>]*>([^<]+)</h2>`)
 	sjStarCountRe   = regexp.MustCompile(`<span>([^<]*影片[^<]*)</span>`)
@@ -1305,6 +1310,7 @@ var (
 	sjEpLinkRe      = regexp.MustCompile(`href="(/video/\d+/episode/\d+/)"[^>]*>([^<]+)</a>`)
 	sjVideoSrcRe    = regexp.MustCompile(`"videoSrc":"(https?://[^"]+?\.m3u8[^"]*)"`)
 	sjContentURLRe  = regexp.MustCompile(`"contentUrl":"(https?://[^"]+?\.m3u8[^"]*)"`)
+	sjInitialDataRe = regexp.MustCompile(`(?s)<script id="videoInitialData"[^>]*>(.*?)</script>`)
 	sjPageNumRe     = regexp.MustCompile(`/page/(\d+)/`)
 )
 
@@ -1463,6 +1469,41 @@ func sjParseRankVideos(slot, htmlStr, catName string) []interface{} {
 	return items
 }
 
+func sjParseRankAICards(slot, htmlStr, catName string) []interface{} {
+	items := []interface{}{}
+	seen := map[string]bool{}
+	for _, block := range strings.Split(htmlStr, `<a class="rank-ai-card"`)[1:] {
+		m := sjVideoHrefRe.FindStringSubmatch(block)
+		if m == nil {
+			continue
+		}
+		vid := "video/" + m[1]
+		if seen[vid] {
+			continue
+		}
+		title := ""
+		if tm := sjRankAIH2Re.FindStringSubmatch(block); tm != nil {
+			title = tm[1]
+		} else if am := sjDramaAltRe.FindStringSubmatch(block); am != nil {
+			title = am[1]
+		}
+		if title == "" {
+			continue
+		}
+		seen[vid] = true
+		pic := ""
+		if im := sjEncSrcRe.FindStringSubmatch(block); im != nil {
+			pic = im[1]
+		}
+		remarks := "AI热播榜"
+		if pm := sjRankAIPRe.FindStringSubmatch(block); pm != nil {
+			remarks = strings.TrimSpace(pm[1])
+		}
+		items = append(items, makeDrama(slot, vid, g1Attr(title), sjPic(pic), remarks, catName, ""))
+	}
+	return items
+}
+
 func sjAnyCards(slot, htmlStr, catName string) []interface{} {
 	items := sjParseVideoCards(slot, htmlStr, catName)
 	seen := map[string]bool{}
@@ -1496,6 +1537,8 @@ func sjVideoList(slot, path string, page int, catName string) ([]interface{}, in
 		items = sjParseVideoCards(slot, body, catName)
 	case strings.Contains(body, `class="drama-card"`):
 		items = sjParseDramaCards(slot, body, catName)
+	case strings.Contains(body, "rank-ai-card"):
+		items = sjParseRankAICards(slot, body, catName)
 	default:
 		items = sjParseRankVideos(slot, body, catName)
 	}
@@ -1769,6 +1812,68 @@ func sjDetail(slot, rawID string) (map[string]interface{}, error) {
 	return d, nil
 }
 
+// sjPlaybackAPI resolves a video id through the site's playback API
+// (services/playback.js: POST /api/videos/{id}/playback, anonymous;
+// the detail page no longer embeds videoSrc since the 2026-11 site
+// rebuild — verified live 2026-11-17: videoSrc/videoApi/videoKey/
+// videoIv are all empty in videoInitialData).
+func sjPlaybackAPI(id string) (string, error) {
+	hdr := sjHeaders()
+	hdr["Content-Type"] = "application/json"
+	hdr["Accept"] = "application/json"
+	body, code, _, err := httpDo("POST", sjHost+"/api/videos/"+id+"/playback", strings.NewReader("{}"), hdr)
+	if err != nil {
+		return "", err
+	}
+	if code != 200 {
+		return "", fmt.Errorf("91sanji playback api http %d", code)
+	}
+	var resp struct {
+		Status int    `json:"status"`
+		Msg    string `json:"msg"`
+		Data   struct {
+			Streams struct {
+				Main string `json:"main"`
+				HEVC string `json:"hevc"`
+			} `json:"streams"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	if resp.Status != 1 {
+		return "", fmt.Errorf("91sanji playback api status %d: %s", resp.Status, resp.Msg)
+	}
+	u := resp.Data.Streams.Main
+	if u == "" {
+		u = resp.Data.Streams.HEVC
+	}
+	if u == "" {
+		return "", fmt.Errorf("91sanji playback api returned no stream")
+	}
+	return u, nil
+}
+
+// sjPageVideoID reads the video id the site itself uses for playback
+// from a detail/episode page's videoInitialData JSON.
+func sjPageVideoID(raw string) string {
+	m := sjInitialDataRe.FindStringSubmatch(raw)
+	if m == nil {
+		return ""
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(m[1]), &data); err != nil {
+		return ""
+	}
+	switch v := data["id"].(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.Itoa(int(v))
+	}
+	return ""
+}
+
 func sjResolve(slot, rawID string) (map[string]interface{}, error) {
 	if strings.HasPrefix(rawID, "idx:") {
 		return nil, fmt.Errorf("91sanji: folder has no play url")
@@ -1776,9 +1881,34 @@ func sjResolve(slot, rawID string) (map[string]interface{}, error) {
 	if strings.Contains(rawID, ".m3u8") && strings.HasPrefix(rawID, "http") {
 		return playResult(rawID, slot, rawID, sjUA, sjHost+"/", "m3u8", "hls"), nil
 	}
-	page := sjHost + "/" + strings.Trim(rawID, "/") + "/"
+	trimmed := strings.Trim(rawID, "/")
+	// Episode pages carry their own playback id in videoInitialData;
+	// plain video pages use the id in the path.
+	id := ""
+	if strings.Contains(trimmed, "/episode/") {
+		if raw, err := g1Get(sjHost+"/"+trimmed+"/", sjHeaders()); err == nil {
+			id = sjPageVideoID(raw)
+		}
+	} else if parts := strings.Split(trimmed, "/"); len(parts) == 2 && parts[0] == "video" {
+		if _, err := strconv.Atoi(parts[1]); err == nil {
+			id = parts[1]
+		}
+	}
+	var apiErr error
+	if id != "" {
+		if u, err := sjPlaybackAPI(id); err == nil {
+			return playResult(u, slot, rawID, sjUA, sjHost+"/", "m3u8", "hls"), nil
+		} else {
+			apiErr = err
+		}
+	}
+	// Legacy fallback: pages that still embed a signed m3u8.
+	page := sjHost + "/" + trimmed + "/"
 	raw, err := g1Get(page, sjHeaders())
 	if err != nil {
+		if apiErr != nil {
+			return nil, apiErr
+		}
 		return nil, err
 	}
 	m := sjVideoSrcRe.FindStringSubmatch(raw)
@@ -1786,6 +1916,9 @@ func sjResolve(slot, rawID string) (map[string]interface{}, error) {
 		m = sjContentURLRe.FindStringSubmatch(raw)
 	}
 	if m == nil {
+		if apiErr != nil {
+			return nil, apiErr
+		}
 		return nil, fmt.Errorf("91sanji: no videoSrc on detail page")
 	}
 	u := strings.ReplaceAll(strings.ReplaceAll(m[1], `\u0026`, "&"), `\/`, "/")

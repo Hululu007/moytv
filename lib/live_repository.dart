@@ -9,7 +9,6 @@ import 'live_http.dart';
 import 'live_models.dart';
 import 'live_parser.dart';
 import 'live_sources.dart';
-import 'socks5_proxy.dart';
 
 class _Stamped<T> {
   const _Stamped(this.value, this.storedAt);
@@ -23,12 +22,10 @@ class LiveRepository {
     DateTime Function()? now,
     Duration? platformTtl,
     Duration? channelTtl,
-    Duration? routeOrderTtl,
   }) : _http = http ?? LiveHttp(),
        _now = now ?? DateTime.now,
        _platformTtl = platformTtl ?? const Duration(minutes: 10),
-       _channelTtl = channelTtl ?? const Duration(minutes: 5),
-       _routeOrderTtl = routeOrderTtl ?? const Duration(minutes: 15);
+       _channelTtl = channelTtl ?? const Duration(minutes: 5);
 
   /// 已失效的分类：源站仍返回，但频道统一跳转到版权拦截页。
   static const retiredCategories = ['weishizhibo'];
@@ -44,13 +41,10 @@ class LiveRepository {
   final DateTime Function() _now;
   final Duration _platformTtl;
   final Duration _channelTtl;
-  final Duration _routeOrderTtl;
   final Map<String, _Stamped<List<LivePlatform>>> _platforms = {};
   final Map<String, _Stamped<List<LiveChannel>>> _channels = {};
-  final Map<String, _Stamped<List<int>>> _routeOrders = {};
   final Map<String, Future<List<LivePlatform>>> _platformInflight = {};
   final Map<String, Future<List<LiveChannel>>> _channelInflight = {};
-  final Map<String, Future<List<int>?>> _routeOrderInflight = {};
 
   /// 分组/换台位置记忆（随仓库实例走，首页持有同一个仓库故切区不丢）。
   final LiveGroupMemory groupMemory = LiveGroupMemory();
@@ -62,24 +56,20 @@ class LiveRepository {
     // （写缓存时凭代次拦截），与界面层“取消后旧结果不写回”同口径。
     _platformInflight.clear();
     _channelInflight.clear();
-    _routeOrderInflight.clear();
   }
 
   void dispose() {
     _generation++;
     _platformInflight.clear();
     _channelInflight.clear();
-    _routeOrderInflight.clear();
     _http.close();
   }
 
   void clear() {
     _platforms.clear();
     _channels.clear();
-    _routeOrders.clear();
     _platformInflight.clear();
     _channelInflight.clear();
-    _routeOrderInflight.clear();
   }
 
   T? _fresh<T>(Map<String, _Stamped<T>> cache, String key, Duration ttl) {
@@ -221,7 +211,6 @@ class LiveRepository {
       final text = await _http.get(
         spec.listUrlFor(platform, page: 1),
         headers: spec.headers,
-        proxyResourceKey: socks5LiveResourceKey(source.id),
       );
       return [
         LivePlatform(
@@ -231,11 +220,7 @@ class LiveRepository {
         ),
       ];
     }
-    final text = await _http.get(
-      spec.platformsUrl,
-      headers: spec.headers,
-      proxyResourceKey: socks5LiveResourceKey(source.id),
-    );
+    final text = await _http.get(spec.platformsUrl, headers: spec.headers);
     final result = parseApiPlatforms(spec, text);
     if (result.isEmpty) throw AppFailure('该直播源没有可用分类');
     return result;
@@ -251,7 +236,6 @@ class LiveRepository {
     final text = await _http.get(
       spec.listUrlFor(platform, page: page),
       headers: spec.headers,
-      proxyResourceKey: socks5LiveResourceKey(source.id),
     );
     final result = parseApiChannels(spec, platform, text, source.id);
     if (result.isEmpty) throw AppFailure('该分类暂时没有频道');
@@ -273,7 +257,6 @@ class LiveRepository {
     final text = await _http.get(
       spec.playUrlFor(channel.token),
       headers: spec.headers,
-      proxyResourceKey: socks5LiveResourceKey(source.id),
     );
     final url = parseApiPlayUrl(spec, text);
     if (url == null || url.isEmpty) throw AppFailure('该频道暂时无法播放');
@@ -345,10 +328,7 @@ class LiveRepository {
     String endpoint,
   ) async {
     try {
-      final text = await _http.get(
-        '$endpoint/json.txt',
-        proxyResourceKey: socks5LiveResourceKey(source.id),
-      );
+      final text = await _http.get('$endpoint/json.txt');
       final dynamic decoded = jsonDecode(text);
       final raw = decoded is Map ? decoded['pingtai'] : decoded;
       if (raw is! List) return (rows: null, failure: null);
@@ -371,10 +351,7 @@ class LiveRepository {
     Object? lastError;
     for (final endpoint in candidates) {
       try {
-        text = await _http.get(
-          '$endpoint/${platform.id}',
-          proxyResourceKey: socks5LiveResourceKey(source.id),
-        );
+        text = await _http.get('$endpoint/${platform.id}');
         break;
       } catch (error) {
         lastError = error;
@@ -415,112 +392,12 @@ class LiveRepository {
     final endpoint = source.endpoint;
     final text = endpoint.startsWith('asset://')
         ? await rootBundle.loadString(endpoint.substring('asset://'.length))
-        : await _http.get(
-            endpoint,
-            headers: source.headers,
-            proxyResourceKey: socks5LiveResourceKey(source.id),
-          );
+        : await _http.get(endpoint, headers: source.headers);
     final parsed = LiveParser.parse(
       text,
       source: source.id,
       defaultGroup: source.group.isEmpty ? liveUnsortedGroup : source.group,
     );
-    final channels = [for (final group in parsed.groups) ...group.channels];
-    // 空列表直接返回，由 channels() 统一报“该分类暂时没有频道”：
-    // 原先带代理的源会在此对空列表取 channels.first，漏出 StateError。
-    if (channels.isEmpty) return channels;
-    if (source.proxies.isEmpty) return channels;
-    final expanded = [
-      for (final channel in channels)
-        channel.withUrls([
-          for (final proxy in source.proxies)
-            if (channel.url.isNotEmpty) '$proxy${channel.url}',
-          ...channel.urls,
-        ]),
-    ];
-    final order = await _routeOrder(
-      source,
-      channels.first.url,
-      channels.first.headers,
-    );
-    if (order == null) return expanded;
-    return [
-      for (final channel in expanded)
-        channel.withUrls([
-          for (final index in order)
-            if (index < channel.urls.length) channel.urls[index],
-        ]),
-    ];
-  }
-
-  /// 线路可用性取决于用户所处网络，写死的顺序对一部分用户必然是最差顺序：
-  /// 列表型源的首条代理实测要 11 秒才响应，而同一条直连在另一些网络直接 403。
-  /// 因此按「能取到清单 + 响应快」实测排序，取不到清单的线路沉到最后兜底。
-  Future<List<int>?> _routeOrder(
-    LiveSource source,
-    String sample,
-    Map<String, String> headers,
-  ) async {
-    if (source.proxies.isEmpty || sample.isEmpty) return null;
-    final cached = _fresh(_routeOrders, source.id, _routeOrderTtl);
-    if (cached != null) return cached;
-    final inflight = _routeOrderInflight[source.id];
-    if (inflight != null) return inflight;
-    final future = _probeRouteOrder(source, sample, headers);
-    _routeOrderInflight[source.id] = future;
-    try {
-      return await future;
-    } finally {
-      if (identical(_routeOrderInflight[source.id], future)) {
-        _routeOrderInflight.remove(source.id);
-      }
-    }
-  }
-
-  Future<List<int>?> _probeRouteOrder(
-    LiveSource source,
-    String sample,
-    Map<String, String> headers,
-  ) async {
-    final total = source.proxies.length + 1;
-    final probes = await Future.wait<Duration?>([
-      for (var index = 0; index < total; index++)
-        _probeRoute(
-          index == total - 1 ? sample : '${source.proxies[index]}$sample',
-          headers,
-          proxyResourceKey: socks5LiveResourceKey(source.id),
-        ),
-    ]);
-    final order = List<int>.generate(total, (index) => index)
-      ..sort((left, right) {
-        final a = probes[left];
-        final b = probes[right];
-        if (a == null || b == null) {
-          if (a == null && b == null) return left.compareTo(right);
-          return a == null ? 1 : -1;
-        }
-        final compared = a.compareTo(b);
-        return compared == 0 ? left.compareTo(right) : compared;
-      });
-    _routeOrders[source.id] = _Stamped(order, _now());
-    return order;
-  }
-
-  /// 返回该线路取回播放清单的耗时，取不到返回 null。
-  Future<Duration?> _probeRoute(
-    String url,
-    Map<String, String> headers, {
-    String? proxyResourceKey,
-  }) async {
-    final watch = Stopwatch()..start();
-    try {
-      await _http
-          .get(url, headers: headers, proxyResourceKey: proxyResourceKey)
-          .timeout(liveRouteProbeTimeout);
-      return watch.elapsed;
-    } catch (_) {
-      // 预检失败只影响排序，不应该让整个分类加载失败。
-      return null;
-    }
+    return [for (final group in parsed.groups) ...group.channels];
   }
 }

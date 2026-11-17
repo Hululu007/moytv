@@ -613,7 +613,7 @@ class NeonTopBar extends StatelessWidget {
       ],
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 6, 12, 2),
+      padding: const EdgeInsets.fromLTRB(18, 2, 12, 0),
       child: Row(
         children: [
           if (leading != null) ...[leading!, const SizedBox(width: 10)],

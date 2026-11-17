@@ -1,4 +1,5 @@
 import gzip
+import http.client
 import json
 import re
 import ssl
@@ -30,6 +31,17 @@ FALLBACK_CATS = [
     ('c4', 'AI魔改', 'AImogai'),
 ]
 
+FLAG_WORDS = [
+    'loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+    '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉',
+]
+
+
+def _is_flagged(name):
+    low = (name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
+
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE
@@ -41,6 +53,81 @@ _CUR_BASE = [BASE]
 
 def _now():
     return time.time()
+
+
+def _client_fetch(url, hdr, timeout, method='GET', data=None):
+    proxies = urllib.request.getproxies()
+    for _hop in range(6):
+        parts = urllib.parse.urlsplit(url)
+        scheme = (parts.scheme or 'https').lower()
+        host = parts.hostname or ''
+        if not host:
+            return None
+        port = parts.port or (443 if scheme == 'https' else 80)
+        path = urllib.parse.urlunsplit(('', '', parts.path or '/', parts.query, ''))
+        proxy = None
+        try:
+            if not urllib.request.proxy_bypass(host):
+                proxy = proxies.get(scheme)
+        except Exception:
+            proxy = proxies.get(scheme)
+        conn = None
+        try:
+            if proxy:
+                pp = urllib.parse.urlsplit(proxy)
+                phost = pp.hostname or ''
+                pport = pp.port or 8080
+                if not phost:
+                    return None
+                if scheme == 'https':
+                    conn = http.client.HTTPSConnection(phost, pport, context=CTX, timeout=timeout)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    path = url
+            elif scheme == 'https':
+                conn = http.client.HTTPSConnection(host, port, context=CTX, timeout=timeout)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            hdrs = dict(hdr)
+            hdrs['Connection'] = 'keep-alive'
+            conn.request(method, path, body=data, headers=hdrs)
+            resp = conn.getresponse()
+            status = resp.status
+            if status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('Location')
+                try:
+                    resp.read()
+                except Exception:
+                    pass
+                if not loc:
+                    return None
+                url = urllib.parse.urljoin(url, loc)
+                if status in (301, 302, 303):
+                    method = 'GET'
+                    data = None
+                continue
+            body_bytes = resp.read()
+            try:
+                cookies = resp.headers.get_all('Set-Cookie', [])
+            except Exception:
+                cookies = []
+            enc = (resp.headers.get('Content-Encoding') or '').lower()
+            if enc == 'gzip' or body_bytes[:2] == b'\x1f\x8b':
+                try:
+                    body_bytes = gzip.decompress(body_bytes)
+                except Exception:
+                    pass
+            return (status, body_bytes.decode('utf-8', 'replace'), cookies)
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+    return None
 
 
 def _http_get(url, referer=None, timeout=25):
@@ -60,6 +147,13 @@ def _http_get(url, referer=None, timeout=25):
                 resp = _requests.get(url, headers=hdr, timeout=timeout)
                 if resp.status_code == 200:
                     text = resp.content.decode('utf-8', 'replace')
+            except Exception:
+                text = None
+        if text is None:
+            try:
+                got = _client_fetch(url, hdr, timeout)
+                if got is not None and got[0] == 200:
+                    text = got[1]
             except Exception:
                 text = None
         if text is None:
@@ -210,6 +304,12 @@ def _fetch_categories():
     if not cats:
         cats = [(c, n) for c, n, _s in FALLBACK_CATS]
         ttl = 300
+    else:
+        have = set(cid for cid, _name in cats)
+        for c, n, _s in FALLBACK_CATS:
+            if c not in have:
+                cats.append((c, n))
+    cats = [(cid, name) for cid, name in cats if not _is_flagged(name)]
     if len(CACHE) > 20:
         CACHE.clear()
     CACHE['cats'] = (_now(), cats, ttl)
@@ -265,13 +365,33 @@ def _hg_play(mid, mep, page_url):
         except Exception:
             return '', ''
     try:
-        import http.cookiejar
-        jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        opener.open(urllib.request.Request(page_url, headers={'User-Agent': UA, 'Referer': page_url}), timeout=25)
-        with opener.open(urllib.request.Request(api, headers=hdr), timeout=25, context=CTX) as resp:
-            body = resp.read().decode('utf-8', 'replace')
-        cookie = '; '.join('%s=%s' % (c.name, c.value) for c in jar)
+        got = _client_fetch(page_url, {'User-Agent': UA, 'Referer': page_url}, 25)
+        cookie = ''
+        if got is not None:
+            pairs = []
+            for c in got[2]:
+                pair = c.split(';', 1)[0].strip()
+                if '=' in pair:
+                    pairs.append(pair)
+            cookie = '; '.join(pairs)
+        hdr2 = dict(hdr)
+        if cookie:
+            hdr2['Cookie'] = cookie
+        got2 = _client_fetch(api, hdr2, 25)
+        if got2 is None:
+            return '', ''
+        body = got2[1]
+        have = set()
+        for c in cookie.split('; '):
+            if '=' in c:
+                have.add(c.split('=', 1)[0].strip())
+        extra = []
+        for c in got2[2]:
+            pair = c.split(';', 1)[0].strip()
+            if '=' in pair and pair.split('=', 1)[0].strip() not in have:
+                extra.append(pair)
+        if extra:
+            cookie = (cookie + '; ' + '; '.join(extra)) if cookie else '; '.join(extra)
         return body, cookie
     except Exception:
         return '', ''
@@ -341,6 +461,9 @@ class Spider(BaseSpider):
         pg = _norm_pg(pg)
         if pg < 1:
             pg = 1
+        for cid, name in _fetch_categories():
+            if cid == tid and _is_flagged(name):
+                return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         slug = _slug_of(tid)
         if pg <= 1:
             path = '/aidj/%s/' % slug

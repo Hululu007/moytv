@@ -59,8 +59,8 @@ void main() {
       expect(known, contains(key), reason: '图标映射 $key 不在任何注册表里');
     }
     // 注册表计数不变：图标只配站，不加站。
-    expect(BuiltinPySites.entries.length, 51);
-    expect(zakatvBuiltinSites.length, 148);
+    expect(BuiltinPySites.entries.length, 50);
+    expect(zakatvBuiltinSites.length, 142);
     expect(builtinLegadoSources.length, 52);
   });
 

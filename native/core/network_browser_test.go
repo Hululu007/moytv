@@ -37,13 +37,12 @@ func (client *stubBrowserClient) CloseIdleConnections() {}
 func newTestBrowserTransport(base http.RoundTripper, client *stubBrowserClient) *huangguoBrowserTransport {
 	transport := &huangguoBrowserTransport{
 		base:     base,
-		router:   &proxyRouter{mode: "direct"},
 		hosts:    map[string]bool{"static.example.com": true},
 		custom:   map[string]bool{},
 		upgraded: map[string]bool{},
 		clients:  map[string]browserHTTPClient{},
 	}
-	transport.newClient = func(string) (browserHTTPClient, error) { return client, nil }
+	transport.newClient = func() (browserHTTPClient, error) { return client, nil }
 	return transport
 }
 

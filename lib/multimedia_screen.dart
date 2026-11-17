@@ -386,7 +386,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
   Widget _driveRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
       child: Row(
         children: [
           ChoiceChip(
@@ -412,7 +412,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
 
   Widget _searchRow() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
       child: Row(
         children: [
           Expanded(

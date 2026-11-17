@@ -23,6 +23,8 @@ import (
 //     -28800 秒（服务端时钟帧），同步失败按 jar 兜底 -28800。
 //   - 封面若为 .aes 地址，字节是 AES/ECB/NoPadding 加密，密钥
 //     "46cc793c53dc451b"（jar $RProxy 实测），CoverFetch 解开。
+//     2026-11-17 活验：.aes 文件现为 base64 外壳，解码后才是
+//     ECB 密文，明文为 data:image/...;base64,... URI，需再解一层。
 //   - 播放走站方 /videos/getPreUrl 返回的 url 原样播。
 //
 // 边界（账本类口径，如实记录）：jar 的 widen() 把预告 url 的
@@ -192,6 +194,10 @@ func hxcDur(sec int) string {
 
 func hxcCard(v map[string]interface{}, prefix string) (map[string]interface{}, bool) {
 	id := taInt(v["id"])
+	if id <= 0 {
+		// /videoPackage/getList entries carry videoPackageId, not id.
+		id = taInt(v["videoPackageId"])
+	}
 	name := g5StrVal(v["name"])
 	if id <= 0 || name == "" {
 		return nil, false
@@ -278,6 +284,10 @@ func hxcDetail(rawID string) (map[string]interface{}, error) {
 		if dm == nil {
 			return nil, fmt.Errorf("hxc: package detail empty")
 		}
+		// 与 getInfo 同构：字段在 data.info 子对象里。
+		if info := taMap(dm["info"]); info != nil {
+			dm = info
+		}
 		name := g5StrVal(dm["name"])
 		if name == "" {
 			name = g5StrVal(dm["title"])
@@ -286,7 +296,10 @@ func hxcDetail(rawID string) (map[string]interface{}, error) {
 		if pic := g5StrVal(dm["coverImgUrl"]); pic != "" {
 			d["pic"] = pic
 		}
-		d["desc"] = g5StrVal(dm["intro"])
+		d["desc"] = g5StrVal(dm["description"])
+		if d["desc"] == "" {
+			d["desc"] = g5StrVal(dm["intro"])
+		}
 		// 合集内视频作选集，逐集走 getPreUrl
 		var vids []interface{}
 		for _, key := range []string{"list", "videos", "videoList"} {
@@ -426,26 +439,108 @@ func hxcCoverFetch(rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.Contains(rawURL, ".aes") || len(b) == 0 || len(b)%aes.BlockSize != 0 {
+	if mime := sniffImageMime(b); mime != "" {
 		return b, nil
 	}
-	if mime := sniffImageMime(b); mime != "" {
+	if !strings.Contains(rawURL, ".aes") || len(b) == 0 {
+		return b, nil
+	}
+	// Current envelope (verified live 2026-11-17): the .aes file is
+	// base64 text; decoding it yields the AES/ECB ciphertext whose
+	// plaintext is a data:image/...;base64,... URI. The legacy
+	// envelope (raw ECB ciphertext) still decrypts directly below.
+	ciphertext := b
+	if hxcLooksB64(b) {
+		if decoded, derr := base64.StdEncoding.DecodeString(hxcStripB64Space(string(b))); derr == nil && len(decoded) > 0 {
+			ciphertext = decoded
+		}
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
 		return b, nil
 	}
 	block, err := aes.NewCipher(hxcPicKey)
 	if err != nil {
 		return b, nil
 	}
-	out := make([]byte, len(b))
-	for i := 0; i < len(b); i += aes.BlockSize {
-		block.Decrypt(out[i:i+aes.BlockSize], b[i:i+aes.BlockSize])
+	out := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(out[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
 	}
-	// NoPadding：尾部零填充截断
-	out = bytes.TrimRight(out, "\x00")
+	// 填充有两种：零填充（旧）与 PKCS#7（新，实测尾部 \x02\x02）。
+	out = hxcUnpadECB(out)
 	if len(out) == 0 {
 		return b, nil
 	}
+	if img := hxcDataURIImage(out); img != nil {
+		return img, nil
+	}
 	return out, nil
+}
+
+// hxcUnpadECB strips PKCS#7 padding when valid, else trailing zero
+// bytes (legacy NoPadding envelope).
+func hxcUnpadECB(b []byte) []byte {
+	if len(b) > 0 {
+		pad := int(b[len(b)-1])
+		if pad > 0 && pad <= aes.BlockSize && pad <= len(b) {
+			ok := true
+			for _, c := range b[len(b)-pad:] {
+				if int(c) != pad {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return b[:len(b)-pad]
+			}
+		}
+	}
+	return bytes.TrimRight(b, "\x00")
+}
+
+// hxcLooksB64 reports whether b is plausibly base64 text (alphabet +
+// whitespace only), so the base64-unwrap attempt never touches the
+// legacy raw-ciphertext envelope.
+func hxcLooksB64(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	for _, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+' || c == '/' || c == '=':
+		case c == ' ' || c == '\n' || c == '\r' || c == '\t':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func hxcStripB64Space(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// hxcDataURIImage decodes a data:image/...;base64,... payload.
+func hxcDataURIImage(b []byte) []byte {
+	s := string(b)
+	if !strings.HasPrefix(s, "data:image/") {
+		return nil
+	}
+	i := strings.Index(s, ",")
+	if i < 0 {
+		return nil
+	}
+	img, err := base64.StdEncoding.DecodeString(hxcStripB64Space(s[i+1:]))
+	if err != nil || len(img) == 0 {
+		return nil
+	}
+	return img
 }
 
 func init() {

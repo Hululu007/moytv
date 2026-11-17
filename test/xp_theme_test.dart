@@ -49,9 +49,9 @@ void main() {
       expect(scheme.navStyle, NavStyle.bottomTabs);
     });
 
-    test('默认主题仍是 Win7，XP 存值往返', () {
-      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.win7);
-      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.win7);
+    test('默认主题改成 XP，XP 存值往返', () {
+      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.xpWindows);
+      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.xpWindows);
       expect(
         AppThemeMode.fromStorageValue('xpWindows'),
         AppThemeMode.xpWindows,

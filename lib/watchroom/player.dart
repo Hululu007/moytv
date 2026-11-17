@@ -8,7 +8,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../models.dart';
-import '../mpv_egress.dart';
 import '../playback_loader.dart';
 import '../playback_preferences.dart';
 import '../tvbox_video_pane.dart';
@@ -107,10 +106,7 @@ class RoomPlayerHandle extends ChangeNotifier {
       if (plan == null || plan.url.isEmpty) {
         final loader = PlaybackLoader(repository);
         _loader = loader;
-        plan = await loader.load(
-          detail.drama,
-          detail.episodes[episodeIndex],
-        );
+        plan = await loader.load(detail.drama, detail.episodes[episodeIndex]);
       }
       if (plan == null || plan.url.isEmpty) {
         throw AppFailure('站源未返回播放地址，请重试');
@@ -140,9 +136,6 @@ class RoomPlayerHandle extends ChangeNotifier {
           ),
         );
         _subscribePlayerStreams();
-        // MPV 出口：每次开播都按当前决策设一次 http-proxy，并登记到
-        // 决策点，决策变化时自动重设（同一播放器重复登记会覆盖）。
-        bindMpvEgress(_player!);
         final platform = _player!.platform;
         if (Platform.isAndroid &&
             platform is NativePlayer &&
@@ -242,8 +235,6 @@ class RoomPlayerHandle extends ChangeNotifier {
     }
     _subscriptions.clear();
     unawaited(_positionController.close());
-    final player = _player;
-    if (player != null) unbindMpvEgress(player);
     unawaited(_player?.dispose());
     _player = null;
     _videoController = null;

@@ -10,7 +10,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Future<LocalStore> pumpHome(WidgetTester tester) async {
-    // 默认主题已改 Win7：本测试验霓虹首页搜索流，显式钉住紫蓝霓虹。
+    // 默认主题已改 XP：本测试验霓虹首页搜索流，显式钉住紫蓝霓虹。
     SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
     final store = LocalStore(await SharedPreferences.getInstance());
     await tester.pumpWidget(

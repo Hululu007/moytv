@@ -17,7 +17,6 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
-import android.net.ConnectivityManager
 import android.net.Uri
 import android.util.Rational
 import android.view.InputDevice
@@ -324,8 +323,6 @@ class MainActivity : FlutterActivity() {
         AudioMediaPlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AudioCapsulePlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
-        ProxyKernelBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
-        TorrentBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         FrameExtractorBridge.register(flutterEngine.dartExecutor.binaryMessenger)
         val bridge = PyBridge(this)
         pyBridge = bridge
@@ -357,21 +354,6 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         "playbackPower" -> result.success(runCatching { playbackPower() }.getOrNull())
-                        "setEgressProxy" -> {
-                            val proxyUrl = call.argument<String>("proxyUrl")
-                            if (proxyUrl.isNullOrEmpty()) {
-                                result.error("invalid_egress_proxy", "缺少出口地址", null)
-                            } else {
-                                EgressProxySelector.install(proxyUrl)
-                                IjkEgress.proxyUrl = proxyUrl
-                                result.success(null)
-                            }
-                        }
-                        "clearEgressProxy" -> {
-                            EgressProxySelector.clear()
-                            IjkEgress.proxyUrl = null
-                            result.success(null)
-                        }
                         "signatureSha256" -> result.success(signatureSha256())
                         "compatibleRendering" -> result.success(compatibleRendering())
                         "setCompatibleRendering" -> {
@@ -385,20 +367,6 @@ class MainActivity : FlutterActivity() {
                                 result.success(null)
                                 restartApplication()
                             }
-                        }
-                        "systemProxy" -> {
-                            val connection = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                            val proxy = connection.defaultProxy
-                            val host = proxy?.host.orEmpty()
-                            val address = if (host.isNotEmpty() && (proxy?.port ?: 0) > 0) {
-                                "http://${if (host.contains(':')) "[$host]" else host}:${proxy!!.port}"
-                            } else ""
-                            result.success(mapOf(
-                                "http" to address,
-                                "https" to address,
-                                "bypass" to (proxy?.exclusionList?.toList() ?: emptyList<String>()),
-                                "pac" to (proxy != null && proxy.pacFileUrl != Uri.EMPTY)
-                            ))
                         }
                         "pictureInPictureStatus" -> result.success(pictureInPictureStatus())
                         "screenBrightness" -> result.success(effectiveScreenBrightness())

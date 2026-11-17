@@ -23,9 +23,9 @@ void main() {
     for (final entry in BuiltinPySites.entries) {
       final url = pySiteHomepages[entry.siteId];
       if (url == null) {
-        // 只有这两站允许缺席：chaoliu 只有 feed 地址、xhsapp 无固定地址。
+        // 只有 chaoliu 允许缺席：只有 feed 地址。
         expect(
-          ['chaoliu', 'xhsapp'],
+          ['chaoliu'],
           contains(entry.siteId),
           reason: '${entry.siteId} 无主页映射',
         );
@@ -109,7 +109,6 @@ void main() {
     expect(siteHomepageCandidates('v_javdb'), isNotEmpty);
     expect(siteHomepageCandidates('legado_8059_0'), isNotEmpty);
     expect(siteHomepageCandidates('chaoliu'), isEmpty);
-    expect(siteHomepageCandidates('xhsapp'), isEmpty);
     expect(siteHomepageCandidates('no-such-site'), isEmpty);
     expect(siteHomepageCandidates(''), isEmpty);
   });

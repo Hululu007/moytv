@@ -54,18 +54,18 @@ void main() {
     }
   }
 
-  testWidgets('generic settings carry all five merged entries', (
+  testWidgets('generic settings carry all four merged entries', (
     tester,
   ) async {
     await pumpSettings(tester, onHideAdult: () {});
     // 顺序须与页面自上而下一致：reveal 只向下拖，找过下面再回头
     // 找上面的项时该项已滑出构建范围、树里不存在。
+    // 内容源管理入口已搬到站点选择弹窗 + 号，不在设置里。
     for (final keyName in [
       'playback-settings-entry',
       'player-entry',
       'parse-settings-entry',
       'minor-protection-entry',
-      'content-sources-entry',
     ]) {
       await reveal(tester, keyName);
       expect(find.byKey(ValueKey(keyName)), findsOneWidget);

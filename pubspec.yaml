@@ -57,8 +57,6 @@ flutter:
     - assets/video_enhancement/
     - assets/live/
     - assets/live/m3u/
-    - assets/proxy_kernel/
-    - assets/torrserver_chunks/
     - assets/audio_spiders/
     - assets/novel_spiders/
     - assets/legado_sources/

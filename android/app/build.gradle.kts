@@ -135,7 +135,6 @@ dependencies {
     implementation("tv.danmaku.ijk.media:ijkplayer-java:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8")
-    implementation(files("libs/thunder-release.aar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     testImplementation("junit:junit:4.13.2")
 }

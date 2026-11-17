@@ -74,7 +74,7 @@ python3 scripts/build_web.py
 lib/                 Dart 业务代码
 native/              Go 原生核心（bridge / core / server）
 android/app/src/main/cpp/   QuickJS JNI 桥
-assets/              站源配置、jar 插件、py 爬虫、直播源、代理内核
+assets/              站源配置、jar 插件、py 爬虫、直播源
 scripts/             各平台构建/打包脚本
 integrations_test/   集成测试
 ```

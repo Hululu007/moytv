@@ -28,9 +28,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 const sihuPortal = "https://portal.instruno.com/public2"
@@ -97,13 +100,34 @@ func sihuDecrypt(body []byte) (json.RawMessage, error) {
 	return json.RawMessage(out), nil
 }
 
+// Direct client with a 60s timeout: the portal's TTFB measured 21-26s
+// through the verification egress (2026-11-17), so the shared 20s
+// client timed out on the category list and the latest chart, leaving
+// the slot with only the chart categories and an empty ★最新. Direct
+// fetch also skips the shared transport's external-reader fallback,
+// which must not be triggered for this provider. crackMergedHeaders
+// is still applied, as before.
+var sihuClient = &http.Client{Timeout: 60 * time.Second}
+
 func sihuGetJSON(path string) (json.RawMessage, error) {
-	body, code, _, err := httpGet(sihuPortal+path, sihuHeaders())
+	req, err := http.NewRequest("GET", sihuPortal+path, nil)
 	if err != nil {
 		return nil, err
 	}
-	if code != 200 {
-		return nil, fmt.Errorf("sihu http %d for %s", code, path)
+	for k, v := range crackMergedHeaders(sihuPortal+path, sihuHeaders()) {
+		req.Header.Set(k, v)
+	}
+	resp, err := sihuClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("sihu http %d for %s", resp.StatusCode, path)
 	}
 	return sihuDecrypt(body)
 }
@@ -221,6 +245,35 @@ func sihuChartPath(cat string) string {
 	}
 }
 
+// sihuChartKey selects the payload array each chart file carries:
+// top.json holds day/week/moon side by side, so the generic
+// first-array fallback picked one at random (Go map order) and ★日榜
+// showed the wrong ranking on some runs. latest.json holds
+// latest/latest2/movie; the ★最新 list is "latest".
+var sihuChartKey = map[string]string{
+	"t:l": "latest",
+	"t:0": "day",
+	"t:2": "week",
+	"t:3": "moon",
+}
+
+// sihuChartItems prefers the chart's named array, falling back to the
+// generic shape scan when the payload carries a single array.
+func sihuChartItems(raw json.RawMessage, cat string) []*sihuItem {
+	if key, ok := sihuChartKey[cat]; ok {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			if v, ok := obj[key]; ok {
+				var arr []*sihuItem
+				if err := json.Unmarshal(v, &arr); err == nil && len(arr) > 0 {
+					return arr
+				}
+			}
+		}
+	}
+	return sihuArrayItems(raw)
+}
+
 // sihuArrayItems extracts an item array from a decrypted payload of
 // varying shape: root array, or object with a known list key, or the
 // first array-valued field.
@@ -261,7 +314,7 @@ func sihuCatalog(slot, category string, page int) ([]interface{}, int, bool, err
 		if err != nil {
 			return nil, 0, false, err
 		}
-		all := sihuArrayItems(raw)
+		all := sihuChartItems(raw, category)
 		total := len(all)
 		start := (page - 1) * sihuPageSize
 		if start >= total {
@@ -421,17 +474,29 @@ func sihuSearch(slot, kw string) ([]interface{}, error) {
 	return items, nil
 }
 
+// sihuCoverFetch uses the same 60s direct client as sihuGetJSON: the
+// cover host's TTFB also exceeds the shared 20s timeout (3 attempts
+// all timed out in verification, 2026-11-17). The .txt data-URL
+// decoding is unchanged.
 func sihuCoverFetch(u string) ([]byte, error) {
-	if !strings.HasSuffix(u, ".txt") {
-		b, code, _, err := httpGet(u, sihuHeaders())
-		if err != nil || code != 200 {
-			return nil, fmt.Errorf("sihu cover http %d err %v", code, err)
-		}
-		return b, nil
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
 	}
-	b, code, _, err := httpGet(u, sihuHeaders())
-	if err != nil || code != 200 {
-		return nil, fmt.Errorf("sihu cover http %d err %v", code, err)
+	for k, v := range crackMergedHeaders(u, sihuHeaders()) {
+		req.Header.Set(k, v)
+	}
+	resp, err := sihuClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sihu cover http 0 err %v", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil || resp.StatusCode != 200 {
+		return nil, fmt.Errorf("sihu cover http %d err %v", resp.StatusCode, err)
+	}
+	if !strings.HasSuffix(u, ".txt") {
+		return b, nil
 	}
 	s := strings.TrimSpace(string(b))
 	if strings.HasPrefix(s, "data:") {

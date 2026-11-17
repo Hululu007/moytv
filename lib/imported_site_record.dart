@@ -23,6 +23,7 @@ class ImportedSiteRecord {
 
   static const typePy = 'py';
   static const typeJs = 'js';
+  static const typeHtml = 'html';
 
   ImportedSiteRecord copyWith({bool? enabled, String? name, String? ext}) =>
       ImportedSiteRecord(
@@ -62,7 +63,11 @@ class ImportedSiteRecord {
   SourceSite get asSite => SourceSite(
     id,
     name,
-    type == typePy ? 'Python 蜘蛛导入站' : 'JS 蜘蛛导入站',
+    type == typePy
+        ? 'Python 蜘蛛导入站'
+        : type == typeHtml
+        ? 'HTML 站源导入站'
+        : 'JS 蜘蛛导入站',
     section: SourceSite.sectionVideo,
     origin: SourceSite.originImport,
     importType: type,

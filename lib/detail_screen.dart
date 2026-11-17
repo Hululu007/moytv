@@ -37,8 +37,6 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
-import 'torrent/torrent_engine.dart';
-import 'torrent/torrent_home_screen.dart';
 
 typedef DetailTagTap =
     void Function(String sourceId, String tagId, String tagName);
@@ -1228,9 +1226,7 @@ class _DetailScreenState extends State<DetailScreen> {
           Text('磁力链接', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
           Text(
-            TorrentEngineFactory.isEngineAvailable
-                ? '点开可解析、选文件、边下边播，也支持导入 txt/csv/xlsx 文件'
-                : '种子播放仅支持安卓：点开可解析与保存，不能下载、不能播放',
+            '磁力播放已移除：仅展示链接信息，暂不支持播放',
             style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -1243,15 +1239,9 @@ class _DetailScreenState extends State<DetailScreen> {
                   ? null
                   : Text(magnet.metaLabel),
               trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Navigator.of(context).push(
-                appPageRoute<void>(
-                  builder: (_) => TorrentHomePage(
-                    initialMagnet: magnet.url,
-                    repository: widget.repository,
-                    store: widget.store,
-                  ),
-                ),
-              ),
+              onTap: () => ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('磁力链接暂不支持播放'))),
             ),
         ],
       ),
@@ -1792,5 +1782,4 @@ class _DetailScreenState extends State<DetailScreen> {
       ),
     );
   }
-
 }

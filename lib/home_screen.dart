@@ -11,6 +11,7 @@ import 'app_layout.dart';
 import 'auto_refresh_gate.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
+import 'site_icon.dart';
 import 'home_zone.dart';
 import 'app_theme_config.dart';
 import 'content_tier_filter.dart';
@@ -40,6 +41,8 @@ import 'rankings_screen.dart';
 import 'detail_screen.dart';
 import 'folder_catalog_screen.dart';
 import 'global_search_page.dart';
+import 'html_host/html_host_page.dart';
+import 'html_host/html_site.dart';
 import 'web_scrape_page.dart';
 import 'fullscreen_feed_screen.dart';
 import 'hongguo_drama_home.dart';
@@ -61,6 +64,7 @@ import 'zone_settings_screen.dart';
 import 'vip_icon.dart';
 import 'search_input.dart';
 import 'source_picker_sheet.dart';
+import 'site_import_flow.dart';
 import 'sources_screen.dart';
 import 'drama_actions.dart';
 import 'library_updater.dart';
@@ -224,6 +228,11 @@ class _HomeScreenState extends State<HomeScreen>
   /// Tab 时清掉（与 _mineRequested 同一口径）。
   bool _miniAppRequested = false;
 
+  /// 底部 Tab 点了“女优库”后为真：短剧首页分支据此把内层页签驱
+  /// 到女优库页，通用分支改渲染女优库列表页；离开片库区或点其它
+  /// Tab 时清掉（与 _mineRequested 同一口径）。
+  bool _actressRequested = false;
+
   /// 戏剧首页钉住标记：频道/戏剧首页内切站时为真，换站后仍渲染
   /// 戏剧首页分支（分组 id 随站源变化，单凭分组判断会跳到通用
   /// 分支）；离开片库区时清掉，切回片库后按分组重新判断。
@@ -279,13 +288,14 @@ class _HomeScreenState extends State<HomeScreen>
   bool get _isCatalogZone => _zone == HomeZone.library;
 
   /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：多媒体/小程序/
-  /// 我的页虽在片库区内，但各有自己的顶栏，片库顶栏元素不该
+  /// 我的/女优库页虽在片库区内，但各有自己的顶栏，片库顶栏元素不该
   /// 出现在它们上面。
   bool get _showCatalogHeader =>
       _isCatalogZone &&
       !_multimediaRequested &&
       !_miniAppRequested &&
-      !_mineRequested;
+      !_mineRequested &&
+      !_actressRequested;
 
   String get _zoneTitle => switch (_zone) {
     HomeZone.library => '片库',
@@ -301,7 +311,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<SourceGroup> get _sourceGroups {
     // 首页只显示「源显示列表」中开启的站源，被隐藏的站源不出现在分组里。
-    final visible = _librarySources;
+    // HTML 站不进目录分组（点选开宿主页面），这里滤掉，站点选择弹窗
+    // 另从 _librarySources 取全量，不受影响。
+    final visible = _librarySources.where((site) => !site.isHtmlSite).toList();
     final groups = SourceGroup.fromSources(visible);
     return [
       if (groups.length > 1) SourceGroup('all', '全部站源', visible),
@@ -314,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen>
           .where((group) => group.id == (_allSources ? 'all' : _source.groupId))
           .firstOrNull ??
       (() {
-        final visible = _librarySources;
+        final visible = _librarySources.where((s) => !s.isHtmlSite).toList();
         final site = visible.any((s) => s.id == _source.id)
             ? _source
             : (visible.firstOrNull ?? _source);
@@ -342,8 +354,10 @@ class _HomeScreenState extends State<HomeScreen>
       _category.isEmpty &&
       !_selectionMode;
   // 跨源聚合搜索打的是站源管理里勾选显示的可见源，被隐藏的源不参与。
+  // HTML 站无搜索接口，不参与。
   List<String> get _visibleSourceIds => [
-    for (final source in _librarySources) source.id,
+    for (final source in _librarySources)
+      if (!source.isHtmlSite) source.id,
   ];
   // 勾选跨源后，即便当前分组本身不支持在线搜索，也按全部可见源发起在线搜索。
   // 自定义源在 Dart 侧 onlineSearch 恒为 false，但 Go 侧 searchAcross 能识别
@@ -610,6 +624,14 @@ class _HomeScreenState extends State<HomeScreen>
       groups: _sourcePickerGroups(),
       initialEditMode: editMode,
       onDeleteSite: _deleteSourceEntry,
+      onImport: () async {
+        final imported = await showSiteImportFlow(
+          context: context,
+          repository: widget.repository,
+          store: widget.store,
+        );
+        if (imported && mounted) setState(() {});
+      },
       repository: widget.repository,
     );
     if (picked == null || !mounted) return;
@@ -633,7 +655,9 @@ class _HomeScreenState extends State<HomeScreen>
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('删除导入站'),
-          content: Text('确定删除「${imported.name}」吗？导入的蜘蛛文件副本将一并删除。'),
+          content: Text(
+            '确定删除「${imported.name}」吗？${imported.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -703,7 +727,33 @@ class _HomeScreenState extends State<HomeScreen>
       return;
     }
     final site = _librarySources.where((site) => site.id == picked).firstOrNull;
-    if (site != null) _changeSource(site);
+    if (site == null) return;
+    // HTML 站不进目录：点选直接打开宿主页面。
+    if (site.isHtmlSite) {
+      unawaited(_openHtmlSite(site));
+      return;
+    }
+    _changeSource(site);
+  }
+
+  Future<void> _openHtmlSite(SourceSite site) async {
+    final entry = await loadHtmlSiteEntry(widget.store, site.id);
+    if (!mounted) return;
+    if (entry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「${site.name}」打不开，站源文件缺失或已损坏')),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => HtmlHostPage(
+          entry: entry,
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
   }
 
   void _changeFilter(String groupKey, String optionId) {
@@ -858,19 +908,26 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 女优模块入口（用户 2026-11-17 令）：片库顶栏一 tap 到达，
-  /// 与榜单钮并列；模块内含浏览、详情、排行榜与本地同步。
+  /// 女优库区入口（用户 2026-11-17 令）：女优库是独立区域、像片库
+  /// 那样进区，不再 push 路由。普通壳模式切到底部标签“女优库”；
+  /// Win7/XP 桌面壳模式开女优库窗口（与桌面图标同一入口）。
   void _openActressLibrary() {
-    _pauseCatalog();
-    Navigator.push<void>(
-      context,
-      appPageRoute(
-        builder: (_) => ActressListPage(
-          repository: widget.repository,
-          store: widget.store,
-        ),
-      ),
-    );
+    if (_inWin7Shell) {
+      _win7Open(Win7WindowKind.actress);
+      return;
+    }
+    _onBottomTab(6);
+  }
+
+  /// 当前是否 Win7/XP 桌面壳：与 build 里 _win7Shell 的分派条件一致。
+  bool get _inWin7Shell {
+    if (AppLayout.isTelevision(context)) return false;
+    final desktop =
+        Theme.of(context).platform != TargetPlatform.iOS &&
+        MediaQuery.sizeOf(context).width >= 840;
+    if (desktop) return false;
+    final theme = widget.store.appTheme;
+    return theme == AppThemeMode.win7 || theme == AppThemeMode.xpWindows;
   }
 
   Future<void> _manageSources() async {
@@ -1492,13 +1549,14 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听读、3 多媒体、
-  /// 4 小程序、5 我的（听书/阅读已并为“听读”，两子区同指下标 2）。
-  /// 多媒体/小程序/我的只是片库区内的请求态，先于区判断（与
+  /// 4 小程序、5 我的、6 女优库（听书/阅读已并为“听读”，两子区同指下标 2）。
+  /// 多媒体/小程序/我的/女优库只是片库区内的请求态，先于区判断（与
   /// _onBottomTab 的递出顺序一致）。
   int get _bottomTabIndex {
     if (_zone == HomeZone.library && _multimediaRequested) return 3;
     if (_zone == HomeZone.library && _miniAppRequested) return 4;
     if (_zone == HomeZone.library && _mineRequested) return 5;
+    if (_zone == HomeZone.library && _actressRequested) return 6;
     return switch (_zone) {
       HomeZone.library => 0,
       HomeZone.live => 1,
@@ -1511,6 +1569,7 @@ class _HomeScreenState extends State<HomeScreen>
     final wantMine = tabIndex == 5;
     final wantMultimedia = tabIndex == 3;
     final wantMiniApp = tabIndex == 4;
+    final wantActress = tabIndex == 6;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
       2 => _lastListenReadZone,
@@ -1519,15 +1578,17 @@ class _HomeScreenState extends State<HomeScreen>
     if (wantMine == _mineRequested &&
         wantMultimedia == _multimediaRequested &&
         wantMiniApp == _miniAppRequested &&
+        wantActress == _actressRequested &&
         zone == _zone) {
       return;
     }
-    // 同区点“我的”/“多媒体”/“小程序”时 _setZone 会提前返回，必须先
+    // 同区点“我的”/“多媒体”/“小程序”/“女优库”时 _setZone 会提前返回，必须先
     // setState 递出请求。
     setState(() {
       _mineRequested = wantMine;
       _multimediaRequested = wantMultimedia;
       _miniAppRequested = wantMiniApp;
+      _actressRequested = wantActress;
     });
     _setZone(zone);
   }
@@ -1546,6 +1607,7 @@ class _HomeScreenState extends State<HomeScreen>
       (LucideIcons.hardDrive, '多媒体'),
       (LucideIcons.layoutGrid, '小程序'),
       (LucideIcons.user, '我的'),
+      (LucideIcons.users, '女优库'),
     ];
     return NeonCapsuleBar(
       entries: entries,
@@ -1571,6 +1633,7 @@ class _HomeScreenState extends State<HomeScreen>
         _mineRequested = false;
         _multimediaRequested = false;
         _miniAppRequested = false;
+        _actressRequested = false;
         _dramaHomePinned = false;
       }
       _selectionMode = false;
@@ -2043,7 +2106,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   PreferredSizeWidget _glassAppBar() {
     final colors = Theme.of(context).colorScheme;
-    final wide = MediaQuery.sizeOf(context).width >= 840;
     final largeTitle = TextStyle(
       fontSize: 12,
       height: 1.1,
@@ -2056,55 +2118,41 @@ class _HomeScreenState extends State<HomeScreen>
         widget.store.catalogView.sort != CatalogSort.source ||
         widget.store.catalogView.release.isNotEmpty;
     final updating = _group.sources.any((source) => _updater.busy(source.id));
-    final Widget title;
-    if (_selectionMode) {
-      title = Text('选择视频', style: largeTitle);
-    } else if (_multimediaRequested) {
-      title = Text('多媒体', style: largeTitle);
-    } else if (_miniAppRequested) {
-      title = Text('小程序', style: largeTitle);
-    } else if (_mineRequested) {
-      title = Text('我的', style: largeTitle);
-    } else if (_showCatalogHeader) {
-      title = GlassTapTarget(
-        key: const ValueKey('source-switch'),
-        onTap: _canSwitchSource ? () => unawaited(_pickSource()) : null,
-        onLongPress: _canSwitchSource
-            ? () => unawaited(_pickSource(editMode: true))
-            : null,
-        child: Semantics(
-          button: _canSwitchSource,
-          label: '切换站源',
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  _group.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: largeTitle,
-                ),
-              ),
-              if (_canSwitchSource) ...[
-                const SizedBox(width: 6),
-                Icon(
-                  LucideIcons.chevronDown,
-                  size: 20,
-                  color: colors.onSurfaceVariant,
-                ),
-              ],
-            ],
-          ),
-        ),
-      );
-    } else {
-      title = Text(_zoneTitle, style: largeTitle);
-    }
-    // 工具胶囊：窄屏（手机）时顶栏一行放不下头像 + 标题 + 六项胶囊，
-    // 胶囊会盖住标题；窄屏改放顶栏第二行（bottom），宽屏仍放 actions 行。
+    // 单行图标顶栏：站名文字行已去掉，站点切换就是左上角第一位
+    // 的当前站图标（与胶囊栏同行齐平），点它弹站点选择弹窗，
+    // 长按进编辑模式；头像紧随其后进“我的”页，其余工具钮同行排列。
     final capsule = GlassButtonGroup(
       children: [
+        GlassGroupItem(
+          key: const ValueKey('source-switch'),
+          icon: _allSources ? LucideIcons.layers : null,
+          tooltip: '切换站源',
+          onPressed: _canSwitchSource ? () => unawaited(_pickSource()) : null,
+          onLongPress: _canSwitchSource
+              ? () => unawaited(_pickSource(editMode: true))
+              : null,
+          child: _allSources
+              ? null
+              : SiteIcon(
+                  siteId: _source.id,
+                  siteName: _source.name,
+                  size: 28,
+                  borderRadius: 8,
+                ),
+        ),
+        GlassGroupItem(
+          key: const ValueKey('open-mine-page'),
+          tooltip: '我的',
+          onPressed: _openMine,
+          child: ClipOval(
+            child: Image.asset(
+              'assets/ant_logo.png',
+              width: 32,
+              height: 32,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
         if (updating || _loading && _items.isNotEmpty)
           const GlassGroupItem(
             key: ValueKey('catalog-refresh'),
@@ -2164,12 +2212,33 @@ class _HomeScreenState extends State<HomeScreen>
           ),
       ],
     );
+    final Widget title;
+    if (_selectionMode) {
+      title = Text('选择视频', style: largeTitle);
+    } else if (_multimediaRequested) {
+      title = Text('多媒体', style: largeTitle);
+    } else if (_miniAppRequested) {
+      title = Text('小程序', style: largeTitle);
+    } else if (_mineRequested) {
+      title = Text('我的', style: largeTitle);
+    } else if (_actressRequested) {
+      title = Text('女优库', style: largeTitle);
+    } else if (_showCatalogHeader) {
+      // 窄屏放不下整排时横向滚动，站图标始终在最左第一位。
+      title = SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.only(right: 8),
+        child: capsule,
+      );
+    } else {
+      title = Text(_zoneTitle, style: largeTitle);
+    }
     return AppBar(
-      toolbarHeight: 64,
+      toolbarHeight: 44,
       centerTitle: false,
-      titleSpacing: 20,
+      titleSpacing: catalog ? 8 : 20,
       automaticallyImplyLeading: false,
-      leading: _appBarLeading(),
+      leading: catalog ? null : _appBarLeading(),
       title: title,
       actions: [
         if (_selectionMode) ...[
@@ -2188,12 +2257,6 @@ class _HomeScreenState extends State<HomeScreen>
             onPressed: _cancelSelection,
           ),
         ] else ...[
-          if (catalog) ...[
-            // 宽屏工具胶囊放 actions 行；站源选择只留标题上的一个，
-            // 原 actions 里的下拉盒与标题选择器重复，已删。
-            if (wide) capsule,
-            if (wide) const SizedBox(width: 8),
-          ],
           // 片库区右上角不放齿轮（用户令）；齿轮只留在直播区。
           if (!AppLayout.isTelevision(context) && _zone == HomeZone.live)
             GlassIconButton(
@@ -2203,21 +2266,8 @@ class _HomeScreenState extends State<HomeScreen>
               onPressed: _openZoneSettings,
             ),
         ],
-        const SizedBox(width: 16),
+        if (!catalog) const SizedBox(width: 16),
       ],
-      // 窄屏第二行：工具胶囊右对齐独占一行，不再盖住站源条。
-      bottom: catalog && !wide
-          ? PreferredSize(
-              preferredSize: const Size.fromHeight(52),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 12, bottom: 8),
-                  child: capsule,
-                ),
-              ),
-            )
-          : null,
     );
   }
 
@@ -2274,6 +2324,8 @@ class _HomeScreenState extends State<HomeScreen>
     Win7WindowKind.novel => _contentBinding.selectedIdFor(ContentSection.novel),
     Win7WindowKind.miniApp => null,
     Win7WindowKind.multimedia => null,
+    Win7WindowKind.mine => null,
+    Win7WindowKind.actress => null,
   };
 
   SourceSite? _hongguoSource() {
@@ -2311,6 +2363,7 @@ class _HomeScreenState extends State<HomeScreen>
           _mineRequested = false;
           _multimediaRequested = false;
           _miniAppRequested = false;
+          _actressRequested = false;
           // _changeSource 遇红果组会钉住戏剧首页，这里以窗口种类为准
           // 再拨一次：短剧窗钉住，片库窗不钉。
           _dramaHomePinned = kind == Win7WindowKind.drama;
@@ -2336,11 +2389,23 @@ class _HomeScreenState extends State<HomeScreen>
         );
       case Win7WindowKind.miniApp:
       case Win7WindowKind.multimedia:
+      case Win7WindowKind.mine:
         _applyZoneChange(HomeZone.library);
         setState(() {
           _mineRequested = false;
           _multimediaRequested = false;
           _miniAppRequested = false;
+          _actressRequested = false;
+        });
+      case Win7WindowKind.actress:
+        // 女优库窗前台时把区域请求拨到女优库：切回普通主题后
+        // 底部标签仍选中女优库、内容仍是女优库页，状态一致。
+        _applyZoneChange(HomeZone.library);
+        setState(() {
+          _mineRequested = false;
+          _multimediaRequested = false;
+          _miniAppRequested = false;
+          _actressRequested = true;
         });
     }
   }
@@ -2397,6 +2462,8 @@ class _HomeScreenState extends State<HomeScreen>
   /// 开始菜单树：按区（片库/直播/听读/短剧/小程序/多媒体）分组，
   /// 组下挂该区真实站点，名全部取注册表。听读组下再分听书/阅读
   /// 两层，演示任意层级展开。空组挂一行“暂无可用站点”（点按无动作）。
+  /// 女优库是独立区域、不是站点：末尾一个单叶节点，点按只开女优库
+  /// 窗口，不挂任何站点（模块内绝不显示站点来源信息）。
   List<Win7TreeNode> _win7TreeGroups() {
     List<Win7TreeNode> orEmpty(List<Win7TreeNode> children) =>
         children.isEmpty ? const [Win7TreeNode(label: '暂无可用站点')] : children;
@@ -2489,6 +2556,11 @@ class _HomeScreenState extends State<HomeScreen>
             ),
         ]),
       ),
+      // 女优库单叶：点按开女优库窗口（见 _win7TreeGroups 注释）。
+      const Win7TreeNode(
+        label: '女优库',
+        kind: Win7WindowKind.actress,
+      ),
     ];
   }
 
@@ -2547,6 +2619,27 @@ class _HomeScreenState extends State<HomeScreen>
           onOpenDrama: _openDrama,
           onOpenCloudLogin: _openCloudLogin,
         );
+      case Win7WindowKind.mine:
+        // 与通用分支“我的”同一页、同一构造（见 _tabBody 的 _mineRequested
+        // 分支），只加窗口 key；窗口内不挂胶囊栏。
+        return MinePage(
+          key: const ValueKey('win7-mine'),
+          repository: widget.repository,
+          store: widget.store,
+          sourceLabel: '${_group.name} (${_group.sources.length})',
+          onOpenDrama: _openDrama,
+          onOpenSaved: _openSaved,
+          onSettingsPressed: _openZoneSettings,
+        );
+      case Win7WindowKind.actress:
+        // 与片库顶栏女优库钮同一页、同一构造（见 _openActressLibrary），
+        // 只加窗口 key；详情/排行页的跳转行为与现有入口一致（各自 push）。
+        return ActressListPage(
+          key: const ValueKey('win7-actress'),
+          repository: widget.repository,
+          store: widget.store,
+          showTitle: false,
+        );
       case Win7WindowKind.library:
       case Win7WindowKind.drama:
         return _win7LibraryBody(glass: glass, maxWidth: maxWidth);
@@ -2574,7 +2667,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 窗口槽位：直播/听读/小程序/多媒体体常驻（Offstage 藏起），
+  /// 窗口槽位：直播/听读/小程序/多媒体/我的/女优库体常驻（Offstage 藏起），
   /// 状态完整保留；片库/短剧体共用首页目录状态（同一 _scroll
   /// 控制器挂两份滚动视图会崩），只在前台时建体，最小化时槽位
   /// 只留一个空占位、描述留在 _win7Windows 里供恢复换站。
@@ -2765,6 +2858,8 @@ class _HomeScreenState extends State<HomeScreen>
           ? HongguoDramaHome.miniAppTabIndex
           : _mineRequested
           ? HongguoDramaHome.mineTabIndex
+          : _actressRequested
+          ? HongguoDramaHome.actressTabIndex
           : null,
       hideCapsuleBar: hideCapsuleBar,
       driveSites: _cloudDriveSites,
@@ -2778,11 +2873,12 @@ class _HomeScreenState extends State<HomeScreen>
     required double maxWidth,
   }) {
     if (glassDesign(context)) return _glassAppBar();
+    final catalog = _showCatalogHeader && !_selectionMode;
     return AppBar(
-      toolbarHeight: television ? 64 : null,
+      toolbarHeight: television ? 64 : 48,
       titleSpacing: 12,
       automaticallyImplyLeading: false,
-      leading: _appBarLeading(),
+      leading: catalog ? null : _appBarLeading(),
       title: _selectionMode
           ? const Text('选择视频', maxLines: 1, overflow: TextOverflow.ellipsis)
           : _multimediaRequested
@@ -2791,26 +2887,41 @@ class _HomeScreenState extends State<HomeScreen>
           ? const Text('小程序')
           : _mineRequested
           ? const Text('我的')
+          : _actressRequested
+          ? const Text('女优库')
           : _showCatalogHeader
-          ? InkWell(
-              key: const ValueKey('source-switch'),
-              onTap: _canSwitchSource ? () => unawaited(_pickSource()) : null,
-              child: SizedBox(
-                height: 48,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _group.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 站名文字行已去掉：左上角第一位是当前站图标，
+                // 点它弹站点选择弹窗，长按进编辑模式。
+                Tooltip(
+                  message: '切换站源',
+                  child: InkWell(
+                    key: const ValueKey('source-switch'),
+                    onTap: _canSwitchSource
+                        ? () => unawaited(_pickSource())
+                        : null,
+                    onLongPress: _canSwitchSource
+                        ? () => unawaited(_pickSource(editMode: true))
+                        : null,
+                    child: SizedBox.square(
+                      dimension: 48,
+                      child: Center(
+                        child: _allSources
+                            ? const Icon(LucideIcons.layers, size: 24)
+                            : SiteIcon(
+                                siteId: _source.id,
+                                siteName: _source.name,
+                                size: 28,
+                                borderRadius: 8,
+                              ),
                       ),
                     ),
-                    if (_canSwitchSource) const Icon(Icons.expand_more_rounded),
-                  ],
+                  ),
                 ),
-              ),
+                _mineAvatarButton(),
+              ],
             )
           : Text(_zoneTitle),
       actions: [
@@ -2836,10 +2947,10 @@ class _HomeScreenState extends State<HomeScreen>
         ],
         const SizedBox(width: 8),
       ],
-      // 窄屏第二行：目录操作组横排独占一行，不再盖住站源条。
+      // 窄屏第二行：目录操作组横排独占一行，与图标齐平不留余高。
       bottom: _showCatalogHeader && !_selectionMode && maxWidth < 840
           ? PreferredSize(
-              preferredSize: const Size.fromHeight(56),
+              preferredSize: const Size.fromHeight(48),
               child: Align(
                 alignment: Alignment.centerRight,
                 child: SingleChildScrollView(
@@ -3130,6 +3241,15 @@ class _HomeScreenState extends State<HomeScreen>
         onOpenDrama: _openDrama,
         onOpenSaved: _openSaved,
         onSettingsPressed: _openZoneSettings,
+      );
+    }
+    // 女优库：与短剧首页内层页签是同一个列表页；合并名册不依赖
+    // 片库站源，同样放空态判断之前。
+    if (_actressRequested) {
+      return ActressListPage(
+        repository: widget.repository,
+        store: widget.store,
+        showTitle: false,
       );
     }
     if (_librarySources.isEmpty) {

@@ -183,7 +183,7 @@ void main() {
 
   group('主题卡显示内容选择', () {
     Future<LocalStore> pumpThemeScreen(WidgetTester tester) async {
-      // 默认主题已改 Win7：本测试验主题卡，显式钉住紫蓝霓虹。
+      // 默认主题已改 XP：本测试验主题卡，显式钉住紫蓝霓虹。
       SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
@@ -227,7 +227,7 @@ void main() {
     });
 
     testWidgets('每套主题的档独立存放', (tester) async {
-      // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+      // 默认主题已改 XP：显式钉住紫蓝霓虹，保原口径。
       SharedPreferences.setMockInitialValues({'appThemeMode': 'purpleNeon'});
       final store = LocalStore(await SharedPreferences.getInstance());
       addTearDown(store.dispose);
@@ -291,7 +291,7 @@ void main() {
     }) async {
       SharedPreferences.setMockInitialValues({
         'hiddenSites': '[${hidden.map((id) => '"$id"').join(',')}]',
-        // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+        // 默认主题已改 XP：显式钉住紫蓝霓虹，保原口径。
         'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());
@@ -419,7 +419,7 @@ void main() {
       // adult1 可见，抽样必中，测试才稳定（藏站本身不影响断言口径）。
       SharedPreferences.setMockInitialValues({
         'hiddenSites': '[]',
-        // 默认主题已改 Win7：显式钉住紫蓝霓虹，保原口径。
+        // 默认主题已改 XP：显式钉住紫蓝霓虹，保原口径。
         'appThemeMode': 'purpleNeon',
       });
       final probe = LocalStore(await SharedPreferences.getInstance());
@@ -459,7 +459,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'source': 'hongguo',
         'hiddenSites': '[]',
-        // 默认主题已改 Win7：本组验通用外壳（底栏标签），显式钉住紫蓝霓虹。
+        // 默认主题已改 XP：本组验通用外壳（底栏标签），显式钉住紫蓝霓虹。
         'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());

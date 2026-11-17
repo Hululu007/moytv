@@ -745,7 +745,7 @@ class HaikuoStore {
   /// 不变，MissAV 一字未动）。
   /// v10：2026-11-17 zip 修复规则 14 条追加入包（132 → 146 条，现有
   /// 132 条顺序标题不动；2879 摘除详情播放文字行）。
-  static const builtinBundleVersion = 10;
+  static const builtinBundleVersion = 12;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 

@@ -135,6 +135,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     color: #B4A5CE; background: rgba(11,6,23,.9); max-height: 28vh; overflow: auto; display: none;
     white-space: pre-wrap; }
   .loading { padding: 40px 10px; text-align: center; color: #B4A5CE; font-size: 13px; }
+  .paging-more { padding: 14px 10px 20px; text-align: center; color: #B4A5CE; font-size: 13px; }
   .loading .spin, .play-loading .spin { width: 26px; height: 26px; margin: 0 auto 12px;
     border-radius: 50%; border: 3px solid rgba(177,75,255,.25); border-top-color: #B14BFF;
     animation: hkspin .8s linear infinite; }
@@ -414,6 +415,40 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     }
     fetchCache[key] = { code: code, body: body, headers: headers || {}, at: Date.now() };
   }
+  // 模板型 ## 地址：占位符嵌在路径段里（如 hiker://empty##fyclass/fypage/、
+  // hiker://empty##show/fyclass/by/fyarea//page/fypage/、
+  // hiker://empty##https://...?fyclass&paged=fypage），规则按模板拼地址，
+  // 不能改写成 ## 分段形态——分段改写会丢模板结构（51吃瓜点分类后 MY_URL
+  // 变成 hiker://empty##page##1，规则拼出 https://.../page##1 取不到数）。
+  // 判定：## 后的某段含占位符且该段不止占位符本身。纯分段形态
+  //（##fyclass##fypage）走原有分段重建，一字不动。
+  function homeTemplateHasEmbeddedPlaceholder(base) {
+    if (String(base || '').indexOf('##') < 0) return false;
+    var segs = String(base).split('##');
+    for (var i = 1; i < segs.length; i++) {
+      var s = segs[i];
+      if (/(fyclass|fypage|fyarea|fyyear|fysort|fyAll)/.test(s) &&
+          !/^(fyclass|fypage|fyarea|fyyear|fysort|fyAll)$/.test(s.replace(/^\s+|\s+$/g, ''))) return true;
+    }
+    return false;
+  }
+  // 模板代入：与 substituteTemplates 同一套占位语义（fypage@ 起值/步长、
+  // 裸 fypage/fyclass/fyarea/fyyear/fysort/fyAll、[firstPage=...]），页码
+  // 固定 1（reloadHome 即回第 1 页）。只用于 reloadHome 的模板型地址。
+  function substituteHomeTemplate(base) {
+    var out = String(base || '');
+    var fp = /\[firstPage=([^\]]*)\]/.exec(out);
+    if (fp) out = fp[1];
+    out = out.replace(/fypage@(-?\d+)@\*(-?\d+)@/g, function (m, s, st) { return String(Number(s)); });
+    out = out.replace(/fypage@(-?\d+)(?!@)/g, function (m, off) { return String(1 + Number(off)); });
+    out = out.replace(/\bfypage\b/g, '1');
+    out = out.replace(/\bfyclass\b/g, String(selectedCls || ''));
+    out = out.replace(/\bfyarea\b/g, String(selectedArea || ''));
+    out = out.replace(/\bfyyear\b/g, String(selectedYear || ''));
+    out = out.replace(/\bfysort\b/g, String(selectedSort || ''));
+    out = out.replace(/fyAll/g, String(selectedCls || ''));
+    return out;
+  }
   function reloadHome() {
     clearPageTasks();
     // ## 规则保持原样：hiker://empty##分类##页##排序（规则按分段自取）。
@@ -421,9 +456,12 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     // 不会发给服务器，fetch(MY_URL) 仍取首页地址，脚本按分段
     // 读分类/排序/地区/年份；分段约定 pp[1]分类 pp[2]页 pp[3]排序
     // pp[4]地区 pp[5]年份，同时 fyclass/fyarea/fyyear 全局变量同步。
+    // 模板型 ## 地址（占位符嵌路径段）按模板代入，不走分段重建。
     var base = homeUrl();
     var url;
-    if (base.indexOf('##') >= 0 || base === '' || base.indexOf('hiker://') === 0) {
+    if (homeTemplateHasEmbeddedPlaceholder(base)) {
+      url = substituteHomeTemplate(base);
+    } else if (base.indexOf('##') >= 0 || base === '' || base.indexOf('hiker://') === 0) {
       url = 'hiker://empty##' + selectedCls + '##1' + (selectedSort ? '##' + selectedSort : '') +
         (selectedArea ? '##' + selectedArea : '') + (selectedYear ? '##' + selectedYear : '');
     } else {
@@ -2459,7 +2497,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 导航栈条目：回上一级要用的地址/页码 + 当时主题 + 当时标题，
   // goBack 按条目恢复主题与标题。
   function pushNavEntry() {
-    navStack.push({ url: MY_URL, page: MY_PAGE, theme: currentPageTheme, title: pageTitle });
+    // G3：已翻页的列表（第 2 页起）连同已加载的全部条目一起入栈，
+    // 返回时直接恢复快照，不重跑（重跑只剩当前页）；搜索结果页
+    // 不快照，保留“返回回首页”的既有行为。
+    var entry = { url: MY_URL, page: MY_PAGE, theme: currentPageTheme, title: pageTitle };
+    if (MY_PAGE > 1 && !isDetail && MY_TYPE !== 'search' && currentItems && currentItems.length) {
+      entry.items = currentItems.slice();
+    }
+    navStack.push(entry);
   }
   // ---------- C12 #autoPage#：滚到底自动拼接下一章 ----------
   var autoPageCtx = null;
@@ -2600,6 +2645,229 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       return { text: textOut };
     }
     return null;
+  }
+  // ---------- G3 列表翻页：滚到底自动加载下一页并追加 ----------
+  // 官方语义：MY_PAGE 第一页为 1、第二页为 2（指南）；onRefresh 监听
+  // 注明“下一页和切换分类不算”刷新——翻页是独立于刷新的重跑。
+  // 武装只看证据（规则地址含 fypage、## 分段、脚本读 MY_PAGE/fypage、
+  // 搜索地址含 fypage），无证据的静态页永不翻页；每页结果与已显示
+  // 项去重，全重复/空结果即判无更多，避免静态页越翻越长。
+  // 页码状态只活在当前运行页内：换规则即新页，天然按规则隔离；
+  // 页内切分类走 reloadHome（页码归 1），身份键亦随筛选值变化。
+  var pagingCtx = null;
+  var pagingLoading = false;
+  var pagingScrollBound = false;
+  var pagingExhaustedKey = null;
+  var pagingRendering = false;
+  // 列表身份：翻页改写 ## 第 2 段后地址会变，身份计算时把该段归一，
+  // 同一列表翻页前后身份不变；切分类/换地址/换类型即新身份。
+  function pagingListKey() {
+    var u = String(MY_URL || '');
+    var idx = u.indexOf('##');
+    if (idx >= 0) {
+      var segs = u.split('##');
+      if (segs.length >= 3) segs[2] = '#';
+      u = segs.join('##');
+    }
+    return String(MY_TYPE || '') + '|' + u + '|' + String(selectedCls || '') +
+      '|' + String(selectedSort || '') + '|' + String(selectedArea || '') +
+      '|' + String(selectedYear || '');
+  }
+  // ## 第 2 段是页码位（reloadHome 写入 '1'，规则首址写 'fypage'，
+  // 3 条规则直接读该段作页码）：仅当该段为 fypage 或纯数字时改写，
+  // 其余形态一律不动；MY_PAGE 全局递增覆盖其余全部读法。
+  function withPageSegment(url, page) {
+    var text = String(url || '');
+    var idx = text.indexOf('##');
+    if (idx < 0) return text;
+    var segs = text.split('##');
+    if (segs.length < 3) return text;
+    var seg = String(segs[2]);
+    if (seg !== 'fypage' && !/^\d+$/.test(seg)) return text;
+    segs[2] = String(page);
+    return segs.join('##');
+  }
+  // 子页查询串里的 page 参数：fypage 或纯数字时改写，否则不动。
+  function withQueryPage(url, page) {
+    var text = String(url || '');
+    var q = text.indexOf('?');
+    if (q < 0) return text;
+    var head = text.slice(0, q + 1), query = text.slice(q + 1);
+    var parts = query.split('&');
+    var changed = false;
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0] === 'page' && (kv[1] === 'fypage' || /^\d+$/.test(kv[1] || ''))) {
+        parts[i] = 'page=' + page;
+        changed = true;
+      }
+    }
+    return changed ? head + parts.join('&') : text;
+  }
+  function pagingItemKey(it) {
+    var u = String((it && (it.url || it.link)) || '');
+    var t = String((it && (it.title || it.name)) || '');
+    if (u || t) return u + '\n' + t;
+    try { return JSON.stringify(it); } catch (e) { return String(it); }
+  }
+  function pagingEvidence(scriptText) {
+    var t = String(scriptText || '');
+    return t.indexOf('MY_PAGE') >= 0 || /\bfypage\b/.test(t);
+  }
+  function pagingEligible() {
+    if (isDetail || pagingLoading || resultCapture) return false;
+    if (!pagingCtx) return false;
+    if (!currentItems || !currentItems.length) return false;
+    if (pagingExhaustedKey === pagingListKey()) return false;
+    if (pagingCtx.kind === 'virtual') {
+      var m = /^hiker:\/\/page\/([^?#]+)/.exec(String(pagingCtx.url || ''));
+      if (m) {
+        var page = findPage(m[1]);
+        if (page && pagingEvidence(pageRuleText(page))) return true;
+      }
+      var q = String(pagingCtx.url || '');
+      if (q.indexOf('fypage') >= 0 || /[?&]page=\d+/.test(q)) return true;
+      return false;
+    }
+    if (pagingCtx.kind === 'search') {
+      var rule = PROGRAM.rule || {};
+      if (String(rule.search_url || '').indexOf('fypage') >= 0) return true;
+      return pagingEvidence(searchScriptText());
+    }
+    var ruleUrl = String((PROGRAM.rule && PROGRAM.rule.url) || '');
+    if (ruleUrl.indexOf('fypage') >= 0 || String(MY_URL || '').indexOf('fypage') >= 0) return true;
+    if (String(MY_URL || '').indexOf('##') >= 0) return true;
+    return pagingEvidence(PROGRAM.script);
+  }
+  function bindPagingScroll() {
+    if (pagingScrollBound) return;
+    pagingScrollBound = true;
+    try {
+      window.addEventListener('scroll', function () { maybeLoadNextPage(); }, { passive: true });
+    } catch (e) {
+      try { window.addEventListener('scroll', function () { maybeLoadNextPage(); }); } catch (e2) {}
+    }
+  }
+  function maybeLoadNextPage() {
+    if (!pagingEligible()) return;
+    var y = 0, vh = 0, sh = 0;
+    try {
+      y = window.scrollY || window.pageYOffset || 0;
+      vh = window.innerHeight || 0;
+      sh = document.body ? document.body.scrollHeight : 0;
+    } catch (e) { return; }
+    if (sh <= 0) return;
+    // y>0：必须是用户真实滚过，首屏未滚时不触发，避免短列表
+    // 首绘即连锁翻页。
+    if (y <= 0) return;
+    if (y + vh < sh - 200) return;
+    loadNextListPage();
+  }
+  function loadNextListPage() {
+    if (!pagingEligible()) return;
+    var ctx = pagingCtx;
+    var guardKey = pagingListKey();
+    var guardPage = MY_PAGE;
+    var guardCtx = pagingCtx;
+    pagingLoading = true;
+    // 先挂“正在加载下一页”脚，让浏览器先画出来，再延迟执行取数
+    // （同步 XHR 会冻住绘制，与导航的 defer 模式一致）。
+    var footer = null;
+    try {
+      footer = document.createElement('div');
+      footer.className = 'paging-more';
+      footer.textContent = '正在加载下一页…';
+      listEl.appendChild(footer);
+    } catch (e) { footer = null; }
+    defer(function () {
+      // 导航已换页时放弃：身份、页码、上下文任一变了都不跑。
+      if (pagingCtx !== guardCtx || pagingListKey() !== guardKey ||
+          MY_PAGE !== guardPage || isDetail || resultCapture) {
+        pagingLoading = false;
+        if (footer && footer.parentNode) { try { footer.parentNode.removeChild(footer); } catch (e) {} }
+        return;
+      }
+      runNextListPage(ctx, guardKey);
+    });
+  }
+  // 捕获模式重跑当前列表脚本（复用 captureNextChapter 的 resultCapture
+  // 模式）：页码 +1 后取数，集齐新项再一次性追加渲染；取数期间的
+  // 监听/前置项事后全数恢复，不污染当前页；空结果不断旧列表。
+  function runNextListPage(ctx, guardKey) {
+    var nextPage = MY_PAGE + 1;
+    var collected = [];
+    var savedCapture = resultCapture;
+    var savedUrl = MY_URL, savedPage = MY_PAGE, savedInput = currentInput;
+    var savedPre = preResultItems.slice();
+    var savedRefresh = refreshListeners.slice();
+    var savedClose = closeListeners.slice();
+    var y = 0;
+    try { y = window.scrollY || 0; } catch (e) { y = 0; }
+    resultCapture = collected;
+    try {
+      if (ctx.kind === 'search') {
+        setGlobals(buildSearchUrl(searchKeyword, nextPage), nextPage);
+        setCurrentInput(searchKeyword);
+        runPrerule();
+        runSource(searchScriptText());
+      } else if (ctx.kind === 'virtual') {
+        var vUrl = withQueryPage(ctx.url, nextPage);
+        setGlobals(withPageSegment(savedUrl, nextPage), nextPage);
+        var text = resolveVirtual(vUrl);
+        if (!collected.length && typeof text === 'string') {
+          var trimmed = text.trim();
+          if (trimmed.charAt(0) === '[') {
+            try {
+              var arr = JSON.parse(trimmed);
+              if (Array.isArray(arr)) collected = collected.concat(arr);
+            } catch (e) { /* 非法数组不追加 */ }
+          }
+        }
+        if (vUrl !== ctx.url) ctx.url = vUrl;
+      } else {
+        setGlobals(withPageSegment(savedUrl, nextPage), nextPage);
+        runPrerule();
+        var homeScript = String(PROGRAM.script || '');
+        if (!homeScript.trim()) {
+          var r = PROGRAM.rule || {};
+          homeScript = String(r.chapter_find || r.movie_find || '');
+        }
+        runSource(homeScript);
+      }
+    } catch (e) { /* 取数失败按空页处理：不断旧列表 */ }
+    resultCapture = savedCapture;
+    // 捕获期间 runSource 清掉的监听与前置项一律恢复，不污染当前页。
+    preResultItems = savedPre;
+    refreshListeners.length = 0;
+    for (var ri = 0; ri < savedRefresh.length; ri++) refreshListeners.push(savedRefresh[ri]);
+    closeListeners.length = 0;
+    for (var ci2 = 0; ci2 < savedClose.length; ci2++) closeListeners.push(savedClose[ci2]);
+    // 去重：已显示项 + 前置项一律不再追加；全重复/空结果判无更多。
+    var seen = {};
+    var si;
+    for (si = 0; si < currentItems.length; si++) seen[pagingItemKey(currentItems[si])] = true;
+    for (si = 0; si < savedPre.length; si++) seen[pagingItemKey(savedPre[si])] = true;
+    var fresh = [];
+    for (si = 0; si < collected.length; si++) {
+      var k = pagingItemKey(collected[si]);
+      if (!seen[k]) { seen[k] = true; fresh.push(collected[si]); }
+    }
+    pagingLoading = false;
+    if (!fresh.length) {
+      // 无更多：状态原样恢复，记死该列表身份，提示一次。
+      setGlobals(savedUrl, savedPage);
+      setCurrentInput(savedInput);
+      pagingExhaustedKey = guardKey;
+      pagingRendering = true;
+      try { render(currentItems); } finally { pagingRendering = false; }
+      try { window.scrollTo(0, y); } catch (e) {}
+      toast('没有更多了');
+      return;
+    }
+    // 成功：提交新页码与新地址，追加渲染并保住滚动位置。
+    pagingRendering = true;
+    try { render(currentItems.concat(fresh)); } finally { pagingRendering = false; }
+    try { window.scrollTo(0, y); } catch (e) {}
   }
   // ---------- C13 #autoCache#/#cacheOnly#/cacheCode：页面级缓存 ----------
   // 只缓存第一页（MY_PAGE==1 才读写）；键 = md5(剥除后地址 + '|' +
@@ -2904,6 +3172,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
           }
           isDetail = false;
           render(items, colType);
+          // G3：子页列表可翻页时记下子页地址，翻页重解该地址。
+          pagingCtx = { kind: 'virtual', url: String(url || '') };
           return;
         }
       } catch (e) { /* 不是合法数组，往下当文本 */ }
@@ -3078,8 +3348,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       var listPage = findPage('list');
       if (listPage) {
         applyCapturedNavState();
-        var listText = runPageRule(listPage.rule, 'list');
-        if (listText) { renderVirtual(listText, url); return true; }
+        // 查询串必须带进子页执行（getParam('u')/getParam('pg') 靠它读参）；
+        // js: 子页靠 setResult 副作用渲染、返回空串，同样算已处理——
+        // 旧代码以返回文本为空就 reloadHome，把刚渲染出的列表页抹掉。
+        var listRef = splitPageRef(url.replace(/^hiker:\/\/page\//i, ''));
+        var listText = runPageRule(listPage.rule, listRef.path + (listRef.query ? '?' + listRef.query : ''));
+        if (listText) { renderVirtual(listText, url); }
+        return true;
       }
       reloadHome();
       return true;
@@ -3088,8 +3363,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       var searchPage = findPage('search');
       if (searchPage) {
         applyCapturedNavState();
-        var searchText = runPageRule(searchPage.rule, 'search');
-        if (searchText) { renderVirtual(searchText, url); return true; }
+        var searchRef = splitPageRef(url.replace(/^hiker:\/\/page\//i, ''));
+        var searchText = runPageRule(searchPage.rule, searchRef.path + (searchRef.query ? '?' + searchRef.query : ''));
+        if (searchText) { renderVirtual(searchText, url); }
+        return true;
       }
       native({ type: 'openSearch', keyword: '', rule: '', group: '', auto: false });
       return true;
@@ -3457,6 +3734,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     // 新一帧渲染开始：重置本帧 x5 行计数并藏起旧原生行；
     // 本帧的 x5RowHtml 会再发配置（捕获模式已在上面返回，不动行）。
     x5RenderBegin();
+    // G3：非捕获渲染即当前列表定稿——详情页永不翻页，列表页按
+    // 当前类型记翻页上下文；翻页追加渲染由 pagingRendering 守卫
+    // 不动上下文，子页列表由 renderVirtual 事后改记，聚合搜索
+    // 结果由 runAggregatedSearch 事后清掉。
+    if (!pagingRendering) {
+      if (isDetail) { pagingCtx = null; }
+      else { pagingCtx = { kind: MY_TYPE === 'search' ? 'search' : 'home' }; }
+    }
     currentItems = mainItems.slice();
     if (!isDetail && preResultItems.length) items = preResultItems.concat(items);
     currentMode = isDetail ? 'detail' : 'list';
@@ -4158,6 +4443,10 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       if (isDetail) {
         runSource(detailScript());
       } else {
+        // G3：列表刷新回到第 1 页（翻页后刷新不再只剩当前页），
+        // 并清掉该列表的“无更多”标记，给误判留恢复口。
+        setGlobals(withPageSegment(MY_URL, 1), 1);
+        pagingExhaustedKey = null;
         runPrerule();
         runSource(PROGRAM.script);
       }
@@ -5333,6 +5622,13 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     showListLoading();
     defer(function () {
       if (token !== navToken) return;
+      // G3：带快照的已翻页列表直接恢复快照（先跑 prerule 恢复
+      // 前置项），不重跑脚本；其余一律走既有重跑路径。
+      if (prev && prev.page > 1 && prev.items && prev.items.length) {
+        runPrerule();
+        render(prev.items.slice());
+        return;
+      }
       runPrerule();
       runSource(PROGRAM.script || '');
     });
@@ -5381,6 +5677,9 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     } catch (error) {
       listEl.innerHTML = '<div class="error">执行失败：\n' +
         escapeHtml(error && error.stack ? error.stack : String(error)) + '</div>';
+      // G3：脚本执行失败的页面没有可翻页的列表，清掉上下文，
+      // 避免滚到底把旧列表顶回错误页；捕获模式下调用方自理。
+      if (!resultCapture) pagingCtx = null;
       return false;
     }
   }
@@ -5476,18 +5775,18 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       } catch (e) { /* ignore */ }
     }
   }
-  // 搜索：search_url 模板替换（**/fypage/fyAll/fyclass）后当 MY_URL，
-  // prerule 先跑，再跑 searchFind（没有则回落 find_rule）。
-  function runSearch(keyword, page) {
-    clearPageTasks();
-    clearNavCapture();
+  // 搜索脚本：searchFind（没有则回落 find_rule）；G3 翻页复用。
+  function searchScriptText() {
     var rule = PROGRAM.rule || {};
-    var kw = String(keyword == null ? '' : keyword);
-    setSearchKeyword(kw);
+    return String(rule.searchFind || rule.searchfind || '') ||
+      String(rule.find_rule || PROGRAM.script || '');
+  }
+  // 搜索地址：search_url 模板替换（**/fypage/fyAll/fyclass）后当
+  // MY_URL；G3 翻页复用，页码递增即下一页。相对地址补全（R6-F10）
+  // 与 runSearch 原逻辑一致。
+  function buildSearchUrl(kw, page) {
+    var rule = PROGRAM.rule || {};
     var searchUrl = String(rule.search_url || '');
-    var searchFind = String(rule.searchFind || rule.searchfind || '');
-    var script = searchFind || String(rule.find_rule || PROGRAM.script || '');
-    if (!script.trim() && !searchUrl) { toast('这条规则没有搜索'); return; }
     var myUrl;
     if (searchUrl) {
       myUrl = searchUrl.split('**').join(kw);
@@ -5502,6 +5801,20 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (rule.url && myUrl.charAt(0) === '/' && myUrl.charAt(1) !== '/' && getHome(rule.url)) {
       myUrl = getHome(rule.url) + myUrl;
     }
+    return myUrl;
+  }
+  // 搜索：search_url 模板替换（**/fypage/fyAll/fyclass）后当 MY_URL，
+  // prerule 先跑，再跑 searchFind（没有则回落 find_rule）。
+  function runSearch(keyword, page) {
+    clearPageTasks();
+    clearNavCapture();
+    var rule = PROGRAM.rule || {};
+    var kw = String(keyword == null ? '' : keyword);
+    setSearchKeyword(kw);
+    var searchUrl = String(rule.search_url || '');
+    var script = searchScriptText();
+    if (!script.trim() && !searchUrl) { toast('这条规则没有搜索'); return; }
+    var myUrl = buildSearchUrl(kw, page);
     pushNavEntry();
     applyPageTheme('');
     setGlobals(myUrl, page || 1);
@@ -8449,6 +8762,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     showBack(true);
     isDetail = false;
     render(collected);
+    // G3：聚合搜索结果不可翻页（多规则一次取齐），清掉上下文。
+    pagingCtx = null;
   }
 
   var API = {
@@ -8761,6 +9076,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     seedStorage();
     syncFilterGlobals();
     bindAutoPageScroll();
+    bindPagingScroll();
     prunePageCache();
     var source = String(PROGRAM.script || '');
     if (source.indexOf('js:') === 0) source = source.slice(3);

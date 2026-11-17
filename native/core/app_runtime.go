@@ -57,7 +57,6 @@ type Downloader struct {
 	providerMu            sync.Mutex
 	providerHosts         map[string]string
 	limiter               *requestLimiter
-	proxyRouter           *proxyRouter
 	hongguoOnce           sync.Once
 	hongguo               *hongguoAppClient
 	huangjuOnce           sync.Once
@@ -108,8 +107,6 @@ type nativeDrama struct {
 
 type nativeInput struct {
 	ExpectedVersions map[string]string       `json:"expectedVersions"`
-	SystemProxy      nativeSystemProxy       `json:"systemProxy"`
-	EgressProxy      string                  `json:"egressProxy"`
 	Settings         nativeResourceSettings  `json:"settings"`
 	JobIDs           []string                `json:"jobIds"`
 	PlaybackSession  string                  `json:"playbackSession"`
@@ -342,8 +339,7 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	}
 	cfg := defaultConfig()
 	cfg.dataDir = directory
-	router := &proxyRouter{}
-	d := &Downloader{cfg: cfg, providerHosts: map[string]string{}, proxyRouter: router,
+	d := &Downloader{cfg: cfg, providerHosts: map[string]string{},
 		limiter: newRequestLimiter(3, 250*time.Millisecond), diagnostics: newDiagnosticLog(directory)}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// RootCAs 设为「系统信任库 + 打包 CA 全集」。Android 端 Go 不加载系统信任库，
@@ -352,7 +348,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: systemCertPoolWithBundle()}
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 20 * time.Second
-	transport.Proxy = router.proxy
+	// 直连：Clone 会继承 DefaultTransport 的 ProxyFromEnvironment，必须显式
+	// 置 nil，否则环境变量里的代理仍会生效。
+	transport.Proxy = nil
 	cdn := newCDNTransport(transport, newDNSResolver(transport))
 	browserTransport := newHuangguoBrowserTransport(cdn, d)
 	d.browserTransport = browserTransport
@@ -509,10 +507,6 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return map[string]any{"items": engine.downloader.pendingShieldChallenges(), "userAgent": shieldUserAgent}, nil
 	case "setClearance":
 		return true, engine.downloader.setShieldClearance(input.Host, input.Cookie, input.UA)
-	case "updateSystemProxy":
-		return true, engine.updateSystemProxy(input.SystemProxy)
-	case "setEgressProxy":
-		return true, engine.setEgressProxy(input.EgressProxy)
 	case "crackConfigSet":
 		removed, err := seku.CrackConfigSet(input.Content)
 		if err != nil {
@@ -946,6 +940,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		}
 	case sourceHongguoNew:
 		items, result.HasMore, result.Filters, err = d.fetchHongguoNewCatalogPage(ctx, category, page, input.Filters)
+	case sourceFanqie:
+		items, result.HasMore, result.Filters, err = d.fetchFanqieCatalogPage(ctx, category, page)
 	case sourceHuangdou:
 		client := newHuangdouAPIClient(d)
 		var decoded any
@@ -1059,6 +1055,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		}
 	case sourceHongguoNew:
 		raw, chapters, err = engine.downloader.fetchHongguoNewDetail(ctx, sourceID)
+	case sourceFanqie:
+		raw, chapters, err = engine.downloader.fetchFanqieDetail(ctx, sourceID)
 	case sourceHGTV:
 		raw, chapters, err = engine.downloader.fetchHGTVDetail(ctx, sourceID)
 	case sourceHGTVMirror:

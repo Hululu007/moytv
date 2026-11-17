@@ -85,7 +85,7 @@ void main() {
   Future<LocalStore> makeStore() async {
     SharedPreferences.setMockInitialValues({
       'hiddenSites': '[]',
-      // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+      // 默认主题已改 XP：本测试验通用外壳，显式钉住紫蓝霓虹。
       'appThemeMode': 'purpleNeon',
     });
     final store = LocalStore(await SharedPreferences.getInstance());
@@ -137,10 +137,11 @@ void main() {
   }
 
   group('戏剧首页底栏覆盖（第 4 件）', () {
-    testWidgets('藏胶囊栏时芯片行出现且胶囊栏消失', (tester) async {
+    testWidgets('藏胶囊栏时合并顶栏出现且胶囊栏消失', (tester) async {
       await pumpDramaHome(tester, hideCapsuleBar: true);
       expect(find.byType(NeonBottomBar), findsNothing);
-      expect(find.byKey(const ValueKey('drama-internal-nav')), findsOneWidget);
+      // 首页页签：品牌 + 页签 + 搜索/刷新并成一排的合并顶栏。
+      expect(find.byKey(const ValueKey('drama-merged-topbar')), findsOneWidget);
       expect(find.byKey(const ValueKey('drama-nav-home')), findsOneWidget);
       expect(find.byKey(const ValueKey('drama-nav-channel')), findsOneWidget);
       expect(
@@ -237,7 +238,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'source': source,
         'hiddenSites': '[]',
-        // 默认主题已改 Win7：本测试验通用外壳，显式钉住紫蓝霓虹。
+        // 默认主题已改 XP：本测试验通用外壳，显式钉住紫蓝霓虹。
         'appThemeMode': 'purpleNeon',
       });
       final store = LocalStore(await SharedPreferences.getInstance());
@@ -362,9 +363,7 @@ void main() {
       final namesById = {for (final site in store.sources) site.id: site.name};
       expect(
         repository.requests.every(
-          (id) =>
-              id == target.id ||
-              (namesById[id] ?? '').startsWith('🔞'),
+          (id) => id == target.id || (namesById[id] ?? '').startsWith('🔞'),
         ),
         isTrue,
       );

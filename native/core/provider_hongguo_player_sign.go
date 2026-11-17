@@ -214,6 +214,14 @@ func hongguoPlayerArgus(query string, body []byte, timestamp uint32, deviceID st
 }
 
 func hongguoPlayerLadon(aid string, timestamp uint32, prefix []byte) string {
+	return hongguoPlayerLadonWithLicense(aid, 1611921764, timestamp, prefix)
+}
+
+// hongguoPlayerLadonWithLicense：ladon 34 轮 ARX 密码，license 可参。
+// 旧播放签名 license 恒为 1611921764（hongguoPlayerLadon 委托此函数）；
+// V5 helios 以 license 646637794、aid 8662、le32(random) 前缀调用
+// （对照上游 sign/v5.rs helios → ladon::ladon_encrypt）。
+func hongguoPlayerLadonWithLicense(aid string, license int64, timestamp uint32, prefix []byte) string {
 	hash := md5.Sum(append(append([]byte(nil), prefix...), aid...))
 	digest := []byte(hex.EncodeToString(hash[:]))
 	left, right := binary.LittleEndian.Uint64(digest), binary.LittleEndian.Uint64(digest[8:])
@@ -226,7 +234,7 @@ func hongguoPlayerLadon(aid string, timestamp uint32, prefix []byte) string {
 		left = mixed ^ bits.RotateLeft64(left, 3)
 		right, queue = queue[0], queue[1:]
 	}
-	payload := []byte(strconv.FormatUint(uint64(timestamp), 10) + "-1611921764-" + aid)
+	payload := []byte(strconv.FormatUint(uint64(timestamp), 10) + "-" + strconv.FormatInt(license, 10) + "-" + aid)
 	data := hongguoCommentPad(payload)
 	for offset := 0; offset < len(data); offset += 16 {
 		left, right := binary.LittleEndian.Uint64(data[offset:]), binary.LittleEndian.Uint64(data[offset+8:])

@@ -379,24 +379,6 @@
       "ext": ""
     },
     {
-      "key": "zakaseku",
-      "name": "🔞阅妹阁┃App原版62站",
-      "api": "csp_ZakaSekuAmns",
-      "ext": ""
-    },
-    {
-      "key": "zakakp14",
-      "name": "🔞看片站群┃App挖出14站",
-      "api": "csp_ZakaYueMGeAmns",
-      "ext": ""
-    },
-    {
-      "key": "zaka-yue2",
-      "name": "🔞阅妹阁模块2┃JavDB+51吃瓜",
-      "api": "csp_ZakaYueMGe2Amns",
-      "ext": ""
-    },
-    {
       "key": "zakafq",
       "name": "🔞番茄视频┃免登入直取",
       "api": "csp_ZakaFqAmns",
@@ -793,12 +775,6 @@
       "ext": ""
     },
     {
-      "key": "hongguo",
-      "name": "🍎红果短剧·听书┃官方直采+自建朗读",
-      "api": "csp_ZakaHongguoAmns",
-      "ext": "{\"host\":\"https://hongguoduanju.com\"}"
-    },
-    {
       "key": "ZakaLiveTv",
       "name": "📡电视直播┃110台",
       "api": "csp_ZakaLiveTvAmns",
@@ -871,21 +847,9 @@
       "ext": ""
     },
     {
-      "key": "go_tingshu",
-      "name": "听书",
-      "api": "csp_TingShu",
-      "ext": "{}"
-    },
-    {
       "key": "hstv",
       "name": "🔞HSTV",
       "api": "csp_Hstv",
-      "ext": "{}"
-    },
-    {
-      "key": "Xhs",
-      "name": "🔞小红薯APP(JAR)",
-      "api": "csp_Xhs",
       "ext": "{}"
     },
     {

@@ -12,10 +12,28 @@ import (
 )
 
 const (
-	hongguoDeviceRegisterURL   = "https://log.snssdk.com/service/2/device_register/"
-	hongguoDeviceRotations     = 3
-	hongguoDeviceRegisterPause = 10 * time.Minute
+	hongguoDeviceRegisterURL = "https://log.snssdk.com/service/2/device_register/"
+	hongguoDeviceRotations   = 3
+	// 注册失败退避：首败暂停 30 秒，连续失败翻倍，封顶 10 分钟；成功即清零。
+	// 一次注册失败不再让 App 链全死 10 分钟（原 flat 暂停的教训）。
+	hongguoDeviceRegisterPauseBase = 30 * time.Second
+	hongguoDeviceRegisterPauseMax  = 10 * time.Minute
 )
+
+// hongguoDeviceRegisterPauseDuration：第 failures 次连续注册失败后的暂停时长。
+func hongguoDeviceRegisterPauseDuration(failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	pause := hongguoDeviceRegisterPauseBase
+	for i := 1; i < failures; i++ {
+		pause *= 2
+		if pause >= hongguoDeviceRegisterPauseMax {
+			return hongguoDeviceRegisterPauseMax
+		}
+	}
+	return pause
+}
 
 func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, rejected string) error {
 	client := downloader.hongguoClient()
@@ -33,10 +51,12 @@ func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, rejected 
 	deviceID, installID, err := downloader.registerHongguoDevice(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
-			client.registerPausedUntil = time.Now().Add(hongguoDeviceRegisterPause)
+			client.registerPauseFailures++
+			client.registerPausedUntil = time.Now().Add(hongguoDeviceRegisterPauseDuration(client.registerPauseFailures))
 		}
 		return err
 	}
+	client.registerPauseFailures = 0
 	client.mu.Lock()
 	client.state.DeviceID, client.state.InstallID, client.state.Registered = deviceID, installID, true
 	client.deviceLimited = false

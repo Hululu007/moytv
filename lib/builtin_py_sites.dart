@@ -674,19 +674,6 @@ class BuiltinPySites {
     importType: 'py',
   );
 
-  static const xhsappSiteId = 'xhsapp';
-  static const xhsappAssetPath = 'assets/py_spiders/xhsapp.py';
-  static const xhsappFileId = 'builtin_xhsapp';
-
-  static const xhsappSite = SourceSite(
-    xhsappSiteId,
-    '🔞小红薯APP',
-    '内置 py · xhsapp',
-    section: SourceSite.sectionVideo,
-    origin: SourceSite.originBuiltin,
-    importType: 'py',
-  );
-
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
     BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
@@ -739,7 +726,6 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: insavSiteId, site: insavSite, assetPath: insavAssetPath, fileId: insavFileId),
     BuiltinPyEntry(siteId: sp91SiteId, site: sp91Site, assetPath: sp91AssetPath, fileId: sp91FileId),
     BuiltinPyEntry(siteId: mmsqSiteId, site: mmsqSite, assetPath: mmsqAssetPath, fileId: mmsqFileId),
-    BuiltinPyEntry(siteId: xhsappSiteId, site: xhsappSite, assetPath: xhsappAssetPath, fileId: xhsappFileId),
   ];
 
   static BuiltinPyEntry? entryFor(String siteId) {

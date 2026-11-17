@@ -5,14 +5,9 @@ import 'dart:typed_data';
 
 import 'core_bridge.dart';
 import 'live_models.dart';
-import 'proxy_kernel_service.dart';
-import 'socks5_proxy.dart';
 
 const liveRequestTimeout = Duration(seconds: 14);
 
-/// 线路预检超时。比正常请求短得多：预检只为排序，慢线路按「不可用」处理，
-/// 不能让用户停在列表页等一条 14 秒的超时。
-const liveRouteProbeTimeout = Duration(seconds: 4);
 const _maxLiveBytes = 8 << 20;
 const _deviceInfo = '{"t":"webPc","v":"1.0","ui":"0","ck":{"sessKeyAsp":""}}';
 
@@ -44,7 +39,9 @@ class LiveCookieJar {
       var domainMismatch = false;
       for (final attr in parts.skip(1)) {
         final eq = attr.indexOf('=');
-        final attrName = (eq < 0 ? attr : attr.substring(0, eq)).trim().toLowerCase();
+        final attrName = (eq < 0 ? attr : attr.substring(0, eq))
+            .trim()
+            .toLowerCase();
         final attrValue = eq < 0 ? '' : attr.substring(eq + 1).trim();
         if (attrName == 'max-age') {
           final seconds = int.tryParse(attrValue);
@@ -54,7 +51,10 @@ class LiveCookieJar {
             if (!HttpDate.parse(attrValue).isAfter(current)) expired = true;
           } catch (_) {}
         } else if (attrName == 'domain') {
-          final domain = attrValue.toLowerCase().replaceFirst(RegExp(r'^\.'), '');
+          final domain = attrValue.toLowerCase().replaceFirst(
+            RegExp(r'^\.'),
+            '',
+          );
           final hostLower = host.toLowerCase();
           if (domain.isNotEmpty &&
               hostLower != domain &&
@@ -83,91 +83,25 @@ class LiveCookieJar {
   void clear() => _byHost.clear();
 }
 
+/// 直播取数客户端：直连。应用内代理机件已删（2026-11-17），不再按资源键
+/// 选代理客户端；所有请求走同一个默认直连客户端。
 class LiveHttp {
-  LiveHttp({
-    this._proxyResourceKey,
-    Socks5ProxyRouter? proxyRouter,
-    Socks5ForwarderPool? forwarderPool,
-  }) : _proxyRouter = proxyRouter ?? Socks5ProxyRouter.instance,
-       _forwarderPool = forwarderPool ?? Socks5ForwarderPool.instance {
-    _client.findProxy = ProxyKernelTraffic.findProxy;
-  }
+  LiveHttp();
 
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10);
   final LiveCookieJar _cookies = LiveCookieJar();
 
-  /// 构造时绑定的默认资源键；每次请求也可用 [proxyResourceKey] 覆盖。
-  /// 无分配时走默认客户端（代理内核全局链路），行为与以前一致。
-  final String? _proxyResourceKey;
-  final Socks5ProxyRouter _proxyRouter;
-  final Socks5ForwarderPool _forwarderPool;
-  final Map<String, HttpClient> _routedClients = {};
-  int _routedGeneration = -1;
-
-  void _syncRoutedClients() {
-    if (_proxyRouter.generation == _routedGeneration) return;
-    for (final client in _routedClients.values) {
-      client.close(force: true);
-    }
-    _routedClients.clear();
-    _routedGeneration = _proxyRouter.generation;
-  }
-
-  /// 按资源键选客户端：fallback 用默认客户端（内核链路），direct 用
-  /// 专用直连客户端，via 用该 SOCKS5 代理的转发器端口客户端。
-  /// 等转发器起好的间隙里快照变了就按新快照重算，最多重试 3 次，
-  /// 仍不一致时回默认客户端，绝不卡死。
-  Future<HttpClient> _clientFor(String? callKey) async {
-    for (var attempt = 0; attempt < 3; attempt++) {
-      _syncRoutedClients();
-      final route = _proxyRouter.resolve(callKey ?? _proxyResourceKey);
-      switch (route.kind) {
-        case Socks5RouteKind.fallback:
-          return _client;
-        case Socks5RouteKind.direct:
-          return _routedClients.putIfAbsent(
-            route.clientKey,
-            () => HttpClient()
-              ..connectionTimeout = const Duration(seconds: 10)
-              ..findProxy = (_) => 'DIRECT',
-          );
-        case Socks5RouteKind.via:
-          final cached = _routedClients[route.clientKey];
-          if (cached != null) return cached;
-          final port = await _forwarderPool.ensurePort(route.entry!);
-          if (_proxyRouter.generation != _routedGeneration) continue;
-          final built = buildForwardedHttpClient(
-            port,
-            connectionTimeout: const Duration(seconds: 10),
-          );
-          final existing = _routedClients[route.clientKey];
-          if (existing != null) {
-            built.close(force: true);
-            return existing;
-          }
-          _routedClients[route.clientKey] = built;
-          return built;
-      }
-    }
-    return _client;
-  }
-
   void close() {
     _client.close(force: true);
-    for (final client in _routedClients.values) {
-      client.close(force: true);
-    }
-    _routedClients.clear();
   }
 
   Future<String> get(
     String url, {
     Map<String, String> headers = const {},
     Duration? timeout,
-    String? proxyResourceKey,
   }) async => _send(
-    await _clientFor(proxyResourceKey),
+    _client,
     url,
     method: 'GET',
     headers: headers,
@@ -179,9 +113,8 @@ class LiveHttp {
     String body, {
     Map<String, String> headers = const {},
     Duration? timeout,
-    String? proxyResourceKey,
   }) async => _send(
-    await _clientFor(proxyResourceKey),
+    _client,
     url,
     method: 'POST',
     body: body,
@@ -194,9 +127,8 @@ class LiveHttp {
     Object body, {
     Map<String, String> headers = const {},
     Duration? timeout,
-    String? proxyResourceKey,
   }) async => _send(
-    await _clientFor(proxyResourceKey),
+    _client,
     url,
     method: 'POST',
     body: jsonEncode(body),
@@ -266,8 +198,6 @@ class LiveHttp {
       throw AppFailure('直播源连接超时');
     } on HandshakeException {
       throw AppFailure('直播源证书校验失败');
-    } on Socks5Failure catch (error) {
-      throw AppFailure(error.message);
     } on SocketException {
       throw AppFailure('无法连接直播源');
     } on FormatException {

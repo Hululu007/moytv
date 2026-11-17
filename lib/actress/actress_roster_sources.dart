@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 
 import 'actress_models.dart';
@@ -64,7 +65,8 @@ abstract class ActressRosterSource {
     required ActressHttpFetch fetch,
   });
 
-  /// 排行第 [page] 页（1 起，顺序即名次序）：只有 MissAV 提供，
+  /// 排行第 [page] 页（1 起，顺序即名次序）：MissAV 默认提供；
+  /// whos 须开 [WhosRosterSource.enableRanking]（未验通前默认关闭），
   /// 其余源返回空页。
   Future<ActressRosterPage> fetchRankingPage(
     int page, {
@@ -202,10 +204,30 @@ List<RosterFilm> parseChaoliuFilms(String body) {
 
 /// whos.tv 女优库：结构取自已发布 spider `ZakaWhosAmns` 的解析逻辑
 /// （`/actresses` 列表 + `/actresses/<slug>` 人物页，每页 12 人）。
-/// 封面不取（data-cover-src 经 XOR 混淆，封面统一走跨站补全）。
+///
+/// 兜底开关（默认全关，手机验通一项开一项，见 ACTRESS_FALLBACK_SPEC）：
+/// - [enableRanking]：`/ranking/actress` 日榜作名气分后备信号；
+/// - [enableNameSearch]：`?name=` 搜索作 enrichPerson 的追加输入；
+/// - [enableXorCover]：data-cover-src XOR 解码直取封面（默认走跨站补全）。
+/// 卡片评分/作品数/别名解析是防御性的（只读已拉回的列表页），
+/// 始终开启，解析不到即空值，不影响既有字段。
 class WhosRosterSource extends ActressRosterSource {
+  WhosRosterSource({
+    this.enableRanking = false,
+    this.enableNameSearch = false,
+    this.enableXorCover = false,
+    this.rankingPeriod = '24h',
+  });
+
   static const base = 'https://whos.tv';
   static const maxPages = 5000;
+
+  final bool enableRanking;
+  final bool enableNameSearch;
+  final bool enableXorCover;
+
+  /// 排行榜周期（24h/7d/30d/total），默认 24h 日榜。
+  final String rankingPeriod;
 
   @override
   ActressRosterSourceId get id => ActressRosterSourceId.whos;
@@ -241,17 +263,68 @@ class WhosRosterSource extends ActressRosterSource {
       if (response.statusCode != 200) {
         throw StateError('whos films http ${response.statusCode}');
       }
-      final pageFilms = parseWhosFilms(response.body);
+      final pageFilms = parseWhosFilms(
+        response.body,
+        decodeCover: enableXorCover,
+      );
       if (pageFilms.isEmpty) break;
       films.addAll(pageFilms);
     }
     return films;
   }
+
+  @override
+  Future<ActressRosterPage> fetchRankingPage(
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (!enableRanking || page != 1) {
+      return const ActressRosterPage(persons: [], hasMore: false);
+    }
+    final response = await fetch('$base/ranking/actress?period=$rankingPeriod');
+    if (response.statusCode != 200) {
+      throw StateError('whos ranking http ${response.statusCode}');
+    }
+    final persons = parseWhosRoster(response.body);
+    return ActressRosterPage(persons: persons, hasMore: false);
+  }
+
+  /// 按名搜索（`?name=`）：仅开关打开时拉取，否则返回空页。
+  Future<ActressRosterPage> fetchSearchByName(
+    String name, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (!enableNameSearch) {
+      return const ActressRosterPage(persons: [], hasMore: false);
+    }
+    final encoded = Uri.encodeQueryComponent(name);
+    final response = await fetch('$base/actresses?name=$encoded');
+    if (response.statusCode != 200) {
+      throw StateError('whos search http ${response.statusCode}');
+    }
+    final persons = parseWhosRoster(response.body);
+    return ActressRosterPage(persons: persons, hasMore: false);
+  }
+
+  /// 人物页简介键值对：与 [fetchFilms] 同一端点（首页）；是否写库
+  /// 由调用方（enrichPerson 的开关）决定，本方法只取不写。
+  Future<Map<String, String>> fetchPersonAbout(
+    String sourceId, {
+    required ActressHttpFetch fetch,
+  }) async {
+    final response = await fetch('$base/actresses/$sourceId');
+    if (response.statusCode != 200) {
+      throw StateError('whos person http ${response.statusCode}');
+    }
+    return parseWhosPersonAbout(response.body);
+  }
 }
 
 /// 解析 whos 列表页：按 `<a href="/actresses/<slug>">` 切块（排除
 /// `page-` 开头的分页链接），名取 `<img alt>`，回落为 slug 解码，
-/// 头像取 `<img src>`。性别未知，记空（不臆断）。
+/// 头像取 `<img src>`（优先 hersav 演员图）。性别未知，记空（不臆断）。
+/// 卡片另取评分/作品数/别名（防御性解析，取不到即空值）；名为
+/// “素人”的伪演员条目（分类入口，不是真人）整条排除。
 List<RosterPerson> parseWhosRoster(String body) {
   final document = html_parser.parse(body);
   final out = <RosterPerson>[];
@@ -261,28 +334,173 @@ List<RosterPerson> parseWhosRoster(String body) {
     final slug = href.replaceFirst('/actresses/', '').split('/').first;
     if (slug.isEmpty || slug.startsWith('page-')) continue;
     if (!seen.add(slug)) continue;
-    final img = anchor.querySelector('img');
-    var name = img?.attributes['alt']?.trim() ?? '';
+    final scope = _whosCardScope(anchor);
+    Element? avatarImg;
+    for (final img in scope.querySelectorAll('img')) {
+      if ((img.attributes['src'] ?? '').contains('v.hersav.me/actress')) {
+        avatarImg = img;
+        break;
+      }
+    }
+    avatarImg ??= anchor.querySelector('img');
+    var name = '';
+    for (final img in anchor.querySelectorAll('img')) {
+      final alt = img.attributes['alt']?.trim() ?? '';
+      if (alt.isNotEmpty) {
+        name = alt;
+        break;
+      }
+    }
     if (name.isEmpty) {
       name = Uri.decodeComponent(slug).replaceAll(RegExp(r'[-_]'), ' ').trim();
     }
-    if (name.isEmpty) continue;
-    final avatar = _resolveUrl(WhosRosterSource.base, img?.attributes['src']);
+    if (name.isEmpty || name == '素人') continue;
+    final avatar = _resolveUrl(WhosRosterSource.base, avatarImg?.attributes['src']);
     out.add(
       RosterPerson(
         source: ActressRosterSourceId.whos,
         sourceId: slug,
         name: name,
         avatarUrl: avatar,
+        rating: _whosCardRating(scope),
+        exactWorks: _whosCardWorks(scope),
+        aliases: _whosCardAlias(scope, name),
       ),
     );
   }
   return out;
 }
 
+/// 卡片作用域：父元素恰好只含一条女优链接时取父元素（评分/作品数
+/// 等元数据在链接外时也能取到），否则只取链接自身，避免串卡。
+Element _whosCardScope(Element anchor) {
+  final parent = anchor.parent;
+  if (parent != null) {
+    final anchors = parent.querySelectorAll('a[href^="/actresses/"]');
+    if (anchors.length == 1) return parent;
+  }
+  return anchor;
+}
+
+/// 卡片评分：先认 `aria-label="评分 X"`，再认 amber/yellow 评分数值；
+/// 0–10 之外的值视为误取，返回 null。
+double? _whosCardRating(Element scope) {
+  final candidates = <Element>[scope, ...scope.querySelectorAll('*')];
+  for (final element in candidates) {
+    final label = element.attributes['aria-label'];
+    if (label == null) continue;
+    final match = RegExp(r'评分\s*([0-9]+(?:\.[0-9]+)?)').firstMatch(label);
+    if (match != null) {
+      final value = double.tryParse(match.group(1)!);
+      if (value != null && value >= 0 && value <= 10) return value;
+    }
+  }
+  for (final element in scope.querySelectorAll('*')) {
+    final classes = element.attributes['class'] ?? '';
+    if (!classes.contains('text-amber') && !classes.contains('text-yellow')) {
+      continue;
+    }
+    final match = RegExp(
+      r'^\s*([0-9]+(?:\.[0-9]+)?)',
+    ).firstMatch(element.text);
+    if (match != null) {
+      final value = double.tryParse(match.group(1)!);
+      if (value != null && value >= 0 && value <= 10) return value;
+    }
+  }
+  return null;
+}
+
+/// 卡片作品数：`N 部作品` 文本，去逗号转整数；异常值返回 0。
+int _whosCardWorks(Element scope) {
+  final match = RegExp(r'([\d,]+)\s*部作品').firstMatch(scope.text);
+  if (match == null) return 0;
+  final value = int.tryParse(match.group(1)!.replaceAll(',', ''));
+  if (value == null || value < 0 || value > 999999) return 0;
+  return value;
+}
+
+/// 卡片别名：`mt-0.5` 元数据行的首个合规文本（≤40 字、不是名字
+/// 本身、不含作品数/评分/星号）；取不到返回空。
+List<String> _whosCardAlias(Element scope, String name) {
+  for (final element in scope.querySelectorAll('*')) {
+    final classes = element.attributes['class'] ?? '';
+    if (!classes.contains('mt-0.5')) continue;
+    final text = element.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty || text.length > 40) continue;
+    if (text == name) continue;
+    if (text.contains('部作品') ||
+        text.contains('评分') ||
+        text.contains('★') ||
+        text.contains('☆')) {
+      continue;
+    }
+    return [text];
+  }
+  return const [];
+}
+
+/// whos 封面 XOR 解码：decCover 的逐字移植——hex 串末字节为密钥，
+/// 其余字节逐个异或，解出文本须以 http(s):// 开头，否则返回 null。
+String? decodeWhosCover(String? hex) {
+  if (hex == null) return null;
+  final cleaned = hex.trim();
+  if (cleaned.length < 6 || cleaned.length.isOdd) return null;
+  if (!RegExp(r'^[0-9a-fA-F]+$').hasMatch(cleaned)) return null;
+  final bytes = <int>[];
+  for (var i = 0; i < cleaned.length; i += 2) {
+    bytes.add(int.parse(cleaned.substring(i, i + 2), radix: 16));
+  }
+  if (bytes.isEmpty) return null;
+  final key = bytes.last;
+  final decoded = [
+    for (var i = 0; i < bytes.length - 1; i++) bytes[i] ^ key,
+  ];
+  final text = utf8.decode(decoded, allowMalformed: true);
+  if (text.startsWith('http://') || text.startsWith('https://')) return text;
+  return null;
+}
+
+/// 解析 whos 人物页简介键值对：`<p class="text-sm
+/// text-muted-foreground">键</p>` 紧跟 `<p class="font-medium
+/// text-white">值</p>`；键超过 8 字、值超过 200 字视为错配，跳过。
+Map<String, String> parseWhosPersonAbout(String body) {
+  final document = html_parser.parse(body);
+  final about = <String, String>{};
+  for (final paragraph in document.querySelectorAll('p')) {
+    final classes = paragraph.attributes['class'] ?? '';
+    if (!classes.contains('text-sm') ||
+        !classes.contains('text-muted-foreground')) {
+      continue;
+    }
+    final parent = paragraph.parent;
+    if (parent == null) continue;
+    final siblings = parent.children;
+    final index = siblings.indexOf(paragraph);
+    if (index < 0 || index + 1 >= siblings.length) continue;
+    final next = siblings[index + 1];
+    if (next.localName != 'p') continue;
+    final nextClasses = next.attributes['class'] ?? '';
+    if (!nextClasses.contains('font-medium') ||
+        !nextClasses.contains('text-white')) {
+      continue;
+    }
+    final key = paragraph.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final value = next.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (key.isEmpty || key.length > 8 || value.isEmpty || value.length > 200) {
+      continue;
+    }
+    about[key] = value;
+    if (about.length >= 20) break;
+  }
+  return about;
+}
+
 /// 解析 whos 人物页：按 `<a href="/videos/<id>">` 切块，标题取
 /// `<h3>`/alt/`<p>` 的首个非空，番号只认标题打头的番号形 token。
-List<RosterFilm> parseWhosFilms(String body) {
+/// [decodeCover] 打开时另取封面（data-cover-src XOR 解码，解不出
+/// 回落 img src）与详情地址；关闭时两字段恒为空。
+List<RosterFilm> parseWhosFilms(String body, {bool decodeCover = false}) {
   final document = html_parser.parse(body);
   final out = <RosterFilm>[];
   final seen = <String>{};
@@ -296,10 +514,21 @@ List<RosterFilm> parseWhosFilms(String body) {
     ]);
     if (title.isEmpty) continue;
     final code = extractLeadingAvCode(title);
+    var coverUrl = '';
+    if (decodeCover) {
+      final img = anchor.querySelector('img');
+      final encoded = img?.attributes['data-cover-src'];
+      coverUrl = decodeWhosCover(encoded) ?? '';
+      if (coverUrl.isEmpty) {
+        coverUrl = _resolveUrl(WhosRosterSource.base, img?.attributes['src']);
+      }
+    }
     out.add(
       RosterFilm(
         code: code,
         title: code.isNotEmpty && title == code ? '' : title,
+        coverUrl: coverUrl,
+        detailUrl: decodeCover ? href : '',
       ),
     );
   }

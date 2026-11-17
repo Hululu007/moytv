@@ -33,7 +33,7 @@ func (downloader *Downloader) resolveHongguoNewMedia(ctx context.Context, task T
 		return providerMedia{}, fmt.Errorf("红果(新)章节 ID 无效，请重新获取章节")
 	}
 	// 与旧槽 resolveHongguoMedia 相同的三段链：App 模型 → 网页兜底 → 网页取流。
-	// 不做跨集预取（py 也没有）；设备限流/重注册/海外线都在 App 模型函数内部处理。
+	// 不做跨集预取（py 也没有）；V5 单腿的设备重试与暂态重试都在 App 模型函数内部处理。
 	media, nativeErr := downloader.resolveHongguoAppMedia(ctx, videoID)
 	if nativeErr == nil {
 		return media, nil

@@ -158,11 +158,11 @@ void main() {
       }
     });
 
-    test('未知或空存储值回落默认 Win7，已存偏好优先', () {
-      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.win7);
-      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.win7);
-      expect(AppThemeMode.fromStorageValue('neon'), AppThemeMode.win7);
-      expect(AppThemeMode.fromStorageValue('bogus'), AppThemeMode.win7);
+    test('未知或空存储值回落默认 XP，已存偏好优先', () {
+      expect(AppThemeMode.fromStorageValue(null), AppThemeMode.xpWindows);
+      expect(AppThemeMode.fromStorageValue(''), AppThemeMode.xpWindows);
+      expect(AppThemeMode.fromStorageValue('neon'), AppThemeMode.xpWindows);
+      expect(AppThemeMode.fromStorageValue('bogus'), AppThemeMode.xpWindows);
       // 已存偏好不受默认影响：读到哪套就是哪套。
       expect(
         AppThemeMode.fromStorageValue('purpleNeon'),
@@ -200,7 +200,7 @@ void main() {
     });
   });
 
-  testWidgets('AppThemeConfig.of 在没有配置时回落 Win7', (tester) async {
+  testWidgets('AppThemeConfig.of 在没有配置时回落 XP', (tester) async {
     AppThemeConfig? seen;
     await tester.pumpWidget(
       MaterialApp(
@@ -212,6 +212,6 @@ void main() {
         ),
       ),
     );
-    expect(seen?.mode, AppThemeMode.win7);
+    expect(seen?.mode, AppThemeMode.xpWindows);
   });
 }

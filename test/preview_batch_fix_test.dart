@@ -177,7 +177,6 @@ void main() {
           SourcePickerEntry(id: 'abjav', name: '🔞ABJAV'),
           SourcePickerEntry(id: 'v_javdb', name: 'JavDB'),
           SourcePickerEntry(id: 'chaoliu', name: '🔞潮流AV'),
-          SourcePickerEntry(id: 'xhsapp', name: '🔞小红薯APP'),
           SourcePickerEntry(id: 'v_sihu', name: '四虎'),
           SourcePickerEntry(id: 'legado_8039_0', name: '禁漫天堂'),
         ],

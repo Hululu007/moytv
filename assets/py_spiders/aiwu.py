@@ -83,7 +83,7 @@ class Spider(BaseSpider):
             raw = b""
             try:
                 req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=20) as r:
+                with urllib.request.urlopen(req, timeout=70) as r:
                     while True:
                         try:
                             chunk = r.read(65536)
@@ -244,7 +244,7 @@ class Spider(BaseSpider):
                         "Referer": page,
                         "X-Requested-With": "XMLHttpRequest",
                     })
-                    with urllib.request.urlopen(req, timeout=20) as r:
+                    with urllib.request.urlopen(req, timeout=70) as r:
                         data = json.loads(r.read().decode("utf-8", "ignore"))
                     if data.get("code") == 1 and data.get("url"):
                         url = self.host + data["url"]
@@ -282,7 +282,7 @@ class Spider(BaseSpider):
             _req = _ur.Request(target, headers={
                 "User-Agent": self.ua,
                 "Referer": "%s://%s/" % (_o.scheme, _o.netloc)})
-            with _ur.urlopen(_req, timeout=20) as _r:
+            with _ur.urlopen(_req, timeout=70) as _r:
                 return [_r.status, _r.headers.get("Content-Type") or "application/octet-stream", _r.read(), {}]
         except Exception:
             return [502, "text/plain", b"proxy error", {}]

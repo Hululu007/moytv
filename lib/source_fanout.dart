@@ -31,3 +31,32 @@ Future<List<Out>> fanoutOrdered<In, Out>(
   await Future.wait([for (var i = 0; i < workers; i++) worker()]);
   return [for (final result in results) result as Out];
 }
+
+/// 有界并发扇出（逐个回调版）：与 [fanoutOrdered] 同款有界并发，
+/// 但每项完成时立即调 [onResult]（按完成顺序），不等全部跑完；
+/// 返回的 Future 在全部任务结束后完成。
+///
+/// 全局搜索渐进显示用：先回的站先上屏，慢站不拖住已出的结果。
+/// [run] 抛错的约定与 [fanoutOrdered] 相同：错误向上传播、其余
+/// 在途任务继续跑完但结果被丢弃；需要单站失败隔离的调用方应
+/// 在 [run] 内部自行 try/catch 后返回空结果。
+Future<void> fanoutEach<In, Out>(
+  List<In> inputs,
+  Future<Out> Function(In input) run, {
+  required void Function(In input, Out result) onResult,
+  int concurrency = 6,
+}) async {
+  if (inputs.isEmpty) return;
+  final workers = min(concurrency < 1 ? 1 : concurrency, inputs.length);
+  var next = 0;
+  Future<void> worker() async {
+    while (true) {
+      final index = next++;
+      if (index >= inputs.length) return;
+      final result = await run(inputs[index]);
+      onResult(inputs[index], result);
+    }
+  }
+
+  await Future.wait([for (var i = 0; i < workers; i++) worker()]);
+}

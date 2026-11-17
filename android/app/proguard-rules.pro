@@ -6,4 +6,9 @@
 -keep class com.github.catvod.Init { *; }
 -keep class com.github.catvod.utils.Prefers { *; }
 -keep class com.github.catvod.utils.Path { *; }
+# HTML 取页：Chaquopy 按名调 runner、jar 按父优先链基类与助手，名与成员都不能混淆。
+-keep class moyi.HtmlPageRunner { *; }
+-keep class com.github.catvod.crawler.Spider { *; }
+-keep class com.github.catvod.crawler.Html* { *; }
+-keep class com.github.catvod.spider.Init { *; }
 -keepattributes Signature

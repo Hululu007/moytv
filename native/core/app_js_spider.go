@@ -27,9 +27,13 @@ type jsSpiderCtx struct {
 
 func jsSpiderHTTPClient() *http.Client {
 	jar, _ := cookiejar.New(nil)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// 直连：显式置 nil，不继承环境变量代理。
+	transport.Proxy = nil
 	return &http.Client{
-		Jar:     jar,
-		Timeout: 25 * time.Second,
+		Transport: transport,
+		Jar:       jar,
+		Timeout:   25 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("too many redirects")

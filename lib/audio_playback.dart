@@ -10,7 +10,6 @@ import 'audio_media_session.dart';
 import 'content_models.dart';
 import 'core_bridge.dart';
 import 'floating_window.dart';
-import 'mpv_egress.dart';
 import 'playback_foreground.dart';
 
 /// 听书播放引擎的最小接口：控制器只依赖它，不直接碰 media_kit。
@@ -38,10 +37,7 @@ abstract class AudioPlayerEngine {
 
 /// media_kit 实现：与旧详情页私有播放器同一用法（open/setRate/play）。
 class MediaKitAudioEngine implements AudioPlayerEngine {
-  MediaKitAudioEngine() : _player = Player() {
-    // MPV 出口：按当前决策设 http-proxy，决策变化时自动重设。
-    bindMpvEgress(_player);
-  }
+  MediaKitAudioEngine() : _player = Player();
 
   final Player _player;
 
@@ -89,7 +85,6 @@ class MediaKitAudioEngine implements AudioPlayerEngine {
 
   @override
   Future<void> dispose() {
-    unbindMpvEgress(_player);
     return _player.dispose();
   }
 }
@@ -210,9 +205,7 @@ class AudioPlaybackController extends ChangeNotifier
 
   /// 当前播的是否就是这本书：详情页重进时凭此决定显示真实状态还是闲置态。
   bool isCurrentBook(String sourceId, String bookId) {
-    return _ownActive &&
-        _source?.id == sourceId &&
-        _detail?.book.id == bookId;
+    return _ownActive && _source?.id == sourceId && _detail?.book.id == bookId;
   }
 
   void _notify() {

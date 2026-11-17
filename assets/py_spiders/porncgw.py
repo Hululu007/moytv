@@ -57,6 +57,61 @@ CATS = [
 ]
 
 
+
+try:
+    from Crypto.Cipher import AES as _AES
+    from Crypto.Util.Padding import unpad as _unpad
+except Exception:
+    _AES = None
+    _unpad = None
+
+
+_IMG_KEY_CODES = '102_53_100_57_54_53_100_102_55_53_51_51_54_50_55_48'
+_IMG_IV_CODES = '57_55_98_54_48_51_57_52_97_98_99_50_102_98_101_49'
+_IMG_CDN_HOSTS = ('pic.drleao.cn', 'new.drleao.cn', 'image.drleao.cn', 'pic.aluxvl.cn')
+
+
+def _decode_codes(text):
+    try:
+        return bytes(int(x) for x in str(text).split('_') if x != '')
+    except Exception:
+        return b''
+
+
+def _image_mime(data):
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return 'image/gif'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    return ''
+
+
+def _decrypt_image(raw):
+    if _AES is None or not raw or len(raw) % 16:
+        return b''
+    try:
+        plain = _AES.new(_decode_codes(_IMG_KEY_CODES), _AES.MODE_CBC, _decode_codes(_IMG_IV_CODES)).decrypt(raw)
+        return _unpad(plain, _AES.block_size)
+    except Exception:
+        return b''
+
+
+def _cover_url(raw):
+    url = _unescape(str(raw or '').strip())
+    if not url.startswith('http'):
+        return url
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return url
+    if host in _IMG_CDN_HOSTS:
+        return 'proxy://do=img&type=img&u=' + urllib.parse.quote(url, safe='')
+    return url
+
 def _ctx():
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -64,8 +119,9 @@ def _ctx():
     return ctx
 
 
-def _http_get(url, timeout=25):
+def _http_get(url, timeout=70):
     h = {'User-Agent': UA, 'Referer': BASE}
+    best = ''
     for _ in range(3):
         if _HAS_REQ:
             try:
@@ -77,14 +133,21 @@ def _http_get(url, timeout=25):
         try:
             req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
-                data = resp.read()
+                try:
+                    data = resp.read()
+                except http.client.IncompleteRead as ie:
+                    data = ie.partial or b''
                 enc = (resp.headers.get('Content-Encoding') or '').lower()
                 if enc == 'gzip' or data[:2] == b'\x1f\x8b':
                     try:
                         data = gzip.decompress(data)
                     except Exception:
                         pass
-                return data.decode('utf-8', 'replace')
+                text = data.decode('utf-8', 'replace')
+                if len(text) > len(best):
+                    best = text
+                if '</html>' in text:
+                    return text
         except urllib.error.HTTPError as e:
             try:
                 return e.read().decode('utf-8', 'ignore')
@@ -93,10 +156,10 @@ def _http_get(url, timeout=25):
         except Exception:
             pass
         time.sleep(1)
-    return ''
+    return best
 
 
-def _http_post_json(url, referer, timeout=45):
+def _http_post_json(url, referer, timeout=70):
     import json as _json
     body = _json.dumps({}).encode('utf-8')
     h = {'User-Agent': UA, 'Referer': referer, 'Content-Type': 'application/json'}
@@ -111,7 +174,10 @@ def _http_post_json(url, referer, timeout=45):
         try:
             req = urllib.request.Request(url, data=body, headers=h, method='POST')
             with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
-                data = resp.read()
+                try:
+                    data = resp.read()
+                except http.client.IncompleteRead as ie:
+                    data = ie.partial or b''
                 enc = (resp.headers.get('Content-Encoding') or '').lower()
                 if enc == 'gzip' or data[:2] == b'\x1f\x8b':
                     try:
@@ -216,7 +282,7 @@ class Spider(BaseSpider):
             out.append({
                 'vod_id': vid,
                 'vod_name': title,
-                'vod_pic': cover,
+                'vod_pic': _cover_url(cover),
                 'vod_remarks': remark,
             })
         return out
@@ -276,9 +342,13 @@ class Spider(BaseSpider):
         if title.endswith(' - porn吃瓜网'):
             title = title[:-len(' - porn吃瓜网')].strip()
         cover = ''
-        m = re.search(r'<meta property="og:image"[^>]*content="([^"]+)"', html)
+        m = re.search(r'data-src="(https://[^"]+)"', html)
         if m:
-            cover = _unescape(m.group(1).strip())
+            cover = _cover_url(_unescape(m.group(1).strip()))
+        if not cover:
+            m = re.search(r'<meta property="og:image"[^>]*content="([^"]+)"', html)
+            if m:
+                cover = _unescape(m.group(1).strip())
         synopsis = ''
         m = re.search(r'<meta name="description"[^>]*content="([^"]+)"', html)
         if m:
@@ -353,7 +423,40 @@ class Spider(BaseSpider):
         return {'parse': 0, 'playUrl': m3u8, 'url': m3u8, 'header': header}
 
     def localProxy(self, param):
-        return [404, 'text/plain', '']
+        target = ''
+        try:
+            if isinstance(param, dict):
+                target = param.get('u') or param.get('url') or ''
+                if not target:
+                    q = urllib.parse.parse_qs(str(param.get('query') or param.get('params') or ''))
+                    target = (q.get('u') or q.get('url') or [''])[0]
+            else:
+                q = urllib.parse.parse_qs(str(param or ''))
+                target = (q.get('u') or q.get('url') or [''])[0]
+                if not target and str(param or '').startswith('http'):
+                    target = str(param)
+            target = urllib.parse.unquote(str(target or '').strip())
+        except Exception:
+            target = ''
+        if not target.startswith('http'):
+            return [502, 'text/plain', b'proxy error', {}]
+        try:
+            req = urllib.request.Request(target, headers={'User-Agent': UA, 'Referer': BASE})
+            with urllib.request.urlopen(req, timeout=70, context=_ctx()) as resp:
+                try:
+                    raw = resp.read()
+                except http.client.IncompleteRead as ie:
+                    raw = ie.partial or b''
+        except Exception:
+            return [502, 'text/plain', b'proxy error', {}]
+        mime = _image_mime(raw)
+        if mime:
+            return [200, mime, raw, {}]
+        plain = _decrypt_image(raw)
+        mime = _image_mime(plain)
+        if mime:
+            return [200, mime, plain, {}]
+        return [502, 'text/plain', b'proxy error', {}]
 
     def isVideoFormat(self, url):
         url = (url or '').lower()

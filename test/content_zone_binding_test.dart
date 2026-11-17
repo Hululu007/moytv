@@ -2,9 +2,16 @@ import 'package:moyi/content_models.dart';
 import 'package:moyi/content_registry.dart';
 import 'package:moyi/content_zone_binding.dart';
 import 'package:moyi/content_zone_screen.dart';
+import 'package:moyi/site_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// 源切换已图标化：当前源改按行首 SiteIcon 的 siteId 断言。
+void expectCurrentSourceIcon(WidgetTester tester, String siteId) {
+  final icon = tester.widget<SiteIcon>(find.byType(SiteIcon));
+  expect(icon.siteId, siteId);
+}
 
 class FakeContentSource extends ContentSource {
   FakeContentSource(this._id, this._name, this._section);
@@ -130,7 +137,7 @@ void main() {
       final binding = fakeBinding(store: store);
       await tester.pumpWidget(host(binding, ContentSection.audio));
       await settle(tester);
-      expect(find.text('听书甲'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_audio_a');
 
       await tester.tap(find.byKey(const ValueKey('content-source-switch')));
       await tester.pump();
@@ -141,7 +148,7 @@ void main() {
         find.byKey(const ValueKey('site-picker-row-fake_audio_b')),
       );
       await settle(tester);
-      expect(find.text('听书乙'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_audio_b');
       expect(find.text('听书乙-作品'), findsOneWidget);
       expect(binding.sourceFor(ContentSection.audio)?.id, 'fake_audio_b');
       expect(store['content_zone_source_audio'], 'fake_audio_b');
@@ -158,11 +165,11 @@ void main() {
         find.byKey(const ValueKey('site-picker-row-fake_audio_b')),
       );
       await settle(tester);
-      expect(find.text('听书乙'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_audio_b');
 
       await tester.pumpWidget(host(binding, ContentSection.audio));
       await settle(tester);
-      expect(find.text('听书乙'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_audio_b');
       expect(find.text('听书乙-作品'), findsOneWidget);
     });
   });
@@ -233,7 +240,7 @@ void main() {
       final binding = fakeBinding(store: store);
       await tester.pumpWidget(host(binding, ContentSection.novel));
       await settle(tester);
-      expect(find.text('漫画甲'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_novel_b');
       expect(find.text('漫画甲-作品'), findsOneWidget);
     });
 
@@ -243,7 +250,7 @@ void main() {
       final binding = fakeBinding(store: store);
       await tester.pumpWidget(host(binding, ContentSection.novel));
       await settle(tester);
-      expect(find.text('小说甲'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_novel_a');
 
       await tester.tap(find.byKey(const ValueKey('content-source-switch')));
       await tester.pump();
@@ -254,7 +261,7 @@ void main() {
         find.byKey(const ValueKey('site-picker-row-fake_novel_b')),
       );
       await settle(tester);
-      expect(find.text('漫画甲'), findsOneWidget);
+      expectCurrentSourceIcon(tester, 'fake_novel_b');
       expect(find.text('漫画甲-作品'), findsOneWidget);
       expect(binding.sourceFor(ContentSection.novel)?.id, 'fake_novel_b');
       expect(store['content_zone_source_novel'], 'fake_novel_b');

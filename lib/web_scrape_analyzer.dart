@@ -7,7 +7,6 @@ import 'content_http.dart';
 import 'core_bridge.dart';
 import 'nexhub_scraper/scraper/verification_detector.dart';
 import 'nexhub_scraper/scraper/web_scrape_service.dart';
-import 'socks5_proxy.dart';
 import 'url_site_probe.dart';
 
 /// 爬取失败：面向用户的中文原因，调用方直接展示 [message]，不编造数据。
@@ -164,15 +163,14 @@ class WebScrapeAnalyzer {
     ScrapeFetch? fetchHtml,
     WebScrapeService? scrapeService,
     UrlSiteProbe? probe,
-  })  : _fetchHtml = fetchHtml, // ignore: prefer_initializing_formals
-        _service = scrapeService,
-        _probe = probe; // ignore: prefer_initializing_formals
+  }) : _fetchHtml = fetchHtml, // ignore: prefer_initializing_formals
+       _service = scrapeService,
+       _probe = probe; // ignore: prefer_initializing_formals
 
   final ScrapeFetch? _fetchHtml;
   final WebScrapeService? _service;
   final UrlSiteProbe? _probe;
-  final ContentHttp _http =
-      ContentHttp(proxyResourceKey: socks5ScrapeResourceKey);
+  final ContentHttp _http = ContentHttp();
 
   static const _fetchTimeout = Duration(seconds: 15);
 
@@ -219,7 +217,8 @@ class WebScrapeAnalyzer {
     final evidence = <String>[...?probed?.evidence];
     evidence.add('通用爬取：页面链接 ${scraped.links.length} 个');
     final name =
-        probed?.name ?? _nameFromTitle(scraped.pageTitle, Uri.parse(origin).host);
+        probed?.name ??
+        _nameFromTitle(scraped.pageTitle, Uri.parse(origin).host);
 
     String? categoryTemplate;
     String? searchUrl;
@@ -268,13 +267,11 @@ class WebScrapeAnalyzer {
           detailSample = sampled.sample;
           playChain = sampled.chain;
           evidence.add('详情示例：${detailSample.title}');
-          evidence.add(
-            switch (playChain) {
-              PlayChain.directMedia => '播放链：详情页含直链',
-              PlayChain.viaPlayPage => '播放链：详情页含播放页链接',
-              PlayChain.none => '播放链：详情页未发现可播放地址',
-            },
-          );
+          evidence.add(switch (playChain) {
+            PlayChain.directMedia => '播放链：详情页含直链',
+            PlayChain.viaPlayPage => '播放链：详情页含播放页链接',
+            PlayChain.none => '播放链：详情页未发现可播放地址',
+          });
         }
       } on ScrapeFailure catch (e) {
         evidence.add('列表/详情采样失败：${e.message}');
@@ -437,13 +434,9 @@ class WebScrapeAnalyzer {
     for (final anchor in anchors) {
       for (final img in anchor.querySelectorAll('img')) {
         final lazy =
-            img.attributes['data-src'] ??
-            img.attributes['data-original'] ??
-            '';
+            img.attributes['data-src'] ?? img.attributes['data-original'] ?? '';
         if (lazy.trim().isNotEmpty) {
-          return base
-              .resolveUri(Uri.tryParse(lazy.trim()) ?? Uri())
-              .toString();
+          return base.resolveUri(Uri.tryParse(lazy.trim()) ?? Uri()).toString();
         }
         fallback ??= img.attributes['src']?.trim();
       }
@@ -524,10 +517,12 @@ class WebScrapeAnalyzer {
         doc.querySelector('h1')?.text.trim() ??
         doc.querySelector('title')?.text.trim() ??
         '';
-    final description = _metaContent(doc, 'description') ??
+    final description =
+        _metaContent(doc, 'description') ??
         _metaContent(doc, 'og:description', property: true) ??
         _firstParagraph(doc);
-    final cover = _metaContent(doc, 'og:image', property: true) ??
+    final cover =
+        _metaContent(doc, 'og:image', property: true) ??
         _firstImage(doc, base) ??
         '';
     final mediaUrls = <String>[..._extractMedia(doc, base)];
@@ -588,8 +583,9 @@ class WebScrapeAnalyzer {
     final seen = <String>{};
     void add(String? raw) {
       if (raw == null || raw.trim().isEmpty) return;
-      final resolved =
-          base.resolveUri(Uri.tryParse(raw.trim()) ?? Uri()).toString();
+      final resolved = base
+          .resolveUri(Uri.tryParse(raw.trim()) ?? Uri())
+          .toString();
       if (seen.add(resolved)) out.add(resolved);
     }
 
@@ -629,8 +625,7 @@ class WebScrapeAnalyzer {
     for (final match in _rawMediaPattern.allMatches(html)) {
       var raw = match.group(0)!.replaceAll('&amp;', '&');
       if (raw.startsWith('//')) raw = 'https:$raw';
-      final resolved =
-          base.resolveUri(Uri.tryParse(raw) ?? Uri()).toString();
+      final resolved = base.resolveUri(Uri.tryParse(raw) ?? Uri()).toString();
       if (seen.add(resolved)) out.add(resolved);
       if (out.length >= 5) break;
     }
@@ -663,8 +658,9 @@ class WebScrapeAnalyzer {
       final hasPlayUrl = members.any(
         (m) => m.path.toLowerCase().contains('play'),
       );
-      final episodeTexts =
-          members.where((m) => _episodeText.hasMatch(m.text)).length;
+      final episodeTexts = members
+          .where((m) => _episodeText.hasMatch(m.text))
+          .length;
       if (!hasPlayUrl && episodeTexts < 2) continue;
       return _PlayGroup(
         pattern: template.pattern,
@@ -960,11 +956,9 @@ class WebScrapeAnalyzer {
         if (dlist is List && dlist.isNotEmpty && dlist.first is Map) {
           final v = dlist.first as Map;
           final playUrl = '${v['vod_play_url'] ?? ''}';
-          final media = RegExp(r'https?://[^\s#\$]+')
-              .allMatches(playUrl)
-              .map((m) => m.group(0)!)
-              .take(5)
-              .toList();
+          final media = RegExp(
+            r'https?://[^\s#\$]+',
+          ).allMatches(playUrl).map((m) => m.group(0)!).take(5).toList();
           hasPlayUrls = media.isNotEmpty;
           detail = ScrapedDetailSample(
             title: '${v['vod_name'] ?? ''}',
@@ -1015,10 +1009,7 @@ class _Template {
     final explicit = explicitPattern;
     if (explicit != null) return explicit;
     final mids = members.map(
-      (m) => m.path.substring(
-        prefix.length,
-        m.path.length - suffix.length,
-      ),
+      (m) => m.path.substring(prefix.length, m.path.length - suffix.length),
     );
     final allDigits = mids.every((m) => RegExp(r'^\d+$').hasMatch(m));
     final middle = allDigits ? r'\d+' : '.+?';

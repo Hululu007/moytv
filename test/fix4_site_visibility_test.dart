@@ -31,7 +31,6 @@ void main() {
       'tingyou',
       'hysxs',
       'asmrmoon',
-      'jar_tingshu',
     ]);
   });
 

@@ -209,7 +209,7 @@ class M3uSubscriptionService {
   static String newId() =>
       DateTime.now().microsecondsSinceEpoch.toRadixString(36);
 
-  static Future<String> fetchText(String url, {String? resourceKey}) async {
+  static Future<String> fetchText(String url) async {
     final trimmed = url.trim();
     final uri = Uri.tryParse(trimmed);
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
@@ -217,7 +217,7 @@ class M3uSubscriptionService {
     }
     final http = LiveHttp();
     try {
-      return await http.get(trimmed, proxyResourceKey: resourceKey);
+      return await http.get(trimmed);
     } catch (error) {
       throw AppFailure('拉取订阅失败：$error');
     } finally {

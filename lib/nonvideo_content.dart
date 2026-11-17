@@ -645,27 +645,37 @@ class PicsViewerView extends StatefulWidget {
     required this.title,
     this.initialIndex = 0,
     this.onIndexChanged,
+    this.verticalScroll = false,
   });
   final NonVideoContent content;
   final String title;
   final int initialIndex;
   final ValueChanged<int>? onIndexChanged;
+
+  /// 纵向连续滚动：整章图上下排成一列（漫画阅读）；默认横向逐张翻页。
+  final bool verticalScroll;
   @override
   State<PicsViewerView> createState() => _PicsViewerViewState();
 }
 
 class _PicsViewerViewState extends State<PicsViewerView> {
   late final PageController _controller;
+  late final ScrollController _scrollController;
   int _index = 0;
+  bool _restored = false;
+  int _restoreAttempts = 0;
   @override
   void initState() {
     super.initState();
     _controller = PageController(initialPage: widget.initialIndex);
+    _scrollController = ScrollController()..addListener(_onVerticalScroll);
     _index = widget.initialIndex;
+    if (widget.verticalScroll) _scheduleRestore();
   }
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -675,8 +685,85 @@ class _PicsViewerViewState extends State<PicsViewerView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.content.urls != widget.content.urls) {
       _index = 0;
+      _restored = true;
       _controller.jumpToPage(0);
+      if (_scrollController.hasClients) _scrollController.jumpTo(0);
     }
+  }
+
+  /// 纵向模式按滚动比例估算当前图序号（恢复书签用同一口径，来回一致）。
+  int _indexFromOffset() {
+    final urls = widget.content.urls;
+    if (urls.length <= 1 || !_scrollController.hasClients) return 0;
+    final max = _scrollController.position.maxScrollExtent;
+    if (max <= 0) return 0;
+    final fraction = (_scrollController.offset / max).clamp(0.0, 1.0);
+    return (fraction * (urls.length - 1)).round().clamp(0, urls.length - 1);
+  }
+
+  void _onVerticalScroll() {
+    if (!widget.verticalScroll) return;
+    final next = _indexFromOffset();
+    if (next != _index) {
+      setState(() => _index = next);
+      widget.onIndexChanged?.call(next);
+    }
+  }
+
+  /// 续读恢复：按 initialIndex 的比例跳到对应滚动位置。图未加载完时
+  /// maxScrollExtent 为 0，帧后回调链式复查（图一到、下一帧就跳），
+  /// 30 帧仍为 0 就停在顶部。
+  void _scheduleRestore() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_restored || !widget.verticalScroll || !mounted) return;
+      final urls = widget.content.urls;
+      if (urls.length <= 1 || widget.initialIndex <= 0) {
+        _restored = true;
+        return;
+      }
+      if (!_scrollController.hasClients ||
+          _scrollController.position.maxScrollExtent <= 0) {
+        if (_restoreAttempts < 30) {
+          _restoreAttempts++;
+          _scheduleRestore();
+        }
+        return;
+      }
+      _restored = true;
+      final max = _scrollController.position.maxScrollExtent;
+      final target =
+          (widget.initialIndex.clamp(0, urls.length - 1) / (urls.length - 1)) *
+          max;
+      if (target > 0) _scrollController.jumpTo(target);
+    });
+  }
+
+  void _scrollByViewport(double direction) {
+    if (!_scrollController.hasClients) return;
+    final viewport = _scrollController.position.viewportDimension;
+    final target = (_scrollController.offset + direction * viewport * 0.85)
+        .clamp(0.0, _scrollController.position.maxScrollExtent);
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  Widget _imageItem(String url) {
+    return Image.network(
+      url,
+      headers: _imageHeaders(url, widget.content.headers),
+      fit: BoxFit.contain,
+      errorBuilder: (context, _, _) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          '图片加载失败\n$url',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white70),
+        ),
+      ),
+    );
   }
 
   @override
@@ -686,46 +773,54 @@ class _PicsViewerViewState extends State<PicsViewerView> {
       color: Colors.black,
       child: Stack(
         children: [
-          PageView.builder(
-            controller: _controller,
-            itemCount: urls.length,
-            onPageChanged: (value) {
-              setState(() => _index = value);
-              widget.onIndexChanged?.call(value);
-              for (final next in [value - 1, value + 1]) {
-                if (next >= 0 && next < urls.length) {
-                  precacheImage(
-                    NetworkImage(
-                      urls[next],
-                      headers: _imageHeaders(urls[next], widget.content.headers),
-                    ),
-                    context,
-                  );
-                }
-              }
-            },
-            itemBuilder: (context, i) {
-              return InteractiveViewer(
-                minScale: 1,
-                maxScale: 4,
-                child: Center(
-                  child: Image.network(
-                    urls[i],
-                    headers: _imageHeaders(urls[i], widget.content.headers),
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, _, _) => Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        '图片加载失败\n${urls[i]}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
+          if (widget.verticalScroll)
+            ListView.builder(
+              controller: _scrollController,
+              itemCount: urls.length,
+              itemBuilder: (context, i) {
+                return Image.network(
+                  urls[i],
+                  headers: _imageHeaders(urls[i], widget.content.headers),
+                  width: double.infinity,
+                  fit: BoxFit.fitWidth,
+                  errorBuilder: (context, _, _) => Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      '图片加载失败\n${urls[i]}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
+                );
+              },
+            )
+          else
+            PageView.builder(
+              controller: _controller,
+              itemCount: urls.length,
+              onPageChanged: (value) {
+                setState(() => _index = value);
+                widget.onIndexChanged?.call(value);
+                for (final next in [value - 1, value + 1]) {
+                  if (next >= 0 && next < urls.length) {
+                    precacheImage(
+                      NetworkImage(
+                        urls[next],
+                        headers: _imageHeaders(urls[next], widget.content.headers),
+                      ),
+                      context,
+                    );
+                  }
+                }
+              },
+              itemBuilder: (context, i) {
+                return InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 4,
+                  child: Center(child: _imageItem(urls[i])),
+                );
+              },
+            ),
           Positioned(
             left: 0,
             right: 0,
@@ -734,28 +829,44 @@ class _PicsViewerViewState extends State<PicsViewerView> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconButton(
-                  tooltip: '上一张',
-                  onPressed: _index > 0
+                  tooltip: widget.verticalScroll ? '上一屏' : '上一张',
+                  onPressed: widget.verticalScroll
+                      ? (_index > 0 ? () => _scrollByViewport(-1) : null)
+                      : _index > 0
                       ? () => _controller.previousPage(
                           duration: const Duration(milliseconds: 200),
                           curve: Curves.easeOut,
                         )
                       : null,
-                  icon: const Icon(Icons.chevron_left, color: Colors.white),
+                  icon: Icon(
+                    widget.verticalScroll
+                        ? Icons.keyboard_arrow_up
+                        : Icons.chevron_left,
+                    color: Colors.white,
+                  ),
                 ),
                 Text(
                   '${_index + 1} / ${urls.length}',
                   style: const TextStyle(color: Colors.white),
                 ),
                 IconButton(
-                  tooltip: '下一张',
-                  onPressed: _index + 1 < urls.length
+                  tooltip: widget.verticalScroll ? '下一屏' : '下一张',
+                  onPressed: widget.verticalScroll
+                      ? (_index + 1 < urls.length
+                            ? () => _scrollByViewport(1)
+                            : null)
+                      : _index + 1 < urls.length
                       ? () => _controller.nextPage(
                           duration: const Duration(milliseconds: 200),
                           curve: Curves.easeOut,
                         )
                       : null,
-                  icon: const Icon(Icons.chevron_right, color: Colors.white),
+                  icon: Icon(
+                    widget.verticalScroll
+                        ? Icons.keyboard_arrow_down
+                        : Icons.chevron_right,
+                    color: Colors.white,
+                  ),
                 ),
               ],
             ),

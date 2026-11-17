@@ -8,11 +8,24 @@ import java.util.Map;
 
 public class Spider {
 
+    /** init 时存下的应用 Context，供 htmlPage 用；不用的蜘蛛不受影响。 */
+    protected Context htmlContext;
+
     public void init(Context context) throws Exception {
+        htmlContext = context == null ? null : context.getApplicationContext();
     }
 
     public void init(Context context, String extend) throws Exception {
         init(context);
+    }
+
+    /** HTML 取页：显式调用才生效，走共享引擎；Context 取 init 时存下的，缺失时回落 Init。 */
+    protected HtmlResult htmlPage(String url) {
+        return htmlPage(url, null);
+    }
+
+    protected HtmlResult htmlPage(String url, Map<String, Object> options) {
+        return HtmlPage.load(url, options, htmlContext);
     }
 
     public String getName() {
