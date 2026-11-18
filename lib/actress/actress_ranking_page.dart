@@ -82,7 +82,7 @@ class _ActressRankingPageState extends State<ActressRankingPage> {
           children: [
             Icon(Icons.emoji_events_outlined),
             SizedBox(width: 8),
-            Text('女优排行榜'),
+            Text('演员排行榜'),
           ],
         ),
       ),

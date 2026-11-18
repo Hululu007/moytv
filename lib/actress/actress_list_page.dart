@@ -7,6 +7,8 @@ import 'actress_detail_page.dart';
 import 'actress_models.dart';
 import 'actress_ranking_page.dart';
 import 'actress_roster_sources.dart';
+import 'actress_search.dart';
+import 'actress_stacking.dart';
 import 'actress_sync.dart';
 import 'actress_widgets.dart';
 import '../content_http.dart';
@@ -17,6 +19,8 @@ import '../local_store.dart';
 ///
 /// 打开只读本地库；库空时自动开始一次全量同步（进度显示、可取消、
 /// 断点续跑），之后只手动刷新、不自动重拉。排行榜入口在顶栏奖杯钮。
+/// 全站叠加入口在同步横幅下方：手动开始/继续，按番号把各站作品
+/// 叠加进库，断点续跑，不自动跑、不与名册同步抢着跑。
 class ActressListPage extends StatefulWidget {
   const ActressListPage({
     super.key,
@@ -24,6 +28,7 @@ class ActressListPage extends StatefulWidget {
     required this.store,
     this.database,
     this.syncService,
+    this.stackingService,
     this.showTitle = true,
   });
 
@@ -40,17 +45,27 @@ class ActressListPage extends StatefulWidget {
   @visibleForTesting
   final ActressSyncService? syncService;
 
+  /// 测试/预览注入：不传时用默认叠加服务（与详情页同一套补全）。
+  @visibleForTesting
+  final ActressStackingService? stackingService;
+
   @override
   State<ActressListPage> createState() => _ActressListPageState();
 }
 
 class _ActressListPageState extends State<ActressListPage> {
   static const _pageSize = 60;
+  // 自动续跑预算：一次进页最多自动起 3 次（含首次自动开始），每次间隔
+  // 2 秒；跑完仍未完且预算用尽时只等手动点，不无限循环。
+  static const _maxAutoSyncRuns = 3;
+  static const _autoSyncRetryDelay = Duration(seconds: 2);
 
   late final ActressDatabase _db;
   late final ActressSyncService _sync;
+  late final ActressStackingService _stacking;
   ContentHttp? _http;
   StreamSubscription<ActressSyncProgress>? _progressSub;
+  StreamSubscription<ActressStackingProgress>? _stackingSub;
 
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
@@ -67,9 +82,12 @@ class _ActressListPageState extends State<ActressListPage> {
   var _generation = 0;
 
   ActressSyncProgress _progress = ActressSyncProgress.idle;
+  ActressStackingProgress _stackingProgress = ActressStackingProgress.idle;
   ActressSyncOverview? _overview;
   var _lastSyncFailed = false;
   var _autoSyncStarted = false;
+  Timer? _autoSyncTimer;
+  var _autoSyncRuns = 0;
 
   @override
   void initState() {
@@ -90,6 +108,19 @@ class _ActressListPageState extends State<ActressListPage> {
       );
     }
     _progressSub = _sync.progress.listen(_onProgress);
+    if (widget.stackingService != null) {
+      _stacking = widget.stackingService!;
+    } else {
+      _stacking = ActressStackingService(
+        db: _db,
+        enrichment: ActressEnrichment(
+          repository: widget.repository,
+          store: widget.store,
+          db: _db,
+        ),
+      );
+    }
+    _stackingSub = _stacking.progress.listen(_onStackingProgress);
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
     _bootstrap();
@@ -98,11 +129,15 @@ class _ActressListPageState extends State<ActressListPage> {
   @override
   void dispose() {
     _progressSub?.cancel();
+    _stackingSub?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     _searchDebounce?.cancel();
+    _autoSyncTimer?.cancel();
     _sync.cancel();
     _sync.dispose();
+    _stacking.cancel();
+    _stacking.dispose();
     _http?.close();
     super.dispose();
   }
@@ -112,14 +147,20 @@ class _ActressListPageState extends State<ActressListPage> {
     final overview = await _db.overview();
     if (!mounted || generation != _generation) return;
     setState(() => _overview = overview);
+    // 叠加只读一次断点作横幅状态，绝不自动跑。
+    final stacking = await _stacking.snapshot();
+    if (!mounted || generation != _generation) return;
+    setState(() => _stackingProgress = stacking);
     // _loadPage(reset) 会推进代次，这里只判 mounted，不再比代次。
     await _loadPage(reset: true);
     if (!mounted) return;
-    // 库空时自动开始一次全量同步；已有数据（哪怕没同步完）只手动续跑，
-    // 不自动重拉。
-    if (!_autoSyncStarted && overview.persons == 0 && !_sync.isRunning) {
+    // 库空、或已有数据但没同步完，都自动开始一次断点续跑，不等手动点。
+    if (!_autoSyncStarted &&
+        (overview.persons == 0 || !overview.allDone) &&
+        !_sync.isRunning) {
       _autoSyncStarted = true;
-      unawaited(_runSync(refresh: false));
+      _autoSyncRuns = 1;
+      unawaited(_runSync());
     }
   }
 
@@ -131,6 +172,22 @@ class _ActressListPageState extends State<ActressListPage> {
     }
   }
 
+  void _onStackingProgress(ActressStackingProgress progress) {
+    if (!mounted) return;
+    setState(() => _stackingProgress = progress);
+    if (!progress.running) {
+      // 叠加写库刷新了 works_count：总览与列表都要重读才显示真数。
+      unawaited(_refreshAfterSync());
+    }
+  }
+
+  /// 手动开始/继续叠加：名册同步跑着时不启动（两路同时写库抢带宽，
+  /// 等同步停了再点）；叠加服务内部断点续跑，本处只管触发一次。
+  Future<void> _runStacking() async {
+    if (_stacking.isRunning || _progress.running) return;
+    await _stacking.run();
+  }
+
   Future<void> _refreshAfterSync() async {
     final overview = await _db.overview();
     if (!mounted) return;
@@ -138,12 +195,29 @@ class _ActressListPageState extends State<ActressListPage> {
     await _loadPage(reset: true);
   }
 
-  Future<void> _runSync({required bool refresh}) async {
+  /// 只断点续跑：永远不从头重拉（refresh 恒为 false）。跑完仍没同步完、
+  /// 且没被取消、且自动预算还有剩时，2 秒后自动再续一次；手动点的那
+  /// 次跑完也一样续。预算用尽后只等手动点。
+  Future<void> _runSync() async {
+    _autoSyncTimer?.cancel();
     if (_sync.isRunning) return;
     setState(() => _lastSyncFailed = false);
-    final result = await _sync.run(refresh: refresh);
+    final result = await _sync.run(refresh: false);
     if (!mounted) return;
     setState(() => _lastSyncFailed = result.hasFailures);
+    final overview = await _db.overview();
+    if (!mounted) return;
+    setState(() => _overview = overview);
+    if (result.cancelled ||
+        overview.allDone ||
+        _autoSyncRuns >= _maxAutoSyncRuns) {
+      return;
+    }
+    _autoSyncTimer = Timer(_autoSyncRetryDelay, () {
+      if (!mounted || _sync.isRunning) return;
+      _autoSyncRuns++;
+      unawaited(_runSync());
+    });
   }
 
   void _onScroll() {
@@ -240,12 +314,12 @@ class _ActressListPageState extends State<ActressListPage> {
     final overview = _overview;
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 48,
+        toolbarHeight: 40,
         title: widget.showTitle
             ? Text(
                 overview == null
-                    ? '女优库'
-                    : '女优库 ${overview.persons} 位演员',
+                    ? '演员库'
+                    : '演员库 ${overview.persons} 位演员',
               )
             : overview == null
             ? null
@@ -253,28 +327,31 @@ class _ActressListPageState extends State<ActressListPage> {
         actions: [
           IconButton(
             key: const ValueKey('open-actress-ranking'),
-            tooltip: '女优排行榜',
+            tooltip: '演员排行榜',
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.emoji_events_outlined),
             onPressed: _openRanking,
           ),
           IconButton(
             key: const ValueKey('refresh-actress-library'),
             tooltip: '刷新同步',
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: _progress.running ? null : () => _runSync(refresh: true),
+            onPressed: _progress.running ? null : () => _runSync(),
           ),
         ],
       ),
       body: Column(
         children: [
           _buildSyncBanner(colors),
+          _buildStackingBanner(colors),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
             child: TextField(
               key: const ValueKey('actress-search'),
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: '搜女优名：中文 / 日文都行',
+                hintText: '搜名字或番号：中文 / 日文 / SSIS-123 都行',
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: _query.isEmpty
                     ? null
@@ -382,6 +459,7 @@ class _ActressListPageState extends State<ActressListPage> {
           : '第 ${_progress.done} 页';
       return MaterialBanner(
         backgroundColor: colors.surfaceContainerHigh,
+        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
         content: Row(
           children: [
             const SizedBox.square(
@@ -396,17 +474,33 @@ class _ActressListPageState extends State<ActressListPage> {
             ),
           ],
         ),
-        actions: [TextButton(onPressed: _sync.cancel, child: const Text('取消'))],
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: _sync.cancel,
+            child: const Text('取消'),
+          ),
+        ],
       );
     }
     if (overview == null) return const SizedBox.shrink();
     if (overview.persons == 0) {
       return MaterialBanner(
         backgroundColor: colors.surfaceContainerHigh,
-        content: const Text('还没有数据，点刷新开始同步女优库。'),
+        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
+        content: const Text('还没有数据，点刷新开始同步演员库。'),
         actions: [
           TextButton(
-            onPressed: () => _runSync(refresh: false),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => _runSync(),
             child: const Text('开始同步'),
           ),
         ],
@@ -416,13 +510,19 @@ class _ActressListPageState extends State<ActressListPage> {
     if (_lastSyncFailed || unfinished) {
       return MaterialBanner(
         backgroundColor: colors.surfaceContainerHigh,
+        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
         content: Text(
           '已同步 ${overview.persons} 人 · ${overview.works} 部作品，'
           '部分内容还没同步完，点刷新继续补。',
         ),
         actions: [
           TextButton(
-            onPressed: () => _runSync(refresh: true),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => _runSync(),
             child: const Text('继续同步'),
           ),
         ],
@@ -436,6 +536,98 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
+  /// 全站叠加横幅：与同步横幅同一样式，只显示人数与进度，不显示
+  /// 任何来源信息。库空时不显示（无可叠加）；叠加跑着时显示进度
+  /// 与取消；跑完一轮显示断点进度与继续按钮；全库跑完显示完成态。
+  Widget _buildStackingBanner(ColorScheme colors) {
+    final overview = _overview;
+    if (overview == null || overview.persons == 0) {
+      return const SizedBox.shrink();
+    }
+    final stacking = _stackingProgress;
+    const bannerPadding = EdgeInsetsDirectional.only(
+      start: 16,
+      top: 2,
+      end: 4,
+      bottom: 2,
+    );
+    ButtonStyle compactButton() => TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: const Size(0, 28),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    if (stacking.running) {
+      return MaterialBanner(
+        key: const ValueKey('actress-stacking-banner'),
+        backgroundColor: colors.surfaceContainerHigh,
+        padding: bannerPadding,
+        content: Row(
+          children: [
+            const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '全站叠加中 · 已叠加 ${stacking.done}/${stacking.total} 人'
+                ' · 本轮新增 ${stacking.worksAdded} 部作品',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('cancel-actress-stacking'),
+            style: compactButton(),
+            onPressed: _stacking.cancel,
+            child: const Text('取消'),
+          ),
+        ],
+      );
+    }
+    if (stacking.finished) {
+      return Container(
+        key: const ValueKey('actress-stacking-banner'),
+        width: double.infinity,
+        color: colors.surfaceContainerLow,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Text(
+          '全站叠加已完成：${stacking.done} 人作品已按番号叠加。',
+        ),
+      );
+    }
+    final started = stacking.done > 0;
+    return MaterialBanner(
+      key: const ValueKey('actress-stacking-banner'),
+      backgroundColor: colors.surfaceContainerHigh,
+      padding: bannerPadding,
+      content: Text(
+        started
+            ? '全站叠加：已叠加 ${stacking.done}/${stacking.total} 人，'
+                  '继续按番号补全各站作品。'
+            : '全站叠加：按番号把各站作品叠加到每个人名下，断点续跑，'
+                  '不用一次跑完。',
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('start-actress-stacking'),
+          style: compactButton(),
+          onPressed: _progress.running ? null : () => _runStacking(),
+          child: Text(started ? '继续叠加' : '开始叠加'),
+        ),
+      ],
+    );
+  }
+
+  /// 人物宫格布局：普通列表与姓名分组共用同一套格子尺寸。
+  static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+    crossAxisCount: 3,
+    mainAxisSpacing: 16,
+    crossAxisSpacing: 8,
+    childAspectRatio: 0.88,
+  );
+
   Widget _buildList(ColorScheme colors) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
@@ -448,16 +640,13 @@ class _ActressListPageState extends State<ActressListPage> {
         ),
       );
     }
+    // 按名字排序时按姓名首字母分组显示（通讯录式）；按作品数时不变。
+    if (_sort == ActressSort.nameAsc) return _buildGroupedList(colors);
     return GridView.builder(
       key: const ValueKey('actress-person-list'),
       controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        mainAxisSpacing: 16,
-        crossAxisSpacing: 8,
-        childAspectRatio: 0.88,
-      ),
+      gridDelegate: _gridDelegate,
       itemCount: _persons.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= _persons.length) {
@@ -470,6 +659,59 @@ class _ActressListPageState extends State<ActressListPage> {
           onTap: () => _openPerson(person),
         );
       },
+    );
+  }
+
+  /// 姓名分组列表：已加载的人按分组键顺序成段，每段一个字母头 +
+  /// 一张宫格；翻页追加的人并入末段重算，不会把同一组拆成两段。
+  Widget _buildGroupedList(ColorScheme colors) {
+    final groups = <String, List<ActressPerson>>{};
+    for (final person in _persons) {
+      final key = actressGroupKey(person.displayName, person.aliases);
+      (groups[key] ??= []).add(person);
+    }
+    return CustomScrollView(
+      key: const ValueKey('actress-person-list'),
+      controller: _scrollController,
+      slivers: [
+        for (final entry in groups.entries) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+              child: Text(
+                entry.key,
+                key: ValueKey('actress-group-${entry.key}'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            sliver: SliverGrid.builder(
+              gridDelegate: _gridDelegate,
+              itemCount: entry.value.length,
+              itemBuilder: (context, index) {
+                final person = entry.value[index];
+                return _ActressGridCard(
+                  key: ValueKey('actress-person-${person.localId}'),
+                  person: person,
+                  onTap: () => _openPerson(person),
+                );
+              },
+            ),
+          ),
+        ],
+        if (_hasMore)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ),
+      ],
     );
   }
 }

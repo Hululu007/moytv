@@ -29,7 +29,7 @@ class GlobalSearchBookTarget {
 ///
 /// 魔蚁没有境界 / 修为系统，午夜门禁早已整段摘掉，成人源也在列，
 /// 不做任何门禁过滤；漫画挂在阅读区里，不单独成区。视频站不走这里：
-/// 视频侧以站源注册表为准，由 [searchAcross] 一次扇出（见全局搜索页）。
+/// 视频侧以站源注册表为准，由流式搜索一次扇出（见全局搜索页）。
 List<GlobalSearchBookTarget> globalSearchBookTargets({
   required List<ContentSource> audioSources,
   required List<ContentSource> novelSources,
@@ -97,12 +97,16 @@ Future<List<GlobalSearchBookGroup>> searchReadingTargets(
 ///
 /// 全局搜索页用它实现“回来一个显示一个”；展示层收到组后自行
 /// 排序，回调顺序不保证与目标站表一致。
+///
+/// [shouldStop]（O2 真取消）：透传给 [fanoutEach]，新一轮搜索开始
+/// 后旧轮不再发起后续站。
 Future<void> searchReadingTargetsProgressive(
   String query,
   List<GlobalSearchBookTarget> targets, {
   required void Function(GlobalSearchBookGroup group) onGroup,
   Duration perSiteTimeout = globalSearchPerSiteTimeout,
   int concurrency = globalSearchConcurrency,
+  bool Function()? shouldStop,
 }) async {
   final trimmed = query.trim();
   if (trimmed.isEmpty || targets.isEmpty) return;
@@ -127,5 +131,6 @@ Future<void> searchReadingTargetsProgressive(
       if (group != null) onGroup(group);
     },
     concurrency: concurrency,
+    shouldStop: shouldStop,
   );
 }

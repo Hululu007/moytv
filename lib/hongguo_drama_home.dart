@@ -25,6 +25,7 @@ import 'multimedia_screen.dart';
 import 'neon/neon_channel_view.dart';
 import 'neon/neon_home_view.dart';
 import 'neon/neon_ui.dart';
+import 'neon_glass_kit.dart';
 import 'playback_foreground.dart';
 import 'tvbox_player_bridge.dart';
 import 'watchroom/player.dart';
@@ -133,7 +134,8 @@ class HongguoDramaHome extends StatefulWidget {
   final ValueChanged<String> onSearchSubmitted;
 
   /// 霓虹首页/频道页放大镜的动作：那两处没有输入框，点放大镜直接
-  /// 打开全站全局搜索（多媒体屏自带网盘搜索框，不走这里）。
+  /// 打开搜索页（平时只搜当前站；全部站源模式下搜全部可见站。
+  /// 多媒体屏自带网盘搜索框，不走这里）。
   final VoidCallback onOpenGlobalSearch;
 
   /// 霓虹首页头像的动作：抽屉拆除后，点头像进“我的”页。
@@ -1070,6 +1072,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           ? Column(
               children: [
                 _tab == _neonHomeTab ? _mergedTopBar() : _internalNavRow(),
+                if (_tab == _neonHomeTab) _homeFilterRow(),
                 Expanded(child: body),
               ],
             )
@@ -1109,12 +1112,13 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
-  /// 合并顶栏（用户 2026-11-17 令）：底部标签样式下，霓虹首页的品牌
-  /// 行与内层页签行并成一排——软件图标 + 魔蚁box/站名 与 首页/频道/
-  /// 多媒体/推荐 同行齐平，搜索与刷新钮同行右置。品牌标题点按仍切
-  /// 换站源、图标点按仍进“我的”页、搜索/刷新与原顶栏同一回调；
-  /// 页签放不下时中间横滑。行高与页签行一致（54），切页签不跳动。
-  /// 配色全部取当前主题，不写死颜色。
+  /// 合并顶栏（用户 2026-11-17 令，2026-11-18 令改顺序）：底部标签
+  /// 样式下，霓虹首页的品牌行与内层页签行并成一排——左上角第一位
+  /// 是品牌 + 站名（点按弹站点列表弹窗，与目录顶栏左上角站图标
+  /// 弹弹窗的口径一致），头像紧随其后（点按进“我的”页），再往右
+  /// 是首页/频道/多媒体/推荐页签，搜索与刷新钮同行右置；页签放不
+  /// 下时中间横滑。行高与页签行一致（54），切页签不跳动。品牌字
+  /// 比霓虹品牌样式小一档（16），配色全部取当前主题，不写死颜色。
   Widget _mergedTopBar() {
     final config = AppThemeConfig.of(context);
     return Padding(
@@ -1122,19 +1126,6 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
       child: Row(
         children: [
-          GestureDetector(
-            key: const ValueKey('neon-avatar'),
-            onTap: widget.onAvatarPressed,
-            child: ClipOval(
-              child: Image.asset(
-                'assets/ant_logo.png',
-                width: 38,
-                height: 38,
-                fit: BoxFit.cover,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Semantics(
@@ -1156,6 +1147,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
                         '魔蚁box',
                         style: Neon.brandStyle.copyWith(
                           color: config.textPrimary,
+                          fontSize: 16,
                         ),
                       ),
                     ),
@@ -1183,6 +1175,19 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            key: const ValueKey('neon-avatar'),
+            onTap: widget.onAvatarPressed,
+            child: ClipOval(
+              child: Image.asset(
+                'assets/ant_logo.png',
+                width: 38,
+                height: 38,
+                fit: BoxFit.cover,
               ),
             ),
           ),
@@ -1220,6 +1225,50 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
+  /// 首页分类 + 筛选行（用户 2026-11-18 令）：霓虹首页页签此前只有
+  /// 品牌顶栏，没有分类与筛选。行内第一位是筛选胶囊（点按打开排序
+  /// 与筛选，与目录顶栏同一回调，生效中高亮），其后是本站分类横滑
+  /// 胶囊（与频道页同一份分类、同一回调，点按即切分类取数）。
+  /// Win7/XP 窗口壳里固定在合并顶栏下方（见 build 的 Column），胶
+  /// 囊栏壳里随首页滚动区置顶（经 [NeonHomeView.headerRow]），两处
+  /// 只会出现一处，不会重复。
+  Widget _homeFilterRow() {
+    return SizedBox(
+      key: const ValueKey('neon-home-filter-row'),
+      height: 40,
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          NeonCapsule(
+            key: const ValueKey('neon-home-filter'),
+            label: '筛选',
+            icon: LucideIcons.arrowUpDown,
+            selected: widget.filtersActive,
+            onTap: widget.onFilterPressed,
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(right: 12),
+              children: [
+                for (final category in widget.categories) ...[
+                  NeonCapsule(
+                    key: ValueKey('neon-home-category-${category.id}'),
+                    label: category.name,
+                    selected: category.id == widget.selectedCategory,
+                    onTap: () => widget.onCategorySelected(category.id),
+                  ),
+                  const SizedBox(width: 7),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _neonHome(BuildContext context) {
     return NeonHomeView(
       items: widget.dramas,
@@ -1238,6 +1287,9 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       onOpenFeatured: widget.onOpenFeatured,
       // 底部标签样式下顶栏已并进固定合并行，滚动区内不再画品牌顶栏。
       hideTopBar: widget.hideCapsuleBar,
+      // 胶囊栏壳里分类 + 筛选行随滚动区置顶；窗口壳里该行固定在
+      // 合并顶栏下方，这里不传，避免同一行出现两次。
+      headerRow: widget.hideCapsuleBar ? null : _homeFilterRow(),
     );
   }
 

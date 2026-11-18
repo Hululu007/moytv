@@ -13,6 +13,9 @@ import 'package:path_provider/path_provider.dart';
 
 import 'core_bridge.dart';
 import 'app_update.dart';
+import 'dns_settings.dart';
+import 'dns_settings_screen.dart';
+import 'nexhub_scraper/network/network_config_service.dart';
 import 'cloud_drive/cloud_drive_screen.dart';
 import 'app_update_screen.dart';
 import 'audio_capsule.dart';
@@ -251,7 +254,11 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.store,
+    // DNS 配置变化时刷新设置列表里的 DNS 副标题。
+    animation: Listenable.merge([
+      widget.store,
+      NetworkConfigService.instance,
+    ]),
     builder: (_, _) {
       final body = glassDesign(context) ? _glassBody() : _materialBody();
       if (widget.embedded) return body;
@@ -373,6 +380,14 @@ class _SettingsScreenState extends State<SettingsScreen>
           title: '站点验证',
           detail: '为被拦截的站点完成浏览器验证',
           onTap: () => openClearanceFlow(context, widget.repository),
+        ),
+        _SettingsItem(
+          keyName: 'dns-settings-entry',
+          icon: Icons.language_outlined,
+          lucide: LucideIcons.globe,
+          title: 'DNS 设置',
+          detail: dnsSummary(NetworkConfigService.instance.config.dns),
+          onTap: () => _push(const DnsSettingsScreen()),
         ),
       ]),
       _SettingsGroup('源与规则', [

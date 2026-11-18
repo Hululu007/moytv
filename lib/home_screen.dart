@@ -73,6 +73,7 @@ import 'live_screen.dart';
 import 'live_store.dart';
 import 'live_sources.dart';
 import 'content_registry.dart';
+import 'ra2_game_page.dart';
 import 'miniapp/mini_app_store.dart';
 import 'miniapp/mini_app_manifest.dart';
 import 'win7_desktop.dart';
@@ -751,6 +752,42 @@ class _HomeScreenState extends State<HomeScreen>
           entry: entry,
           repository: widget.repository,
           store: widget.store,
+          // fm.openLive：切到直播区（桌面壳开直播窗口），桥随后
+          // 退掉宿主页面，直播立即可见。页面可带 sourceId 选源。
+          onOpenLive: (params) async {
+            if (!mounted) return false;
+            final sourceId =
+                (params['sourceId'] ??
+                        params['source'] ??
+                        params['liveId'] ??
+                        params['channelId'] ??
+                        '')
+                    .toString()
+                    .trim();
+            if (_inWin7Shell) {
+              _win7Open(
+                Win7WindowKind.live,
+                sourceId: sourceId.isEmpty ? null : sourceId,
+              );
+            } else {
+              if (sourceId.isNotEmpty) {
+                _liveEntryNonce++;
+                _liveEntrySourceId = sourceId;
+              }
+              _setZone(HomeZone.live);
+              // 已在直播区时 _setZone 提前返回，仍需重建把新
+              // nonce 递给直播页（与订阅入口同一口径）。
+              if (mounted) setState(() {});
+            }
+            return true;
+          },
+          // fm.openKeep：打开追剧（收藏的剧集与更新），即设置页
+          // “追剧”入口的同一页，压在宿主页面之上，返回即回 HTML 页。
+          onOpenKeep: (_) async {
+            if (!mounted) return false;
+            _openSaved(history: false);
+            return true;
+          },
         ),
       ),
     );
@@ -1494,9 +1531,11 @@ class _HomeScreenState extends State<HomeScreen>
     _openGlobalVideoResult(drama);
   }
 
-  /// 打开全站全局搜索：搜索行里的全局搜索按钮与霓虹首页/频道页的
-  /// 放大镜共用同一入口，点结果走 _openGlobalVideoResult 切区切源。
-  void _openGlobalSearch() {
+  /// 打开本站搜索：搜索行里的搜索按钮与霓虹首页/频道页的放大镜
+  /// 共用同一入口，只搜当前站，点结果走 _openGlobalVideoResult 切区
+  /// 切源。全部站源模式下没有单一当前站，沿用原来的全部可见站搜索。
+  void _openSiteSearch() {
+    final singleSite = !_allSources;
     Navigator.of(context).push(
       appPageRoute(
         builder: (_) => GlobalSearchPage(
@@ -1504,6 +1543,8 @@ class _HomeScreenState extends State<HomeScreen>
           store: widget.store,
           initialQuery: _search.text,
           onOpenDrama: _openGlobalVideoResult,
+          siteId: singleSite ? _source.id : null,
+          siteName: singleSite ? _source.name : null,
         ),
       ),
     );
@@ -1607,7 +1648,7 @@ class _HomeScreenState extends State<HomeScreen>
       (LucideIcons.hardDrive, '多媒体'),
       (LucideIcons.layoutGrid, '小程序'),
       (LucideIcons.user, '我的'),
-      (LucideIcons.users, '女优库'),
+      (LucideIcons.users, '演员库'),
     ];
     return NeonCapsuleBar(
       entries: entries,
@@ -2050,7 +2091,7 @@ class _HomeScreenState extends State<HomeScreen>
       // 女优库入口：与榜单钮并列，只在片库顶栏出现。
       IconButton(
         key: const ValueKey('open-actress-library'),
-        tooltip: '女优库',
+        tooltip: '演员库',
         onPressed: _openActressLibrary,
         icon: const Icon(Icons.people_alt_outlined),
       ),
@@ -2180,7 +2221,7 @@ class _HomeScreenState extends State<HomeScreen>
         GlassGroupItem(
           key: const ValueKey('open-actress-library'),
           icon: LucideIcons.users,
-          tooltip: '女优库',
+          tooltip: '演员库',
           onPressed: _openActressLibrary,
         ),
         GlassGroupItem(
@@ -2222,7 +2263,7 @@ class _HomeScreenState extends State<HomeScreen>
     } else if (_mineRequested) {
       title = Text('我的', style: largeTitle);
     } else if (_actressRequested) {
-      title = Text('女优库', style: largeTitle);
+      title = Text('演员库', style: largeTitle);
     } else if (_showCatalogHeader) {
       // 窄屏放不下整排时横向滚动，站图标始终在最左第一位。
       title = SingleChildScrollView(
@@ -2326,6 +2367,7 @@ class _HomeScreenState extends State<HomeScreen>
     Win7WindowKind.multimedia => null,
     Win7WindowKind.mine => null,
     Win7WindowKind.actress => null,
+    Win7WindowKind.game => null,
   };
 
   SourceSite? _hongguoSource() {
@@ -2390,6 +2432,7 @@ class _HomeScreenState extends State<HomeScreen>
       case Win7WindowKind.miniApp:
       case Win7WindowKind.multimedia:
       case Win7WindowKind.mine:
+      case Win7WindowKind.game:
         _applyZoneChange(HomeZone.library);
         setState(() {
           _mineRequested = false;
@@ -2464,12 +2507,16 @@ class _HomeScreenState extends State<HomeScreen>
   /// 两层，演示任意层级展开。空组挂一行“暂无可用站点”（点按无动作）。
   /// 女优库是独立区域、不是站点：末尾一个单叶节点，点按只开女优库
   /// 窗口，不挂任何站点（模块内绝不显示站点来源信息）。
+  /// 组节点也带 kind（只用来画组行图标；点按仍是展开/收起，isLeaf
+  /// 按 children 判，不受影响）。听读组没有对应的单一区 kind，不带
+  /// kind、组行不画图标；听书/阅读两个子组各带自己的 kind。
   List<Win7TreeNode> _win7TreeGroups() {
     List<Win7TreeNode> orEmpty(List<Win7TreeNode> children) =>
         children.isEmpty ? const [Win7TreeNode(label: '暂无可用站点')] : children;
     return [
       Win7TreeNode(
         label: '片库',
+        kind: Win7WindowKind.library,
         children: orEmpty([
           for (final site in _librarySources)
             Win7TreeNode(
@@ -2481,6 +2528,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       Win7TreeNode(
         label: '直播',
+        kind: Win7WindowKind.live,
         children: orEmpty([
           for (final source in LiveSource.visible(false))
             Win7TreeNode(
@@ -2495,6 +2543,7 @@ class _HomeScreenState extends State<HomeScreen>
         children: [
           Win7TreeNode(
             label: '听书',
+            kind: Win7WindowKind.audio,
             children: orEmpty([
               for (final source in ContentRegistry.sourcesFor(
                 ContentSection.audio,
@@ -2508,6 +2557,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           Win7TreeNode(
             label: '阅读',
+            kind: Win7WindowKind.novel,
             children: orEmpty([
               for (final source in ContentRegistry.sourcesFor(
                 ContentSection.novel,
@@ -2523,6 +2573,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       Win7TreeNode(
         label: '短剧',
+        kind: Win7WindowKind.drama,
         children: orEmpty([
           for (final site in _librarySources)
             if (isHongguoDramaGroup(site.groupId))
@@ -2536,6 +2587,7 @@ class _HomeScreenState extends State<HomeScreen>
       // 小程序/多媒体屏不接受直达某项的参数，树节点只开窗口。
       Win7TreeNode(
         label: '小程序',
+        kind: Win7WindowKind.miniApp,
         children: orEmpty([
           for (final app in _win7MiniApps)
             Win7TreeNode(
@@ -2547,6 +2599,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       Win7TreeNode(
         label: '多媒体',
+        kind: Win7WindowKind.multimedia,
         children: orEmpty([
           for (final site in _cloudDriveSites)
             Win7TreeNode(
@@ -2558,7 +2611,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       // 女优库单叶：点按开女优库窗口（见 _win7TreeGroups 注释）。
       const Win7TreeNode(
-        label: '女优库',
+        label: '演员库',
         kind: Win7WindowKind.actress,
       ),
     ];
@@ -2640,6 +2693,10 @@ class _HomeScreenState extends State<HomeScreen>
           store: widget.store,
           showTitle: false,
         );
+      case Win7WindowKind.game:
+        // 网页游戏窗口：无 AppBar、无地址栏、无网址字串的 WebView 页；
+        // key 固定，实例靠 Offstage 槽位常驻，最小化不重载。
+        return const Ra2GamePage(key: ValueKey('win7-game'));
       case Win7WindowKind.library:
       case Win7WindowKind.drama:
         return _win7LibraryBody(glass: glass, maxWidth: maxWidth);
@@ -2667,7 +2724,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 窗口槽位：直播/听读/小程序/多媒体/我的/女优库体常驻（Offstage 藏起），
+  /// 窗口槽位：直播/听读/小程序/多媒体/我的/女优库/游戏体常驻（Offstage 藏起），
   /// 状态完整保留；片库/短剧体共用首页目录状态（同一 _scroll
   /// 控制器挂两份滚动视图会崩），只在前台时建体，最小化时槽位
   /// 只留一个空占位、描述留在 _win7Windows 里供恢复换站。
@@ -2838,7 +2895,7 @@ class _HomeScreenState extends State<HomeScreen>
       searchHint: _searchHint,
       onSearchChanged: _searchChanged,
       onSearchSubmitted: _submitSearch,
-      onOpenGlobalSearch: _openGlobalSearch,
+      onOpenGlobalSearch: _openSiteSearch,
       onAvatarPressed: _openMine,
       onFilterPressed: () => unawaited(_chooseCatalogView()),
       onRankingsPressed: _openRankings,
@@ -2888,7 +2945,7 @@ class _HomeScreenState extends State<HomeScreen>
           : _mineRequested
           ? const Text('我的')
           : _actressRequested
-          ? const Text('女优库')
+          ? const Text('演员库')
           : _showCatalogHeader
           ? Row(
               mainAxisSize: MainAxisSize.min,
@@ -3342,10 +3399,12 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
                 IconButton(
-                  key: const ValueKey('global-search'),
-                  tooltip: '全局搜索',
+                  key: const ValueKey('site-search'),
+                  // 全部站源模式下没有单一当前站，打开的是全部搜索，
+                  // 提示语跟着说实话；平时只搜本站。
+                  tooltip: _allSources ? '全局搜索' : '搜索本站',
                   icon: const Icon(Icons.manage_search_rounded),
-                  onPressed: _openGlobalSearch,
+                  onPressed: _openSiteSearch,
                 ),
               ],
             ),

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_list_page.dart';
@@ -8,6 +10,7 @@ import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/mine_page.dart';
 import 'package:moyi/neon/neon_ui.dart';
+import 'package:moyi/site_icon.dart';
 import 'package:moyi/win7_desktop.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -27,8 +30,11 @@ void main() {
     // 全量变体（魔蚁box）；全量模式下注册表已有它，不重复注。
     // 只影响点名要验目录顶栏的用例，其余用例沿用默认注册表。
     bool registerHuangdou = false,
+    // 预置的开始菜单固定列表（写进 mock 存表，覆盖首次随机抽）；
+    // 为空时不写该键，菜单走首次随机抽。
+    List<String>? pinnedSites,
   }) async {
-    // 7 个桌面图标在默认 600 高视口里排不下（第 7 个中心点在视口外、
+    // 8 个桌面图标在默认 600 高视口里排不下（第 8 个中心点在视口外、
     // 点按命中不了）；用手机尺寸视口（与预览测试一致）。
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1.0;
@@ -39,11 +45,15 @@ void main() {
       SourceSite.importedSites[source] = SourceSite.byId(source);
       addTearDown(() => SourceSite.importedSites.remove(source));
     }
-    SharedPreferences.setMockInitialValues({
+    final mockValues = <String, Object>{
       'source': source,
       'hiddenSites': '[]',
       'appThemeMode': 'win7',
-    });
+    };
+    if (pinnedSites != null) {
+      mockValues[startMenuPinnedSitesKey] = pinnedSites;
+    }
+    SharedPreferences.setMockInitialValues(mockValues);
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
     await tester.pumpWidget(
@@ -60,7 +70,7 @@ void main() {
 
   Finder win7Key(String name) => find.byKey(ValueKey(name));
 
-  testWidgets('Win7 桌面：7 图标 + 任务栏 + 无胶囊栏', (tester) async {
+  testWidgets('Win7 桌面：8 图标 + 任务栏 + 无胶囊栏', (tester) async {
     await pumpWin7Home(tester);
     expect(win7Key('win7-desktop'), findsOneWidget);
     for (final kind in Win7WindowKind.values) {
@@ -75,19 +85,22 @@ void main() {
     }
     // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
     expect(win7Key('win7-desktop-icon-drama'), findsNothing);
-    // “我的电脑”已从桌面拿掉（改成“我的”图标），多媒体窗只走开始菜单。
+    // 多媒体窗口没有桌面图标，只走开始菜单（桌面顶上的“我的电脑”
+    // 是“我的”窗口，与多媒体窗是两个窗口）。
     expect(win7Key('win7-desktop-icon-multimedia'), findsNothing);
-    // 默认顺序：直播在片库后面，女优库在“我的”上面。
+    // 默认顺序：我的电脑置顶第一位，其余按听书、阅读、片库、
+    // 直播、小程序、女优库、游戏往下排。
     double top(String name) =>
         tester.getTopLeft(win7Key('win7-desktop-icon-$name')).dy;
     final order = [
+      'mine',
       'audio',
       'novel',
       'library',
       'live',
       'miniApp',
       'actress',
-      'mine',
+      'game',
     ];
     for (var i = 1; i < order.length; i++) {
       expect(
@@ -116,15 +129,35 @@ void main() {
     expect(find.byType(NeonCapsuleBar), findsNothing);
   });
 
-  testWidgets('点“我的”图标开“我的”窗口：标题栏 + 我的页', (tester) async {
+  testWidgets('点“我的电脑”图标开“我的电脑”窗口：标题栏 + 我的页', (tester) async {
     await pumpWin7Home(tester);
     await tester.tap(win7Key('win7-desktop-icon-mine'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(win7Key('win7-desktop'), findsNothing);
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '我的');
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '我的电脑');
     expect(find.byType(MinePage), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-mine'), findsOneWidget);
+  });
+
+  testWidgets('桌面图标上色：8 个彩色底块 + “我的电脑”显示器图标', (tester) async {
+    // “我的”窗口改叫“我的电脑”，图标换显示器样式（与多媒体窗的
+    // 整机图标区分）；普通壳底部标签的“我的”不在这套定义里，不动。
+    expect(Win7WindowKind.mine.title, '我的电脑');
+    expect(Win7WindowKind.mine.icon, Icons.desktop_windows);
+    expect(
+      Win7WindowKind.mine.icon,
+      isNot(Win7WindowKind.multimedia.icon),
+    );
+    await pumpWin7Home(tester);
+    expect(find.byType(DesktopIconBadge), findsNWidgets(8));
+    expect(find.text('我的电脑'), findsOneWidget);
+    // 8 个底块渐变色各不相同（成套彩色，不撞色）。
+    final gradients = tester
+        .widgetList<DesktopIconBadge>(find.byType(DesktopIconBadge))
+        .map((badge) => badge.kind.iconGradient.join(','))
+        .toSet();
+    expect(gradients.length, 8);
   });
 
   testWidgets('点“女优库”图标开女优库窗口：标题栏 + 列表页', (tester) async {
@@ -132,7 +165,7 @@ void main() {
     await tester.tap(win7Key('win7-desktop-icon-actress'));
     await tester.pump();
     expect(win7Key('win7-desktop'), findsNothing);
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '女优库');
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '演员库');
     expect(find.byType(ActressListPage), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-actress'), findsOneWidget);
   });
@@ -257,7 +290,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(win7Key('win7-start-menu'), findsNothing);
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '女优库');
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '演员库');
     expect(find.byType(ActressListPage), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-actress'), findsOneWidget);
   });
@@ -271,7 +304,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-actress-library')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '女优库');
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '演员库');
     expect(find.byType(ActressListPage), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-actress'), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-library'), findsOneWidget);
@@ -294,7 +327,7 @@ void main() {
     final barLabel = tester.widget<Text>(
       find.descendant(
         of: find.byType(NeonCapsuleBar),
-        matching: find.text('女优库'),
+        matching: find.text('演员库'),
       ),
     );
     expect(barLabel.style?.fontWeight, FontWeight.w700);
@@ -316,5 +349,399 @@ void main() {
     expect(win7Key('win7-desktop'), findsNothing);
     expect(win7Key('win7-taskbar'), findsNothing);
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
+  });
+
+  // ---- 开始菜单双栏与长按固定 ----
+
+  // 8 个可固定叶子（site-a～site-h）+ 占位叶 + 无站点单叶。
+  List<Win7TreeNode> menuTestGroups() => [
+    Win7TreeNode(
+      label: '片库',
+      kind: Win7WindowKind.library,
+      children: [
+        const Win7TreeNode(
+          label: '甲站',
+          kind: Win7WindowKind.library,
+          siteId: 'site-a',
+        ),
+        const Win7TreeNode(
+          label: '乙站',
+          kind: Win7WindowKind.library,
+          siteId: 'site-b',
+        ),
+        const Win7TreeNode(
+          label: '丙站',
+          kind: Win7WindowKind.library,
+          siteId: 'site-c',
+        ),
+      ],
+    ),
+    Win7TreeNode(
+      label: '直播',
+      kind: Win7WindowKind.live,
+      children: [
+        const Win7TreeNode(
+          label: '丁台',
+          kind: Win7WindowKind.live,
+          siteId: 'site-d',
+        ),
+        const Win7TreeNode(
+          label: '戊台',
+          kind: Win7WindowKind.live,
+          siteId: 'site-e',
+        ),
+      ],
+    ),
+    Win7TreeNode(
+      label: '多媒体',
+      kind: Win7WindowKind.multimedia,
+      children: [
+        const Win7TreeNode(
+          label: '己盘',
+          kind: Win7WindowKind.multimedia,
+          siteId: 'site-f',
+        ),
+        const Win7TreeNode(
+          label: '庚盘',
+          kind: Win7WindowKind.multimedia,
+          siteId: 'site-g',
+        ),
+        const Win7TreeNode(
+          label: '辛盘',
+          kind: Win7WindowKind.multimedia,
+          siteId: 'site-h',
+        ),
+      ],
+    ),
+    Win7TreeNode(
+      label: '空组',
+      children: [const Win7TreeNode(label: '暂无可用站点')],
+    ),
+    const Win7TreeNode(label: '演员库', kind: Win7WindowKind.actress),
+  ];
+
+  Future<void> pumpWin7StartMenu(
+    WidgetTester tester, {
+    Map<String, Object>? mockPrefs,
+    bool resetPrefs = true,
+    required void Function(Win7WindowKind kind, String? siteId) onLeafTap,
+    required VoidCallback onDismiss,
+  }) async {
+    if (resetPrefs) SharedPreferences.setMockInitialValues(mockPrefs ?? {});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Win7StartMenu(
+            groups: menuTestGroups(),
+            onLeafTap: onLeafTap,
+            onDismiss: onDismiss,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  test('随机抽固定：6 个不重复、只取有站点叶子、同种子同结果', () {
+    final drawn = drawRandomPinnedSites(menuTestGroups(), 6, Random(42));
+    expect(drawn.length, 6);
+    expect(drawn.map((node) => node.siteId).toSet().length, 6);
+    expect(drawn.every((node) => node.kind != null && node.siteId != null), isTrue);
+    final again = drawRandomPinnedSites(menuTestGroups(), 6, Random(42));
+    expect(
+      again.map((node) => node.siteId).toList(),
+      drawn.map((node) => node.siteId).toList(),
+    );
+  });
+
+  test('随机抽固定：叶子不够时全取', () {
+    final groups = [
+      Win7TreeNode(
+        label: '一组',
+        children: [
+          const Win7TreeNode(
+            label: '甲',
+            kind: Win7WindowKind.library,
+            siteId: 'only-one',
+          ),
+        ],
+      ),
+    ];
+    final drawn = drawRandomPinnedSites(groups, 6, Random(1));
+    expect(drawn.map((node) => node.siteId).toList(), ['only-one']);
+  });
+
+  test('解析固定列表：按存序、未知与重复跳过、空表回空', () {
+    final resolved = resolveStartMenuPinnedSites(
+      menuTestGroups(),
+      ['site-h', 'nope', 'site-a', 'site-h'],
+    );
+    expect(
+      resolved.map((node) => node.siteId).toList(),
+      ['site-h', 'site-a'],
+    );
+    expect(resolveStartMenuPinnedSites(menuTestGroups(), []), isEmpty);
+  });
+
+  test('解析固定列表：同 id 在多组出现取第一次出现的节点', () {
+    final groups = [
+      Win7TreeNode(
+        label: '片库',
+        children: [
+          const Win7TreeNode(
+            label: '甲站',
+            kind: Win7WindowKind.library,
+            siteId: 'dup',
+          ),
+        ],
+      ),
+      Win7TreeNode(
+        label: '短剧',
+        children: [
+          const Win7TreeNode(
+            label: '甲剧',
+            kind: Win7WindowKind.drama,
+            siteId: 'dup',
+          ),
+        ],
+      ),
+    ];
+    final resolved = resolveStartMenuPinnedSites(groups, ['dup']);
+    expect(resolved.length, 1);
+    expect(resolved.single.label, '甲站');
+    expect(resolved.single.kind, Win7WindowKind.library);
+  });
+
+  test('首次加载：从没存过抽 6 个存下来，第二次读同一份', () async {
+    SharedPreferences.setMockInitialValues({});
+    final first = await loadStartMenuPinnedSites(
+      menuTestGroups(),
+      random: Random(7),
+    );
+    expect(first.length, 6);
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(startMenuPinnedSitesKey)!;
+    expect(stored.length, 6);
+    expect(stored.toSet().length, 6);
+    expect(stored, first.map((node) => node.siteId).toList());
+    final second = await loadStartMenuPinnedSites(
+      menuTestGroups(),
+      random: Random(99),
+    );
+    expect(second.map((node) => node.siteId).toList(), stored);
+  });
+
+  test('加载：存过空表不再自动补抽', () async {
+    SharedPreferences.setMockInitialValues({
+      startMenuPinnedSitesKey: <String>[],
+    });
+    final loaded = await loadStartMenuPinnedSites(menuTestGroups());
+    expect(loaded, isEmpty);
+  });
+
+  testWidgets('开始菜单双栏：左树 + 右固定栏 + 分隔线', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: ['site-b'],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(win7Key('win7-start-menu-divider'), findsOneWidget);
+    expect(win7Key('win7-start-menu-pinned'), findsOneWidget);
+    expect(win7Key('win7-tree-node-0'), findsOneWidget);
+    expect(win7Key('win7-start-menu-pinned-site-b'), findsOneWidget);
+    expect(find.byType(SiteIcon), findsOneWidget);
+  });
+
+  testWidgets('组行显示区图标，多媒体组行是硬盘图标', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: <String>[],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(find.byIcon(Icons.storage), findsOneWidget);
+    expect(find.byIcon(Icons.video_library), findsOneWidget);
+    expect(find.byIcon(Icons.live_tv), findsOneWidget);
+  });
+
+  testWidgets('长按叶子出菜单，点固定进右列并存盘', (tester) async {
+    final taps = <(Win7WindowKind, String?)>[];
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: <String>[],
+      },
+      onLeafTap: (kind, siteId) => taps.add((kind, siteId)),
+      onDismiss: () {},
+    );
+    expect(find.text('长按左侧站点，固定到这里'), findsOneWidget);
+    await tester.tap(win7Key('win7-tree-node-0'));
+    await tester.pumpAndSettle();
+    await tester.longPress(win7Key('win7-tree-node-0-0'));
+    await tester.pumpAndSettle();
+    expect(find.text('固定到快捷方式'), findsOneWidget);
+    await tester.tap(find.text('固定到快捷方式'));
+    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(win7Key('win7-start-menu-pinned-site-a'), findsOneWidget);
+    // 长按没触发点按打开。
+    expect(taps, isEmpty);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList(startMenuPinnedSitesKey), ['site-a']);
+  });
+
+  testWidgets('长按组节点不弹菜单', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: <String>[],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    await tester.longPress(win7Key('win7-tree-node-0'));
+    await tester.pumpAndSettle();
+    expect(find.text('固定到快捷方式'), findsNothing);
+    expect(find.text('取消固定'), findsNothing);
+  });
+
+  testWidgets('长按已固定点取消出右列并存盘', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: ['site-a', 'site-b'],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(win7Key('win7-start-menu-pinned-site-a'), findsOneWidget);
+    await tester.longPress(win7Key('win7-start-menu-pinned-site-a'));
+    await tester.pumpAndSettle();
+    expect(find.text('取消固定'), findsOneWidget);
+    await tester.tap(find.text('取消固定'));
+    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(win7Key('win7-start-menu-pinned-site-a'), findsNothing);
+    expect(win7Key('win7-start-menu-pinned-site-b'), findsOneWidget);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList(startMenuPinnedSitesKey), ['site-b']);
+  });
+
+  testWidgets('点固定站点走 onLeafTap', (tester) async {
+    final taps = <(Win7WindowKind, String?)>[];
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: ['site-d'],
+      },
+      onLeafTap: (kind, siteId) => taps.add((kind, siteId)),
+      onDismiss: () {},
+    );
+    await tester.tap(win7Key('win7-start-menu-pinned-site-d'));
+    await tester.pumpAndSettle();
+    expect(taps, [(Win7WindowKind.live, 'site-d')]);
+  });
+
+  testWidgets('固定后关掉重开还在', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: <String>[],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    await tester.tap(win7Key('win7-tree-node-0'));
+    await tester.pumpAndSettle();
+    await tester.longPress(win7Key('win7-tree-node-0-0'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('固定到快捷方式'));
+    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(win7Key('win7-start-menu-pinned-site-a'), findsOneWidget);
+    // 重开一个新菜单实例：读存下来的那份，固定还在。
+    await pumpWin7StartMenu(
+      tester,
+      resetPrefs: false,
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(win7Key('win7-start-menu-pinned-site-a'), findsOneWidget);
+  });
+
+  testWidgets('首次打开随机固定 6 个不重复，存下来后重开不变', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {},
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(find.byType(SiteIcon), findsNWidgets(6));
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(startMenuPinnedSitesKey)!;
+    expect(stored.length, 6);
+    expect(stored.toSet().length, 6);
+    await pumpWin7StartMenu(
+      tester,
+      resetPrefs: false,
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(find.byType(SiteIcon), findsNWidgets(6));
+    final prefsAgain = await SharedPreferences.getInstance();
+    expect(prefsAgain.getStringList(startMenuPinnedSitesKey), stored);
+    double top(String id) =>
+        tester.getTopLeft(win7Key('win7-start-menu-pinned-$id')).dy;
+    for (var i = 1; i < stored.length; i++) {
+      expect(top(stored[i]), greaterThan(top(stored[i - 1])));
+    }
+  });
+
+  testWidgets('全取消后重开不再自动补抽', (tester) async {
+    await pumpWin7StartMenu(
+      tester,
+      mockPrefs: {
+        startMenuPinnedSitesKey: ['site-a'],
+      },
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    await tester.longPress(win7Key('win7-start-menu-pinned-site-a'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消固定'));
+    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(find.text('长按左侧站点，固定到这里'), findsOneWidget);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList(startMenuPinnedSitesKey), <String>[]);
+    await pumpWin7StartMenu(
+      tester,
+      resetPrefs: false,
+      onLeafTap: (_, _) {},
+      onDismiss: () {},
+    );
+    expect(find.text('长按左侧站点，固定到这里'), findsOneWidget);
+    expect(find.byType(SiteIcon), findsNothing);
+  });
+
+  testWidgets('开始菜单双栏：右列固定站点点按开窗口', (tester) async {
+    await pumpWin7Home(tester, pinnedSites: ['xiuguo']);
+    await tester.tap(win7Key('win7-start-button'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(win7Key('win7-start-menu-divider'), findsOneWidget);
+    expect(win7Key('win7-start-menu-pinned'), findsOneWidget);
+    expect(win7Key('win7-start-menu-pinned-xiuguo'), findsOneWidget);
+    await tester.tap(win7Key('win7-start-menu-pinned-xiuguo'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(win7Key('win7-start-menu'), findsNothing);
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '直播');
+    expect(win7Key('win7-taskbar-entry-live'), findsOneWidget);
   });
 }

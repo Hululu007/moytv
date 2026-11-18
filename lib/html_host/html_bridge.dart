@@ -8,8 +8,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../core_bridge.dart';
+import '../detail_screen.dart';
 import '../global_search_page.dart';
 import '../local_store.dart';
+import '../models.dart';
 import '../settings_screen.dart';
 import 'html_gateway.dart';
 import 'html_play.dart';
@@ -70,6 +72,9 @@ class HtmlBridgeHost {
     required this.precacheArtwork,
     this.onOpenLive,
     this.onOpenKeep,
+    this.setChrome,
+    this.restoreChrome,
+    this.exitPage,
   });
 
   final void Function(Widget page) pushPage;
@@ -82,6 +87,43 @@ class HtmlBridgeHost {
   final Future<void> Function(List<String> urls) precacheArtwork;
   final Future<bool> Function(Map<String, dynamic> params)? onOpenLive;
   final Future<bool> Function(Map<String, dynamic> params)? onOpenKeep;
+
+  /// chrome 控制：宿主页面接真实现（顶栏显隐 + 系统栏模式），
+  /// 返回实际生效的模式；未接线时桥报 unsupported。
+  /// [setChrome] 入参为归一后的模式与页面原选项（restoreAffordance /
+  /// statusBarStyle / navigationBarStyle / startup 由宿主页面处理）。
+  final Future<String> Function(String mode, Map<String, dynamic> options)?
+  setChrome;
+  final Future<String> Function()? restoreChrome;
+
+  /// 强制退出宿主页面：fm.openLive 切到下层直播区后，宿主页面
+  /// 须退掉直播才可见；宿主页面接“放行 PopScope 后退栈”的真实现
+  /// （直接 pop 会被 PopScope 拦去走 WebView 历史）。未接线时
+  /// 不退（调用方自行处理），fm.openKeep 不用它（收藏页压在
+  /// 宿主页面之上，返回即回 HTML 页）。
+  final void Function()? exitPage;
+}
+
+/// chrome 模式归一（手机端）：指南的 TV 模式按语义就近映射——
+/// tv-normal 顶栏在位 → normal；tv-full / tv-toolbar-hidden 顶栏
+/// 隐藏、页面接管首屏 → edge（保留系统栏，页面要沉浸须显式要
+/// immersive）；tv-overlay 顶栏在位、页面避让 → normal。
+/// 不认识的模式返回 null，调用方报 bad_payload。
+String? normalizeHtmlChromeMode(String raw) {
+  switch (raw.trim().toLowerCase()) {
+    case 'normal':
+    case 'tv-normal':
+    case 'tv-overlay':
+      return 'normal';
+    case 'edge':
+    case 'tv-full':
+    case 'tv-toolbar-hidden':
+      return 'edge';
+    case 'immersive':
+      return 'immersive';
+    default:
+      return null;
+  }
 }
 
 /// fm 桥：页面消息的唯一分发点。每个宿主页面一个桥实例，
@@ -158,9 +200,7 @@ class HtmlBridge {
     final id = decoded['id']?.toString() ?? '';
     final method = decoded['method']?.toString() ?? '';
     if (id.isEmpty || method.isEmpty) return;
-    final params = decoded['params'] is Map
-        ? Map<String, dynamic>.from(decoded['params'] as Map)
-        : <String, dynamic>{};
+    final params = _normalizeParams(method, decoded['params']);
     try {
       final result = await dispatch(method, params);
       _respond(id, ok: true, result: result);
@@ -169,6 +209,36 @@ class HtmlBridge {
     } catch (error) {
       _respond(id, ok: false, error: error.toString());
     }
+  }
+
+  /// params 形态容错（垫片归一的双保险）：对象原样收；字符串按方法
+  /// 语义理解为地址/关键词/消息，不再静默丢成空对象（丢了就报
+  /// bad_payload，页面看到的就是“网络或站点异常 / bad_payload”）；
+  /// 数组只在 fm.pan.check 时理解为待检清单。
+  Map<String, dynamic> _normalizeParams(String method, dynamic raw) {
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.isNotEmpty) {
+      switch (method) {
+        case 'fm.req':
+        case 'fm.res':
+        case 'fm.play':
+        case 'fm.vodInline':
+        case 'fm.vod':
+        case 'fm.pan.play':
+          return {'url': raw};
+        case 'fm.search':
+          return {'query': raw, 'keyword': raw};
+        case 'fm.ext.log':
+        case 'fm.ext.toast':
+          return {'message': raw};
+        default:
+          return <String, dynamic>{};
+      }
+    }
+    if (raw is List && method == 'fm.pan.check') {
+      return {'items': raw};
+    }
+    return <String, dynamic>{};
   }
 
   void _respond(String id, {required bool ok, Object? result, String error = ''}) {
@@ -248,7 +318,17 @@ class HtmlBridge {
       case 'fm.pan.play':
         return _panPlay(params);
       case 'fm.pan.check':
-        throw const HtmlBridgeError('unsupported', 'pan check is v2');
+        // 诚实不支持（v2）：网盘分享检测须逐家接匿名分享接口——
+        // 阿里/夸克/UC/百度/天翼/123/迅雷/115/移动共 9 家，含迅雷
+        // captcha token 与移动内置加解密；树内网盘引擎只有登录态
+        // 浏览（凭据 + 目录 + 直链），无任何一家分享有效性检测，
+        // 也无 driveCheck 开关（fm.config 已如实报 false）。拿
+        // HTTP 探活冒充检测会把“已失效分享页也回 200”误判为有
+        // 效，故不做假实现；页面应先查 fm.config().driveCheck。
+        throw const HtmlBridgeError(
+          'unsupported',
+          'pan check needs per-provider share APIs (v2)',
+        );
       case 'fm.ext.info':
         return {
           'siteKey': siteKey,
@@ -263,8 +343,9 @@ class HtmlBridge {
         host.showToast(params['message']?.toString() ?? '');
         return {};
       case 'fm.ui.setChrome':
+        return _setChrome(params);
       case 'fm.ui.restoreChrome':
-        throw const HtmlBridgeError('unsupported', 'no chrome concept in shell');
+        return _restoreChrome();
       case 'fm.ui.getViewport':
         return host.viewport();
       case 'fm._urlchange':
@@ -343,9 +424,10 @@ class HtmlBridge {
       final response = await request.close().timeout(
         Duration(milliseconds: timeoutMs),
       );
+      final setCookieHeaders = response.headers['set-cookie'] ?? const [];
       if (credentials != 'omit') {
         try {
-          await _storeCookies(uri, response.headers['set-cookie'] ?? const []);
+          await _storeCookies(uri, setCookieHeaders);
         } catch (_) {}
       }
       const maxBody = 8 * 1024 * 1024;
@@ -380,9 +462,12 @@ class HtmlBridge {
         decodedBody = utf8.decode(bytes, allowMalformed: true);
       }
       return {
+        'ok': true,
         'status': response.statusCode,
         'headers': responseHeaders,
+        'cookies': setCookieHeaders,
         'body': decodedBody,
+        'data': decodedBody,
         'url': finalUrl,
       };
     } on HtmlBridgeError {
@@ -397,10 +482,17 @@ class HtmlBridge {
   }
 
   int _clampTimeout(dynamic value) {
+    num? numeric;
     if (value is num) {
-      return value.toInt().clamp(1000, 120000);
+      numeric = value;
+    } else if (value is String) {
+      numeric = num.tryParse(value.trim());
     }
-    return 30000;
+    if (numeric == null) return 30000;
+    var ms = numeric.toDouble();
+    // 超时单位双约定：指南写秒、已发页面传毫秒；小于 1000 的值按秒读。
+    if (ms < 1000) ms *= 1000;
+    return ms.toInt().clamp(1000, 120000);
   }
 
   Future<List<WebViewCookie>> _readCookies(Uri uri) async {
@@ -462,8 +554,10 @@ class HtmlBridge {
     }
   }
 
-  Map<String, dynamic> _vod(Map<String, dynamic> params) {
+  Future<Map<String, dynamic>> _vod(Map<String, dynamic> params) async {
     try {
+      // 自带可播内容优先：载荷自带选集时走 HTML 详情页，与之前一致，
+      // 哪怕载荷里同时带了别站的 siteKey 也不改道。
       final detail = parseHtmlVodPayload(params);
       host.pushPage(
         HtmlVodDetailPage(
@@ -475,13 +569,118 @@ class HtmlBridge {
       return {};
     } on HtmlResolverUnsupported {
       throw const HtmlBridgeError('resolver_not_supported');
-    } on FormatException catch (error) {
-      throw HtmlBridgeError('bad_payload', error.message);
+    } on FormatException {
+      // 无可播内容：只剩 siteKey + vodId 时试跨站详情，取数走
+      // 目标站自己的引擎（DetailScreen 内调 repository.detail，
+      // 与全局搜索打开别站详情同一条链）。
     }
+    final target = _crossSiteVodTarget(params);
+    if (target == null) {
+      throw const HtmlBridgeError(
+        'bad_payload',
+        'vod payload has no playable episodes',
+      );
+    }
+    final (targetSite, vodId) = target;
+    if (targetSite == siteKey || !SourceSite.isKnown(targetSite)) {
+      // 自身 HTML 站无详情引擎可查；未知站无法取数。两处都报
+      // bad_payload：载荷指了一个桥无法解析的详情目标。
+      throw HtmlBridgeError('bad_payload', 'unknown vod target $targetSite');
+    }
+    if (SourceSite.byId(targetSite).isHtmlSite) {
+      throw const HtmlBridgeError(
+        'unsupported',
+        'html sites have no detail engine',
+      );
+    }
+    if (!store.allowsSource(targetSite)) {
+      // 当前用户档案不可见/不可用的站（如未成年保护锁定时），
+      // 不许经 HTML 桥绕过门禁打开。
+      throw const HtmlBridgeError(
+        'unsupported',
+        'site not available for the current profile',
+      );
+    }
+    host.pushPage(
+      DetailScreen(
+        drama: Drama(
+          id: '$targetSite:$vodId',
+          source: targetSite,
+          sourceId: vodId,
+          title:
+              (params['vod_name'] ?? params['title'] ?? params['name'] ?? '')
+                  .toString()
+                  .trim(),
+          description:
+              (params['vod_content'] ??
+                      params['description'] ??
+                      params['content'] ??
+                      '')
+                  .toString()
+                  .trim(),
+          cover:
+              (params['vod_pic'] ?? params['pic'] ?? params['cover'] ?? '')
+                  .toString()
+                  .trim(),
+          category:
+              (params['vod_class'] ??
+                      params['category'] ??
+                      params['type_name'] ??
+                      '')
+                  .toString()
+                  .trim(),
+        ),
+        repository: repository,
+        store: store,
+      ),
+    );
+    return {};
+  }
+
+  /// 跨站详情目标：(siteKey, vodId)。siteKey 取 siteKey/source，
+  /// vodId 取 vod_id/vodId/id；vodId 带 `站:号` 前缀时剥掉站前缀
+  /// （与 py 详情取 vodId 的口径一致）。缺任一项返回 null。
+  (String, String)? _crossSiteVodTarget(Map<String, dynamic> params) {
+    final targetSite =
+        (params['siteKey'] ?? params['source'] ?? '').toString().trim();
+    var vodId =
+        (params['vod_id'] ?? params['vodId'] ?? params['id'] ?? '')
+            .toString()
+            .trim();
+    if (targetSite.isEmpty || vodId.isEmpty) return null;
+    final prefix = '$targetSite:';
+    if (vodId.startsWith(prefix)) vodId = vodId.substring(prefix.length);
+    if (vodId.isEmpty) return null;
+    return (targetSite, vodId);
+  }
+
+  Future<Map<String, dynamic>> _setChrome(Map<String, dynamic> params) async {
+    final apply = host.setChrome;
+    if (apply == null) {
+      throw const HtmlBridgeError('unsupported', 'chrome control not wired');
+    }
+    final mode = normalizeHtmlChromeMode(params['mode']?.toString() ?? '');
+    if (mode == null) {
+      throw HtmlBridgeError(
+        'bad_payload',
+        'unknown chrome mode ${params['mode']}',
+      );
+    }
+    final applied = await apply(mode, params);
+    return {'mode': applied, 'chromeMode': applied};
+  }
+
+  Future<Map<String, dynamic>> _restoreChrome() async {
+    final restore = host.restoreChrome;
+    if (restore == null) {
+      throw const HtmlBridgeError('unsupported', 'chrome control not wired');
+    }
+    final mode = await restore();
+    return {'mode': mode, 'chromeMode': mode};
   }
 
   Map<String, dynamic> _search(Map<String, dynamic> params) {
-    final query = params['query']?.toString() ?? '';
+    final query = (params['query'] ?? params['keyword'] ?? '').toString();
     host.pushPage(
       GlobalSearchPage(
         repository: repository,
@@ -520,6 +719,7 @@ class HtmlBridge {
         await cache.write(key, jsonEncode(params['value']));
         return {};
       case 'remove':
+      case 'del':
         await cache.remove(key);
         return {};
       default:
@@ -532,7 +732,12 @@ class HtmlBridge {
     if (open == null) {
       throw const HtmlBridgeError('unsupported', 'live entry not wired');
     }
-    return {'opened': await open(params)};
+    final opened = await open(params);
+    // 直播区在宿主页面下层：打开成功就退掉宿主页面，直播立即
+    // 可见。桥在其上又推了详情/播放页时只退掉最上一层，再按
+    // 一次返回即见直播（与返回键逐层退的规矩一致）。
+    if (opened) host.exitPage?.call();
+    return {'opened': opened};
   }
 
   Future<Map<String, dynamic>> _openKeep(Map<String, dynamic> params) async {

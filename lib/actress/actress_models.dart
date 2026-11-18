@@ -56,6 +56,56 @@ String normalizeAvCode(String code) {
   return cleaned;
 }
 
+/// 搜索框里的番号键：输入像番号时返回归一化番号键，否则 null。
+/// 像番号 = 归一化后至少 3 位、同时含字母与数字（SSIS-123、abw123、
+/// FC2-PPV-1234567 都认；纯名字、纯数字、纯字母都不认）。返回的键
+/// 只含大写字母与数字，可直接拼进 SQL LIKE（无通配符）。
+String? actressCodeQueryKey(String query) {
+  final key = normalizeAvCode(query.trim());
+  if (key.length < 3) return null;
+  if (!RegExp(r'[A-Z]').hasMatch(key)) return null;
+  if (!RegExp(r'[0-9]').hasMatch(key)) return null;
+  return key;
+}
+
+/// 姓名分组键：通讯录式首字母分组，只看每个候选名字的首字符，不猜读音。
+/// - 拉丁字母开头 → 该大写字母；
+/// - 假名开头 → 按五十音行换算（あ行→A、か行→K、さ行→S、た行→T、
+///   な行→N、は行→H、ま行→M、や行→Y、ら行→R、わ行→W，片假名同行）；
+/// - 汉字/数字/其他开头 → 看别名里有没有拉丁或假名开头的名字，有则
+///   用它的键；都没有 → '#'（未归类组，排在最后）。
+String actressGroupKey(
+  String displayName, [
+  List<String> aliases = const [],
+]) {
+  for (final candidate in [displayName, ...aliases]) {
+    final key = _groupKeyForFirstChar(candidate);
+    if (key != null) return key;
+  }
+  return '#';
+}
+
+String? _groupKeyForFirstChar(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return null;
+  final rune = trimmed.runes.first;
+  if (rune >= 0x41 && rune <= 0x5A) return String.fromCharCode(rune);
+  if (rune >= 0x61 && rune <= 0x7A) return String.fromCharCode(rune - 0x20);
+  // 片假名与平假名差 0x60，归一到平假名再按行查。
+  final hira = rune >= 0x30A1 && rune <= 0x30FA ? rune - 0x60 : rune;
+  if (hira < 0x3041 || hira > 0x3093) return null;
+  if (hira <= 0x304A) return 'A';
+  if (hira <= 0x3054) return 'K';
+  if (hira <= 0x305E) return 'S';
+  if (hira <= 0x3069) return 'T';
+  if (hira <= 0x306E) return 'N';
+  if (hira <= 0x307D) return 'H';
+  if (hira <= 0x3082) return 'M';
+  if (hira <= 0x3088) return 'Y';
+  if (hira <= 0x308D) return 'R';
+  return 'W';
+}
+
 /// 无番号作品的标题去重键：小写、去空白与常见标点。只在番号为空时
 /// 用作去重键，同一人物内有效。
 String actressTitleKey(String title) => title.toLowerCase().replaceAll(

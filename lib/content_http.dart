@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'core_bridge.dart';
 import 'legado_gbk.dart';
+import 'nexhub_scraper/network/network_config_service.dart';
 
 const contentUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -63,11 +64,28 @@ String decodeContentBytes(List<int> bytes, {String? contentType}) {
 class ContentHttp {
   ContentHttp();
 
-  final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 10);
+  /// 共享客户端：建时按当时全局网络档案定型（DNS 配置快照在
+  /// connectionFactory 闭包里）。DNS 设置改后，档案签名变化，
+  /// 下次请求重建客户端，新解析立即生效，不用重启应用。
+  HttpClient? _client;
+  String? _clientSignature;
+
+  HttpClient get _currentClient {
+    final signature = NetworkConfigService.instance.globalProfile.signature;
+    final existing = _client;
+    if (existing != null && _clientSignature == signature) return existing;
+    existing?.close(force: true);
+    final created = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    _client = created;
+    _clientSignature = signature;
+    return created;
+  }
 
   void close() {
-    _client.close(force: true);
+    _client?.close(force: true);
+    _client = null;
+    _clientSignature = null;
   }
 
   Future<String> get(
@@ -75,7 +93,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
   }) async =>
-      _send(_client, url, method: 'GET', headers: headers, timeout: timeout);
+      _send(_currentClient, url, method: 'GET', headers: headers, timeout: timeout);
 
   /// GET 并返回原始响应（状态码/响应头/字节），非 200 不抛错。
   /// 与 [get] 同一条超时/大小上限链路，仅错误语义不同。
@@ -84,7 +102,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
   }) async {
-    final client = _client;
+    final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
@@ -102,7 +120,8 @@ class ContentHttp {
       });
       final response = await request.close().timeout(timeout);
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
+      await for (final chunk in response.timeout(timeout)) {
         builder.add(chunk);
         if (builder.length > _maxContentBytes) {
           throw AppFailure('内容源返回的数据过大');
@@ -134,7 +153,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
   }) async => _send(
-    _client,
+    _currentClient,
     url,
     method: 'POST',
     body: form.entries
@@ -153,7 +172,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
   }) async {
-    final client = _client;
+    final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
@@ -175,11 +194,12 @@ class ContentHttp {
       request.write(jsonEncode(json));
       final response = await request.close().timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(timeout);
         throw AppFailure('内容源返回 ${response.statusCode}');
       }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
+      await for (final chunk in response.timeout(timeout)) {
         builder.add(chunk);
         if (builder.length > _maxContentBytes) {
           throw AppFailure('内容源返回的数据过大');
@@ -205,7 +225,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 90),
   }) async {
-    final client = _client;
+    final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
@@ -219,11 +239,12 @@ class ContentHttp {
       });
       final response = await request.close().timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(timeout);
         throw AppFailure('内容源返回 ${response.statusCode}');
       }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
+      await for (final chunk in response.timeout(timeout)) {
         builder.add(chunk);
         if (builder.length > _maxContentBytes) {
           throw AppFailure('内容源返回的数据过大');
@@ -248,7 +269,7 @@ class ContentHttp {
     String charset = 'utf-8',
     Duration timeout = contentTimeout,
   }) async {
-    final client = _client;
+    final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw AppFailure('内容源地址无效');
@@ -274,11 +295,12 @@ class ContentHttp {
       }
       final response = await request.close().timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(timeout);
         throw AppFailure('内容源返回 ${response.statusCode}');
       }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
+      await for (final chunk in response.timeout(timeout)) {
         builder.add(chunk);
         if (builder.length > _maxContentBytes) {
           throw AppFailure('内容源返回的数据过大');
@@ -329,11 +351,12 @@ class ContentHttp {
       }
       final response = await request.close().timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(timeout);
         throw AppFailure('内容源返回 ${response.statusCode}');
       }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
+      await for (final chunk in response.timeout(timeout)) {
         builder.add(chunk);
         if (builder.length > _maxContentBytes) {
           throw AppFailure('内容源返回的数据过大');

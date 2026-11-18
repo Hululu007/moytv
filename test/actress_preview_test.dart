@@ -257,7 +257,7 @@ void main() {
     await _capture(
       tester,
       name: 'actress_ranking',
-      label: '预览 · 假数据 · 女优排行榜 · 头像为占位',
+      label: '预览 · 假数据 · 演员排行榜 · 头像为占位',
       buildPage: (db, repository, store) => ActressRankingPage(
         repository: repository,
         store: store,

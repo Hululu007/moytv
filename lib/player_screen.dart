@@ -3252,13 +3252,12 @@ class _PlayerScreenState extends State<PlayerScreen>
           repository: widget.repository,
           drama: backdropDrama,
         ),
-        ImageFiltered(
-          imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: DramaCover(
-            drama: backdropDrama,
-            repository: widget.repository,
-            radius: 0,
-          ),
+        // 背景图清晰显示、不模糊（用户令）：前景文字可读性靠各调用
+        // 点的渐变罩/暗色覆盖保证，这里不再加任何 blur 滤镜。
+        DramaCover(
+          drama: backdropDrama,
+          repository: widget.repository,
+          radius: 0,
         ),
       ],
     );

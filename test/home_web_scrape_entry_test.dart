@@ -31,8 +31,8 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
-      // 搜索行默认折叠：全局搜索按钮（只在搜索行里）不存在。
-      expect(find.byKey(const ValueKey('global-search')), findsNothing);
+      // 搜索行默认折叠：本站搜索按钮（只在搜索行里）不存在。
+      expect(find.byKey(const ValueKey('site-search')), findsNothing);
       // 地球入口在顶栏常显，且只有一个。
       final globe = find.byKey(const ValueKey('web-scrape'));
       expect(globe, findsOneWidget);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/main.dart';
+import 'package:moyi/models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -21,7 +22,7 @@ void main() {
     return store;
   }
 
-  testWidgets('首页放大镜打开全局搜索，返回回首页', (tester) async {
+  testWidgets('首页放大镜打开本站搜索，返回回首页', (tester) async {
     final store = await pumpHome(tester);
     expect(
       find.byKey(const ValueKey('neon-top-search')),
@@ -30,7 +31,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('neon-top-search')));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.text('全局搜索'), findsOneWidget);
+    // 本站搜索标题带当前站名，不再是全局搜索。
+    expect(
+      find.text('搜索：${SourceSite.byId(store.source).name}'),
+      findsOneWidget,
+    );
+    expect(find.text('全局搜索'), findsNothing);
     await tester.tap(find.byType(BackButton));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
@@ -41,7 +47,7 @@ void main() {
     store.dispose();
   });
 
-  testWidgets('频道页放大镜同样打开全局搜索', (tester) async {
+  testWidgets('频道页放大镜同样打开本站搜索', (tester) async {
     final store = await pumpHome(tester);
     await tester.tap(find.text('频道'));
     await tester.pump(const Duration(milliseconds: 500));
@@ -53,7 +59,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('neon-channel-search')));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.text('全局搜索'), findsOneWidget);
+    expect(
+      find.text('搜索：${SourceSite.byId(store.source).name}'),
+      findsOneWidget,
+    );
+    expect(find.text('全局搜索'), findsNothing);
     store.dispose();
   });
 }

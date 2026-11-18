@@ -31,6 +31,7 @@ class NeonHomeView extends StatefulWidget {
     this.featuredItems,
     this.onOpenFeatured,
     this.hideTopBar = false,
+    this.headerRow,
     this.loading = false,
     this.loadingMore = false,
     this.hasMore = false,
@@ -63,6 +64,11 @@ class NeonHomeView extends StatefulWidget {
   /// （品牌、头像、搜索、刷新改由外层合并行承载，见
   /// HongguoDramaHome 的合并顶栏），避免同一排出现两次。默认不隐藏。
   final bool hideTopBar;
+
+  /// 分类 + 筛选行：胶囊栏壳里首页滚动区置顶的行（调用方构造，
+  /// 见 HongguoDramaHome 的首页分类行）；Win7/XP 窗口壳里该行
+  /// 固定在合并顶栏下方，这里不传，避免重复。
+  final Widget? headerRow;
 
   final bool loading;
   final bool loadingMore;
@@ -191,6 +197,8 @@ class _NeonHomeViewState extends State<NeonHomeView> {
                 ],
               ),
             ),
+          if (widget.headerRow != null)
+            SliverToBoxAdapter(child: widget.headerRow!),
           if (featured.isNotEmpty)
             SliverToBoxAdapter(
               child: SizedBox(

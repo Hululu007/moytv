@@ -1,5 +1,9 @@
 // 移植自 NexHub（https://github.com/nexhub-app/NexHub，提交 37ddbdd，Apache-2.0）。
 // 原始路径：lib/core/network/runtime/dns_resolver.dart。移植状态：原文复制（仅加本出处注），逻辑未改。
+// 魔蚁改编（2026-11-18，DNS 设置）：_resolveDoh 的 HttpClient 改为裸客户端
+// （runWithHttpOverrides + 空覆盖）。原文的 `HttpClient()` 在全局覆盖
+// （NexHubHttpOverrides）装上后会再次命中覆盖 → connectionFactory → 本解析器
+// → 无限递归，DoH 永远查不完；裸客户端用系统 DNS 引导，断开自引用。
 /// DNS 解析器：带 TTL 缓存，支持 system / custom(UDP) / DoH / DoT 四模式，
 /// 并优先命中自定义 Hosts。
 ///
@@ -237,7 +241,13 @@ class DnsResolver {
       'type': 'A',
     });
     // 独立裸 HttpClient：不挂 HttpOverrides.global，用系统 DNS 引导，避免递归。
-    final client = HttpClient();
+    // 必须经 runWithHttpOverrides 建：直接 `HttpClient()` 会命中全局覆盖
+    // （NexHubHttpOverrides → connectionFactory → DnsResolver），DoH 查 DoH
+    // 端点的主机时无限递归，永远等不到结果。
+    final client = HttpOverrides.runWithHttpOverrides<HttpClient>(
+      HttpClient.new,
+      _BareHttpOverrides(),
+    );
     try {
       final req = await client.getUrl(uri);
       req.headers.set(HttpHeaders.acceptHeader, 'application/dns-json');
@@ -374,3 +384,7 @@ class DnsResolver {
     return offset;
   }
 }
+
+/// 空覆盖：`createHttpClient` 沿用基类实现（直接创建真实客户端），
+/// 供 DoH 引导请求在 zone 内临时替换全局覆盖，避免自引用递归。
+class _BareHttpOverrides extends HttpOverrides {}

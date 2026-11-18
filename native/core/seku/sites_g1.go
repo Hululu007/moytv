@@ -1940,10 +1940,12 @@ func sjSearch(slot, kw string) ([]interface{}, error) {
 	return sjAnyCards(slot, scope, "搜索"), nil
 }
 
-// sjCoverFetch fetches a cover and, for pic.drleao.cn URLs, decrypts
-// the AES-128-CBC bytes the site stores (key/IV are published in the
-// site's own inline player script; verified live 2026-10-23). Other
-// hosts are returned as fetched.
+// sjCoverFetch fetches a cover and, for the site's encrypted image
+// CDNs (pic.drleao.cn, pic.qnlycc.cn), decrypts the AES-128-CBC
+// bytes the site stores (key/IV are published in the site's own
+// inline player script; drleao verified live 2026-10-23, qnlycc
+// verified live 2026-11-18: same key/IV yields a valid JPEG).
+// Other hosts are returned as fetched.
 func sjCoverFetch(u string) ([]byte, error) {
 	body, code, _, err := httpGet(u, sjHeaders())
 	if err != nil {
@@ -1952,7 +1954,7 @@ func sjCoverFetch(u string) ([]byte, error) {
 	if code != 200 || len(body) == 0 {
 		return nil, fmt.Errorf("91sanji cover http %d", code)
 	}
-	if !strings.Contains(u, "pic.drleao.cn") {
+	if !strings.Contains(u, "pic.drleao.cn") && !strings.Contains(u, "pic.qnlycc.cn") {
 		return body, nil
 	}
 	return sjAESDecrypt(body)

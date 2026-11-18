@@ -29,22 +29,22 @@ void main() {
       expect(jar.id, PluginManager.jarPluginId);
       expect(jar.kind, PluginIconKind.jar);
       expect(jar.md5, zakatvJarMd5);
-      // 142 条配置，0 条 audioOnly（go_tingshu 已删，无纯音频配置）。
-      expect(zakatvBuiltinSites.length, 142);
-      expect(jar.siteCount, 142);
-      expect(jar.detail, contains('142'));
+      // 140 条配置，0 条 audioOnly（go_tingshu 已删，无纯音频配置）。
+      expect(zakatvBuiltinSites.length, 140);
+      expect(jar.siteCount, 140);
+      expect(jar.detail, contains('140'));
     });
 
-    test('49 py plugins in today register order', () {
+    test('120 py plugins in today register order', () {
       final plugins = PluginManager.builtinPlugins();
       final py = plugins.where((p) => p.kind == PluginIconKind.py).toList();
-      expect(py.length, 49);
-      expect(plugins.length, 50);
+      expect(py.length, 120);
+      expect(plugins.length, 121);
       expect(py.first.id, 'py:hmav');
       expect(py.first.name, '🔞河马AV');
-      expect(py.last.id, 'py:mmsq');
+      expect(py.last.id, 'py:zuidazy');
       final ids = py.map((p) => p.id).toSet();
-      expect(ids.length, 49);
+      expect(ids.length, 120);
     });
 
     test('jinguo file plugin carries both sites', () {

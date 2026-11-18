@@ -30,6 +30,11 @@ class ActressSyncCheckpoint {
   final int updatedAt;
 }
 
+/// 全站叠加断点在 sync_state 里的键：source 与 phase 均为 'stacking'，
+/// 与三家名册源的检查点分键，互不干扰。
+const actressStackingCheckpointSource = 'stacking';
+const actressStackingCheckpointPhase = 'stacking';
+
 /// 同步总览：列表页横幅与手动刷新判断用。
 class ActressSyncOverview {
   const ActressSyncOverview({
@@ -121,6 +126,12 @@ abstract class ActressDatabase {
   /// 某源作品清单待同步的人物（有该源身份、且该源 films 未完成）。
   Future<List<ActressPerson>> personsPendingFilms(ActressRosterSourceId source);
 
+  /// 一次性修复候选人：该源 films 已记完成、但作品行数为 0 的人
+  /// （旧版空结果记 ok 的中毒状态），供修复检查点重取一次。
+  Future<List<ActressPerson>> personsNeedingFilmsRepair(
+    ActressRosterSourceId source,
+  );
+
   /// films 进度：done = 已完成人数，total = 该源身份总人数。
   Future<({int done, int total})> filmsProgress(ActressRosterSourceId source);
 
@@ -131,6 +142,19 @@ abstract class ActressDatabase {
   });
 
   Future<void> markEnriched(int personId);
+
+  /// 按 localId 升序取人（全站叠加逐人轮询用）：只要 id 大于
+  /// [afterId] 的前 [limit] 人，与列表排序无关，断点 cursor 即最后
+  /// 一人的 localId。
+  Future<List<ActressPerson>> personsAfterId({
+    required int afterId,
+    required int limit,
+  });
+
+  /// 全站叠加断点（独立键，与三家名册源的检查点分开，各记各的）。
+  Future<ActressSyncCheckpoint?> stackingCheckpoint();
+
+  Future<void> saveStackingCheckpoint(ActressSyncCheckpoint checkpoint);
 
   Future<ActressSyncCheckpoint?> checkpoint(
     ActressRosterSourceId source,
@@ -481,8 +505,18 @@ class SqfliteActressDatabase implements ActressDatabase {
     final like = '%$trimmed%';
     final keyLike = '%${actressNameKey(trimmed)}%';
     args.addAll([like, like, keyLike]);
-    return '(display_name LIKE ? OR aliases LIKE ? OR id IN '
-        '(SELECT person_id FROM person_names WHERE name_key LIKE ?))';
+    var where =
+        '(display_name LIKE ? OR aliases LIKE ? OR id IN '
+        '(SELECT person_id FROM person_names WHERE name_key LIKE ?)';
+    // 番号搜索：输入像番号时，另按作品番号键模糊匹配（SSIS-12 能命中
+    // SSIS123）；键只含大写字母与数字，拼进 LIKE 无通配符风险。
+    final codeKey = actressCodeQueryKey(trimmed);
+    if (codeKey != null) {
+      args.add('%$codeKey%');
+      where +=
+          ' OR id IN (SELECT person_id FROM works WHERE code_key LIKE ?)';
+    }
+    return '$where)';
   }
 
   // 标签存为 JSON 数组文本，带引号匹配避免子串误中（'"有码"' 只中整标签）。
@@ -782,6 +816,26 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<List<ActressPerson>> personsNeedingFilmsRepair(
+    ActressRosterSourceId source,
+  ) async {
+    final db = await _open();
+    final column = _sourceIdColumn(source);
+    final rows = await db.query(
+      'persons',
+      where:
+          "$column <> '' AND EXISTS (SELECT 1 FROM source_films f "
+          'WHERE f.person_id = persons.id AND f.source = ? '
+          'AND f.synced_at IS NOT NULL) '
+          'AND NOT EXISTS (SELECT 1 FROM works w '
+          'WHERE w.person_id = persons.id)',
+      whereArgs: [_sourceName(source)],
+      orderBy: 'id ASC',
+    );
+    return rows.map(_personFromRow).toList();
+  }
+
+  @override
   Future<({int done, int total})> filmsProgress(
     ActressRosterSourceId source,
   ) async {
@@ -835,6 +889,61 @@ class SqfliteActressDatabase implements ActressDatabase {
       where: 'id = ?',
       whereArgs: [personId],
     );
+  }
+
+  @override
+  Future<List<ActressPerson>> personsAfterId({
+    required int afterId,
+    required int limit,
+  }) async {
+    final db = await _open();
+    final rows = await db.query(
+      'persons',
+      where: 'id > ?',
+      whereArgs: [afterId],
+      orderBy: 'id ASC',
+      limit: limit,
+    );
+    return rows.map(_personFromRow).toList();
+  }
+
+  @override
+  Future<ActressSyncCheckpoint?> stackingCheckpoint() async {
+    final db = await _open();
+    final rows = await db.query(
+      'sync_state',
+      where: 'source = ? AND phase = ?',
+      whereArgs: [
+        actressStackingCheckpointSource,
+        actressStackingCheckpointPhase,
+      ],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return ActressSyncCheckpoint(
+      source: row['source'] as String,
+      phase: row['phase'] as String,
+      cursor: (row['cursor'] as String?) ?? '',
+      total: (row['total'] as num?)?.toInt() ?? 0,
+      finished: (row['finished'] as num?)?.toInt() == 1,
+      error: (row['error'] as String?) ?? '',
+      updatedAt: (row['updated_at'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  @override
+  Future<void> saveStackingCheckpoint(ActressSyncCheckpoint checkpoint) async {
+    final db = await _open();
+    await db.insert('sync_state', {
+      'source': actressStackingCheckpointSource,
+      'phase': actressStackingCheckpointPhase,
+      'cursor': checkpoint.cursor,
+      'total': checkpoint.total,
+      'finished': checkpoint.finished ? 1 : 0,
+      'error': checkpoint.error,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   @override
@@ -920,6 +1029,10 @@ class MemoryActressDatabase implements ActressDatabase {
   final _works = <int, ActressWork>{};
   final _filmsState = <String, bool>{};
   final _checkpoints = <String, ActressSyncCheckpoint>{};
+
+  /// 全站叠加断点在检查点表里的键（与三家名册源的键分开）。
+  static const _stackingCheckpointKey =
+      '$actressStackingCheckpointSource:$actressStackingCheckpointPhase';
   int _nextPersonId = 1;
   int _nextWorkId = 1;
 
@@ -975,12 +1088,23 @@ class MemoryActressDatabase implements ActressDatabase {
     if (person.displayName.contains(trimmed)) return true;
     if (person.aliases.any((alias) => alias.contains(trimmed))) return true;
     final key = actressNameKey(trimmed);
-    if (key.isEmpty) return false;
-    final keys = <String>{
-      actressNameKey(person.displayName),
-      for (final alias in person.aliases) actressNameKey(alias),
-    };
-    return keys.any((candidate) => candidate.contains(key));
+    if (key.isNotEmpty) {
+      final keys = <String>{
+        actressNameKey(person.displayName),
+        for (final alias in person.aliases) actressNameKey(alias),
+      };
+      if (keys.any((candidate) => candidate.contains(key))) return true;
+    }
+    // 番号搜索：与 SQL 版同一口径，作品番号键模糊匹配。
+    final codeKey = actressCodeQueryKey(trimmed);
+    if (codeKey != null) {
+      return _works.values.any(
+        (work) =>
+            work.personId == person.localId &&
+            work.codeKey.contains(codeKey),
+      );
+    }
+    return false;
   }
 
   List<ActressPerson> _filtered({
@@ -1209,6 +1333,25 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<List<ActressPerson>> personsNeedingFilmsRepair(
+    ActressRosterSourceId source,
+  ) async {
+    final repair =
+        _persons.values
+            .where(
+              (person) =>
+                  person.hasSource(source) &&
+                  _filmsState['${person.localId}:${source.name}'] == true &&
+                  !_works.values.any(
+                    (work) => work.personId == person.localId,
+                  ),
+            )
+            .toList()
+          ..sort((a, b) => a.localId.compareTo(b.localId));
+    return repair;
+  }
+
+  @override
   Future<({int done, int total})> filmsProgress(
     ActressRosterSourceId source,
   ) async {
@@ -1248,6 +1391,34 @@ class MemoryActressDatabase implements ActressDatabase {
         enrichedAt: DateTime.now().millisecondsSinceEpoch,
       );
     }
+  }
+
+  @override
+  Future<List<ActressPerson>> personsAfterId({
+    required int afterId,
+    required int limit,
+  }) async {
+    final persons =
+        _persons.values.where((person) => person.localId > afterId).toList()
+          ..sort((a, b) => a.localId.compareTo(b.localId));
+    return persons.take(limit).toList();
+  }
+
+  @override
+  Future<ActressSyncCheckpoint?> stackingCheckpoint() async =>
+      _checkpoints[_stackingCheckpointKey];
+
+  @override
+  Future<void> saveStackingCheckpoint(ActressSyncCheckpoint checkpoint) async {
+    _checkpoints[_stackingCheckpointKey] = ActressSyncCheckpoint(
+      source: actressStackingCheckpointSource,
+      phase: actressStackingCheckpointPhase,
+      cursor: checkpoint.cursor,
+      total: checkpoint.total,
+      finished: checkpoint.finished,
+      error: checkpoint.error,
+      updatedAt: checkpoint.updatedAt,
+    );
   }
 
   @override

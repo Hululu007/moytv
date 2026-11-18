@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'core_bridge.dart';
 import 'live_models.dart';
+import 'nexhub_scraper/network/network_config_service.dart';
 
 const liveRequestTimeout = Duration(seconds: 14);
 
@@ -88,12 +89,29 @@ class LiveCookieJar {
 class LiveHttp {
   LiveHttp();
 
-  final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 10);
+  /// 共享客户端：与 ContentHttp 同款跟随机制——DNS 设置改后档案签名
+  /// 变化，下次请求重建客户端，新解析立即生效，不用重启应用。
+  HttpClient? _client;
+  String? _clientSignature;
+
+  HttpClient get _currentClient {
+    final signature = NetworkConfigService.instance.globalProfile.signature;
+    final existing = _client;
+    if (existing != null && _clientSignature == signature) return existing;
+    existing?.close(force: true);
+    final created = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    _client = created;
+    _clientSignature = signature;
+    return created;
+  }
+
   final LiveCookieJar _cookies = LiveCookieJar();
 
   void close() {
-    _client.close(force: true);
+    _client?.close(force: true);
+    _client = null;
+    _clientSignature = null;
   }
 
   Future<String> get(
@@ -101,7 +119,7 @@ class LiveHttp {
     Map<String, String> headers = const {},
     Duration? timeout,
   }) async => _send(
-    _client,
+    _currentClient,
     url,
     method: 'GET',
     headers: headers,
@@ -114,7 +132,7 @@ class LiveHttp {
     Map<String, String> headers = const {},
     Duration? timeout,
   }) async => _send(
-    _client,
+    _currentClient,
     url,
     method: 'POST',
     body: body,
@@ -128,7 +146,7 @@ class LiveHttp {
     Map<String, String> headers = const {},
     Duration? timeout,
   }) async => _send(
-    _client,
+    _currentClient,
     url,
     method: 'POST',
     body: jsonEncode(body),

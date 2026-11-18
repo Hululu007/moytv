@@ -49,6 +49,24 @@ TAGS = [
 ]
 
 
+def _salvage_list(text):
+    txt = (text or '').strip()
+    if not txt.startswith('['):
+        return None
+    idx = len(txt)
+    for _ in range(8):
+        idx = txt.rfind('},', 0, idx)
+        if idx < 0:
+            break
+        try:
+            val = json.loads(txt[:idx + 1] + ']')
+        except Exception:
+            continue
+        if isinstance(val, list) and val:
+            return val
+    return None
+
+
 def _ctx():
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -131,16 +149,25 @@ class Spider(BaseSpider):
                     data = json.dumps(body).encode('utf-8') if body is not None else None
                     if data:
                         h['Content-Type'] = 'application/json'
+                    h['Accept-Encoding'] = 'identity'
                     req = urllib.request.Request(url, data=data, headers=h, method=method)
                     with urllib.request.urlopen(req, timeout=60, context=_ctx()) as resp:
                         status = resp.status
-                        raw = resp.read()
+                        try:
+                            raw = resp.read()
+                        except http.client.IncompleteRead as ie:
+                            raw = ie.partial or b''
+                            status = resp.status
                         enc = (resp.headers.get('Content-Encoding') or '').lower()
                         if enc == 'gzip' or raw[:2] == b'\x1f\x8b':
                             try:
                                 raw = gzip.decompress(raw)
                             except Exception:
-                                pass
+                                try:
+                                    import zlib
+                                    raw = zlib.decompressobj(31).decompress(raw)
+                                except Exception:
+                                    pass
                         text = raw.decode('utf-8', 'replace')
                 except urllib.error.HTTPError as e:
                     status = e.code
@@ -162,7 +189,9 @@ class Spider(BaseSpider):
                 try:
                     return json.loads(text)
                 except Exception:
-                    return None
+                    salv = _salvage_list(text)
+                    if salv is not None:
+                        return salv
             if status in (401, 403, 404):
                 return None
             time.sleep(1)
@@ -188,7 +217,11 @@ class Spider(BaseSpider):
                 data = json.dumps(body).encode('utf-8')
                 req = urllib.request.Request(API + '/auth/device', data=data, headers=h, method='POST')
                 with urllib.request.urlopen(req, timeout=30, context=_ctx()) as resp:
-                    d = json.loads(resp.read().decode('utf-8', 'replace'))
+                    try:
+                        raw = resp.read()
+                    except http.client.IncompleteRead as ie:
+                        raw = ie.partial or b''
+                    d = json.loads(raw.decode('utf-8', 'replace'))
                     if d.get('token'):
                         self._token = d['token']
                         return True

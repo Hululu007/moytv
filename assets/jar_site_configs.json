@@ -13,12 +13,6 @@
       "ext": ""
     },
     {
-      "key": "ZakaHuangguo",
-      "name": "🔞黄果",
-      "api": "csp_ZakaHuangguoAmns",
-      "ext": ""
-    },
-    {
       "key": "ZakaHl365",
       "name": "🔞黑料不打烊",
       "api": "csp_ZakaHl365Amns",
@@ -58,12 +52,6 @@
       "key": "ZakaCucumber",
       "name": "🔞黄瓜视频",
       "api": "csp_ZakaCucumberAmns",
-      "ext": ""
-    },
-    {
-      "key": "ZakaHaijiao",
-      "name": "🔞海角社区",
-      "api": "csp_ZakaHaijiaoAmns",
       "ext": ""
     },
     {
@@ -709,12 +697,6 @@
       "ext": "{\"relay\":\"https://py.fzcrym.link:1314\"}"
     },
     {
-      "key": "zaka93",
-      "name": "👑93站合一",
-      "api": "csp_Zaka93Amns",
-      "ext": ""
-    },
-    {
       "key": "go2av",
       "name": "🔞GO2AV┃帝皇影视",
       "api": "csp_ZakaGo2avAmns",
@@ -857,6 +839,12 @@
       "name": "🔞潮流AV(JAR)",
       "api": "csp_ZakaChaoliu",
       "ext": "{}"
+    },
+    {
+      "key": "YzAikan",
+      "name": "柚子爱看",
+      "api": "csp_YzAikan",
+      "ext": ""
     }
   ]
 }

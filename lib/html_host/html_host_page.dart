@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../core_bridge.dart';
@@ -48,6 +50,13 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   Size? _lastViewport;
   bool _allowPop = false;
 
+  /// fm.ui.setChrome 的当前模式：normal（顶栏在位）/ edge（顶栏隐藏、
+  /// 系统栏保留）/ immersive（顶栏与系统栏都隐藏）。restoreChrome
+  /// 回到最近一次 setChrome 之前的模式。
+  String _chromeMode = 'normal';
+  String _chromeModeBefore = 'normal';
+  String _restoreAffordance = 'auto';
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +69,18 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
       setState(() => _error = '当前平台不支持 HTML 站源');
       return;
     }
+    // startup 偏好：页面上次以 startup:true 存下的 normal/edge 在
+    // 下次打开本站时直接生效（immersive 从不存启动偏好）。
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(
+        'moyi_html_chrome:${widget.entry.siteKey}',
+      );
+      if (saved != null && (saved == 'edge' || saved == 'normal')) {
+        _chromeMode = saved;
+        _chromeModeBefore = saved;
+      }
+    } catch (_) {}
     try {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _server = server;
@@ -83,6 +104,9 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
           precacheArtwork: _precacheArtwork,
           onOpenLive: widget.onOpenLive,
           onOpenKeep: widget.onOpenKeep,
+          setChrome: _setChrome,
+          restoreChrome: _restoreChrome,
+          exitPage: _exitPage,
         ),
         cache: SharedPreferencesHtmlCacheStore(
           'moyi_html_cache:${widget.entry.siteKey}:',
@@ -115,6 +139,7 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
         await controller.loadRequest(Uri.parse(entry.siteUrl));
       }
       if (mounted) setState(() => _ready = true);
+      _applySystemUiForMode(_chromeMode, const {});
     } catch (error) {
       if (mounted) setState(() => _error = '宿主启动失败：$error');
     }
@@ -123,8 +148,90 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // 离开页面必把系统栏还给整应用的默认 edgeToEdge（main.dart
+    // 启动时所设），否则沉浸模式会漏到壳的其它页面。
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     unawaited(_server?.close(force: true));
     super.dispose();
+  }
+
+  /// fm.ui.setChrome：normal/edge/immersive 三档。startup:true 时
+  /// 只持久化 normal/edge；scrim 暂不处理（系统栏默认透明）。
+  Future<String> _setChrome(
+    String mode,
+    Map<String, dynamic> options,
+  ) async {
+    if (!mounted) return _chromeMode;
+    if (options['startup'] == true && (mode == 'normal' || mode == 'edge')) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          'moyi_html_chrome:${widget.entry.siteKey}',
+          mode,
+        );
+      } catch (_) {}
+      if (!mounted) return _chromeMode;
+    }
+    setState(() {
+      _chromeModeBefore = _chromeMode;
+      _chromeMode = mode;
+      _restoreAffordance =
+          options['restoreAffordance']?.toString() ?? 'auto';
+    });
+    _applySystemUiForMode(mode, options);
+    _bridge?.dispatchPageEvent('fmviewport', _viewport());
+    return mode;
+  }
+
+  /// fm.ui.restoreChrome：回到最近一次 setChrome 之前的模式。
+  Future<String> _restoreChrome() async {
+    if (!mounted) return _chromeMode;
+    final target = _chromeModeBefore;
+    setState(() {
+      _chromeMode = target;
+      _restoreAffordance = 'auto';
+    });
+    _applySystemUiForMode(target, const {});
+    _bridge?.dispatchPageEvent('fmviewport', _viewport());
+    return target;
+  }
+
+  void _applySystemUiForMode(String mode, Map<String, dynamic> options) {
+    SystemChrome.setEnabledSystemUIMode(
+      mode == 'immersive'
+          ? SystemUiMode.immersiveSticky
+          : SystemUiMode.edgeToEdge,
+    );
+    final statusStyle = options['statusBarStyle']?.toString() ?? '';
+    final navStyle = options['navigationBarStyle']?.toString() ?? '';
+    if (statusStyle.isEmpty && navStyle.isEmpty) return;
+    // light = 浅色图标（配深色背景），dark = 深色图标（配浅色背景），
+    // auto 跟当前主题深浅。
+    Brightness? iconBrightness(String style) {
+      switch (style) {
+        case 'light':
+          return Brightness.light;
+        case 'dark':
+          return Brightness.dark;
+        case 'auto':
+          return Theme.of(context).brightness == Brightness.dark
+              ? Brightness.light
+              : Brightness.dark;
+        default:
+          return null;
+      }
+    }
+
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarIconBrightness: statusStyle.isEmpty
+            ? null
+            : iconBrightness(statusStyle),
+        systemNavigationBarIconBrightness: navStyle.isEmpty
+            ? null
+            : iconBrightness(navStyle),
+      ),
+    );
   }
 
   @override
@@ -149,10 +256,18 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   Map<String, dynamic> _viewport() {
     final size = MediaQuery.maybeSizeOf(context) ?? Size.zero;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+    final padding = MediaQuery.maybePaddingOf(context) ?? EdgeInsets.zero;
     return {
       'width': size.width,
       'height': size.height,
       'devicePixelRatio': dpr,
+      'chromeMode': _chromeMode,
+      'safeArea': {
+        'top': padding.top,
+        'bottom': padding.bottom,
+        'left': padding.left,
+        'right': padding.right,
+      },
     };
   }
 
@@ -181,6 +296,17 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   void _popPage() {
     if (!mounted) return;
     Navigator.of(context).maybePop();
+  }
+
+  /// 强制退出（fm.openLive 用）：先放行 PopScope 再退栈，与
+  /// _onPopInvoked 的退栈路径一致；直接 pop 会被 PopScope 拦下
+  /// 改走 WebView 历史，退不出去。
+  void _exitPage() {
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   Future<void> _precacheArtwork(List<String> urls) async {
@@ -226,6 +352,8 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
     final siteInfo = jsonEncode({
       'siteKey': widget.entry.siteKey,
       'siteName': widget.entry.siteName,
+      // 垫片 fm.res 同步算网关地址用（见 html_sdk.dart）。
+      'gatewayPort': _server?.port ?? 0,
     });
     final tag =
         '<script>window.__moyiSiteInfo=$siteInfo;</script>'
@@ -260,6 +388,8 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
     final siteInfo = jsonEncode({
       'siteKey': widget.entry.siteKey,
       'siteName': widget.entry.siteName,
+      // 垫片 fm.res 同步算网关地址用（见 html_sdk.dart）。
+      'gatewayPort': _server?.port ?? 0,
     });
     try {
       await controller.runJavaScript('window.__moyiSiteInfo=$siteInfo;');
@@ -348,30 +478,61 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     final error = _error;
+    final body = error != null
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(error, textAlign: TextAlign.center),
+            ),
+          )
+        : !_ready || _controller == null
+        ? const Center(child: CircularProgressIndicator())
+        : WebViewWidget(controller: _controller!);
+    // 沉浸模式的原生恢复入口：页面自绘返回（restoreAffordance none）
+    // 时不叠加；其余情况右上角给一个半透明恢复钮，点按回到
+    // 进入沉浸前的模式。返回键仍优先走 WebView 历史（见 _onPopInvoked）。
+    final showRestoreAffordance =
+        _chromeMode == 'immersive' && _restoreAffordance != 'none';
+    final padding = MediaQuery.maybePaddingOf(context) ?? EdgeInsets.zero;
     return PopScope(
       canPop: _allowPop,
       onPopInvokedWithResult: (didPop, _) => unawaited(_onPopInvoked(didPop)),
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(widget.entry.siteName),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: '刷新',
-              onPressed: () => unawaited(_controller?.reload()),
-            ),
-          ],
-        ),
-        body: error != null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(error, textAlign: TextAlign.center),
-                ),
+        appBar: _chromeMode == 'normal'
+            ? AppBar(
+                title: Text(widget.entry.siteName),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: '刷新',
+                    onPressed: () => unawaited(_controller?.reload()),
+                  ),
+                ],
               )
-            : !_ready || _controller == null
-            ? const Center(child: CircularProgressIndicator())
-            : WebViewWidget(controller: _controller!),
+            : null,
+        body: showRestoreAffordance
+            ? Stack(
+                children: [
+                  body,
+                  Positioned(
+                    top: padding.top + 8,
+                    right: 8,
+                    child: Material(
+                      color: Colors.black45,
+                      shape: const CircleBorder(),
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.fullscreen_exit,
+                          color: Colors.white,
+                        ),
+                        tooltip: '恢复界面',
+                        onPressed: () => unawaited(_restoreChrome()),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : body,
       ),
     );
   }

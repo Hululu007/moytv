@@ -41,11 +41,9 @@ GUID = str(uuid.uuid4())
 
 CATS = [
     ('video', '全部视频'),
-    ('game', 'Sex游戏'),
 ]
 
 HOME_SIZE = 30
-GAME_SIZE = 20
 SEARCH_SIZE = 25
 
 
@@ -318,36 +316,6 @@ def _video_cards(lst):
     return out
 
 
-def _game_cards(lst):
-    out = []
-    for it in lst or []:
-        if not isinstance(it, dict):
-            continue
-        gid = _str(it.get('id'))
-        if not gid:
-            continue
-        out.append({
-            'vod_id': 'g:' + gid,
-            'vod_name': 'Sex游戏 #' + gid,
-            'vod_pic': _fix_url(it.get('cover') or ''),
-            'vod_remarks': '',
-        })
-    return out
-
-
-def _parse_json_text(raw):
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            obj = json.loads(raw)
-            if isinstance(obj, list):
-                return obj
-        except Exception:
-            pass
-    return []
-
-
 def _norm_id(ids):
     if isinstance(ids, (list, tuple)):
         ids = ids[0] if ids else ''
@@ -384,15 +352,6 @@ class Spider(BaseSpider):
             total = 0
         return _video_cards(body.get('videoList')), total
 
-    def _games(self, pg):
-        body = _api('/mod/getGameList', {'page': pg, 'size': GAME_SIZE})
-        total = 0
-        try:
-            total = int(body.get('total') or 0)
-        except Exception:
-            total = 0
-        return _game_cards(body.get('gameList')), total
-
     def homeContent(self, filter=''):
         items, _ = self._home(1)
         return {
@@ -407,9 +366,8 @@ class Spider(BaseSpider):
     def categoryContent(self, tid, pg, filter=False, extend=None):
         pg = _norm_pg(pg)
         if tid == 'game':
-            items, total = self._games(pg)
-        else:
-            items, total = self._home(pg)
+            return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
+        items, total = self._home(pg)
         return {'list': items, 'page': pg, 'pagecount': 0, 'total': total}
 
     def _video_detail(self, vid):
@@ -421,71 +379,12 @@ class Spider(BaseSpider):
             return None
         return info
 
-    def _game_detail(self, gid):
-        body = _api('/mod/getGameDetail', {'id': gid})
-        info = body.get('gameDetail') if isinstance(body, dict) else None
-        if not isinstance(info, dict):
-            return None
-        if not _str(info.get('id')):
-            return None
-        vbody = _api('/mod/getGameVideoDetail', {'id': gid})
-        cmds = []
-        det = vbody.get('gameVideosDetail') if isinstance(vbody, dict) else None
-        if isinstance(det, dict):
-            cmds = _parse_json_text(det.get('modVideo'))
-        return info, cmds
-
     def detailContent(self, ids):
         nid = _norm_id(ids)
         if not nid:
             return {'list': []}
         if nid.startswith('g:'):
-            got = self._game_detail(nid[2:])
-            if not got:
-                return {'list': []}
-            info, cmds = got
-            title = _str(info.get('modName')) or ('Sex游戏 #' + nid[2:])
-            free = []
-            vip_count = 0
-            for c in cmds:
-                if not isinstance(c, dict):
-                    continue
-                name = _str(c.get('name') or c.get('key'))
-                key = _str(c.get('key'))
-                video = c.get('video') if isinstance(c.get('video'), dict) else {}
-                url = _fix_url(video.get('phone') or video.get('pc') or '')
-                if not name or not key or not url:
-                    continue
-                if c.get('isVip'):
-                    vip_count += 1
-                    continue
-                free.append('%s$guohnsqj:g:%s:%s' % (name, nid[2:], key))
-            stills = []
-            for im in _parse_json_text(info.get('modJeiTu')):
-                if isinstance(im, dict):
-                    u = _fix_url(im.get('imageUrl') or '')
-                    if u:
-                        stills.append(u)
-            parts = ['Sex游戏']
-            parts.append('免费指令 %d 个' % len(free))
-            if vip_count:
-                parts.append('VIP指令 %d 个需会员' % vip_count)
-            return {'list': [{
-                'vod_id': nid,
-                'vod_name': title,
-                'vod_pic': _fix_url(info.get('modCover') or ''),
-                'vod_actor': '',
-                'vod_director': '',
-                'vod_remarks': '免费 %d / 共 %d' % (len(free), len(free) + vip_count),
-                'vod_year': '',
-                'vod_area': '',
-                'vod_content': '\n'.join(parts),
-                'type_name': 'Sex游戏',
-                'vod_tag': 'Sex游戏',
-                'vod_play_from': '在线播放',
-                'vod_play_url': '#'.join(free),
-                'stills': stills[:8],
-            }]}
+            return {'list': []}
         if nid.startswith('v:'):
             vid = nid[2:]
         else:
@@ -546,23 +445,6 @@ class Spider(BaseSpider):
         stream = ''
         if raw.startswith('http'):
             stream = raw
-        elif raw.startswith('g:'):
-            parts = raw[2:].split(':', 1)
-            if len(parts) == 2:
-                got = self._game_detail(parts[0])
-                if got:
-                    _, cmds = got
-                    for c in cmds:
-                        if not isinstance(c, dict):
-                            continue
-                        if _str(c.get('key')) != parts[1]:
-                            continue
-                        if c.get('isVip'):
-                            stream = ''
-                            break
-                        video = c.get('video') if isinstance(c.get('video'), dict) else {}
-                        stream = _fix_url(video.get('phone') or video.get('pc') or '')
-                        break
         elif raw.startswith('v:'):
             parts = raw[2:].split(':')
             vid = parts[0]

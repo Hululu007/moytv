@@ -15,7 +15,9 @@ except Exception:
         class BaseSpider:
             pass
 
-BASE = 'https://5.hmav7598.cc:8888'
+BASES = ['https://5.hmav7911.cc:8888', 'https://5.hmav7912.cc:8888', 'https://5.hmav7913.cc:8888']
+BASE = BASES[0]
+_BASE_STATE = {'base': '', 'ts': 0}
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 CATEGORIES = [
@@ -110,6 +112,39 @@ def _unwrap(raw):
     return raw
 
 
+def _ensure_base():
+    global BASE
+    now = _now()
+    if _BASE_STATE['base'] and now - _BASE_STATE['ts'] < 600:
+        BASE = _BASE_STATE['base']
+        return BASE
+    for cand in BASES:
+        try:
+            body = _unwrap(_http_get(cand + '/', referer=cand + '/'))
+        except Exception:
+            body = ''
+        if body and 'vod-img' in body:
+            _BASE_STATE['base'] = cand
+            _BASE_STATE['ts'] = now
+            BASE = cand
+            return cand
+    _BASE_STATE['base'] = BASES[0]
+    _BASE_STATE['ts'] = now
+    BASE = BASES[0]
+    return BASE
+
+
+def _rebase(url):
+    try:
+        parts = urllib.parse.urlsplit(url)
+        base_parts = urllib.parse.urlsplit(BASE)
+        if parts.netloc and parts.netloc != base_parts.netloc:
+            url = urllib.parse.urlunsplit((base_parts.scheme, base_parts.netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        pass
+    return url
+
+
 def _txt(s):
     if not s:
         return ''
@@ -131,6 +166,8 @@ def _fmt_dur(sec):
 
 
 def _page(url):
+    _ensure_base()
+    url = _rebase(url)
     ck = 'P:' + url
     v = CACHE.get(ck)
     if v and _now() - v[0] < CACHE_TTL:

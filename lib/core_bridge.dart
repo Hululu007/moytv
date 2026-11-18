@@ -362,6 +362,30 @@ abstract class AppRepository {
   // 跨源聚合搜索：并发打所有给定站源，返回按标题/年份/集数归一去重后的结果。
   Future<CatalogPage> searchAcross(List<String> sources, String query);
 
+  /// 流式跨源搜索（O1 渐进显示用）：与 [searchAcross] 同款扇出
+  /// （同站源过滤、同腿划分、同单站预算），但每站回结果立即调
+  /// [onSite]（按完成顺序），不等全部站回完；返回的 Future 在
+  /// 全部站结束后完成，供调用方收尾。空结果的站不回调。
+  ///
+  /// [shouldStop]（O2 真取消）：扇出每取新站前检查，返回 true 时
+  /// 不再发起后续站，已回调的结果保留，Future 正常完成。
+  /// MethodChannel 在途调用与 Go 腿调用本身无法撤回——取消只
+  /// 做到 Dart 侧不再等待、不再发起后续站、结果不写回。
+  ///
+  /// 默认实现走批回 [searchAcross] 再按站拆开回调（供测试假仓
+  /// 与未覆写的实现用，到达顺序是整批、不流式，但结果集合一致）；
+  /// NativeRepository 覆写为真流式。
+  Future<void> searchAcrossProgressive(
+    List<String> sources,
+    String query, {
+    required void Function(String source, List<Drama> items) onSite,
+    bool Function()? shouldStop,
+  }) async {
+    if (shouldStop != null && shouldStop()) return;
+    final page = await searchAcross(sources, query);
+    _emitSiteItems(page.items, onSite, shouldStop);
+  }
+
   /// 搜索结果增量轮询（西瓜播放器推荐用）。guoapp3 核心无此通道，默认返回空页，
   /// 调用方以首轮完整结果为准。
   Future<CatalogPage> searchProgress(String source, String query) async =>
@@ -679,6 +703,30 @@ String searchAcrossFailureWarning(List<String> failedSources) {
   ]..sort();
   if (labels.length == 1) return '${labels.single} 未返回结果';
   return '${labels.first} 等 ${labels.length} 个站源未返回结果';
+}
+
+/// 把一批搜索结果按站拆开回调（流式搜索里 Go 腿整批回的拆包、
+/// 以及默认批回退路的拆包共用）：同一站的条目合并为一次回调，
+/// 顺序按该站在结果里首次出现；回调间检查 [shouldStop]，停了
+/// 就不再回调后续站。空站不回调。
+void _emitSiteItems(
+  List<Drama> items,
+  void Function(String source, List<Drama> items) onSite,
+  bool Function()? shouldStop,
+) {
+  final bySource = <String, List<Drama>>{};
+  final order = <String>[];
+  for (final drama in items) {
+    final list = bySource.putIfAbsent(drama.source, () {
+      order.add(drama.source);
+      return <Drama>[];
+    });
+    list.add(drama);
+  }
+  for (final source in order) {
+    if (shouldStop != null && shouldStop()) return;
+    onSite(source, bySource[source]!);
+  }
 }
 
 /// 封面字节归一：有些站的封面地址回的不是图片本身，而是一段
@@ -2378,6 +2426,105 @@ class NativeRepository extends AppRepository {
       fresh: true,
       warning: searchAcrossFailureWarning(failures),
     );
+  }
+
+  @override
+  Future<void> searchAcrossProgressive(
+    List<String> sources,
+    String query, {
+    required void Function(String source, List<Drama> items) onSite,
+    bool Function()? shouldStop,
+  }) async {
+    // 站源过滤与腿划分与 searchAcross 同款（两处各写一份，批回
+    // 语义一字不动；改划分时两处一起改）。
+    final store = access;
+    if (store != null) {
+      sources = [
+        for (final source in sources)
+          if (store.siteVisible(source)) source,
+      ];
+    }
+    sources = {
+      for (final source in sources)
+        JarHaijiaoTakeover.goSourceForJarSite(source) ?? source,
+    }.toList();
+    final jarSources = sources.where(JarBridge.isJarSource).toList();
+    final pyTargets = sources.where(isPySource).toList();
+    final jsTargets = sources.where(isJsSource).toList();
+    final rest = sources
+        .where(
+          (source) =>
+              !JarBridge.isJarSource(source) &&
+              !isPySource(source) &&
+              !isJsSource(source),
+        )
+        .toList();
+    if (shouldStop != null && shouldStop()) return;
+    if (jarSources.isEmpty && pyTargets.isEmpty && jsTargets.isEmpty) {
+      // 纯 Go 腿：Go 侧一次整批回，拆包后按站回调；抛错语义与
+      // 批回 searchAcross 一致（上抛，调用方记本腿失败）。在途
+      // 调用无法撤回，停了也只能等它回完、结果不写回。
+      final corePage = CatalogPage.fromJson(
+        await _call({
+          'action': 'searchAcross',
+          'sources': sources,
+          'query': query,
+        }),
+      );
+      _emitSiteItems(corePage.items, onSite, shouldStop);
+      return;
+    }
+    // 混合搜索：Go 腿与 jar/py/js 腿并发跑；jar/py/js 腿逐站回调
+    // 先出，Go 腿整批结果后到时再按站追加。单站失败只丢该站不
+    // 抛错（与批回同口径；流式无处挂 warning，失败站静默丢弃，
+    // 页面只看结果条目）。
+    Future<List<Drama>> restLeg() async {
+      if (rest.isEmpty) return const [];
+      try {
+        final corePage = CatalogPage.fromJson(
+          await _call({
+            'action': 'searchAcross',
+            'sources': rest,
+            'query': query,
+          }),
+        );
+        return corePage.items;
+      } catch (_) {
+        return const [];
+      }
+    }
+
+    final legs = <({String source, Future<CatalogPage> Function() run})>[
+      for (final source in jarSources)
+        (
+          source: source,
+          run: () =>
+              _jarCall(source, (spec) => JarBridge.catalog(spec, query: query)),
+        ),
+      for (final target in pyTargets)
+        (source: target, run: () => catalog(target, query: query)),
+      for (final target in jsTargets)
+        (source: target, run: () => catalog(target, query: query)),
+    ];
+    final restFuture = restLeg();
+    await fanoutEach(legs, (leg) async {
+      try {
+        final page = await leg.run().timeout(_searchPerSiteTimeout);
+        return page.items;
+      } catch (_) {
+        return const <Drama>[];
+      }
+    },
+        onResult: (leg, items) {
+          if (items.isNotEmpty) onSite(leg.source, items);
+        },
+        concurrency: 6,
+        shouldStop: shouldStop);
+    // 取消后不再等 Go 腿：restLeg 内部已吞错，悬空的 Future 只会
+    // 正常完成，不留未处理错误；结果不写回。
+    if (shouldStop != null && shouldStop()) return;
+    final restItems = await restFuture;
+    _emitSiteItems(restItems, onSite, shouldStop);
   }
 
   @override

@@ -1,5 +1,5 @@
 var Apollo = {
-    version: "2026091004",
+    version: "20250425",
     empty: "hiker://empty",
     url: "https://7mmtv.sx/zh/",
     d: [],
@@ -272,8 +272,12 @@ var Apollo = {
         })
         log(url)
         try {
-            var next = pdfh(html, "body&&.pagination-row&&.previous-next:matches(>)&&a&&href")
-            putMyVar("nextPage", next);
+            var pgNext = "";
+            var pgLinks = pdfa(html, "body&&.pagination-row&&a");
+            for (var pgi = 0; pgi < pgLinks.length; pgi++) {
+                if (pdfh(pgLinks[pgi], "a&&Text").trim() === ">") { pgNext = pdfh(pgLinks[pgi], "a&&href"); break; }
+            }
+            if (pgNext) { putMyVar("nextPage", pgNext); } else { clearMyVar("nextPage"); }
         } catch {
             clearMyVar("nextPage");
             //log("可能不存在下一页或者下一页定位有问题");
@@ -327,7 +331,7 @@ var Apollo = {
                     desc: pdfh(item, ".small&&Text"),
                     img: pdfh(item, "img&&data-src").replace(/\/m\//, "/b/").replace(/\/s\//, "/b/").replace(/hcomic\/b\//, "hcomic/s/"),
                     url: url + $('#noHistory#').rule(() => {
-                        const Apollo = (function(){var m=null;try{m=$.require('hiker://files/rules/Apollo/𝟕𝐌𝐌𝐓𝐕.js',true);}catch(e){}if(!m||typeof m!=='object'||!Object.keys(m).length){m=$.require('hiker://page/Apollo');}return m;})()
+                        const Apollo = $.require('hiker://page/Apollo')
                         Apollo.videoParse(MY_URL)
                         setResult(Apollo.d)
                     }),
@@ -357,7 +361,7 @@ var Apollo = {
         }
         lazy = $('#noHistory#')
             .rule(() => {
-                const Apollo = (function(){var m=null;try{m=$.require('hiker://files/rules/Apollo/𝟕𝐌𝐌𝐓𝐕.js',true);}catch(e){}if(!m||typeof m!=='object'||!Object.keys(m).length){m=$.require('hiker://page/Apollo?rule=𝟕𝐌𝐌𝐓𝐕');}return m;})()
+                const Apollo = $.require('hiker://page/Apollo?rule=𝟕𝐌𝐌𝐓𝐕')
                 Apollo.videoParse(MY_URL)
                 setResult(Apollo.d)
             })
@@ -389,7 +393,7 @@ var Apollo = {
         } catch {
             var lastpagenum = currpagenum
         }
-        var list = pdfa(html, "body&&.video||.comics");
+        var list = pdfa(html, "body&&.video,.comics");
         list.forEach(item => {
             var vurl = pdfh(item, 'a&&href');
             var preview = pdfh(item, "video&&data-src");
@@ -505,8 +509,12 @@ var Apollo = {
         })
         log(url)
         try {
-            var next = pdfh(html, "body&&.pagination-row&&.previous-next:matches(>)&&a&&href")
-            putMyVar("nextPage1", next);
+            var pgNext = "";
+            var pgLinks = pdfa(html, "body&&.pagination-row&&a");
+            for (var pgi = 0; pgi < pgLinks.length; pgi++) {
+                if (pdfh(pgLinks[pgi], "a&&Text").trim() === ">") { pgNext = pdfh(pgLinks[pgi], "a&&href"); break; }
+            }
+            if (pgNext) { putMyVar("nextPage1", pgNext); } else { clearMyVar("nextPage1"); }
         } catch {
             clearMyVar("nextPage1");
             // log("可能不存在下一页或者下一页定位有问题");
@@ -536,7 +544,7 @@ var Apollo = {
         log(url)
         var yiji = $('#fypage#noHistory#')
             .rule(() => {
-                const Apollo = (function(){var m=null;try{m=$.require('hiker://files/rules/Apollo/𝟕𝐌𝐌𝐓𝐕.js',true);}catch(e){}if(!m||typeof m!=='object'||!Object.keys(m).length){m=$.require('hiker://page/Apollo?rule=𝟕𝐌𝐌𝐓𝐕');}return m;})()
+                const Apollo = $.require('hiker://page/Apollo?rule=𝟕𝐌𝐌𝐓𝐕')
                 Apollo.avatarParse(MY_URL)
                 setResult(Apollo.d)
             })
@@ -608,18 +616,14 @@ var Apollo = {
 
         try {
             var content = pdfh(html, ".video-introduction-images-text&&Text")
-            if (content != "") {
-                Apollo.setDesc(content, lazypic)
-            } else {
-                Apollo.d.push({
-                    title: "<a style='text-decoration: none;fontcolor:red;' href='" + lazypic + "'>預覽和介紹</a>：" + "曾经沧海难为水，除却巫山不是云。取次花丛懒回顾，半缘修道半缘君。\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t------元稹".fontcolor("grey").small(),
-                    url: Apollo.empty,
-                    col_type: "rich_text",
-                    extra: {
-                        lineVisible: false
-                    }
-                })
-            }
+            Apollo.d.push({
+                title: "<a style='text-decoration: none;fontcolor:red;' href='" + lazypic + "'>預覽和介紹</a>：" + (content != "" ? content : "曾经沧海难为水，除却巫山不是云。取次花丛懒回顾，半缘修道半缘君。\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t------元稹").fontcolor("grey").small(),
+                url: Apollo.empty,
+                col_type: "rich_text",
+                extra: {
+                    lineVisible: false
+                }
+            })
         } catch {}
 
         Apollo.PlayParse(html)
@@ -901,15 +905,12 @@ var Apollo = {
                 return match ? parseInt(match[1], 10) : 0; // 如果没有匹配则返回0
             }
             let videoUrl = '';
-            function rfetch(u, h) { var r = ''; for (var ri = 0; ri < 3; ri++) { r = fetch(u, h); if (r && r.length > 50) break; } return r; }
-            var html = rfetch(input)
+            var html = fetch(input)
             //log(html)
             if (input.indexOf("7mmtv.sx/assets") != -1) {
                 //TV线路42    
-                if (!html) return "toast://首次加载失败，请再点一次重试";
-                var group = html.match(/const videoSources[^;]+/);
-                if (!group) return "toast://页面解析失败，请再点一次重试";
-                eval(group[0])
+                var group = html.match(/const videoSources[^;]+/)[0]
+                eval(group.replace(/^const videoSources/, 'var videoSources'))
                 sortedData = videoSources.sort((a, b) => b.size - a.size);
                 var sortedNames = sortedData.map(item => item.size);
                 var sortedUrls = sortedData.map(item => item.src);
@@ -923,23 +924,19 @@ var Apollo = {
                 return playlist;
             } else if (input.indexOf("7mmtv.sx") != -1) {
                 //TV线路40               
-                if (!html) return "toast://首次加载失败，请再点一次重试";
-                var s = html.match(/src.?=[^\>]+/);
-                if (!s) return "toast://页面解析失败，请再点一次重试";
-                eval(s[0])
-                var request = rfetch(src);
-                if (!request) return "toast://线路请求失败，请再点一次重试";
+                var s = html.match(/src.?=[^\>]+/)[0];
+                eval(s)
+                var request = fetch(src);
                 let playUrl = request.match(/https.*?m3u8/)[0];
-                var group_quality = rfetch(playUrl, {
+                var group_quality = fetch(playUrl, {
                     headers: {
                         'Referer': input
                     }
                 });
-                if (!group_quality || !/\d/.test(group_quality)) return "toast://清单获取失败，请再点一次重试";
                 //log(group_quality)
-                hghest_quality = (group_quality.match(/^[^#\s]+$/gm) || []).map(v => v.includes("http") ? v + "#isVideo=true#" : playUrl.replace(/[^\/]+$/, v))
+                hghest_quality = group_quality.match(/^[^#\s]+$/gm).map(v => v.includes("http") ? v + "#isVideo=true#" : playUrl.replace(/[^\/]+$/, v))
                 //log(hghest_quality)
-                name_quality = (group_quality.match(/RESOLUTION=.*?\,/gm) || []).map(n => n.replace(/RESOLUTION=|\,/g, ""))
+                name_quality = group_quality.match(/RESOLUTION=.*?\,/gm).map(n => n.replace(/RESOLUTION=|\,/g, ""))
 
                 // 按分辨率降序排序 分辨率 数组，并同时调整 hghest_quality
                 var sortedData = name_quality.map((name, index) => ({
@@ -979,21 +976,18 @@ var Apollo = {
 
             } else if (input.indexOf("mm") != -1) {
                 //线路SW37+VH线路38
-                if (!html) return "toast://首次加载失败，请再点一次重试";
-                var script = html.match(/eval(.*\))/);
-                if (!script) return "toast://页面解析失败，请再点一次重试";
-                playUrl = eval(script[1]).match(/(https?.*?)"/)[1]
-                var group_quality = rfetch(playUrl, {
+                var script = html.match(/eval(.*\))/)[1]
+                playUrl = eval(script).match(/(https?.*?)"/)[1]
+                var group_quality = fetch(playUrl, {
                     headers: {
                         'Referer': input
                     }
                 });
-                if (!group_quality) return "toast://清单获取失败，请再点一次重试";
                 group_quality = group_quality.split("\n\n")[0]
                 // log(group_quality)
-                hghest_quality = (group_quality.match(/^[^#\s]+$/gm) || []).map(v => v.includes("http") ? v + "#isVideo=true#" : playUrl.replace(/[^\/]+$/, v + "#.m3u8"))
+                hghest_quality = group_quality.match(/^[^#\s]+$/gm).map(v => v.includes("http") ? v + "#isVideo=true#" : playUrl.replace(/[^\/]+$/, v + "#.m3u8"))
                 //log(hghest_quality)
-                name_quality = (group_quality.match(/RESOLUTION=.*?\,/gm) || []).map(n => n.replace(/RESOLUTION=|\,/g, ""))
+                name_quality = group_quality.match(/RESOLUTION=.*?\,/gm).map(n => n.replace(/RESOLUTION=|\,/g, ""))
 
                 // 按分辨率降序排序 分辨率 数组，并同时调整 hghest_quality
                 var sortedData = name_quality.map((name, index) => ({
@@ -1095,11 +1089,11 @@ var Apollo = {
         Apollo.d.push({
             col_type: 'blank_block',
         })
-        var codelazy = fetch('hiker://files/rules/Apollo/𝐂𝐨𝐝𝐞𝐋𝐚𝐳𝐲.js') || "";
+        var codelazy = fetch('hiker://files/rules/Apollo/CodeLazy.js') || "";
         if (!codelazy || codelazy == 'null' || codelazy == 'undefined') {
             Apollo.d.push({
-                title: '““””<font color="#FF0000">本地 𝐂𝐨𝐝𝐞𝐋𝐚𝐳𝐲.js 不存在</font>',
-                desc: '请把统一维护的 𝐂𝐨𝐝𝐞𝐋𝐚𝐳𝐲.js 放到 hiker://files/rules/Apollo/𝐂𝐨𝐝𝐞𝐋𝐚𝐳𝐲.js；本规则不会远程下载或覆盖。',
+                title: '““””<font color="#FF0000">本地 CodeLazy.js 不存在</font>',
+                desc: '请把统一维护的 CodeLazy.js 放到 hiker://files/rules/Apollo/CodeLazy.js；本规则不会远程下载或覆盖。',
                 url: 'hiker://empty',
                 col_type: 'text_center_1',
                 extra: { lineVisible: false }
@@ -1121,94 +1115,7 @@ var Apollo = {
                 extra: { lineVisible: false }
             })
         }
-    },
-
-    //剧情简介（123AV 同款富文本折叠展开）
-    setDesc: (desc, lazypic) => {
-        function substr(str, maxLength) {
-            let len = 0;
-            for (let i = 0; i < str.length; i++) {
-                if (str.charCodeAt(i) > 255) {
-                    len += 2;
-                } else {
-                    len++;
-                }
-                if (len > maxLength) {
-                    return str.slice(0, i) + '...';
-                }
-            }
-            return str;
-        }
-
-        function setDesc(arr, desc, num) {
-            //log(desc)
-            if (desc == undefined) {
-                return;
-            }
-            desc = desc.constructor == Array ? desc.join('<br>') : desc;
-            if (desc.replace(/(<br>|\s+|<\/?p>|&nbsp;)/g, '').length == 0) {
-                return;
-            }
-
-            const mark = 'desc';
-            num = typeof(num) == 'undefined' ? 100 : num
-            desc = desc.startsWith('　　') ? desc : '　　' + desc;
-            desc = desc.replace(/'/g, "&#39;");
-            desc = desc.replace(/\r\n/g, "<br>");
-            desc = desc.replace(/\r/g, "<br>");
-            desc = desc.replace(/\n/g, "<br>");
-            let sdesc = substr(desc, num);
-
-            var colors = {
-                show: "#008B8B",
-                hide: "#8A2BE2"
-            }
-
-            var lazy = $(`#noLoading#`).b64().lazyRule((dc, sdc, m, cs) => {
-                var show = storage0.getItem(m, '0');
-                var title = findItem('desc').title;
-                var re = /(<\/big><br>.*?>).+/g;
-                var exp = '展开:';
-                var ret = '收起:';
-                if (show == '1') {
-                    updateItem('desc', {
-                        title: title
-                            .replace(ret, exp)
-                            .replace(re, '$1' + sdc + '</small>')
-                            .replace(/(<\/big><br>\<font color=").*?(">)/, '$1' + cs.hide + '$2')
-
-                    })
-                    storage0.setItem(m, '0');
-                } else {
-                    updateItem('desc', {
-                        title: title
-                            .replace(exp, ret)
-                            .replace(re, '$1' + dc + '</small>')
-                            .replace(/(<\/big><br>\<font color=").*?(">)/, '$1' + cs.show + '$2')
-                    })
-                    storage0.setItem(m, '1');
-                }
-                return `hiker://empty`
-            }, desc, sdesc, mark, colors)
-            var sc = storage0.getItem(mark, '0') == '0' ? '展开:' : '收起:';
-            var dc = storage0.getItem(mark, '0') == '0' ? sdesc : desc;
-            var cs = storage0.getItem(mark, '0') == '0' ? colors.hide : colors.show;
-            var descTitle = '<b><font color="">∷ 剧情简介\t</font></b>';
-            if (lazypic) descTitle = "<a style='text-decoration: none;' href='" + lazypic + "'>" + descTitle + "</a>";
-            arr.push({
-                title: descTitle + "<middle><a style='text-decoration: none;' href='" + lazy + "'>" + sc + '</a></big><br><font color="' + cs + '">' + dc + '</small>',
-                col_type: 'rich_text',
-                extra: {
-                    id: 'desc',
-                    lineSpacing: 6,
-                    textSize: 15,
-                    lineVisible: true,
-                }
-            })
-        }
-
-        setDesc(Apollo.d, desc, 90);
-    },
+    }
 
 }
 

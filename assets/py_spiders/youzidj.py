@@ -109,7 +109,9 @@ def _http_get(url, referer=None, timeout=30):
             except Exception:
                 pass
         try:
-            req = urllib.request.Request(url, headers=h)
+            h2 = dict(h)
+            h2['Accept-Encoding'] = 'identity'
+            req = urllib.request.Request(url, headers=h2)
             with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as resp:
                 data = resp.read()
                 enc = (resp.headers.get('Content-Encoding') or '').lower()
@@ -124,6 +126,20 @@ def _http_get(url, referer=None, timeout=30):
                 return e.read().decode('utf-8', 'ignore')
             except http.client.IncompleteRead as ie:
                 return ie.partial.decode('utf-8', 'ignore')
+        except http.client.IncompleteRead as ie:
+            try:
+                data = ie.partial or b''
+                if data[:2] == b'\x1f\x8b':
+                    try:
+                        import zlib
+                        data = zlib.decompressobj(31).decompress(data)
+                    except Exception:
+                        data = b''
+                text = data.decode('utf-8', 'replace')
+                if text.strip():
+                    return text
+            except Exception:
+                pass
         except Exception:
             pass
         time.sleep(1)
@@ -143,9 +159,25 @@ def _playback(video_id, referer):
     }
     if referer:
         h['Referer'] = referer
+    age_h = {
+        'User-Agent': UA,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': BASE,
+        'Referer': BASE + '/',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Dest': 'document',
+    }
+    age_body = urllib.parse.urlencode({'decision': 'accepted', 'return_to': '/'}).encode('utf-8')
     if _HAS_REQ:
         try:
             sess = requests.Session()
+            try:
+                sess.post('%s/age-check' % BASE, headers=age_h, data=age_body, timeout=30)
+            except Exception:
+                pass
             sess.post('%s/api/account/bootstrap' % BASE, headers=h, data=b'{}', timeout=30)
             r = sess.post(api, headers=h, data=b'{}', timeout=30)
             cookie = '; '.join('%s=%s' % (c.name, c.value) for c in sess.cookies if c.name.startswith('eden_'))
@@ -160,17 +192,31 @@ def _playback(video_id, referer):
     try:
         import http.cookiejar
         cj = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-        for target in ('%s/api/account/bootstrap' % BASE, api):
-            req = urllib.request.Request(target, data=b'{}', headers=h, method='POST')
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=_ctx()),
+            urllib.request.HTTPCookieProcessor(cj))
+
+        def _post(target, data, headers):
+            req = urllib.request.Request(target, data=data, headers=headers, method='POST')
             try:
                 with opener.open(req, timeout=30) as resp:
-                    body = resp.read().decode('utf-8', 'replace')
+                    try:
+                        return resp.status, resp.read().decode('utf-8', 'replace')
+                    except http.client.IncompleteRead as ie:
+                        return resp.status, (ie.partial or b'').decode('utf-8', 'ignore')
             except urllib.error.HTTPError as e:
-                body = e.read().decode('utf-8', 'ignore')
-                if target == api:
-                    return '', '; '.join('%s=%s' % (c.name, c.value) for c in cj if c.name.startswith('eden_'))
-                body = ''
+                try:
+                    return e.code, e.read().decode('utf-8', 'ignore')
+                except http.client.IncompleteRead as ie:
+                    return e.code, (ie.partial or b'').decode('utf-8', 'ignore')
+            except http.client.IncompleteRead as ie:
+                return 200, (ie.partial or b'').decode('utf-8', 'ignore')
+            except Exception:
+                return 0, ''
+
+        _post('%s/age-check' % BASE, age_body, age_h)
+        _post('%s/api/account/bootstrap' % BASE, b'{}', h)
+        _status, body = _post(api, b'{}', h)
         cookie = '; '.join('%s=%s' % (c.name, c.value) for c in cj if c.name.startswith('eden_'))
         try:
             return (json.loads(body).get('url') or '').strip(), cookie

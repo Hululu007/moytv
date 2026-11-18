@@ -44,6 +44,14 @@ CATS = [
     ('2037', '91探花'),
 ]
 
+FLAG_WORDS = ['loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年',
+              '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉']
+
+
+def _is_flagged(name):
+    low = str(name or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
+
 
 def _gf_mul(a, b):
     p = 0
@@ -356,11 +364,11 @@ class Spider(BaseSpider):
                     continue
                 cid = _str(it.get('id'))
                 name = it.get('name') or ''
-                if cid and name:
+                if cid and name and not _is_flagged(name):
                     out.append((cid, name))
             if out:
                 return out
-        return list(CATS)
+        return [c for c in CATS if not _is_flagged(c[1])]
 
     def _catalog(self, tid, pg):
         path = '/videos?category_id=%s&page=%s&ps=28' % (urllib.parse.quote(tid), pg)

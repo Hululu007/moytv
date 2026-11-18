@@ -80,14 +80,21 @@ class _CatalogFiltersState extends State<CatalogFilters> {
       if (levels.level2.isNotEmpty) levels.level2,
     ];
     final chipHeight = compactChipHeight(context);
+    final heights = <double>[
+      largeCompactChipHeight(context),
+      for (var i = 1; i < rows.length; i++) chipHeight,
+    ];
+    final totalHeight =
+        heights.fold<double>(0, (sum, h) => sum + h) +
+        (rows.length > 1 ? 4 : 0);
     return SizedBox(
-      height: chipHeight * rows.length + (rows.length > 1 ? 4 : 0),
+      height: totalHeight,
       child: Column(
         children: [
           for (var i = 0; i < rows.length; i++) ...[
             if (i > 0) const SizedBox(height: 4),
             SizedBox(
-              height: chipHeight,
+              height: heights[i],
               child: Row(
                 children: [
                   Expanded(child: _chipRow(i, rows[i])),
@@ -158,6 +165,7 @@ class _CatalogFiltersState extends State<CatalogFilters> {
                 key: ValueKey('category-${entry.id}'),
                 label: entry.name,
                 selected: entry.id == widget.category,
+                large: rowIndex == 0,
                 onSelected: () => widget.onCategory(entry.id),
               ),
             ),

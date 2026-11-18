@@ -28,8 +28,10 @@ List<String> actressSearchSiteIds(LocalStore store) => [
 /// - 番号路：对仍无封面的作品按番号逐个搜（每轮上限 120 个、并发 4），
 ///   只补已有行，不新增；
 /// - 两路结果都按归一化番号去重（无番号按标题键），同一部只留一张卡；
-/// - 搜过的结果写进库，下次打开同一人物直接读缓存（[ActressPerson.enrichedAt]
-///   非空即跳过）；失败的站静默跳过，不弹错、不挡列表；
+/// - 搜过的结果写进库；已记 enrichedAt 且全部作品已有封面时下次
+///   打开不再跑（[ActressPerson.enrichedAt] 非空且无无封面作品才跳
+///   过——只看 enrichedAt 会把同步窗口期打开过的人永久锁死在无封
+///   面状态）；失败的站静默跳过，不弹错、不挡列表；
 /// - 来源信息只写进库内字段供封面解析用，界面绝不显示。
 class ActressEnrichment {
   ActressEnrichment({
@@ -49,8 +51,10 @@ class ActressEnrichment {
   final int nameHitsCap;
 
   /// 跑一轮补全。返回 true 表示本轮已把能查的都查完（调用方记
-  /// enrichedAt，下次打开不再跑）；返回 false 表示番号路触到上限，
-  /// 还有没查的作品，下次打开继续。
+  /// enrichedAt，下次打开符合跳过条件时不再跑）；返回 false 表示
+  /// 本轮没查完（作品还没同步进来、番号路触到上限或中途取消），
+  /// 下次打开继续。作品为空时必须返回 false：返回 true 会让调用
+  /// 方记 enrichedAt，作品随后进来也再也不补（中毒标记）。
   ///
   /// whos 追加输入默认关闭：[whosDetailEnabled] 为 false（默认）或
   /// 未传 [whosSource]/[whosFetch] 时，行为与此前一字不差。
@@ -62,9 +66,17 @@ class ActressEnrichment {
     ActressHttpFetch? whosFetch,
     bool whosDetailEnabled = false,
   }) async {
-    if (person.enrichedAt != null) return true;
     final works = await _allWorks(person.localId);
-    if (works.isEmpty) return true;
+    // 作品还没同步进来：什么都没查到，不算完成，调用方不得记
+    // enrichedAt，否则作品进来后也再也不补。
+    if (works.isEmpty) return false;
+    // 已补过且全部作品已有封面：跳过。跳过条件不能只看
+    // enrichedAt：同步窗口期打开过的人会被记上 enrichedAt，作品
+    // 进来后仍有无封面作品时必须重新补。
+    if (person.enrichedAt != null &&
+        !works.any((work) => !work.hasCover)) {
+      return true;
+    }
     if (isCancelled?.call() == true) return false;
 
     final siteIds = actressSearchSiteIds(store);

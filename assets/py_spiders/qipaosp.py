@@ -33,6 +33,13 @@ RE_CAT = re.compile(r'href="/category/(cate\d+)/"[^>]*>([^<]+)</a>')
 RE_OGIMG = re.compile(r'property="og:image" content="([^"]+)"')
 RE_DESC = re.compile(r'name="description" content="([^"]+)"')
 RE_M3U8 = re.compile(r'data-url="([^"]+\.m3u8[^"]*)"')
+BLOCKED_CAT_IDS = {'cate36'}
+FLAG_WORDS = ('loli', 'lolita', '幼女', '幼齿', '初中生', '小学生', '未成年', '未满', '萝莉', '童颜', '幼态', '处女', '小萝莉')
+
+
+def _blocked(text):
+    low = str(text or '').lower()
+    return any(w.lower() in low for w in FLAG_WORDS)
 
 
 def _http_get(url, referer=None, timeout=25):
@@ -104,6 +111,8 @@ def _parse_cards(html):
             name = _txt(hm2.group(1)) if hm2 else ''
         if not name:
             continue
+        if _blocked(name):
+            continue
         im = RE_IMG.search(block)
         pic = im.group(1) if im else ''
         if not pic:
@@ -129,8 +138,11 @@ def _parse_cats(html):
             continue
         seen.add(tid)
         name = _txt(name)
-        if name:
-            out.append({'type_id': tid, 'type_name': name})
+        if not name:
+            continue
+        if tid in BLOCKED_CAT_IDS or _blocked(name):
+            continue
+        out.append({'type_id': tid, 'type_name': name})
     return out
 
 
@@ -177,6 +189,8 @@ class Spider(BaseSpider):
     def categoryContent(self, tid, pg, filter=False, extend=None):
         tid = str(tid or '').strip()
         pg = _norm_pg(pg)
+        if tid in BLOCKED_CAT_IDS:
+            return {'list': [], 'page': pg, 'pagecount': 0, 'total': 0}
         if pg <= 1:
             path = '/category/%s/' % tid
         else:
@@ -198,6 +212,8 @@ class Spider(BaseSpider):
             if title.endswith(' - 气泡视频'):
                 title = title[:-len(' - 气泡视频')].strip()
         if not title:
+            return {'list': []}
+        if _blocked(title):
             return {'list': []}
         im = RE_OGIMG.search(html)
         pic = im.group(1) if im else ''

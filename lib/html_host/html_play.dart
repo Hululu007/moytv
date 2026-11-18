@@ -71,10 +71,18 @@ List<HtmlPlayEpisode> parseHtmlVodPlayUrl(
 }
 
 void _checkResolver(Map map) {
+  // mediaUrl 是已解析好的真实地址，有它不再回调解析器。
+  if ((map['mediaUrl'] ?? '').toString().trim().isNotEmpty) return;
   final resolver = map['resolver'];
   if (resolver != null &&
       !(resolver is String && resolver.trim().isEmpty) &&
       !(resolver is bool && !resolver)) {
+    throw const HtmlResolverUnsupported();
+  }
+  // 指南 §5 的字段名是 resolve（布尔）：true 表示点集才回调页面解析。
+  final resolve = map['resolve'];
+  if (resolve == true ||
+      (resolve is String && resolve.trim().isNotEmpty)) {
     throw const HtmlResolverUnsupported();
   }
 }
@@ -90,7 +98,9 @@ List<HtmlPlayEpisode> _episodesFromList(
     if (item is Map) {
       _checkResolver(item);
       final url =
-          (item['url'] ?? item['playUrl'] ?? item['src'] ?? '').toString().trim();
+          (item['mediaUrl'] ?? item['url'] ?? item['playUrl'] ?? item['src'] ?? '')
+              .toString()
+              .trim();
       if (url.isEmpty) continue;
       final name =
           (item['name'] ?? item['title'] ?? '').toString().trim();
@@ -175,7 +185,9 @@ List<HtmlPlayEpisode> _episodesFromInput(
       }
     }
     final direct =
-        (input['url'] ?? input['playUrl'] ?? input['src'] ?? '').toString().trim();
+        (input['mediaUrl'] ?? input['url'] ?? input['playUrl'] ?? input['src'] ?? '')
+            .toString()
+            .trim();
     if (direct.isNotEmpty) {
       final name = (input['name'] ?? input['title'] ?? '').toString().trim();
       return [
@@ -197,6 +209,8 @@ List<HtmlPlayEpisode> _episodesFromInput(
       'subtitle',
       'subtitleUrl',
       'resolver',
+      'resolve',
+      'mediaUrl',
       'line',
       'episodes',
       'list',
@@ -258,17 +272,34 @@ HtmlPlayRequest parseHtmlPlayPayload(
   String title = '';
   String subtitleUrl = '';
   var initialIndex = 0;
+  var hasExplicitIndex = false;
+  String mark = '';
   dynamic episodeInput = payload;
   if (payload is Map) {
     _checkResolver(payload);
     headers.addAll(_stringHeaders(payload['headers']));
-    title = (payload['title'] ?? payload['name'] ?? '').toString().trim();
+    title = (payload['title'] ?? payload['name'] ?? payload['vod_name'] ?? '')
+        .toString()
+        .trim();
     subtitleUrl =
         (payload['subtitle'] ?? payload['subtitleUrl'] ?? '').toString().trim();
     final rawIndex = payload['index'] ?? payload['initialIndex'];
-    if (rawIndex is num) initialIndex = rawIndex.toInt();
+    if (rawIndex is num) {
+      initialIndex = rawIndex.toInt();
+      hasExplicitIndex = true;
+    }
+    mark = (payload['mark'] ?? '').toString().trim();
     episodeInput =
         payload['episodes'] ?? payload['list'] ?? payload['urls'] ?? payload;
+    if (episodeInput is List && episodeInput.isEmpty) episodeInput = payload;
+    if (identical(episodeInput, payload)) {
+      // 只有 vod_play_url 串、没有 episodes 列表时（如指南 §5 的
+      // vodInline 载荷简写），按 $$$ 分线路展平成选集。
+      final playUrl = payload['vod_play_url'];
+      if (playUrl is String && playUrl.trim().isNotEmpty) {
+        episodeInput = playUrl.split('\$\$\$');
+      }
+    }
   }
   final episodes = parseHtmlPlayEpisodes(
     episodeInput,
@@ -276,6 +307,10 @@ HtmlPlayRequest parseHtmlPlayPayload(
   );
   if (episodes.isEmpty) {
     throw const FormatException('no playable url in payload');
+  }
+  if (!hasExplicitIndex && episodeInput is List) {
+    final marked = _initialIndexFromMarkers(episodeInput, episodes, mark);
+    if (marked != null) initialIndex = marked;
   }
   if (initialIndex < 0) initialIndex = 0;
   if (initialIndex >= episodes.length) initialIndex = episodes.length - 1;
@@ -286,6 +321,30 @@ HtmlPlayRequest parseHtmlPlayPayload(
     headers: headers,
     subtitleUrl: subtitleUrl,
   );
+}
+
+/// mark/active 起播集：按集名匹配（active 优先于 mark）；
+// 找不到名字匹配时返回 null（起播集保持默认 0）。
+int? _initialIndexFromMarkers(
+  List input,
+  List<HtmlPlayEpisode> episodes,
+  String mark,
+) {
+  var target = mark;
+  for (final item in input) {
+    if (item is Map && item['active'] == true) {
+      final name = (item['name'] ?? item['label'] ?? item['title'] ?? '')
+          .toString()
+          .trim();
+      if (name.isNotEmpty) target = name;
+      break;
+    }
+  }
+  if (target.isEmpty) return null;
+  for (var i = 0; i < episodes.length; i++) {
+    if (episodes[i].name == target) return i;
+  }
+  return null;
 }
 
 /// 播放入口：按首集地址分流——novel:// 与 pics:// 进阅读/看图页，
@@ -416,7 +475,10 @@ HtmlVodDetail parseHtmlVodPayload(Map<String, dynamic> payload) {
         );
       }
     } else {
-      final direct = (payload['url'] ?? payload['src'] ?? '').toString().trim();
+      final direct =
+          (payload['mediaUrl'] ?? payload['url'] ?? payload['src'] ?? '')
+              .toString()
+              .trim();
       if (direct.isNotEmpty) {
         lines.add(
           HtmlVodLine(

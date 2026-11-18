@@ -143,7 +143,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   .play-loading { position: fixed; inset: 0; z-index: 50; display: none;
     align-items: center; justify-content: center; background: rgba(11,6,23,.55); }
   .play-loading .box { text-align: center; color: #fff; font-size: 13px; }
-  body.hk-inline-playing .d-head { display: none; }
+  /* 内嵌播放藏海报墙的规则在样式表末尾（见 .hk-detail-head 注），
+     须后于各版式自身的 display 声明，特异性与顺序双保险。 */
   /* 规则级 col_type 版式（M23/M24）：与海阔组件样式同名同形。 */
   .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .marquee { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
@@ -226,6 +227,14 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   @keyframes hkmq { from { transform: translateX(0); } to { transform: translateX(-100%); } }
   .x5wrap { position: relative; margin-bottom: 12px; }
   .x5spin { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #B4A5CE; font-size: 13px; background: rgba(25,16,41,.6); }
+  /* 内嵌播放藏海报墙：经典详情页的 .d-head 与列表分支详情形态页
+     的头项（render() 在 pageIsDetail 时给 data-index="0" 的元素打
+     .hk-detail-head 标记）。播放时藏起，海报墙就地由顶部的原生
+     播放器代替；未播放时标记无任何样式，页面原样。本规则放样式
+     表末尾：头项自身的版式规则（如 .rowitem/.picgrid img）也带
+     display 声明，藏匿规则须后于它们，特异性与顺序双保险。 */
+  body.hk-inline-playing .d-head,
+  body.hk-inline-playing .hk-detail-head { display: none; }
 </style>
 </head>
 <body>
@@ -256,6 +265,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   // 详情模式：openDetail() 进入、goBack()/boot() 退出。详情结果按
   // 头项→简介→线路→选集渲染；列表页（首页/分类/搜索）保持原有卡片/行渲染。
   var isDetail = false;
+  // 详情形态复判结果（见 isDetailFormPage）：当前渲染页按条目形态
+  // 是否为详情页。只供播放路由（sendPlay/play 兜底与列表点按的
+  // fromDetail）用，渲染分流仍只认 isDetail。每次 render() 重算；
+  // renderText/renderGallery 显示非条目内容时清掉。
+  var pageIsDetail = false;
   // 当前详情页的选集条目（按顺序）：点选集发 play 消息时带上，
   // 原生播放器据此显示选集面板；切集时原生调 __haikuoPlayEpisode(i)。
   var currentEpisodes = [];
@@ -2214,14 +2228,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     // （详情页海报墙就地变播放器）还是推一个新播放页。
     // 详情页内的播放入口（海报播放键、选集点按）显式传 true，
     // 不依赖点击时刻 isDetail 全局变量的状态；列表页不传，
-    // 仍按 isDetail 判定、保持推新页。
+    // 仍按 isDetail 判定、保持推新页；未显式传时按当前页形态
+    // 兜底（isDetail 或 pageIsDetail 复判），模块式/子页详情页
+    // 的规则直调 play() 也能内嵌。
     // 尾部 `;{...}` 后缀头与 `@头=` 后缀头在此摘出（见
     // extractPlayHeaderSuffix / extractPlayAtHeaders），
     // 干净地址发给播放器，头随 play 消息带过去。
     var cleaned = extractPlayHeaderSuffix(url);
     var atCleaned = extractPlayAtHeaders(cleaned.url);
     var playUrl = atCleaned.url;
-    var payload = { type: 'play', url: playUrl, title: itemTitle(item), detail: fromDetail === true ? true : isDetail };
+    var payload = { type: 'play', url: playUrl, title: itemTitle(item), detail: fromDetail === true ? true : (isDetail || pageIsDetail) };
     var ctx = episodeContext(item);
     if (ctx) { payload.episodes = ctx.episodes; payload.index = ctx.index; payload.series = ctx.series; }
     // 字幕/弹幕地址随 play 消息带给播放器（条目自带才有，没有不编）。
@@ -3434,6 +3450,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     pushNavEntry();
     showBack(true);
     isDetail = false;
+    pageIsDetail = false;
     var html = '<div class="gallery">';
     urls.forEach(function (u) {
       var src = /^https?:\/\//.test(u) ? u : resolveUrl(u, MY_URL);
@@ -3616,6 +3633,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   function renderText(text) {
     x5RenderBegin();
+    pageIsDetail = false;
     listEl.innerHTML = '<div class="empty">' + escapeHtml(String(text).slice(0, 4000)) + '</div>';
   }
   // 当前渲染的条目（updateItem/deleteItem 等动态接口的操作对象，
@@ -3721,6 +3739,52 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     else preResultItems = [];
     if (!resultCapture && !isDetail) render([]);
   }
+  // 播放入口地址判定（详情形态复判用）：懒链接、嗅探 scheme、
+  // 播放 JSON、媒体地址、isVideo 旗标都算播放入口；@rule= 动态
+  // 规则链接是导航不是播放，不算。对象形态（{urls:[...]}）按
+  // openItem 的 R6-F2 分支，有 urls 即播放入口。
+  function isPlayLinkUrl(rawUrl) {
+    if (rawUrl && typeof rawUrl === 'object') {
+      return Array.isArray(rawUrl.urls) && rawUrl.urls.length > 0;
+    }
+    var u = stripFlags(rawUrl);
+    if (!u) return false;
+    if (u.indexOf('hiker://lazy#') >= 0 || u.indexOf('@lazyRule=') >= 0) return true;
+    if (u.indexOf('x5Play://') === 0 || u.indexOf('x5Rule://') === 0 ||
+        u.indexOf('webRule://') === 0 || u.indexOf('video://') === 0) return true;
+    if (parsePlayJson(u)) return true;
+    return isMediaLink(u, rawUrl) || hasFlag(rawUrl, 'isVideo=true');
+  }
+  // 详情形态复判：只决定本页发起的播放走内嵌还是推新页，不改渲染。
+  // 模块式规则（pages + .rule()）与子页渲染的详情页不走 openDetail，
+  // isDetail 恒为 false，点播放会被当成列表页推新页（MissAV
+  // “播放正片”、Memojav 二级详情同属此类）。这里按条目形态复判，
+  // 与 renderDetail 的头项/选集判定同一口径：首项带图（非选集/
+  // 正文行）且页内有选集形态的播放入口，即详情页。卡片墙/平铺
+  // 列表（首项是卡片、无选集入口）与导航钮页（钮地址不可播）不中。
+  // 生效列取条目列与规则列的并（与 render() 分段同一算法），
+  // 无列的条目在卡片规则下按卡片算，不误判成选集。
+  function isDetailFormPage(items, ruleColType) {
+    if (!items || items.length < 2) return false;
+    var head = items[0];
+    if (!itemPic(head)) return false;
+    var headCol = colTypeOf(head) || ruleColType || '';
+    if (headCol === '*') headCol = '';
+    if (/^text_[2-9]$/.test(headCol) || headCol === 'rich_text') return false;
+    for (var i = 1; i < items.length; i++) {
+      var it = items[i];
+      var col = colTypeOf(it) || ruleColType || '';
+      if (col === '*') col = '';
+      if (/^text_[2-9]$/.test(col)) return true;
+      // 按钮与标题行：地址是播放入口才算选集（导航钮、空链接、
+      // 复制链接的同列标题行不算，分类列表页不误判）。Memojav
+      // 二级详情的播放入口就是 text_center_1 + x5Rule 地址。
+      if ((col === 'flex_button' || col === 'scroll_button' ||
+          col === 'text_1' || col === 'text_center_1') &&
+          isPlayLinkUrl(it && (it.url || it.link))) return true;
+    }
+    return false;
+  }
   function render(items, forcedColType) {
     if (!Array.isArray(items)) items = items ? [items] : [];
     var mainItems = items;
@@ -3748,13 +3812,16 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     currentEpisodes = [];
     detailTitle = '';
     headItem = null;
+    var ruleColType = String(forcedColType || (PROGRAM.rule && PROGRAM.rule.col_type) || '');
+    // 详情形态复判：导航路径没进详情模式的页面，按条目形态再判一次，
+    // 只影响本页点按的 fromDetail（内嵌还是推新页），渲染分流不动。
+    pageIsDetail = isDetail || isDetailFormPage(items, ruleColType);
     if (isDetail) { renderDetail(items); return; }
     var rowsHtml = categoryRowsHtml();
     if (!items.length) {
       listEl.innerHTML = rowsHtml + '<div class="empty"><div class="big">🍃</div>这个页面没有返回内容</div>';
       return;
     }
-    var ruleColType = String(forcedColType || (PROGRAM.rule && PROGRAM.rule.col_type) || '');
     // 按有效 col_type 分段：连续同版式的条目画成一组，条目级
     // col_type 优先于规则级（JS 解析结果支持混排，官方语义）。
     var sections = [];
@@ -3772,13 +3839,29 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       html += sectionHtml(sec.col, sec.indexes, items);
     });
     listEl.innerHTML = html;
+    // 详情形态页的头项打标记：内嵌播放时 CSS 藏起它（与
+    // renderDetail 的 .d-head 同一口径），海报墙就地由顶部的
+    // 原生播放器代替；只藏头项自身（data-index="0" 的元素），
+    // 选集/线路/简介行不动，播放中切集仍可点。pageIsDetail 为真
+    // 即首项带图且页内有选集形态入口（见 isDetailFormPage），
+    // 纯列表页不打标记。标记随每次渲染重打，播放中重渲染
+    // （updateItem/回退重进）也不露海报。x5 占位不打标记：
+    // 原生 x5 行另有定位，藏占位会错位。
+    if (pageIsDetail) {
+      var headEl = listEl.querySelector('[data-index="0"]');
+      if (headEl && !headEl.hasAttribute('data-x5-slot') && headEl.classList) {
+        headEl.classList.add('hk-detail-head');
+      }
+    }
     Array.prototype.forEach.call(listEl.querySelectorAll('[data-index]'), function (el) {
       el.addEventListener('click', function () {
         var idx = Number(el.getAttribute('data-index'));
         if (el.__hkLongPressed) { el.__hkLongPressed = false; return; }
-        openItem(items[idx], false, idx);
+        // 详情形态页的点按带 fromDetail：模块式/子页详情页的播放入口
+        // 走内嵌；纯列表页仍传 false、推新页。
+        openItem(items[idx], pageIsDetail, idx);
       });
-      bindLongClick(el, items[Number(el.getAttribute('data-index'))], false);
+      bindLongClick(el, items[Number(el.getAttribute('data-index'))], pageIsDetail);
     });
     Array.prototype.forEach.call(listEl.querySelectorAll('.hk-searchrow'), function (el) {
       el.addEventListener('click', function () {
@@ -3804,7 +3887,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
           // 它显式返回字符串时才走结果出口，避免误报“解析失败”。
           var fn = new Function('input', code);
           var out = fn(inputEl.value);
-          if (typeof out === 'string' && out) handleLazyResult(out, it, false);
+          if (typeof out === 'string' && out) handleLazyResult(out, it, pageIsDetail);
         } catch (e) { say('执行失败：' + e); }
       };
       btn.addEventListener('click', submit);
@@ -4457,7 +4540,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
   }
   function setPage() {}
   function join(url) { openItem({ url: url }); }
-  function play(url, title) { native({ type: isMedia(url) ? 'play' : 'open', url: url, title: title || '', detail: isDetail }); }
+  function play(url, title) { native({ type: isMedia(url) ? 'play' : 'open', url: url, title: title || '', detail: isDetail || pageIsDetail }); }
   function open(url) { native({ type: 'open', url: url }); }
   function playVideo(url, title) { play(url, title); }
   function download(url, dest) {
@@ -4958,6 +5041,25 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     if (hasOwnProps(moduleObj.exports)) return moduleObj.exports;
     return {};
   }
+  // 裸 require 分流：hiker://page/、hiker://files/、hiker://assets/、
+  // file:// 四种前缀走 loadModule（子页/模块文件，与 $.require 同口径）；
+  // http(s) 地址一律走原 requireRemote，行为不变。之前裸 require 遇
+  // hiker://page/ 也进 requireRemote，取回的是子页对象 JSON 串、求值
+  // 后导出为空，规则只能拿到 {}。
+  function requireForRule(path, headers, version) {
+    var p = String(path || '');
+    if (p.indexOf('hiker://page/') === 0 || p.indexOf('hiker://files/') === 0 ||
+        p.indexOf('hiker://assets/') === 0 || p.indexOf('file://') === 0) {
+      return loadModule(p);
+    }
+    return requireRemote(p, headers, version);
+  }
+  // evalPrivateJS 桩：官方私有脚本的求值入口，参数是不透明加密串，
+  // 密钥只在官方客户端、没有公开规范，壳子无法解密。调用即抛明确
+  // 错误，绝不回假数据、绝不静默吞掉（规则会在界面上看到失败原因）。
+  function evalPrivateJSStub() {
+    throw new Error('该规则用了官方私有脚本（evalPrivateJS），壳子不支持，无法运行');
+  }
   function deleteCache(url) {
     try {
       if (url) {
@@ -5087,6 +5189,11 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     while ((m = re2.exec(src)) !== null) add(m[1]);
     var re3 = /(?:^|[;\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>)/g;
     while ((m = re3.exec(src)) !== null) add(m[1]);
+    // 对象字面量导出：var/let/const NAME = {…} 也收（无 $.exports /
+    // module.exports 的模块靠收集回落时，对象名不在收集列里就回 {}）。
+    // 只收声明形态；函数内同名声明在顶层 typeof 为 undefined，不影响。
+    var re4 = /(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*\{/g;
+    while ((m = re4.exec(src)) !== null) add(m[1]);
     // 固定 8 个名永远在列（老规则只定义其中几个时也不漏）。
     var fixed = ['home', 'detail', 'search', 'category', 'play', 'lazy', 'init', 'main'];
     for (var i = 0; i < fixed.length; i++) add(fixed[i]);
@@ -8804,7 +8911,8 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     aesEncode: aesEncode, aesDecode: aesDecode,
     batchExecute: batchExecute, be: batchExecute, syncExecute: syncExecute,
     writeHexFile: writeHexFile, http: http, storage0: storage0,
-    require: requireRemote, requireCache: requireCache, rc: requireCache,
+    require: requireForRule, requireCache: requireCache, rc: requireCache,
+    evalPrivateJS: evalPrivateJSStub,
     fetchCache: fetchCache, fc: fetchCache, deleteCache: deleteCache,
     getPageTitle: getPageTitle, setPageTitle: setPageTitle, getUrl: getUrl,
     getParam: getParam, getHome: getHome, getRule: getRule,

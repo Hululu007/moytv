@@ -58,7 +58,11 @@ var khState = &struct {
 	host string
 }{host: khSeedHost}
 
-var khClient = &http.Client{Timeout: 25 * time.Second}
+// 60s: learned-host TTFB measured 18-26s from the verification egress
+// (2026-11-17/18), so the old 25s budget timed out fresh processes on
+// the first categories while warm processes passed. Same precedent as
+// the sihu/xhy11 60s clients. Fast paths are unaffected.
+var khClient = &http.Client{Timeout: 60 * time.Second}
 
 func khHeaders() map[string]string {
 	return map[string]string{

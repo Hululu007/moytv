@@ -27,7 +27,7 @@ const _shellEntries = [
   (LucideIcons.hardDrive, '多媒体'),
   (LucideIcons.layoutGrid, '小程序'),
   (LucideIcons.user, '我的'),
-  (LucideIcons.users, '女优库'),
+  (LucideIcons.users, '演员库'),
 ];
 
 Future<LocalStore> _makeStore([Map<String, Object> seeds = const {}]) async {
@@ -142,7 +142,7 @@ void main() {
     final config = AppThemeConfig.forTheme(mode);
     testWidgets('底栏颜色随主题走 ${config.themeName}', (tester) async {
       await _pumpBar(tester, mode: mode, index: 1, onSelect: (_) {});
-      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的', '女优库']) {
+      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的', '演员库']) {
         expect(find.text(label), findsOneWidget);
       }
       // 霓虹胶囊栏：选中 = primaryColor，无选中胶囊/圆点。
@@ -186,7 +186,7 @@ void main() {
       index: 0,
       onSelect: (_) {},
     );
-    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的', '女优库'];
+    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的', '演员库'];
     var previousX = -1.0;
     for (final label in order) {
       expect(find.text(label), findsOneWidget);

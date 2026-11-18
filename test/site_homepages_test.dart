@@ -22,22 +22,14 @@ void main() {
     // 视频 py：注册表里的 siteId 与 assetPath 一一对应。
     for (final entry in BuiltinPySites.entries) {
       final url = pySiteHomepages[entry.siteId];
-      if (url == null) {
-        // 只有 chaoliu 允许缺席：只有 feed 地址。
-        expect(
-          ['chaoliu'],
-          contains(entry.siteId),
-          reason: '${entry.siteId} 无主页映射',
-        );
-        continue;
-      }
-      expect(url, originOf(url), reason: '$url 不是 origin');
+      expect(url, isNotNull, reason: '${entry.siteId} 无主页映射');
+      expect(url, originOf(url!), reason: '$url 不是 origin');
       final text = File(entry.assetPath).readAsStringSync();
       expect(
         text,
-        contains(Uri.parse(url).host),
+        contains(Uri.parse(url!).host),
         reason:
-            '${entry.siteId} 的主机 ${Uri.parse(url).host} 不在 ${entry.assetPath} 里',
+            '${entry.siteId} 的主机 ${Uri.parse(url!).host} 不在 ${entry.assetPath} 里',
       );
       checked.add(entry.siteId);
     }
@@ -58,7 +50,7 @@ void main() {
     }
     // 表里不许有多余条目（防编造/漂移）。
     expect(pySiteHomepages.keys.toSet(), checked);
-    expect(pySiteHomepages.length, 70);
+    expect(pySiteHomepages.length, 144);
   });
 
   test('Go 映射：值确是 origin、主机名确在 Go 核源码里', () {
@@ -104,11 +96,12 @@ void main() {
   test('桥接查表：三种 id 形态都解析，查不到回空', () {
     final hmav = siteHomepageCandidates('hmav');
     expect(hmav, isNotEmpty);
-    expect(hmav.first, startsWith('https://5.hmav7598.cc:8888/'));
+    expect(hmav.first, startsWith('https://5.hmav7911.cc:8888/'));
     expect(siteHomepageCandidates('jar:zakatv:hmav'), hmav);
     expect(siteHomepageCandidates('v_javdb'), isNotEmpty);
     expect(siteHomepageCandidates('legado_8059_0'), isNotEmpty);
-    expect(siteHomepageCandidates('chaoliu'), isEmpty);
+    expect(siteHomepageCandidates('chaoliu'), isNotEmpty);
+    expect(siteHomepageCandidates('chaoliu').first, startsWith('https://mjv011.com/'));
     expect(siteHomepageCandidates('no-such-site'), isEmpty);
     expect(siteHomepageCandidates(''), isEmpty);
   });
@@ -207,7 +200,7 @@ void main() {
       await tester.pumpAndSettle();
     });
     expect(requested, isNotEmpty);
-    expect(requested.first, startsWith('https://5.hmav7598.cc:8888/'));
+    expect(requested.first, startsWith('https://5.hmav7911.cc:8888/'));
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('河'), findsNothing);
   });

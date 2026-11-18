@@ -4,9 +4,11 @@ except Exception:
     class BaseSpider:
         pass
 
+import http.client
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -70,7 +72,22 @@ def _http_get(url, timeout=35, headers=None):
             else:
                 req = urllib.request.Request(url, headers=h)
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return resp.read().decode("utf-8", "ignore")
+                    try:
+                        return resp.read().decode("utf-8", "ignore")
+                    except http.client.IncompleteRead as ie:
+                        text = (ie.partial or b"").decode("utf-8", "ignore")
+                        if text.strip():
+                            return text
+                        raise
+        except urllib.error.HTTPError as e:
+            try:
+                text = e.read().decode("utf-8", "ignore")
+            except http.client.IncompleteRead as ie:
+                text = (ie.partial or b"").decode("utf-8", "ignore")
+            if text.strip():
+                return text
+            last = e
+            time.sleep(0.6)
         except Exception as e:
             last = e
             time.sleep(0.6)
@@ -95,7 +112,21 @@ def _http_post_json(url, payload, timeout=35, headers=None):
             else:
                 req = urllib.request.Request(url, data=body, headers=h, method="POST")
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return json.loads(resp.read().decode("utf-8", "ignore"))
+                    try:
+                        raw = resp.read()
+                    except http.client.IncompleteRead as ie:
+                        raw = ie.partial or b""
+                    return json.loads(raw.decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read()
+            except http.client.IncompleteRead as ie:
+                raw = ie.partial or b""
+            try:
+                return json.loads(raw.decode("utf-8", "ignore"))
+            except Exception:
+                last = e
+                time.sleep(0.6)
         except Exception as e:
             last = e
             time.sleep(0.6)

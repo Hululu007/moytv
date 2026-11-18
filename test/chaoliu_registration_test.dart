@@ -8,19 +8,21 @@ import 'package:moyi/plugin_manager.dart';
 import 'package:moyi/zakatv_builtin.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 潮流AV 注册守卫：py 由潮流 App（live.zaka.chaoliu 2.20）静态逆向
-/// 写成，已在 2026-11-16 用蜘蛛本体抽查验过真站（173 个分类、分类
-/// 页 24 条有封面、详情出播放地址、playerContent 回真 m3u8 且拉到
-/// 200 变体列表；见 ~/workspace/chaoliu_re/REVERSE.md）。2026-11-17
-/// 按用户发来的 chaoliu-spider jar（命令行爬虫，非 TVBox 蜘蛛，见
-/// ~/workspace/chaoliu_update_20261117/）移植更新：数据通道换新域名
-/// feed2-k7m2（旧域名留作回退）、UA 去掉 ChaoliuApp 后缀、详情补
-/// ac=detail 回退、搜索补 wd 回退；分类表与 jp220/mjv220 路径未动。
-/// 移植版只过了离线桩验，真站实测因出口断网待补，见 NOTES.md。这里
-/// 只守注册正确：文件在位且与来源字节一致、协议齐全、key 唯一、无
-/// 中文注释、分类数 173、插件清单与跨站选线已接通。线路 3 的 CDN 在
-/// 本机出口 403、女优详情选集、图集 pics:// 链路、番号秒播表均属
-/// 手机待验项，注册时不冒充已验。
+/// 潮流AV 注册守卫：2026-11-18 按用户令重写为真实站直连，不再调
+/// App 的 feed API（chaoliu-feed2-k7m2 已从源里摘净）。视频链走
+/// mjv011.com 直连 HTML（分类/列表/详情/搜索/play.php 取流，纯
+/// Python AES 解 pid，与 jar 版 ZakaMjv011Amns2 同链）；女优库与
+/// 图库走潮流自有站 chaoliu-av-tk8m.web.zaka.live 的 jp220/data220
+/// 烤制数据。分类与 mjv011.com 导航 1:1（首页 + 每日更新 + 15 个
+/// 导航分类 + 女优库 + 7 个图库 = 25）。蜘蛛本体交付门已全过：
+/// 25 个分类首页非空有真封面、翻页零重叠、详情出 3 档播放地址、
+/// playerContent 回真 m3u8（1422 分片/7109 秒、AES-128 密钥 16
+/// 字节可取）、搜索出真结果、番号秒播表与 MJV 回退链均验真播；
+/// 见 ~/workspace/chaoliu_realsite_20261118/（gate2/gate3/gate5
+/// 日志）。这里只守注册正确：文件在位且与来源字节一致、协议齐
+/// 全、key 唯一、无中文注释、分类数 25、插件清单与跨站选线已接
+/// 通。手机待验：qrtuv CDN 的秒播地址本机出口 403、手机上能否播
+/// 须实测；jar 版委托链与图集 Large_cgurl 提取未经真机跑。
 const _protocolMethods = <String>[
   'getName',
   'getDependence',
@@ -40,7 +42,7 @@ const _protocolMethods = <String>[
 
 /// 来源文件 md5（~/workspace/chaoliu_re/sources/chaoliu.py），树内
 /// 文件必须与它字节一致，改一个字节这里就报。
-const _sourceMd5 = '6cebe248ea2807424c141e85a646b0ed';
+const _sourceMd5 = '8263b376a032f55359241eb413e06138';
 
 int _countListEntries(List<String> lines, String header) {
   var inList = false;
@@ -100,20 +102,24 @@ void main() {
     }
   });
 
-  test('潮流AV：分类数 173', () {
+  test('潮流AV：分类数 25', () {
     final lines = File(
       BuiltinPySites.chaoliuAssetPath,
     ).readAsStringSync().split('\n');
-    final cats = _countListEntries(lines, 'CATS = [');
-    final mjv = _countListEntries(lines, 'MJV = [');
+    final mjvCats = _countListEntries(lines, 'MJV_CATS = [');
     final tuku = _countListEntries(lines, 'TUKU = [');
-    final ph = _countListEntries(lines, 'PH = [');
-    expect(cats, 156);
-    expect(mjv, 7);
+    expect(mjvCats, 15);
     expect(tuku, 7);
-    expect(ph, 2);
-    // homeContent：CATS + MJV + 女优库 1 个 + TUKU + PH。
-    expect(cats + mjv + 1 + tuku + ph, 173);
+    // homeContent：首页 + 每日更新 + MJV_CATS + 女优库 1 个 + TUKU。
+    expect(2 + mjvCats + 1 + tuku, 25);
+  });
+
+  test('潮流AV：不含 App feed API 地址', () {
+    final text = File(
+      BuiltinPySites.chaoliuAssetPath,
+    ).readAsStringSync();
+    expect(text.contains('chaoliu-feed'), isFalse);
+    expect(text.contains('mjv011.com'), isTrue);
   });
 
   test('潮流AV：key 不与 jar 内置站撞', () {

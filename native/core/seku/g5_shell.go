@@ -50,8 +50,10 @@ var g5YuuhcHosts = []string{
 	"https://www.yuuhc115.sbs",
 }
 
-// Navigation 1:1 (lines 1-4 merged, 32 cats; 色图色书 is an off-site
-// image/text link with no in-site videos, excluded as in py).
+// Navigation 1:1 (lines 1-4 merged, 31 cats; one category id excised
+// per TRIAGE disposition, enforced by id in g5YuuhcCatalog below;
+// 色图色书 is an off-site image/text link with no in-site videos,
+// excluded as in py).
 var g5YuuhcCats = []struct{ id, name string }{
 	{"4042620", "探花系列"}, {"4052620", "偷拍自拍"}, {"4062620", "熟女少妇"},
 	{"4072620", "无码专区"}, {"4082620", "欧美性爱"}, {"4092620", "颜值正义"},
@@ -60,7 +62,7 @@ var g5YuuhcCats = []struct{ id, name string }{
 	{"4162630", "制服丝袜"}, {"4172630", "口交自慰"}, {"4182630", "国产精品"},
 	{"4192630", "大秀视频"}, {"4222640", "亚洲情色"}, {"4232640", "强奸乱伦"},
 	{"4242640", "伦理三级"}, {"4252640", "女同性恋"}, {"4262640", "明星换脸"},
-	{"4272640", "A V 解说"}, {"4282640", "少女萝莉"}, {"4292640", "角色剧情"},
+	{"4272640", "A V 解说"}, {"4292640", "角色剧情"},
 	{"4322650", "精品网红"}, {"4332650", "多人群交"}, {"4342650", "S M 调教"},
 	{"4352650", "动漫卡通"}, {"4362650", "变性伪娘"}, {"4372650", "V R 视角"},
 	{"4382650", "反差母狗"}, {"4392650", "人妻系列"},
@@ -253,6 +255,10 @@ func g5YuuhcCatalog(slot, category string, page int) ([]interface{}, int, bool, 
 	tid := category
 	if tid == "" {
 		tid = g5YuuhcCats[0].id
+	}
+	// Excised category id: never served, even on a direct request.
+	if tid == "4282640" {
+		return nil, 0, false, fmt.Errorf("yuuhc catalog: category removed")
 	}
 	body := g5YuuhcGet(fmt.Sprintf("/list.php?id=%s&page=%d", tid, page))
 	if body == "" {

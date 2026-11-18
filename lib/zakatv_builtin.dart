@@ -18,7 +18,7 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = '09ee47224268ed3d90fd1ece455ce70c';
+const String zakatvJarMd5 = '6917f0a00bf495d88a28d4ac2643ec44';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';
@@ -29,12 +29,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'ZakaMjv011',
     '🔞mjv011',
     'com.github.catvod.spider.ZakaMjv011Amns2',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'ZakaHuangguo',
-    '🔞黄果',
-    'com.github.catvod.spider.ZakaHuangguoAmns',
     '',
   ),
   ZakatvBuiltinSite(
@@ -78,12 +72,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'ZakaCucumber',
     '🔞黄瓜视频',
     'com.github.catvod.spider.ZakaCucumberAmns',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'ZakaHaijiao',
-    '🔞海角社区',
-    'com.github.catvod.spider.ZakaHaijiaoAmns',
     '',
   ),
   ZakatvBuiltinSite(
@@ -731,12 +719,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '{"relay":"https://py.fzcrym.link:1314"}',
   ),
   ZakatvBuiltinSite(
-    'zaka93',
-    '🔞👑93站合一',
-    'com.github.catvod.spider.Zaka93Amns',
-    '',
-  ),
-  ZakatvBuiltinSite(
     'go2av',
     '🔞GO2AV┃帝皇影视',
     'com.github.catvod.spider.ZakaGo2avAmns',
@@ -869,5 +851,11 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '🔞潮流AV(JAR)',
     'com.github.catvod.spider.ZakaChaoliu',
     '{}',
+  ),
+  ZakatvBuiltinSite(
+    'YzAikan',
+    '柚子爱看',
+    'com.github.catvod.spider.YzAikan',
+    '',
   ),
 ];

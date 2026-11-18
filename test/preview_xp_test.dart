@@ -103,6 +103,12 @@ void main() {
     await _capturePng(tester, name: 'xp_desktop', app: _xpHome(store));
   });
 
+  testWidgets('预览 XP 桌面带游戏图标', (tester) async {
+    appThemeNotifier.value = AppThemeMode.xpWindows;
+    final store = await _previewStore();
+    await _capturePng(tester, name: 'xp_desktop_game', app: _xpHome(store));
+  });
+
   testWidgets('预览 XP 片库窗口', (tester) async {
     appThemeNotifier.value = AppThemeMode.xpWindows;
     final store = await _previewStore();
@@ -113,6 +119,21 @@ void main() {
       setup: (tester) async {
         await tester.tap(
           find.byKey(const ValueKey('xp-desktop-icon-library')),
+        );
+      },
+    );
+  });
+
+  testWidgets('预览 XP 开始菜单', (tester) async {
+    appThemeNotifier.value = AppThemeMode.xpWindows;
+    final store = await _previewStore();
+    await _capturePng(
+      tester,
+      name: 'xp_start_menu',
+      app: _xpHome(store),
+      setup: (tester) async {
+        await tester.tap(
+          find.byKey(const ValueKey('xp-start-button')),
         );
       },
     );

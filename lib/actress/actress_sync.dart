@@ -63,6 +63,9 @@ class ActressSyncResult {
   bool get hasFailures => failedSources.isNotEmpty;
 }
 
+/// 一次性修复检查点的阶段名：每源一条，修复跑完即记完成。
+const _filmsRepairPhase = 'films_repair_v1';
+
 /// 一次性全量同步服务：名册 + 全部作品清单存本地，断点续跑。
 ///
 /// - 顺序：潮流 → whos → MissAV（潮流最可靠，先落库为合并打底）；
@@ -70,10 +73,14 @@ class ActressSyncResult {
 ///   作后备信号，开关打开时才拉，名次写入 whos_rank 列）；
 /// - 断点：名册/排行记下一页页码，作品记已完成人物（整人取完再记点，
 ///   失败重取靠 upsert 幂等，不会重复入库）；
+/// - 空作品清单不是成功：拉回空列表记失败等刷新补，绝不记 ok；
+/// - 一次性修复：已记 ok 但作品为 0 的人（旧版空结果记 ok 的中毒
+///   状态），修复检查点未完成时重取一次，跑完即记完成；
 /// - 单源整体失败（被盾挡、域名不通）只记失败，不拖垮其余源；
 /// - 手动刷新（refresh: true）重拉名册与排行拾取新人/新名次，作品
 ///   只补未完成与失败的人物，永不全量重拉；
-/// - 打开模块只读本地，本服务只在库空时自动跑一次，或手动刷新时跑。
+/// - 打开模块只读本地；列表页在库空或没同步完时自动断点续跑，跑完
+///   仍未完自动再续（有次数上限），手动点的也是断点续跑、不重拉。
 class ActressSyncService {
   ActressSyncService({
     required this.db,
@@ -266,7 +273,31 @@ class ActressSyncService {
     ActressRosterSource source,
     int sourceIndex,
   ) async {
-    final pending = await db.personsPendingFilms(source.id);
+    // 一次性修复（films_repair_v1）：旧版把空结果记成 ok，中毒的人
+    // 作品为 0 却永不再取；修复检查点未完成时，把这类人并入本次
+    // 待取清单重取一次，阶段跑完即记完成（取消时不记，下次继续修）。
+    final repairCheckpoint = await db.checkpoint(
+      source.id,
+      _filmsRepairPhase,
+    );
+    final repairOpen = repairCheckpoint == null || !repairCheckpoint.finished;
+    var pending = await db.personsPendingFilms(source.id);
+    var repairCount = 0;
+    if (repairOpen) {
+      final repair = await db.personsNeedingFilmsRepair(source.id);
+      if (repair.isNotEmpty) {
+        final seen = <int>{for (final person in pending) person.localId};
+        final merged = [...pending];
+        for (final person in repair) {
+          if (seen.add(person.localId)) {
+            merged.add(person);
+            repairCount++;
+          }
+        }
+        merged.sort((a, b) => a.localId.compareTo(b.localId));
+        pending = merged;
+      }
+    }
     if (pending.isEmpty) {
       await db.saveCheckpoint(
         ActressSyncCheckpoint(
@@ -275,11 +306,13 @@ class ActressSyncService {
           finished: true,
         ),
       );
+      if (repairOpen) await _saveRepairCheckpoint(source, repairCount);
       return;
     }
     final progress = await db.filmsProgress(source.id);
     final total = progress.total;
-    var done = progress.done;
+    // 修复候选人已计入已完成数，重取期间先扣掉，进度不超总数。
+    var done = progress.done - repairCount;
     var failed = 0;
     var nextIndex = 0;
     var lastCompletedId = 0;
@@ -325,6 +358,23 @@ class ActressSyncService {
         finished: remaining.isEmpty && !_cancelled,
       ),
     );
+    if (repairOpen && !_cancelled) {
+      await _saveRepairCheckpoint(source, repairCount);
+    }
+  }
+
+  Future<void> _saveRepairCheckpoint(
+    ActressRosterSource source,
+    int repairCount,
+  ) async {
+    await db.saveCheckpoint(
+      ActressSyncCheckpoint(
+        source: source.id.name,
+        phase: _filmsRepairPhase,
+        total: repairCount,
+        finished: true,
+      ),
+    );
   }
 
   Future<bool> _syncOnePersonFilms(
@@ -337,6 +387,13 @@ class ActressSyncService {
       final films = await _withRetry(
         () => source.fetchFilms(sourceId, fetch: fetch),
       );
+      if (films.isEmpty) {
+        // 拉回来了但为空：不是成功，记失败等下次刷新补。空结果
+        // 绝不能记 ok，否则断点与刷新永不再重取，中毒永久化。
+        // 空判定放在重试之外：已拉回空结果，重试无意义。
+        await db.markFilmsState(person.localId, source.id, ok: false);
+        return false;
+      }
       await db.upsertWorks(person.localId, films);
       await db.markFilmsState(person.localId, source.id, ok: true);
       return true;

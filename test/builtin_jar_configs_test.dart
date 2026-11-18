@@ -16,12 +16,15 @@ void main() {
     expect(yt!.key, 'youtube');
     expect(yt.name, 'YouTube');
     expect(yt.ext, '{"proxy":""}');
-    final haijiao = matchJarSiteConfig(
-      'com.github.catvod.spider.ZakaHaijiaoAmns',
-      configs,
+    // Phase 3: ZakaHaijiao jar registration removed (dead site; the Go
+    // v_haijiao slot takes over via JarHaijiaoTakeover), so no jar config.
+    expect(
+      matchJarSiteConfig(
+        'com.github.catvod.spider.ZakaHaijiaoAmns',
+        configs,
+      ),
+      isNull,
     );
-    expect(haijiao, isNotNull);
-    expect(haijiao!.key, 'ZakaHaijiao');
     expect(
       matchJarSiteConfig('com.github.catvod.spider.NotInJson', configs),
       isNull,

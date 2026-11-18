@@ -33,7 +33,7 @@ abstract final class XpTheme {
   static const Color entryActiveBg = Color(0xFF1C4FB8);
 }
 
-/// 桌面：绿色山丘墙纸 + 左侧竖排图标。桌面本身没有任何导航。
+/// 桌面：绿色山丘墙纸 + 左侧图标区（竖排，满一列换一列）。桌面本身没有任何导航。
 class XpDesktop extends StatelessWidget {
   const XpDesktop({super.key, required this.onIconTap});
 
@@ -57,18 +57,7 @@ class XpDesktop extends StatelessWidget {
               onIconTap: onIconTap,
               iconBuilder: (kind) => Column(
                 children: [
-                  Icon(
-                    kind.icon,
-                    size: 42,
-                    color: Colors.white,
-                    shadows: const [
-                      Shadow(
-                        color: Colors.black54,
-                        blurRadius: 4,
-                        offset: Offset(0, 1),
-                      ),
-                    ],
-                  ),
+                  DesktopIconBadge(kind: kind),
                   const SizedBox(height: 4),
                   Text(
                     kind.title,
@@ -139,7 +128,7 @@ class XpTaskbar extends StatelessWidget {
             key: const ValueKey('xp-start-button'),
             onTap: onStartTap,
             child: Container(
-              padding: const EdgeInsets.fromLTRB(10, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
@@ -289,57 +278,140 @@ class _XpStartMenuState extends State<XpStartMenu> {
   /// 已展开的节点路径（下标串，如 "0-2"）；默认全收起。
   final Set<String> _expanded = {};
 
+  /// 右列固定站点：先空着（显示提示语），存表读到后换成解析结果；
+  /// 从没存过时读到的是首次随机抽的那份。
+  List<Win7TreeNode> _pinned = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPinned();
+  }
+
+  Future<void> _loadPinned() async {
+    final pinned = await loadStartMenuPinnedSites(widget.groups);
+    if (!mounted) return;
+    setState(() => _pinned = pinned);
+  }
+
+  /// 把树叶子固定到右列末尾并存盘；已在固定栏里时不重复加。
+  Future<void> _pinNode(Win7TreeNode node) async {
+    final siteId = node.siteId;
+    if (siteId == null || node.kind == null) return;
+    if (_pinned.any((pinned) => pinned.siteId == siteId)) return;
+    final updated = [..._pinned, node];
+    setState(() => _pinned = updated);
+    await saveStartMenuPinnedSites(
+      updated.map((pinned) => pinned.siteId!).toList(),
+    );
+  }
+
+  /// 从右列取消固定并存盘；全取消后存下来的是空表，不再自动补抽。
+  Future<void> _unpinSite(String siteId) async {
+    final updated =
+        _pinned.where((pinned) => pinned.siteId != siteId).toList();
+    if (updated.length == _pinned.length) return;
+    setState(() => _pinned = updated);
+    await saveStartMenuPinnedSites(
+      updated.map((pinned) => pinned.siteId!).toList(),
+    );
+  }
+
+  /// 长按树叶子弹出的上下文菜单：只有“固定到快捷方式”一项。
+  Future<void> _showLeafMenu(Offset position, Win7TreeNode node) async {
+    final action = await showStartMenuContextMenu<String>(
+      context: context,
+      globalPosition: position,
+      entries: const [(value: 'pin', label: '固定到快捷方式')],
+      backgroundColor: XpTheme.menuBody,
+      textColor: XpTheme.menuText,
+    );
+    if (action == 'pin' && mounted) _pinNode(node);
+  }
+
+  /// 长按右列固定站点弹出的上下文菜单：只有“取消固定”一项。
+  Future<void> _showPinnedMenu(Offset position, Win7TreeNode node) async {
+    final siteId = node.siteId;
+    if (siteId == null) return;
+    final action = await showStartMenuContextMenu<String>(
+      context: context,
+      globalPosition: position,
+      entries: const [(value: 'unpin', label: '取消固定')],
+      backgroundColor: XpTheme.menuBody,
+      textColor: XpTheme.menuText,
+    );
+    if (action == 'unpin' && mounted) _unpinSite(siteId);
+  }
+
   Widget _renderNode(Win7TreeNode node, String path, double leftPadding) {
     final expanded = _expanded.contains(path);
+    // 只有可固定的叶子才响应长按（组节点与无站点叶子不弹菜单）；
+    // 长按手势与点按/展开互不干扰（手势竞技场裁决）。
+    final pinnable = node.isLeaf && node.kind != null && node.siteId != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          key: ValueKey('xp-tree-node-$path'),
-          onTap: () {
-            if (node.isLeaf) {
-              final kind = node.kind;
-              if (kind != null) widget.onLeafTap(kind, node.siteId);
-              return;
-            }
-            setState(() {
-              if (expanded) {
-                _expanded.remove(path);
-              } else {
-                _expanded.add(path);
+        GestureDetector(
+          onLongPressStart: pinnable
+              ? (details) => _showLeafMenu(details.globalPosition, node)
+              : null,
+          child: InkWell(
+            key: ValueKey('xp-tree-node-$path'),
+            onTap: () {
+              if (node.isLeaf) {
+                final kind = node.kind;
+                if (kind != null) widget.onLeafTap(kind, node.siteId);
+                return;
               }
-            });
-          },
-          hoverColor: const Color(0x223A93FF),
-          child: Container(
-            padding: EdgeInsets.only(
-              left: leftPadding,
-              top: 10,
-              bottom: 10,
-              right: 12,
-            ),
-            width: double.infinity,
-            child: Row(
-              children: [
-                if (!node.isLeaf)
-                  Icon(
-                    expanded ? Icons.expand_more : Icons.chevron_right,
-                    color: XpTheme.menuText,
-                    size: 18,
-                  ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    node.label,
-                    style: const TextStyle(
+              setState(() {
+                if (expanded) {
+                  _expanded.remove(path);
+                } else {
+                  _expanded.add(path);
+                }
+              });
+            },
+            hoverColor: const Color(0x223A93FF),
+            child: Container(
+              padding: EdgeInsets.only(
+                left: leftPadding,
+                top: 10,
+                bottom: 10,
+                right: 12,
+              ),
+              width: double.infinity,
+              child: Row(
+                children: [
+                  if (!node.isLeaf)
+                    Icon(
+                      expanded ? Icons.expand_more : Icons.chevron_right,
                       color: XpTheme.menuText,
-                      fontSize: 14,
+                      size: 18,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  const SizedBox(width: 6),
+                  // 组行画该区的图标（箭头后、文字前）；叶子行不画。
+                  if (!node.isLeaf && node.kind != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Icon(
+                        node.kind!.icon,
+                        color: XpTheme.menuText,
+                        size: 18,
+                      ),
+                    ),
+                  Expanded(
+                    child: Text(
+                      node.label,
+                      style: const TextStyle(
+                        color: XpTheme.menuText,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -363,11 +435,11 @@ class _XpStartMenuState extends State<XpStartMenu> {
           ),
         ),
         Align(
-          alignment: Alignment.bottomCenter,
+          alignment: Alignment.bottomLeft,
           child: Container(
             height: MediaQuery.of(context).size.height * 0.65,
             width: MediaQuery.of(context).size.width * 0.92,
-            margin: const EdgeInsets.only(bottom: 56),
+            margin: EdgeInsets.zero,
             decoration: BoxDecoration(
               color: XpTheme.menuBody,
               borderRadius: BorderRadius.circular(12),
@@ -407,17 +479,44 @@ class _XpStartMenuState extends State<XpStartMenu> {
                   ),
                 ),
                 Expanded(
-                  child: SingleChildScrollView(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (var i = 0; i < widget.groups.length; i++)
-                            _renderNode(widget.groups[i], '$i', 12),
-                        ],
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 左列：导航树，展开/收起行为与原来一字不差。
+                      Expanded(
+                        flex: 3,
+                        child: SingleChildScrollView(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                for (var i = 0; i < widget.groups.length; i++)
+                                  _renderNode(widget.groups[i], '$i', 12),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      const VerticalDivider(
+                        key: ValueKey('xp-start-menu-divider'),
+                        width: 1,
+                        thickness: 1,
+                        color: Color(0xFFB9D1F5),
+                      ),
+                      // 右列：固定站点栏（图标 + 站名），与电脑开始菜单同式。
+                      Expanded(
+                        flex: 2,
+                        child: StartMenuPinnedColumn(
+                          keyPrefix: 'xp-start-menu',
+                          pinned: _pinned,
+                          onLeafTap: widget.onLeafTap,
+                          onRowLongPress: _showPinnedMenu,
+                          textColor: XpTheme.menuText,
+                          hoverColor: Color(0x223A93FF),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],

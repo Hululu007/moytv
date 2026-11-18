@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/detail_screen.dart';
 import 'package:moyi/global_search_page.dart';
 import 'package:moyi/html_host/html_bridge.dart';
 import 'package:moyi/html_host/html_play.dart';
@@ -40,14 +41,19 @@ class _FakeHost {
   final pushed = <Widget>[];
   final toasts = <String>[];
   var popped = 0;
+  var exited = 0;
   var wentBack = 0;
   var reloaded = 0;
   var canGoBackValue = false;
   final precached = <String>[];
+  final chromeModes = <String>[];
+  var chromeRestored = 0;
 
   HtmlBridgeHost build({
     Future<bool> Function(Map<String, dynamic>)? onOpenLive,
     Future<bool> Function(Map<String, dynamic>)? onOpenKeep,
+    bool wireChrome = false,
+    bool wireExit = true,
   }) => HtmlBridgeHost(
     pushPage: pushed.add,
     showToast: toasts.add,
@@ -63,6 +69,19 @@ class _FakeHost {
     precacheArtwork: (urls) async => precached.addAll(urls),
     onOpenLive: onOpenLive,
     onOpenKeep: onOpenKeep,
+    setChrome: wireChrome
+        ? (mode, _) async {
+            chromeModes.add(mode);
+            return mode;
+          }
+        : null,
+    restoreChrome: wireChrome
+        ? () async {
+            chromeRestored++;
+            return 'normal';
+          }
+        : null,
+    exitPage: wireExit ? () => exited++ : null,
   );
 }
 
@@ -411,6 +430,96 @@ void main() {
       expect(fakeHost.pushed, isEmpty);
     });
 
+    test('fm.vod cross-site opens the native detail page', () async {
+      await bridge.dispatch('fm.vod', {
+        'siteKey': 'hongguo',
+        'vod_id': '456',
+        'title': '跨站剧',
+        'pic': 'https://cdn.example.com/p.jpg',
+      });
+      final pushed = fakeHost.pushed.single as DetailScreen;
+      expect(pushed.drama.source, 'hongguo');
+      expect(pushed.drama.sourceId, '456');
+      expect(pushed.drama.id, 'hongguo:456');
+      expect(pushed.drama.title, '跨站剧');
+      expect(pushed.drama.cover, 'https://cdn.example.com/p.jpg');
+    });
+
+    test('fm.vod cross-site strips a site-prefixed vod id', () async {
+      await bridge.dispatch('fm.vod', {
+        'siteKey': 'hongguo',
+        'vodId': 'hongguo:789',
+      });
+      final pushed = fakeHost.pushed.single as DetailScreen;
+      expect(pushed.drama.sourceId, '789');
+      expect(pushed.drama.id, 'hongguo:789');
+    });
+
+    test('fm.vod with episodes wins over a foreign siteKey', () async {
+      await bridge.dispatch('fm.vod', {
+        'siteKey': 'hongguo',
+        'vod_id': '456',
+        'episodes': [
+          {'name': 'E1', 'url': 'https://cdn.example.com/1.mp4'},
+        ],
+      });
+      expect(fakeHost.pushed.single, isA<HtmlVodDetailPage>());
+    });
+
+    test('fm.vod to an unknown site rejects bad_payload', () async {
+      expect(
+        bridge.dispatch('fm.vod', {
+          'siteKey': 'no-such-site',
+          'vod_id': '123',
+        }),
+        throwsA(
+          isA<HtmlBridgeError>().having((e) => e.code, 'code', 'bad_payload'),
+        ),
+      );
+      expect(fakeHost.pushed, isEmpty);
+    });
+
+    test('fm.vod to its own html site rejects bad_payload', () async {
+      expect(
+        bridge.dispatch('fm.vod', {
+          'siteKey': 'html:demo',
+          'vod_id': '123',
+        }),
+        throwsA(
+          isA<HtmlBridgeError>().having((e) => e.code, 'code', 'bad_payload'),
+        ),
+      );
+      expect(fakeHost.pushed, isEmpty);
+    });
+
+    test('fm.vod to another html site reports unsupported', () async {
+      SourceSite.importedSites['html:w3fake'] = const SourceSite(
+        'html:w3fake',
+        '假 HTML 站',
+        'test',
+        origin: SourceSite.originImport,
+        importType: 'html',
+      );
+      try {
+        await expectLater(
+          bridge.dispatch('fm.vod', {
+            'siteKey': 'html:w3fake',
+            'vod_id': '123',
+          }),
+          throwsA(
+            isA<HtmlBridgeError>().having(
+              (e) => e.code,
+              'code',
+              'unsupported',
+            ),
+          ),
+        );
+      } finally {
+        SourceSite.importedSites.remove('html:w3fake');
+      }
+      expect(fakeHost.pushed, isEmpty);
+    });
+
     test('resolver episodes reject honestly', () async {
       expect(
         bridge.dispatch('fm.vodInline', {
@@ -519,6 +628,41 @@ void main() {
       );
       expect(await bridge.dispatch('fm.openLive', {}), {'opened': true});
     });
+
+    test('openLive success exits the host page, openKeep does not', () async {
+      bridge = HtmlBridge(
+        siteKey: 'html:demo',
+        siteName: '演示站',
+        repository: FixtureRepository(),
+        store: store,
+        host: fakeHost.build(
+          onOpenLive: (_) async => true,
+          onOpenKeep: (_) async => true,
+        ),
+        cache: cache,
+        sendToPage: sink.call,
+        gatewayPort: 18099,
+      );
+      await bridge.dispatch('fm.openKeep', {});
+      expect(fakeHost.exited, 0);
+      await bridge.dispatch('fm.openLive', {});
+      expect(fakeHost.exited, 1);
+    });
+
+    test('openLive returning false does not exit', () async {
+      bridge = HtmlBridge(
+        siteKey: 'html:demo',
+        siteName: '演示站',
+        repository: FixtureRepository(),
+        store: store,
+        host: fakeHost.build(onOpenLive: (_) async => false),
+        cache: cache,
+        sendToPage: sink.call,
+        gatewayPort: 18099,
+      );
+      expect(await bridge.dispatch('fm.openLive', {}), {'opened': false});
+      expect(fakeHost.exited, 0);
+    });
   });
 
   group('fm.back / fm.reload / fm.preloadArtwork', () {
@@ -606,9 +750,74 @@ void main() {
         ),
       );
       expect(
+        bridge.dispatch('fm.ui.restoreChrome', {}),
+        throwsA(
+          isA<HtmlBridgeError>().having((e) => e.code, 'code', 'unsupported'),
+        ),
+      );
+      expect(
         await bridge.dispatch('fm.ui.getViewport', {}),
         {'width': 390, 'height': 844, 'pixelRatio': 3.0},
       );
+    });
+
+    test('fm.ui.setChrome applies the normalized mode when wired', () async {
+      bridge = HtmlBridge(
+        siteKey: 'html:demo',
+        siteName: '演示站',
+        repository: FixtureRepository(),
+        store: store,
+        host: fakeHost.build(wireChrome: true),
+        cache: cache,
+        sendToPage: sink.call,
+        gatewayPort: 18099,
+      );
+      expect(
+        await bridge.dispatch('fm.ui.setChrome', {'mode': 'immersive'}),
+        {'mode': 'immersive', 'chromeMode': 'immersive'},
+      );
+      expect(
+        await bridge.dispatch('fm.ui.setChrome', {'mode': 'tv-full'}),
+        {'mode': 'edge', 'chromeMode': 'edge'},
+      );
+      expect(fakeHost.chromeModes, ['immersive', 'edge']);
+      expect(
+        await bridge.dispatch('fm.ui.restoreChrome', {}),
+        {'mode': 'normal', 'chromeMode': 'normal'},
+      );
+      expect(fakeHost.chromeRestored, 1);
+    });
+
+    test('fm.ui.setChrome with an unknown mode rejects bad_payload', () async {
+      bridge = HtmlBridge(
+        siteKey: 'html:demo',
+        siteName: '演示站',
+        repository: FixtureRepository(),
+        store: store,
+        host: fakeHost.build(wireChrome: true),
+        cache: cache,
+        sendToPage: sink.call,
+        gatewayPort: 18099,
+      );
+      expect(
+        bridge.dispatch('fm.ui.setChrome', {'mode': 'bogus'}),
+        throwsA(
+          isA<HtmlBridgeError>().having((e) => e.code, 'code', 'bad_payload'),
+        ),
+      );
+      expect(fakeHost.chromeModes, isEmpty);
+    });
+
+    test('normalizeHtmlChromeMode maps TV modes to phone modes', () {
+      expect(normalizeHtmlChromeMode('normal'), 'normal');
+      expect(normalizeHtmlChromeMode('tv-normal'), 'normal');
+      expect(normalizeHtmlChromeMode('tv-overlay'), 'normal');
+      expect(normalizeHtmlChromeMode('edge'), 'edge');
+      expect(normalizeHtmlChromeMode('tv-full'), 'edge');
+      expect(normalizeHtmlChromeMode('tv-toolbar-hidden'), 'edge');
+      expect(normalizeHtmlChromeMode('immersive'), 'immersive');
+      expect(normalizeHtmlChromeMode('bogus'), isNull);
+      expect(normalizeHtmlChromeMode(''), isNull);
     });
 
     test('fm._urlchange tracks the current url', () async {

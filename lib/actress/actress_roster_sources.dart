@@ -188,9 +188,13 @@ List<RosterPerson> parseChaoliuRoster(String body) {
 
 /// 解析潮流 `f/<id>.json`：数组每项 `[mid, 番号, 日期]`，全量取回
 /// （py 只取前 200 部作选集显示，同步要全量）。
+/// 解出不是数组时抛错（不要静默回空：空结果曾被同步记成成功，
+/// 中毒状态永久化）；空数组照常返回，由同步层记失败重取。
 List<RosterFilm> parseChaoliuFilms(String body) {
   final decoded = jsonDecode(body);
-  if (decoded is! List) return const [];
+  if (decoded is! List) {
+    throw StateError('chaoliu films: expected a JSON array');
+  }
   final out = <RosterFilm>[];
   for (final item in decoded) {
     if (item is! List || item.length < 2) continue;

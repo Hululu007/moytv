@@ -1,6 +1,8 @@
 package seku
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"fmt"
 	"html"
 	"io"
@@ -126,7 +128,12 @@ func hjwFetch(path string) (string, error) {
 		if err != nil || len(body) <= 2000 || isChallengePage(body) {
 			continue
 		}
-		if !strings.Contains(body, "/archives/") && !strings.Contains(body, "<h1") {
+		// Learning a host requires real content markers: parked
+		// placeholder pages carry an <h1> but no /archives/ cards,
+		// and learning one poisons every later call (empty lists,
+		// no error). Verified 2026-11-18: hjw2026.com serves such
+		// a placeholder (8.4KB, no /archives/ anchors).
+		if !strings.Contains(body, "/archives/") {
 			continue
 		}
 		if final != "" {
@@ -237,6 +244,85 @@ func hjwParseCards(pageHTML string) []map[string]interface{} {
 		}
 	}
 	return out
+}
+
+// hjwCoverFetch fetches a cover and decrypts it when the bytes are
+// AES-128-CBC encrypted at rest (pic.gyezbp.cn serves ciphertext with
+// content-type binary/octet-stream; verified 2026-11-18: decrypting
+// with the image-CDN key/IV published in the sibling 91sanji player's
+// inline script yields a valid JFIF JPEG). Plain images pass through
+// untouched; undecryptable bytes are returned as fetched.
+func hjwCoverFetch(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", hjwUA)
+	resp, err := hjwClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("cover http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 24<<20))
+	if err != nil {
+		return nil, err
+	}
+	if hjwIsImage(body) {
+		return body, nil
+	}
+	if dec, err := hjwAESDecrypt(body); err == nil && hjwIsImage(dec) {
+		return dec, nil
+	}
+	return body, nil
+}
+
+func hjwIsImage(b []byte) bool {
+	if len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF {
+		return true
+	}
+	if len(b) >= 8 && string(b[:8]) == "\x89PNG\r\n\x1a\n" {
+		return true
+	}
+	if len(b) >= 6 && (string(b[:6]) == "GIF87a" || string(b[:6]) == "GIF89a") {
+		return true
+	}
+	if len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP" {
+		return true
+	}
+	return false
+}
+
+func hjwAESDecrypt(data []byte) ([]byte, error) {
+	key := []byte("f5d965df75336270")
+	iv := []byte("97b60394abc2fbe1")
+	if len(data) == 0 || len(data)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("hjw cover: bad ciphertext size")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, len(data))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(out, data)
+	if len(out) > 0 {
+		pad := int(out[len(out)-1])
+		if pad > 0 && pad <= aes.BlockSize && pad <= len(out) {
+			ok := true
+			for _, b := range out[len(out)-pad:] {
+				if int(b) != pad {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				out = out[:len(out)-pad]
+			}
+		}
+	}
+	return out, nil
 }
 
 func hjwCategories(slot string) []interface{} {
@@ -384,5 +470,6 @@ func init() {
 		Resolve:    hjwResolve,
 		Search:     hjwSearch,
 		Headers:    func() map[string]string { return map[string]string{"User-Agent": hjwUA} },
+		CoverFetch: hjwCoverFetch,
 	}, "hjw")
 }

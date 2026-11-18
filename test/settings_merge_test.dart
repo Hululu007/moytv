@@ -104,6 +104,13 @@ void main() {
   ) async {
     await pumpSettings(tester, onHideAdult: () {});
     await reveal(tester, 'plugin-market-entry');
+    // reveal 只保证项已建成（可能仍在缓存区、视口之下）：DNS 项加入后
+    // 该项被顶到视口下方，点之前再向上拖一段，让它真正落进视口。
+    await tester.drag(
+      find.byKey(const ValueKey('settings-list')),
+      const Offset(0, -300),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.byKey(const ValueKey('plugin-market-entry')));
     await settle(tester);
     expect(find.byType(PluginMarketScreen), findsOneWidget);

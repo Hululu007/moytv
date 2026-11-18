@@ -143,7 +143,7 @@ void main() {
     expect(names.intersection(removed23), isEmpty);
   });
 
-  test('播种标记写当前包版本 11', () async {
+  test('播种标记写当前包版本 13', () async {
     await store.ensureBuiltinRules(
       bundleText: jsonEncode([_builtinRule('甲', 'v1')]),
     );
@@ -151,7 +151,7 @@ void main() {
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
     expect(marker['version'], HaikuoStore.builtinBundleVersion);
-    expect(marker['version'], 11);
+    expect(marker['version'], 13);
     expect(marker['names'], ['甲']);
   });
 
@@ -190,7 +190,7 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 11);
+    expect(marker['version'], 13);
   });
 
   test('标记损坏时当没播种过：整包播种、不崩溃、标记重写', () async {
@@ -203,6 +203,6 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 11);
+    expect(marker['version'], 13);
   });
 }

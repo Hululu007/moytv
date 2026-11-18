@@ -29,6 +29,8 @@ import 'plugin_share_intent.dart';
 import 'profiles_screen.dart';
 import 'cloud_drive/cloud_credential_store.dart';
 import 'cloud_drive/cloud_drive_stations.dart';
+import 'nexhub_scraper/network/network_config_service.dart';
+import 'nexhub_scraper/network/runtime/nexhub_http_overrides.dart';
 import 'package_smoke.dart';
 import 'signature_check.dart';
 import 'video_enhancement_assets.dart';
@@ -37,6 +39,12 @@ import 'boot_video.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 全局网络覆盖（DNS 设置的生效点）：Dart 侧所有 HttpClient 派生流量
+  // 按 NetworkConfigService 的全局档案解析域名。默认档案（系统 DNS）
+  // 直通裸客户端，行为与以前一致；用户配了 DNS/Hosts/SNI 后才走
+  // 自定义连接。先装覆盖、再读配置，首批请求就按用户配置走。
+  HttpOverrides.global = NexHubHttpOverrides();
+  await NetworkConfigService.instance.load();
   // 网络直连：应用内代理机件已删，所有请求走直连（手机系统 VPN 在系统层
   // 生效，不受影响）。海阔规则自带 proxy 字段的仍由规则自己的客户端处理。
   unawaited(PlaybackForeground.clearStaleFlag());

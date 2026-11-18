@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'site_icon.dart';
 
 /// Win7 主题的桌面外壳：墙纸 + 左侧图标列 + 底部任务栏 + 开始菜单
 /// + 窗口标题栏。数值全部取用户 2026-11-16 发来的桌面设计稿精确值
@@ -24,7 +26,8 @@ enum Win7WindowKind {
   miniApp,
   multimedia,
   mine,
-  actress;
+  actress,
+  game;
 
   /// 窗口标题栏与任务栏条目上显示的区名（取桌面图标叫法）。
   String get title => switch (this) {
@@ -35,8 +38,9 @@ enum Win7WindowKind {
     Win7WindowKind.novel => '阅读',
     Win7WindowKind.miniApp => '小程序',
     Win7WindowKind.multimedia => '我的电脑',
-    Win7WindowKind.mine => '我的',
-    Win7WindowKind.actress => '女优库',
+    Win7WindowKind.mine => '我的电脑',
+    Win7WindowKind.actress => '演员库',
+    Win7WindowKind.game => '红警2',
   };
 
   IconData get icon => switch (this) {
@@ -46,25 +50,87 @@ enum Win7WindowKind {
     Win7WindowKind.audio => Icons.headphones,
     Win7WindowKind.novel => Icons.menu_book,
     Win7WindowKind.miniApp => Icons.apps,
-    Win7WindowKind.multimedia => Icons.computer,
-    Win7WindowKind.mine => LucideIcons.user,
+    Win7WindowKind.multimedia => Icons.storage,
+    Win7WindowKind.mine => Icons.desktop_windows,
     Win7WindowKind.actress => Icons.people_alt_outlined,
+    Win7WindowKind.game => Icons.sports_esports,
+  };
+
+  /// 桌面图标底块的渐变色（一深一浅，左上到右下）：成套彩色，
+  /// Win7/XP 桌面共用同一套；任务栏与标题栏的小图标仍用白色，
+  /// 不走这套配色。mine（我的电脑）与 multimedia（多媒体窗）
+  /// 标题同名，图标与配色刻意区分：mine 是显示器 + XP 蓝，
+  /// multimedia 是硬盘 + slate 灰，任务栏上能分清。
+  List<Color> get iconGradient => switch (this) {
+    Win7WindowKind.library => const [Color(0xFF6366F1), Color(0xFF4338CA)],
+    Win7WindowKind.drama => const [Color(0xFFA855F7), Color(0xFF7E22CE)],
+    Win7WindowKind.live => const [Color(0xFFF25022), Color(0xFFC2410C)],
+    Win7WindowKind.audio => const [Color(0xFFF59E0B), Color(0xFFD97706)],
+    Win7WindowKind.novel => const [Color(0xFF22A06B), Color(0xFF15803D)],
+    Win7WindowKind.miniApp => const [Color(0xFF06B6D4), Color(0xFF0284C7)],
+    Win7WindowKind.multimedia => const [Color(0xFF64748B), Color(0xFF475569)],
+    Win7WindowKind.mine => const [Color(0xFF3A93FF), Color(0xFF0058E6)],
+    Win7WindowKind.actress => const [Color(0xFFEC4899), Color(0xFFDB2777)],
+    Win7WindowKind.game => const [Color(0xFFB91C1C), Color(0xFF7F1D1D)],
   };
 }
 
-/// 桌面图标默认顺序与内容：7 个。短剧、多媒体（我的电脑）没有
-/// 桌面图标、只在开始菜单树里。顺序口径（用户 2026-11-17 令）：
-/// 女优库排在“我的”上面；直播图标在片库图标后面（与现有图标同
-/// 风格）。用户长按拖拽换过顺序后，以存下来的顺序为准（见
-/// [loadDesktopIconOrder]），这份默认顺序只作没存过时的回落。
+/// 桌面图标底块（Win7/XP 共用）：圆角渐变色块 + 白色字形 +
+/// 浅边与投影，亮墙纸（XP 山丘）与深墙纸（Win7 蓝渐变）上都
+/// 清晰可读。只负责图标本体，标题文字由调用方画在底块下面。
+class DesktopIconBadge extends StatelessWidget {
+  const DesktopIconBadge({super.key, required this.kind, this.size = 48});
+
+  final Win7WindowKind kind;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = kind.iconGradient;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors,
+        ),
+        borderRadius: BorderRadius.circular(size * 0.25),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.55),
+          width: 1,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Icon(kind.icon, size: size * 0.58, color: Colors.white),
+    );
+  }
+}
+
+/// 桌面图标默认顺序与内容：8 个。短剧、多媒体没有桌面图标、
+/// 只在开始菜单树里（多媒体窗口标题也叫“我的电脑”，与桌面
+/// 顶上的“我的电脑”图标是两个窗口，图标与配色不同）。顺序口径
+/// （用户 2026-11-18 令）：我的电脑置顶排第一位，其余按听书、
+/// 阅读、片库、直播、小程序、女优库、游戏的相对顺序往下排。
+/// 用户长按拖拽换过顺序后，以存下来的顺序为准（见
+/// [loadDesktopIconOrder]），这份默认顺序只作没存过时的回落；
+/// 以前拖过的手机保留自己拖的顺序，不自动改（可长按再拖回来）。
 const List<Win7WindowKind> win7DesktopIcons = [
+  Win7WindowKind.mine,
   Win7WindowKind.audio,
   Win7WindowKind.novel,
   Win7WindowKind.library,
   Win7WindowKind.live,
   Win7WindowKind.miniApp,
   Win7WindowKind.actress,
-  Win7WindowKind.mine,
+  Win7WindowKind.game,
 ];
 
 /// 桌面图标顺序存 SharedPreferences 的键（Win7/XP 共用同一份顺序）。
@@ -117,6 +183,51 @@ Future<void> saveDesktopIconOrder(List<Win7WindowKind> order) async {
   } catch (_) {}
 }
 
+/// 单个桌面图标项的高度：图标 48 + 图标与标题间距 4 + 标题行高
+/// + 底部留白 20。标题行高用 TextPainter 按两边标题同一字号
+/// （13 号）与当前文字缩放实测，不写死行高值；字号或缩放变了，
+/// 每列个数跟着变，图标不会被任务栏盖住。行高不低于字号本身：
+/// 字体未就绪的首帧实测会偏小，下限挡住这种低估，避免首帧
+/// 多排一项溢出（真机字体行高本就大于字号，下限不生效）。
+double desktopIconItemHeight(BuildContext context) {
+  final painter = TextPainter(
+    text: const TextSpan(text: '标题', style: TextStyle(fontSize: 13)),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout();
+  final titleHeight = painter.height < 13 ? 13.0 : painter.height;
+  return 48 + 4 + titleHeight + 20;
+}
+
+/// 一列能放几个图标：可用高度除以单项高度，向下取整，至少 1 个。
+/// 可用高度无约束（无限）时返回 [count]，即全部放一列。
+int desktopItemsPerColumn(
+  double availableHeight,
+  double itemHeight,
+  int count,
+) {
+  if (!availableHeight.isFinite || itemHeight <= 0) return count;
+  final per = (availableHeight / itemHeight).floor();
+  return per < 1 ? 1 : per;
+}
+
+/// 把线性图标顺序按每列 [perColumn] 个切成列块（列优先：第一列
+/// 排满再排第二列，和真电脑桌面一样）。[perColumn] 小于 1 时按
+/// 1 算；顺序为空时返回空表。
+List<List<Win7WindowKind>> splitDesktopIconsIntoColumns(
+  List<Win7WindowKind> order,
+  int perColumn,
+) {
+  if (order.isEmpty) return const [];
+  final per = perColumn < 1 ? 1 : perColumn;
+  final columns = <List<Win7WindowKind>>[];
+  for (var i = 0; i < order.length; i += per) {
+    final end = i + per > order.length ? order.length : i + per;
+    columns.add(order.sublist(i, end));
+  }
+  return columns;
+}
+
 /// 开始菜单树节点：组节点只有 [label] 与 [children]，叶子节点带
 /// 目标窗口种类 [kind] 与站点 id [siteId]（点叶子开对应窗口并选站）。
 /// 节点名全部由调用方取注册表填，本文件不写死任何站点名。
@@ -136,6 +247,241 @@ class Win7TreeNode {
   bool get isLeaf => children.isEmpty;
 }
 
+/// 开始菜单右列固定站点：存 SharedPreferences 的有序 siteId 列表
+/// （Win7/XP 共用同一份）。解析只认树里找得到的叶子，找不到或
+/// 已隐藏（不在树里）的 id 静默跳过。用户用长按菜单增删；首次
+/// 打开（从没存过）时随机抽几个存下来，之后只读存下来的那份。
+const String startMenuPinnedSitesKey = 'moyi_start_menu_pinned_sites';
+
+/// 首次打开开始菜单时随机抽的固定站点数（从没存过时只抽一次）。
+const int startMenuPinnedInitialDrawCount = 6;
+
+/// 从树里所有可见站点叶子中随机抽 [count] 个不重复的叶子（kind
+/// 与 siteId 都齐的叶子；“暂无可用站点”占位叶与无站点的单叶如
+/// 女优库不在内；同一 id 只取树里第一次出现的那处）。叶子不够
+/// 时全取。站名一律取树节点，不写死任何站点。
+List<Win7TreeNode> drawRandomPinnedSites(
+  List<Win7TreeNode> groups,
+  int count,
+  Random random,
+) {
+  final leaves = <Win7TreeNode>[];
+  final seen = <String>{};
+  void walk(Win7TreeNode node) {
+    if (node.isLeaf) {
+      final siteId = node.siteId;
+      if (node.kind != null && siteId != null && seen.add(siteId)) {
+        leaves.add(node);
+      }
+      return;
+    }
+    for (final child in node.children) {
+      walk(child);
+    }
+  }
+  for (final group in groups) {
+    walk(group);
+  }
+  leaves.shuffle(random);
+  if (leaves.length <= count) return leaves;
+  return leaves.sublist(0, count);
+}
+
+/// 把存下来的 siteId 列表解析成固定节点：按存序在树里找叶子，
+/// kind/siteId/label 都取树节点；找不到、重复、已隐藏（不在树里）
+/// 的 id 静默跳过；同一 id 在多组出现时取树里第一次出现的节点。
+/// 存表为空时回空列表（不再自动补抽）。
+List<Win7TreeNode> resolveStartMenuPinnedSites(
+  List<Win7TreeNode> groups,
+  List<String> stored,
+) {
+  final byId = <String, Win7TreeNode>{};
+  void walk(Win7TreeNode node) {
+    if (node.isLeaf) {
+      final siteId = node.siteId;
+      if (node.kind != null && siteId != null) {
+        byId.putIfAbsent(siteId, () => node);
+      }
+      return;
+    }
+    for (final child in node.children) {
+      walk(child);
+    }
+  }
+  for (final group in groups) {
+    walk(group);
+  }
+  final resolved = <Win7TreeNode>[];
+  final seen = <String>{};
+  for (final id in stored) {
+    if (!seen.add(id)) continue;
+    final node = byId[id];
+    if (node != null) resolved.add(node);
+  }
+  return resolved;
+}
+
+/// 存固定列表（有序 siteId）；存失败静默忽略。
+Future<void> saveStartMenuPinnedSites(List<String> siteIds) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(startMenuPinnedSitesKey, siteIds);
+  } catch (_) {}
+}
+
+/// 读固定列表：存过就读存下来的那份（哪怕是空表）；从没存过
+/// （key 不存在）时随机抽 [startMenuPinnedInitialDrawCount] 个立即
+/// 存下来当固定列表。只有“从没存过”才抽一次——用户把固定全取
+/// 消后，存下来的是空表，之后打开不再自动补抽。读失败时回空列表。
+Future<List<Win7TreeNode>> loadStartMenuPinnedSites(
+  List<Win7TreeNode> groups, {
+  Random? random,
+}) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(startMenuPinnedSitesKey);
+    if (stored != null) {
+      return resolveStartMenuPinnedSites(groups, stored);
+    }
+    final drawn = drawRandomPinnedSites(
+      groups,
+      startMenuPinnedInitialDrawCount,
+      random ?? Random(),
+    );
+    await saveStartMenuPinnedSites(
+      drawn.map((node) => node.siteId!).toList(),
+    );
+    return drawn;
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// 开始菜单上下文菜单（长按弹出，电脑鼠标右键同式，Win7/XP 共用）：
+/// 在长按点附近打开，点菜单外任意处关闭（showMenu 自带遮罩）。
+/// [entries] 是 (值, 文案) 对；返回选中的值，没选回 null。
+Future<T?> showStartMenuContextMenu<T>({
+  required BuildContext context,
+  required Offset globalPosition,
+  required List<({T value, String label})> entries,
+  required Color backgroundColor,
+  required Color textColor,
+}) {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  return showMenu<T>(
+    context: context,
+    position: RelativeRect.fromRect(
+      Rect.fromPoints(globalPosition, globalPosition),
+      Offset.zero & overlay.size,
+    ),
+    color: backgroundColor,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    items: [
+      for (final entry in entries)
+        PopupMenuItem<T>(
+          value: entry.value,
+          child: Text(
+            entry.label,
+            style: TextStyle(color: textColor, fontSize: 14),
+          ),
+        ),
+    ],
+  );
+}
+
+/// 开始菜单右列：固定站点栏（Win7/XP 共用）。每行一个站点图标 +
+/// 站名，点按效果与点树里对应叶子一样（走同一个 onLeafTap，调用
+/// 方关菜单）；长按一行调 [onRowLongPress]，由调用方弹取消固定菜单。
+/// 图标复用 [SiteIcon] 三级解析，与站点选择弹窗同一套，不另起图标
+/// 逻辑。列表为空时显示一句提示，教用户长按左侧站点固定到这里。
+class StartMenuPinnedColumn extends StatelessWidget {
+  const StartMenuPinnedColumn({
+    super.key,
+    required this.keyPrefix,
+    required this.pinned,
+    required this.onLeafTap,
+    required this.onRowLongPress,
+    required this.textColor,
+    required this.hoverColor,
+  });
+
+  /// 行 key 前缀：Win7 用 'win7-start-menu'，XP 用 'xp-start-menu'。
+  final String keyPrefix;
+  final List<Win7TreeNode> pinned;
+  final void Function(Win7WindowKind kind, String? siteId) onLeafTap;
+
+  /// 长按一行的回调：长按点的全局坐标 + 该行节点，调用方弹菜单。
+  final void Function(Offset globalPosition, Win7TreeNode node) onRowLongPress;
+  final Color textColor;
+  final Color hoverColor;
+
+  Widget _row(Win7TreeNode node) {
+    final siteId = node.siteId!;
+    return GestureDetector(
+      onLongPressStart: (details) =>
+          onRowLongPress(details.globalPosition, node),
+      child: InkWell(
+        key: ValueKey('$keyPrefix-pinned-$siteId'),
+        onTap: () {
+          final kind = node.kind;
+          if (kind != null) onLeafTap(kind, siteId);
+        },
+        hoverColor: hoverColor,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          width: double.infinity,
+          child: Row(
+            children: [
+              SiteIcon(
+                siteId: siteId,
+                siteName: node.label,
+                size: 30,
+                borderRadius: 8,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  node.label,
+                  style: TextStyle(color: textColor, fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: ValueKey('$keyPrefix-pinned'),
+      child: pinned.isEmpty
+          ? Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  '长按左侧站点，固定到这里',
+                  style: TextStyle(
+                    color: textColor.withValues(alpha: 0.6),
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            )
+          : SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [for (final node in pinned) _row(node)],
+              ),
+            ),
+    );
+  }
+}
+
 /// 设计稿主题色。
 abstract final class Win7Theme {
   static const Color taskBarBg = Color(0xCC1C1C1C);
@@ -150,9 +496,10 @@ abstract final class Win7Theme {
   ];
 }
 
-/// 桌面图标列（Win7/XP 共用）：竖排图标，点按开窗口，长按拖拽
-/// 换位置；换完的顺序立刻存下来，下次打开还在。图标本体（图标 +
-/// 标题两行）由调用方按各自风格提供；拖拽手势、顺序状态与持久化
+/// 桌面图标列（Win7/XP 共用）：按列排图标，点按开窗口，长按拖拽
+/// 换位置；换完的顺序立刻存下来，下次打开还在。一列排满后换下
+/// 一列继续排（和真电脑桌面一样）。图标本体（图标 + 标题两行）
+/// 由调用方按各自风格提供；拖拽手势、顺序状态与持久化
 /// 都收在这里，两边行为一致。
 class DesktopIconColumn extends StatefulWidget {
   const DesktopIconColumn({
@@ -207,7 +554,9 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
 
   Widget _item(Win7WindowKind kind, {required bool hovered}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
+      // 8 个图标竖排：行距 20，844 高视口 + 底部安全边距里
+      // 第 8 个图标的标题刚好不被任务栏盖住（24 时标题被盖）。
+      padding: const EdgeInsets.only(bottom: 20),
       child: Container(
         decoration: hovered
             ? BoxDecoration(
@@ -224,40 +573,66 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
     );
   }
 
+  Widget _dragTarget(Win7WindowKind kind) {
+    return DragTarget<Win7WindowKind>(
+      onWillAcceptWithDetails: (details) => details.data != kind,
+      onAcceptWithDetails: (details) => _move(details.data, kind),
+      builder: (context, candidateData, rejectedData) {
+        return LongPressDraggable<Win7WindowKind>(
+          data: kind,
+          onDragStarted: HapticFeedback.mediumImpact,
+          feedback: Material(
+            color: Colors.transparent,
+            child: Opacity(
+              opacity: 0.85,
+              child: widget.iconBuilder(kind),
+            ),
+          ),
+          childWhenDragging: Opacity(
+            opacity: 0.3,
+            child: _item(kind, hovered: false),
+          ),
+          child: _item(kind, hovered: candidateData.isNotEmpty),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        for (final kind in _order)
-          DragTarget<Win7WindowKind>(
-            onWillAcceptWithDetails: (details) => details.data != kind,
-            onAcceptWithDetails: (details) => _move(details.data, kind),
-            builder: (context, candidateData, rejectedData) {
-              return LongPressDraggable<Win7WindowKind>(
-                data: kind,
-                onDragStarted: HapticFeedback.mediumImpact,
-                feedback: Material(
-                  color: Colors.transparent,
-                  child: Opacity(
-                    opacity: 0.85,
-                    child: widget.iconBuilder(kind),
-                  ),
-                ),
-                childWhenDragging: Opacity(
-                  opacity: 0.3,
-                  child: _item(kind, hovered: false),
-                ),
-                child: _item(kind, hovered: candidateData.isNotEmpty),
-              );
-            },
-          ),
-      ],
+    // 满列换列（和真电脑桌面一样）：用布局实测的可用高度除以
+    // 单项高度，算出一列能放几个，排满一列再排下一列。一列能
+    // 放下时只有一列，外观与原来一字不差；多列时每项仍是
+    // DragTarget，拖拽换位逻辑（_move）不改。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final perColumn = desktopItemsPerColumn(
+          constraints.maxHeight,
+          desktopIconItemHeight(context),
+          _order.length,
+        );
+        final columns = splitDesktopIconsIntoColumns(_order, perColumn);
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < columns.length; i++) ...[
+              if (i > 0) const SizedBox(width: 20),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  for (final kind in columns[i]) _dragTarget(kind),
+                ],
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
 
-/// 桌面：蓝渐变墙纸 + 左侧竖排 7 图标。桌面本身没有任何导航。
+/// 桌面：蓝渐变墙纸 + 左侧图标区（竖排，满一列换一列）。桌面本身没有任何导航。
 class Win7Desktop extends StatelessWidget {
   const Win7Desktop({super.key, required this.onIconTap});
 
@@ -284,11 +659,21 @@ class Win7Desktop extends StatelessWidget {
               onIconTap: onIconTap,
               iconBuilder: (kind) => Column(
                 children: [
-                  Icon(kind.icon, size: 42, color: Colors.white),
+                  DesktopIconBadge(kind: kind),
                   const SizedBox(height: 4),
                   Text(
                     kind.title,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black54,
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -419,57 +804,140 @@ class _Win7StartMenuState extends State<Win7StartMenu> {
   /// 已展开的节点路径（下标串，如 "0-2"）；默认全收起，与设计稿一致。
   final Set<String> _expanded = {};
 
+  /// 右列固定站点：先空着（显示提示语），存表读到后换成解析结果；
+  /// 从没存过时读到的是首次随机抽的那份。
+  List<Win7TreeNode> _pinned = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPinned();
+  }
+
+  Future<void> _loadPinned() async {
+    final pinned = await loadStartMenuPinnedSites(widget.groups);
+    if (!mounted) return;
+    setState(() => _pinned = pinned);
+  }
+
+  /// 把树叶子固定到右列末尾并存盘；已在固定栏里时不重复加。
+  Future<void> _pinNode(Win7TreeNode node) async {
+    final siteId = node.siteId;
+    if (siteId == null || node.kind == null) return;
+    if (_pinned.any((pinned) => pinned.siteId == siteId)) return;
+    final updated = [..._pinned, node];
+    setState(() => _pinned = updated);
+    await saveStartMenuPinnedSites(
+      updated.map((pinned) => pinned.siteId!).toList(),
+    );
+  }
+
+  /// 从右列取消固定并存盘；全取消后存下来的是空表，不再自动补抽。
+  Future<void> _unpinSite(String siteId) async {
+    final updated =
+        _pinned.where((pinned) => pinned.siteId != siteId).toList();
+    if (updated.length == _pinned.length) return;
+    setState(() => _pinned = updated);
+    await saveStartMenuPinnedSites(
+      updated.map((pinned) => pinned.siteId!).toList(),
+    );
+  }
+
+  /// 长按树叶子弹出的上下文菜单：只有“固定到快捷方式”一项。
+  Future<void> _showLeafMenu(Offset position, Win7TreeNode node) async {
+    final action = await showStartMenuContextMenu<String>(
+      context: context,
+      globalPosition: position,
+      entries: const [(value: 'pin', label: '固定到快捷方式')],
+      backgroundColor: Win7Theme.startMenuBg,
+      textColor: Win7Theme.textColor,
+    );
+    if (action == 'pin' && mounted) _pinNode(node);
+  }
+
+  /// 长按右列固定站点弹出的上下文菜单：只有“取消固定”一项。
+  Future<void> _showPinnedMenu(Offset position, Win7TreeNode node) async {
+    final siteId = node.siteId;
+    if (siteId == null) return;
+    final action = await showStartMenuContextMenu<String>(
+      context: context,
+      globalPosition: position,
+      entries: const [(value: 'unpin', label: '取消固定')],
+      backgroundColor: Win7Theme.startMenuBg,
+      textColor: Win7Theme.textColor,
+    );
+    if (action == 'unpin' && mounted) _unpinSite(siteId);
+  }
+
   Widget _renderNode(Win7TreeNode node, String path, double leftPadding) {
     final expanded = _expanded.contains(path);
+    // 只有可固定的叶子才响应长按（组节点与无站点叶子不弹菜单）；
+    // 长按手势与点按/展开互不干扰（手势竞技场裁决）。
+    final pinnable = node.isLeaf && node.kind != null && node.siteId != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          key: ValueKey('win7-tree-node-$path'),
-          onTap: () {
-            if (node.isLeaf) {
-              final kind = node.kind;
-              if (kind != null) widget.onLeafTap(kind, node.siteId);
-              return;
-            }
-            setState(() {
-              if (expanded) {
-                _expanded.remove(path);
-              } else {
-                _expanded.add(path);
+        GestureDetector(
+          onLongPressStart: pinnable
+              ? (details) => _showLeafMenu(details.globalPosition, node)
+              : null,
+          child: InkWell(
+            key: ValueKey('win7-tree-node-$path'),
+            onTap: () {
+              if (node.isLeaf) {
+                final kind = node.kind;
+                if (kind != null) widget.onLeafTap(kind, node.siteId);
+                return;
               }
-            });
-          },
-          hoverColor: Win7Theme.hoverBg,
-          child: Container(
-            padding: EdgeInsets.only(
-              left: leftPadding,
-              top: 10,
-              bottom: 10,
-              right: 12,
-            ),
-            width: double.infinity,
-            child: Row(
-              children: [
-                if (!node.isLeaf)
-                  Icon(
-                    expanded ? Icons.expand_more : Icons.chevron_right,
-                    color: Win7Theme.textColor,
-                    size: 18,
-                  ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    node.label,
-                    style: const TextStyle(
+              setState(() {
+                if (expanded) {
+                  _expanded.remove(path);
+                } else {
+                  _expanded.add(path);
+                }
+              });
+            },
+            hoverColor: Win7Theme.hoverBg,
+            child: Container(
+              padding: EdgeInsets.only(
+                left: leftPadding,
+                top: 10,
+                bottom: 10,
+                right: 12,
+              ),
+              width: double.infinity,
+              child: Row(
+                children: [
+                  if (!node.isLeaf)
+                    Icon(
+                      expanded ? Icons.expand_more : Icons.chevron_right,
                       color: Win7Theme.textColor,
-                      fontSize: 14,
+                      size: 18,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  const SizedBox(width: 6),
+                  // 组行画该区的图标（箭头后、文字前）；叶子行不画。
+                  if (!node.isLeaf && node.kind != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Icon(
+                        node.kind!.icon,
+                        color: Win7Theme.textColor,
+                        size: 18,
+                      ),
+                    ),
+                  Expanded(
+                    child: Text(
+                      node.label,
+                      style: const TextStyle(
+                        color: Win7Theme.textColor,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -493,25 +961,52 @@ class _Win7StartMenuState extends State<Win7StartMenu> {
           ),
         ),
         Align(
-          alignment: Alignment.bottomCenter,
+          alignment: Alignment.bottomLeft,
           child: Container(
             height: MediaQuery.of(context).size.height * 0.65,
             width: MediaQuery.of(context).size.width * 0.92,
-            margin: const EdgeInsets.only(bottom: 56),
+            margin: EdgeInsets.zero,
             decoration: BoxDecoration(
               color: Win7Theme.startMenuBg,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (var i = 0; i < widget.groups.length; i++)
-                      _renderNode(widget.groups[i], '$i', 12),
-                  ],
-                ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 左列：导航树，展开/收起行为与原来一字不差。
+                  Expanded(
+                    flex: 3,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (var i = 0; i < widget.groups.length; i++)
+                            _renderNode(widget.groups[i], '$i', 12),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const VerticalDivider(
+                    key: ValueKey('win7-start-menu-divider'),
+                    width: 1,
+                    thickness: 1,
+                    color: Colors.white24,
+                  ),
+                  // 右列：固定站点栏（图标 + 站名），与电脑开始菜单同式。
+                  Expanded(
+                    flex: 2,
+                    child: StartMenuPinnedColumn(
+                      keyPrefix: 'win7-start-menu',
+                      pinned: _pinned,
+                      onLeafTap: widget.onLeafTap,
+                      onRowLongPress: _showPinnedMenu,
+                      textColor: Win7Theme.textColor,
+                      hoverColor: Win7Theme.hoverBg,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
