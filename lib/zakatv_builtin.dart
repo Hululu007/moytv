@@ -18,23 +18,25 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = '44235cee5268015e5ccca0a57aa42107';
+const String zakatvJarMd5 = '029005c7ce017dc0a412f2d079a29dab';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';
 const String youtubeSpiderClass = 'com.github.catvod.spider.YouTube';
 const String zakatvJarId = 'zakatv';
 const String oneJarAsset = 'assets/jars/one.jar';
-const String oneJarMd5 = '1bae661a921446497c35f7cfee65dc6e';
+const String oneJarMd5 = 'af504c50de9f88246da9b086b5893c42';
 const String oneJarId = 'one';
 const String missav30JarAsset = 'assets/jars/missav30.jar';
 const String missav30JarMd5 = '15efee5d3f3f4b2433bd25bc16ccf139';
 const String missav30JarId = 'missav30';
 
-/// 一点播独立 jar 的内置站点：绝不能合进 zakatv.jar——蜘蛛自带
-/// SelfCheck，只认本 jar 的 classes.dex + META-INF/SIG，合 dex 必
-/// 静默空白。拉闸检查已在 smali 层改恒通过，SIG 已按原算法重算
-/// （见 ~/workspace/one_builtin_20261118/REPORT.md）。
+/// 一点播独立 jar 的内置站点：绝不能合进 zakatv.jar——保持独立加载器
+/// 与独立插件条目。2026-11-19 换成新蜘蛛重写版（One-cli_34 的 4 个
+/// 蜘蛛类编 dex，见 ~/workspace/one_update_20261119/REPORT.md）：走
+/// 域名分发接口领域名（30 分钟缓存，失败重领重试），视频是 mp4 直链；
+/// 新蜘蛛无 Auth、无 SelfCheck、无 META-INF/SIG，旧 jar 的拉闸与签
+/// 名机制已随旧实现一并退役。
 const List<ZakatvBuiltinSite> oneBuiltinSites = [
   ZakatvBuiltinSite(
     'One',

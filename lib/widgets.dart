@@ -715,7 +715,14 @@ class StatusPanel extends StatelessWidget {
   );
 }
 
-SliverGridDelegate dramaGridDelegate(BuildContext context, double width) {
+SliverGridDelegate dramaGridDelegate(
+  BuildContext context,
+  double width, {
+  /// 卡片内容超出默认格高时补的高度。DramaTile 的 tagText 行
+  /// （上间距 4 + 一行副标题高）不在 extentFor 里，带 tagText
+  /// 的卡要把这段补上，否则 Column 溢出。
+  double extraExtent = 0,
+}) {
   final columns = width < 600 ? 3 : (width / 180).floor().clamp(4, 9);
   final spacing = width < 600 ? 10.0 : 18.0;
   final tileWidth = (width - (columns - 1) * spacing) / columns;
@@ -723,7 +730,7 @@ SliverGridDelegate dramaGridDelegate(BuildContext context, double width) {
     crossAxisCount: columns,
     mainAxisSpacing: videoGridMainAxisSpacing(tileWidth),
     crossAxisSpacing: spacing,
-    mainAxisExtent: DramaTile.extentFor(context, tileWidth),
+    mainAxisExtent: DramaTile.extentFor(context, tileWidth) + extraExtent,
   );
 }
 

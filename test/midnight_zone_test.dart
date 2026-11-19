@@ -89,7 +89,7 @@ void main() {
               (LucideIcons.tv, '直播'),
               (LucideIcons.headphones, '听书'),
               (LucideIcons.bookOpen, '阅读'),
-              (LucideIcons.hardDrive, '多媒体'),
+              (LucideIcons.hardDrive, '网盘'),
               (LucideIcons.layoutGrid, '小程序'),
               (LucideIcons.user, '我的'),
             ],
@@ -102,7 +102,7 @@ void main() {
       ),
     );
     await tester.pump();
-    for (final label in ['片库', '直播', '听书', '阅读', '多媒体', '小程序', '我的']) {
+    for (final label in ['片库', '直播', '听书', '阅读', '网盘', '小程序', '我的']) {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('午夜区'), findsNothing);

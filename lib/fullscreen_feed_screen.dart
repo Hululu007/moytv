@@ -5,6 +5,7 @@ import 'app_page_route.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'center_feed_loader.dart';
 import 'core_bridge.dart';
@@ -137,6 +138,8 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
   Timer? _hideTimer;
   bool _lastPlaying = false;
   bool _playbackServiceHeld = false;
+  // 切后台只留音频时视频轨的状态：true = 已关掉视频轨。
+  bool _videoTrackOff = false;
   bool _backgrounded = false;
   bool _landscape = false;
   bool _sheetOpen = false;
@@ -370,6 +373,15 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       _backgrounded = true;
+      // 切后台只留音频：视频轨一关，mpv 不再解码视频帧；
+      // 声音照常在后台播，回前台再开画面。
+      // TVBox 原生句柄那路没有 media_kit 播放器，videoController 为空，
+      // 天然跳过。
+      final player = _player.videoController?.player;
+      if (player != null && _player.playing && !_videoTrackOff) {
+        _videoTrackOff = true;
+        unawaited(player.setVideoTrack(VideoTrack.no()));
+      }
       if (!_playbackServiceHeld &&
           shouldAcquirePlaybackService(
             playing: _player.playing,
@@ -380,6 +392,13 @@ class _FullscreenFeedScreenState extends State<FullscreenFeedScreen>
       }
     } else if (state == AppLifecycleState.resumed) {
       _backgrounded = false;
+      if (_videoTrackOff) {
+        _videoTrackOff = false;
+        final player = _player.videoController?.player;
+        if (player != null) {
+          unawaited(player.setVideoTrack(VideoTrack.auto()));
+        }
+      }
     }
   }
 

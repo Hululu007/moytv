@@ -26,8 +26,9 @@ void main() {
     });
 
     test('AndroidManifest：5 个 activity-alias 与 Dart 侧一一对应', () {
-      final manifest =
-          File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+      final manifest = File(
+        'android/app/src/main/AndroidManifest.xml',
+      ).readAsStringSync();
       expect('<activity-alias'.allMatches(manifest).length, 5);
       for (final option in appIconOptions.skip(1)) {
         expect(
@@ -73,14 +74,14 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        calls.add(call);
-        if (call.method == 'currentIcon') return current;
-        if (call.method == 'setIcon') {
-          current = (call.arguments as Map)['id'] as String;
-          return true;
-        }
-        return null;
-      });
+            calls.add(call);
+            if (call.method == 'currentIcon') return current;
+            if (call.method == 'setIcon') {
+              current = (call.arguments as Map)['id'] as String;
+              return true;
+            }
+            return null;
+          });
     });
 
     tearDown(() {
@@ -106,9 +107,7 @@ void main() {
     });
 
     test('非安卓：setIcon 拒绝，currentIcon 回落存档', () async {
-      SharedPreferences.setMockInitialValues(
-        {appIconSelectionKey: 'ant_lens'},
-      );
+      SharedPreferences.setMockInitialValues({appIconSelectionKey: 'ant_lens'});
       final switcher = AppIconSwitcher(supportedOverride: false);
       expect(await switcher.setIcon('ant_flame'), isFalse);
       expect(await switcher.currentIconId(), 'ant_lens');
@@ -118,13 +117,126 @@ void main() {
     test('通道抛错时 currentIcon 回落存档', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        throw PlatformException(code: 'boom');
+            throw PlatformException(code: 'boom');
+          });
+      SharedPreferences.setMockInitialValues({
+        appIconSelectionKey: 'ant_win12',
       });
-      SharedPreferences.setMockInitialValues(
-        {appIconSelectionKey: 'ant_win12'},
-      );
       final switcher = AppIconSwitcher(supportedOverride: true);
       expect(await switcher.currentIconId(), 'ant_win12');
+    });
+  });
+
+  group('切换失败归类与拒绝记忆', () {
+    const channel = MethodChannel('moyi/icon_switch');
+
+    void installHandler(Future<Object?> Function(MethodCall call) handler) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, handler);
+    }
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    test('桥报 SecurityException：归类为拒绝，存档不写、拒绝标志置位', () async {
+      installHandler((call) async {
+        if (call.method == 'currentIcon') return 'default';
+        throw PlatformException(
+          code: 'switch_failed',
+          message: 'Permission denied',
+          details: 'SecurityException',
+        );
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.switchIcon('ant_flame');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.denied);
+      expect(result.detail, 'SecurityException');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(appIconSelectionKey), isNull);
+      expect(prefs.getBool(appIconSwitchDeniedKey), isTrue);
+      expect(await switcher.isSwitchDenied(), isTrue);
+    });
+
+    test('桥报 IllegalArgumentException：归类为组件缺失，不记拒绝', () async {
+      installHandler((call) async {
+        if (call.method == 'currentIcon') return 'default';
+        throw PlatformException(
+          code: 'switch_failed',
+          message: 'unknown alias',
+          details: 'IllegalArgumentException',
+        );
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.switchIcon('ant_flame');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.missing);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool(appIconSwitchDeniedKey), isNull);
+    });
+
+    test('桥回读校验未通过：归类为拒绝', () async {
+      installHandler((call) async {
+        if (call.method == 'currentIcon') return 'default';
+        throw PlatformException(
+          code: 'switch_failed',
+          message: 'icon switch not applied: want=ant_flame',
+          details: 'IllegalStateException',
+        );
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.switchIcon('ant_flame');
+      expect(result.failure, AppIconSwitchFailure.denied);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool(appIconSwitchDeniedKey), isTrue);
+    });
+
+    test('桥返回非 true：归类为未知，不记拒绝', () async {
+      installHandler((call) async {
+        if (call.method == 'currentIcon') return 'default';
+        return false;
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.switchIcon('ant_flame');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.unknown);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool(appIconSwitchDeniedKey), isNull);
+    });
+
+    test('成功切换清掉拒绝记忆并写存档', () async {
+      SharedPreferences.setMockInitialValues({appIconSwitchDeniedKey: true});
+      installHandler((call) async {
+        if (call.method == 'currentIcon') return 'default';
+        return true;
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      expect(await switcher.isSwitchDenied(), isTrue);
+      final result = await switcher.switchIcon('ant_meadow');
+      expect(result.ok, isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(appIconSelectionKey), 'ant_meadow');
+      expect(prefs.getBool(appIconSwitchDeniedKey), isNull);
+      expect(await switcher.isSwitchDenied(), isFalse);
+    });
+
+    test('非法 id：归类为未知，不发通道', () async {
+      final calls = <MethodCall>[];
+      installHandler((call) async {
+        calls.add(call);
+        return null;
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.switchIcon('nope');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.unknown);
+      expect(calls, isEmpty);
     });
   });
 }

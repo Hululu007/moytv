@@ -61,6 +61,8 @@ flutter:
     - assets/novel_spiders/
     - assets/legado_sources/
     - assets/py_spiders/
+    - assets/actress_json/
+    - assets/actress_json/whos_m3u/
     - assets/jars/zakatv.jar
     - assets/jars/youtube.jar
     - assets/jars/one.jar

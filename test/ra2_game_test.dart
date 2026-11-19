@@ -300,7 +300,7 @@ void main() {
     });
   });
 
-  testWidgets('点游戏图标开红警2窗口：标题栏 + 游戏页 + 任务栏条目', (
+  testWidgets('点游戏图标开红警2窗口：进全屏（任务栏与标题栏藏、退出钮在）', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -329,15 +329,12 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byKey(const ValueKey('win7-desktop')), findsNothing);
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('win7-window-title'))).data,
-      '红警2',
-    );
+    // 进游戏即全屏（用户 2026-11-19 令）：标题栏与任务栏都藏，
+    // 右上角悬浮退出钮；游戏页照常加载。
+    expect(find.byKey(const ValueKey('win7-window-title')), findsNothing);
+    expect(find.byKey(const ValueKey('win7-taskbar')), findsNothing);
+    expect(find.byKey(const ValueKey('win7-game-exit')), findsOneWidget);
     expect(find.byType(Ra2GamePage), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('win7-taskbar-entry-game')),
-      findsOneWidget,
-    );
     expect(
       fakePlatform.lastController?.loadedUrls,
       ['https://game.ra2web.com/'],

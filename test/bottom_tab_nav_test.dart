@@ -6,6 +6,7 @@ import 'package:moyi/app_build.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/content_models.dart';
 import 'package:moyi/content_zone_screen.dart';
+import 'package:moyi/game_zone_page.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/home_zone.dart';
 import 'package:moyi/hongguo_drama_home.dart';
@@ -17,17 +18,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
-/// 壳子底部栏的 7 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
-/// 定义）：片库/直播/听读/多媒体/小程序/我的/女优库，中间播放键在
-/// 听读之后（centerAfter: 3）。
+/// 壳子底部栏的 8 个标签（与 home_screen.dart 的 _bottomTabBar 同一份
+/// 定义）：片库/直播/听读/网盘/小程序/女优库/游戏区/我的（“我的”在
+/// 最后一位，用户 2026-11-19 令），中间播放键固定居中（centerAfter: 4，
+/// 网盘之后、左右各 4 个页签，用户 2026-11-19 令）。
 const _shellEntries = [
   (LucideIcons.clapperboard, '片库'),
   (LucideIcons.tv, '直播'),
   (LucideIcons.bookHeadphones, '听读'),
-  (LucideIcons.hardDrive, '多媒体'),
+  (LucideIcons.hardDrive, '网盘'),
   (LucideIcons.layoutGrid, '小程序'),
-  (LucideIcons.user, '我的'),
   (LucideIcons.users, '演员库'),
+  (LucideIcons.gamepad2, '游戏区'),
+  (LucideIcons.user, '我的'),
 ];
 
 Future<LocalStore> _makeStore([Map<String, Object> seeds = const {}]) async {
@@ -54,7 +57,7 @@ Future<void> _pumpBar(
           index: index,
           onSelect: onSelect,
           onCenter: onCenter ?? () {},
-          centerAfter: 3,
+          centerAfter: 4,
           tabKeyPrefix: 'shell-tab',
           centerKey: 'shell-center',
         ),
@@ -68,16 +71,28 @@ Future<void> _pumpBar(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('底部标签多媒体图标是硬盘', (tester) async {
+  testWidgets('底部标签网盘图标是硬盘', (tester) async {
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: (_) {},
     );
-    expect(find.text('多媒体'), findsOneWidget);
+    expect(find.text('网盘'), findsOneWidget);
     expect(find.byIcon(LucideIcons.hardDrive), findsOneWidget);
     expect(find.byIcon(LucideIcons.film), findsNothing);
+  });
+
+  testWidgets('多媒体已改名：旧名不存在，网盘 + 硬盘图标在', (tester) async {
+    await _pumpBar(
+      tester,
+      mode: AppThemeMode.purpleNeon,
+      index: 0,
+      onSelect: (_) {},
+    );
+    expect(find.text('多媒体'), findsNothing);
+    expect(find.text('网盘'), findsOneWidget);
+    expect(find.byIcon(LucideIcons.hardDrive), findsOneWidget);
   });
 
   testWidgets('显示方案默认：全部主题底部标签，全部内容', (tester) async {
@@ -142,7 +157,7 @@ void main() {
     final config = AppThemeConfig.forTheme(mode);
     testWidgets('底栏颜色随主题走 ${config.themeName}', (tester) async {
       await _pumpBar(tester, mode: mode, index: 1, onSelect: (_) {});
-      for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的', '演员库']) {
+      for (final label in ['片库', '直播', '听读', '网盘', '小程序', '我的', '演员库', '游戏区']) {
         expect(find.text(label), findsOneWidget);
       }
       // 霓虹胶囊栏：选中 = primaryColor，无选中胶囊/圆点。
@@ -158,7 +173,7 @@ void main() {
     });
   }
 
-  testWidgets('底栏 7 个 Tab 点按回传下标，中间播放键另回', (tester) async {
+  testWidgets('底栏 8 个 Tab 点按回传下标，中间播放键另回', (tester) async {
     final tapped = <int>[];
     var centerTapped = 0;
     await _pumpBar(
@@ -168,25 +183,25 @@ void main() {
       onSelect: tapped.add,
       onCenter: () => centerTapped++,
     );
-    for (var i = 0; i < 7; i++) {
+    for (var i = 0; i < 8; i++) {
       await tester.tap(find.byKey(ValueKey('shell-tab-$i')));
       await tester.pump();
     }
-    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6, 7]);
     await tester.tap(find.byKey(const ValueKey('shell-center')));
     await tester.pump();
     expect(centerTapped, 1);
-    expect(tapped, [0, 1, 2, 3, 4, 5, 6]);
+    expect(tapped, [0, 1, 2, 3, 4, 5, 6, 7]);
   });
 
-  testWidgets('底栏顺序为片库/直播/听读/[播放键]/多媒体/小程序/我的/女优库', (tester) async {
+  testWidgets('底栏顺序为片库/直播/听读/网盘/[播放键]/小程序/演员库/游戏区/我的', (tester) async {
     await _pumpBar(
       tester,
       mode: AppThemeMode.purpleNeon,
       index: 0,
       onSelect: (_) {},
     );
-    const order = ['片库', '直播', '听读', '多媒体', '小程序', '我的', '演员库'];
+    const order = ['片库', '直播', '听读', '网盘', '小程序', '演员库', '游戏区', '我的'];
     var previousX = -1.0;
     for (final label in order) {
       expect(find.text(label), findsOneWidget);
@@ -194,13 +209,16 @@ void main() {
       expect(x, greaterThan(previousX));
       previousX = x;
     }
-    // 中间播放键在听读与多媒体之间。
+    // 中间播放键固定居中：在网盘与小程序之间，且中心点与胶囊栏
+    // 中线重合（左右各 4 个等宽页签，用户 2026-11-19 令）。
     final centerX = tester.getCenter(find.byKey(const ValueKey('shell-center'))).dx;
-    final listenReadX = tester.getCenter(find.text('听读')).dx;
-    final mediaX = tester.getCenter(find.text('多媒体')).dx;
-    expect(centerX, greaterThan(listenReadX));
-    expect(centerX, lessThan(mediaX));
-    // 多媒体（硬盘）在我的（人形）左边。
+    final mediaX = tester.getCenter(find.text('网盘')).dx;
+    final miniAppX = tester.getCenter(find.text('小程序')).dx;
+    expect(centerX, greaterThan(mediaX));
+    expect(centerX, lessThan(miniAppX));
+    final barCenterX = tester.getCenter(find.byType(NeonCapsuleBar)).dx;
+    expect(centerX, closeTo(barCenterX, 0.5));
+    // 网盘（硬盘）在我的（人形）左边。
     final driveX = tester.getTopLeft(find.byIcon(LucideIcons.hardDrive)).dx;
     final userX = tester.getTopLeft(find.byIcon(LucideIcons.user)).dx;
     expect(driveX, lessThan(userX));
@@ -277,7 +295,7 @@ void main() {
       find.byKey(const ValueKey('multimedia-empty')).evaluate().isNotEmpty ||
       find.byKey(const ValueKey('multimedia-screen')).evaluate().isNotEmpty;
 
-  testWidgets('底栏多媒体进多媒体屏、切其它区能离开、点片库能回', (tester) async {
+  testWidgets('底栏网盘进网盘屏、切其它区能离开、点片库能回', (tester) async {
     await pumpHome(tester);
     await tapShellTab(tester, 3);
     expect(multimediaShown(tester), isTrue);
@@ -304,7 +322,7 @@ void main() {
 
   testWidgets('我的页里不再有主题切换行，设置行可达', (tester) async {
     await pumpHome(tester);
-    await tapShellTab(tester, 5);
+    await tapShellTab(tester, 7);
     expect(find.text('最近观看'), findsOneWidget);
     for (var i = 0; i < 12; i++) {
       if (find.text('设置').evaluate().isNotEmpty) {
@@ -328,12 +346,12 @@ void main() {
 
   testWidgets('底栏女优库进女优库区、切其它区能离开、点片库能回', (tester) async {
     await pumpHome(tester);
-    await tapShellTab(tester, 6);
+    await tapShellTab(tester, 5);
     expect(find.byType(ActressListPage), findsOneWidget);
     await tapShellTab(tester, 1);
     expect(currentZone(tester), HomeZone.live);
     expect(find.byType(ActressListPage), findsNothing);
-    await tapShellTab(tester, 6);
+    await tapShellTab(tester, 5);
     expect(find.byType(ActressListPage), findsOneWidget);
     await tapShellTab(tester, 0);
     expect(find.byType(ActressListPage), findsNothing);
@@ -390,11 +408,11 @@ void main() {
     expect(find.text('最近观看'), findsNothing);
   });
 
-  // 底部标签 7 个 Tab 逐个点、各进各的页：听读在第 2 位（默认
+  // 底部标签 8 个 Tab 逐个点、各进各的页：听读在第 2 位（默认
   // 听书子区，页内子切换进阅读，再点标签回到上次的子区）、多媒
-  // 体在第 3 位、小程序在第 4 位、我的在第 5 位、女优库在第 6 位。
-  // 红果源走短剧分支。
-  testWidgets('底部标签 7 个 Tab 逐个点各进各的页', (tester) async {
+  // 体在第 3 位、小程序在第 4 位、女优库在第 5 位、
+  // 游戏区在第 6 位、我的在第 7 位（最后一位）。红果源走短剧分支。
+  testWidgets('底部标签 8 个 Tab 逐个点各进各的页', (tester) async {
     await pumpHome(tester, source: 'hongguo', theme: 'purpleNeon');
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
 
@@ -421,15 +439,18 @@ void main() {
     await tapShellTab(tester, 4);
     expect(find.byType(MiniAppHomePage), findsOneWidget);
     await tapShellTab(tester, 5);
-    expect(find.text('最近观看'), findsOneWidget);
-    await tapShellTab(tester, 6);
     expect(find.byType(ActressListPage), findsOneWidget);
+    await tapShellTab(tester, 6);
+    expect(find.byType(GameZonePage), findsOneWidget);
+    await tapShellTab(tester, 7);
+    expect(find.text('最近观看'), findsOneWidget);
     await tapShellTab(tester, 0);
     expect(currentZone(tester), isNull);
     expect(multimediaShown(tester), isFalse);
     expect(find.byType(MiniAppHomePage), findsNothing);
     expect(find.text('最近观看'), findsNothing);
     expect(find.byType(ActressListPage), findsNothing);
+    expect(find.byType(GameZonePage), findsNothing);
   }, skip: !allSourcesEnabled);
 
   testWidgets('短剧首页 requestedTab 直达我的页', (tester) async {

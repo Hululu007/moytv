@@ -87,7 +87,8 @@ class NeonHomeView extends StatefulWidget {
   State<NeonHomeView> createState() => _NeonHomeViewState();
 }
 
-class _NeonHomeViewState extends State<NeonHomeView> {
+class _NeonHomeViewState extends State<NeonHomeView>
+    with WidgetsBindingObserver {
   late PageController _pages;
   Timer? _timer;
   int _page = 0;
@@ -108,7 +109,22 @@ class _NeonHomeViewState extends State<NeonHomeView> {
   void initState() {
     super.initState();
     _pages = PageController(viewportFraction: .68);
+    WidgetsBinding.instance.addObserver(this);
     _armTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 切后台：精选轮播停掉，不在后台每 5 秒唤醒一次 GPU 合成；
+    // 回前台再续上，用户看到的还是同一张。
+    if (state == AppLifecycleState.resumed) {
+      _armTimer();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   @override
@@ -139,6 +155,7 @@ class _NeonHomeViewState extends State<NeonHomeView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _pages.dispose();
     super.dispose();

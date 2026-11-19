@@ -394,7 +394,11 @@ class ActressSyncService {
         await db.markFilmsState(person.localId, source.id, ok: false);
         return false;
       }
-      await db.upsertWorks(person.localId, films);
+      await db.upsertWorks(
+        person.localId,
+        films,
+        coverSource: actressRosterCoverSource(source.id),
+      );
       await db.markFilmsState(person.localId, source.id, ok: true);
       return true;
     } catch (_) {

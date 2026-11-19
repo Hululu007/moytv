@@ -24,6 +24,9 @@ class LibraryUpdater extends ChangeNotifier {
   Timer? _timer;
   bool _polling = false;
   bool _disposed = false;
+  // 切后台时暂停轮询：首页在后台也每 10 秒全量刷一次站源状态、
+  // 再加一次全屏 setState，是常驻耗电点之一。
+  bool _paused = false;
   int _ticks = 0;
 
   bool get _valid =>
@@ -39,11 +42,22 @@ class LibraryUpdater extends ChangeNotifier {
     }
     unawaited(refresh());
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_paused) return;
       _ticks++;
-      if (_statuses.values.any((status) => status.running) || _ticks % 5 == 0) {
+      if (_statuses.values.any((status) => status.running) ||
+          _ticks % 15 == 0) {
         unawaited(refresh());
       }
     });
+  }
+
+  /// 切后台暂停 / 回前台恢复并立刻补一次刷新，不丢状态变化。
+  /// 空闲刷新由每 10 秒放慢到每 30 秒：首页只用 busy() 显示“更新中”，
+  /// 站源管理页另有自己的 1 秒轮询，不依赖这里的频率。
+  void setPaused(bool value) {
+    if (_disposed || _paused == value) return;
+    _paused = value;
+    if (!value) unawaited(refresh());
   }
 
   void _notify() {
@@ -73,7 +87,12 @@ class LibraryUpdater extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
-    if (_polling || !_valid || !repository.supportsSourceManagement) return;
+    if (_polling ||
+        _paused ||
+        !_valid ||
+        !repository.supportsSourceManagement) {
+      return;
+    }
     _polling = true;
     try {
       for (final source in store.sources) {

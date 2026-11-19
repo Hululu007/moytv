@@ -296,7 +296,7 @@ class JarImport {
   }
 
   /// 一点播独立 jar 内置：与 zakatv.jar 分开的配置 id 与加载器，jar
-  /// 文件原样落盘（SelfCheck 要读磁盘上的 .jar 与 META-INF/SIG）。
+  /// 文件原样落盘（DexClassLoader 要读磁盘上的真实 .jar 文件）。
   /// 生命周期与 ZakaTV 插件分开，可独立安装/卸载。
   static Future<bool> registerBuiltinOne() async {
     if (_oneRegistered || !JarBridge.supported) return _oneRegistered;

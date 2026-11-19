@@ -234,7 +234,8 @@ class HaikuoStore {
 
   /// 保留两者时的改名：原名 + _2，_2 已被占就往后顺延（_3、_4…）；
   /// id 按新名重算，避免改名后的条目与原名条目 id 撞车。
-  HaikuoProgram _renameForKeepBoth(HaikuoProgram program, Set<String> taken) {    var suffix = 2;
+  HaikuoProgram _renameForKeepBoth(HaikuoProgram program, Set<String> taken) {
+    var suffix = 2;
     var name = '${program.name}_$suffix';
     while (taken.contains(name)) {
       suffix++;
@@ -749,7 +750,10 @@ class HaikuoStore {
   /// 仅 fixlog 与 version；模块文件换成与内嵌页同一份代码）。
   /// v14：2026-11-19 MissAV 规则 v6 多域名回落（条数与顺序不变，其余
   /// 145 条一字未动；MissAV 模块新增 hosts 回落表与 get/ok/origin）。
-  static const builtinBundleVersion = 14;
+  /// v15：2026-11-19 MissAV 规则 v7 取流验盾（条数与顺序不变，其余
+  /// 145 条一字未动；videoParse 两处 lazyRule 取流后先验播放列表，
+  /// 盾页直接报提示、不再把死地址交给播放器转圈）。
+  static const builtinBundleVersion = 15;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 

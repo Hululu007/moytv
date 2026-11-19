@@ -649,20 +649,20 @@ void main() {
     );
   });
 
-  // 6. 底部胶囊栏：多媒体选中（抽屉顶 Tab 已由底栏代替）。
-  testWidgets('预览 胶囊栏多媒体选中', (tester) async {
+  // 6. 底部胶囊栏：网盘选中（抽屉顶 Tab 已由底栏代替）。
+  testWidgets('预览 胶囊栏网盘选中', (tester) async {
     await _capture(
       tester,
       mode: AppThemeMode.purpleNeon,
       screen: Scaffold(
-        body: const Center(child: Text('多媒体页占位 · 底栏为本次预览主体')),
+        body: const Center(child: Text('网盘页占位 · 底栏为本次预览主体')),
         bottomNavigationBar: NeonCapsuleBar(
           entries: const [
             (LucideIcons.clapperboard, '片库'),
             (LucideIcons.tv, '直播'),
             (LucideIcons.headphones, '听书'),
             (LucideIcons.bookOpen, '阅读'),
-            (LucideIcons.hardDrive, '多媒体'),
+            (LucideIcons.hardDrive, '网盘'),
             (LucideIcons.layoutGrid, '小程序'),
             (LucideIcons.user, '我的'),
           ],
@@ -673,7 +673,7 @@ void main() {
         ),
       ),
       name: 'capsule_multimedia_tab',
-      label: '预览 · 假数据 · 底部胶囊栏 7 个：多媒体选中',
+      label: '预览 · 假数据 · 底部胶囊栏 7 个：网盘选中',
     );
   });
 

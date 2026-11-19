@@ -314,7 +314,7 @@ void main() {
                 (LucideIcons.tv, '直播'),
                 (LucideIcons.headphones, '听书'),
                 (LucideIcons.bookOpen, '阅读'),
-                (LucideIcons.hardDrive, '多媒体'),
+                (LucideIcons.hardDrive, '网盘'),
                 (LucideIcons.layoutGrid, '小程序'),
                 (LucideIcons.user, '我的'),
               ],

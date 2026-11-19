@@ -38,7 +38,8 @@ class HomeCarousel extends StatefulWidget {
   State<HomeCarousel> createState() => _HomeCarouselState();
 }
 
-class _HomeCarouselState extends State<HomeCarousel> {
+class _HomeCarouselState extends State<HomeCarousel>
+    with WidgetsBindingObserver {
   final _controller = PageController();
   Timer? _timer;
   int _page = 0;
@@ -46,7 +47,22 @@ class _HomeCarouselState extends State<HomeCarousel> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _armTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 切后台：自动轮播停掉，不在后台每 4 秒唤醒一次 GPU 合成；
+    // 回前台再续上，用户看到的还是同一张。
+    if (state == AppLifecycleState.resumed) {
+      _armTimer();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   @override
@@ -77,6 +93,7 @@ class _HomeCarouselState extends State<HomeCarousel> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _controller.dispose();
     super.dispose();

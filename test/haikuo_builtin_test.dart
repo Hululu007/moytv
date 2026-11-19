@@ -151,7 +151,7 @@ void main() {
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
     expect(marker['version'], HaikuoStore.builtinBundleVersion);
-    expect(marker['version'], 14);
+    expect(marker['version'], 15);
     expect(marker['names'], ['甲']);
   });
 
@@ -190,7 +190,7 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 14);
+    expect(marker['version'], 15);
   });
 
   test('标记损坏时当没播种过：整包播种、不崩溃、标记重写', () async {
@@ -203,6 +203,6 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 14);
+    expect(marker['version'], 15);
   });
 }

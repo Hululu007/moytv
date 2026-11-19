@@ -370,7 +370,8 @@ class _X5RowSession {
   bool hideLoadingRequested = false;
 }
 
-class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
+class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
+    with WidgetsBindingObserver {
   HttpServer? _server;
   WebViewController? _controller;
   String? _error;
@@ -458,6 +459,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.initialShowSearch) {
       _showSearch = true;
       _searchNonce++;
@@ -466,7 +468,31 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // 切后台：嗅探与悬浮视频轮询都停掉，不在后台每 250ms 跨桥跑 JS。
+      // 会话本身留着（_sniffSession 不清），回前台再续上；
+      // 30 秒死线已过的话，下一拍 _sniffTick 会自行按失败回掉。
+      _sniffTimer?.cancel();
+      _sniffTimer = null;
+      _stopFloatVideoPolling();
+    } else if (state == AppLifecycleState.resumed) {
+      final session = _sniffSession;
+      if (session != null && !session.done && _sniffTimer == null) {
+        _sniffTimer = Timer.periodic(
+          const Duration(milliseconds: 250),
+          (_) => unawaited(_sniffTick(session)),
+        );
+      }
+      _syncFloatVideoPolling();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sniffTimer?.cancel();
     _sniffTimer = null;
     _sniffSession = null;

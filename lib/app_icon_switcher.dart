@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,6 +27,34 @@ class AppIconOption {
 }
 
 const String appIconSelectionKey = 'app_icon_selection_v1';
+
+/// 系统拒绝换图标的记忆标志。用户手机是鸿蒙 NEXT、应用跑卓易通容器，
+/// 该容器已实证拒掉组件状态变更；拒绝记下来后，选择页改显横条、停掉
+/// 反复点选（降级），而不是每次都让用户点一个注定失败的按钮。
+const String appIconSwitchDeniedKey = 'app_icon_switch_denied_v1';
+
+/// 切换失败的原因：桥侧把原生异常类名原样带回，按类名归类。
+enum AppIconSwitchFailure {
+  /// 系统拒绝了切换（SecurityException / 回读校验未通过）：桌面或
+  /// 容器不允许改组件状态。
+  denied,
+
+  /// 图标组件未找到（IllegalArgumentException）。
+  missing,
+
+  /// 其他原因（通道不可用、非法 id、桥返回非 true 等）。
+  unknown,
+}
+
+/// 一次切换的结果：成功只认桥侧回读校验通过；失败带原因与原生详情
+/// （异常类名，供界面提示与诊断）。
+class AppIconSwitchResult {
+  const AppIconSwitchResult({required this.ok, this.failure, this.detail});
+
+  final bool ok;
+  final AppIconSwitchFailure? failure;
+  final String? detail;
+}
 
 const List<AppIconOption> appIconOptions = [
   AppIconOption(
@@ -104,17 +133,90 @@ class AppIconSwitcher {
   }
 
   /// 切图标。成功返回 true；平台不支持或桥侧失败返回 false。
-  Future<bool> setIcon(String id) async {
-    if (!appIconOptions.any((o) => o.id == id)) return false;
-    if (!supported) return false;
+  /// 切换失败时拒绝被记下（[appIconSwitchDeniedKey]），选择页据此降级；
+  /// 切换成功清掉拒绝记忆。拒绝只记“系统不让换”这一种，其他失败
+  /// （组件缺失、通道异常）不记，因为它们可能是临时问题。
+  Future<AppIconSwitchResult> switchIcon(String id) async {
+    if (!appIconOptions.any((o) => o.id == id)) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
+    }
+    if (!supported) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
+    }
     try {
       final ok = await _channel.invokeMethod<bool>('setIcon', {'id': id});
-      if (ok != true) return false;
-    } on PlatformException {
-      return false;
+      if (ok != true) {
+        return const AppIconSwitchResult(
+          ok: false,
+          failure: AppIconSwitchFailure.unknown,
+        );
+      }
+    } on PlatformException catch (e) {
+      final detail = e.details?.toString();
+      final failure = _failureFrom(e.code, detail, e.message);
+      if (failure == AppIconSwitchFailure.denied) {
+        final prefs = await _preferences();
+        await prefs.setBool(appIconSwitchDeniedKey, true);
+      }
+      debugPrint(
+        'AppIconSwitcher: switch $id failed code=${e.code} detail=$detail message=${e.message}',
+      );
+      return AppIconSwitchResult(
+        ok: false,
+        failure: failure,
+        detail: detail ?? e.message,
+      );
+    } catch (_) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
     }
     final prefs = await _preferences();
     await prefs.setString(appIconSelectionKey, id);
-    return true;
+    await prefs.remove(appIconSwitchDeniedKey);
+    return const AppIconSwitchResult(ok: true);
+  }
+
+  /// 兼容旧调用：只关心成败。选择页已改走 [switchIcon]，失败要给
+  /// 用户一句准话。
+  Future<bool> setIcon(String id) async => (await switchIcon(id)).ok;
+
+  /// 之前是否被系统拒绝过（见 [appIconSwitchDeniedKey]）。
+  Future<bool> isSwitchDenied() async {
+    final prefs = await _preferences();
+    return prefs.getBool(appIconSwitchDeniedKey) ?? false;
+  }
+
+  /// 清掉拒绝记忆（选择页“再试一次”用；下一次点选会实打实再调桥）。
+  Future<void> clearSwitchDenied() async {
+    final prefs = await _preferences();
+    await prefs.remove(appIconSwitchDeniedKey);
+  }
+
+  static AppIconSwitchFailure _failureFrom(
+    String code,
+    String? detail,
+    String? message,
+  ) {
+    final text = '${detail ?? ''} ${message ?? ''}';
+    if (text.contains('SecurityException')) {
+      return AppIconSwitchFailure.denied;
+    }
+    if (text.contains('IllegalArgumentException')) {
+      return AppIconSwitchFailure.missing;
+    }
+    if (text.contains('IllegalStateException') &&
+        text.contains('not applied')) {
+      // 桥回读校验未通过：系统静默忽略了组件状态变更，等于不让换。
+      return AppIconSwitchFailure.denied;
+    }
+    return AppIconSwitchFailure.unknown;
   }
 }

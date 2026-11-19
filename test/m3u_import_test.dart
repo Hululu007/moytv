@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:moyi/live_models.dart';
 import 'package:moyi/live_repository.dart';
 import 'package:moyi/live_sources.dart';
@@ -20,6 +24,24 @@ https://live.test/plain.m3u8
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // M3uSubscriptionService.build 要把原文件存进应用目录，测前
+  // 把 path_provider 指到临时目录。
+  late Directory tempDir;
+
+  setUpAll(() async {
+    tempDir = await Directory.systemTemp.createTemp('moyi_m3u_import_test');
+    const provider = MethodChannel('plugins.flutter.io/path_provider');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(provider, (call) async => tempDir.path);
+  });
+
+  tearDownAll(() async {
+    const provider = MethodChannel('plugins.flutter.io/path_provider');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(provider, null);
+    await tempDir.delete(recursive: true);
+  });
 
   tearDown(() {
     LiveSource.importedSources.clear();
@@ -80,7 +102,7 @@ void main() {
   });
 
   group('订阅持久化与直播注册', () {
-    test('订阅 JSON 往返保留频道', () {
+    test('订阅 JSON 只存元数据与频道数，不存频道', () {
       final report = analyzeM3u(_sampleM3u, source: 'm3u:abc');
       final sub = M3uSubscription(
         id: 'abc',
@@ -91,11 +113,44 @@ void main() {
         updatedAtMs: 123,
         channels: report.channels,
       );
-      final restored = M3uSubscription.fromJson(sub.toJson());
+      final json = sub.toJson();
+      expect(json.containsKey('channels'), isFalse);
+      expect(json['channelCount'], 3);
+      final restored = M3uSubscription.fromJson(json);
       expect(restored.name, '测试订阅');
       expect(restored.channelCount, 3);
-      expect(restored.channels.first.logo, 'https://logo.test/cctv1.png');
+      expect(restored.channels, isEmpty);
       expect(restored.sourceId, 'm3u:abc');
+    });
+
+    test('老快照的 channels 字段仍能读出', () {
+      final legacy = <String, dynamic>{
+        'id': 'old',
+        'name': '老订阅',
+        'kind': M3uSubscription.kindFile,
+        'url': '',
+        'fileName': '',
+        'groupCount': 2,
+        'updatedAtMs': 0,
+        'channels': [
+          {
+            'key': 'm3u:old\x00卫视\x00湖南卫视',
+            'name': '湖南卫视',
+            'group': '卫视',
+            'source': 'm3u:old',
+            'url': 'https://live.test/hn.m3u8',
+            'urls': ['https://live.test/hn.m3u8'],
+            'headers': <String, String>{},
+            'logo': '',
+            'number': '001',
+            'token': '',
+            'subtitle': '',
+          },
+        ],
+      };
+      final restored = M3uSubscription.fromJson(legacy);
+      expect(restored.channelCount, 1);
+      expect(restored.channels.single.name, '湖南卫视');
     });
 
     test('LocalStore 同步后进入直播区且仓库可直接取频道', () async {
@@ -133,28 +188,40 @@ void main() {
       expect(importedLiveChannels.containsKey('m3u:sub1'), isFalse);
     });
 
-    test('重启后从存档恢复订阅注册', () async {
+    test('重启后从存档恢复订阅，频道按需从副本加载', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final first = LocalStore(prefs);
-      final report = analyzeM3u(_sampleM3u, source: 'm3u:keep');
-      await first.syncM3uSubscriptions([
-        M3uSubscription(
-          id: 'keep',
-          name: '保留订阅',
-          kind: M3uSubscription.kindUrl,
-          url: 'https://sub.test/a.m3u',
-          channels: report.channels,
-        ),
-      ]);
+      final record = await M3uSubscriptionService.build(
+        name: '保留订阅',
+        kind: M3uSubscription.kindUrl,
+        text: _sampleM3u,
+        rawBytes: utf8.encode(_sampleM3u),
+        url: 'https://sub.test/a.m3u',
+      );
+      await first.syncM3uSubscriptions([record]);
       first.dispose();
       LiveSource.importedSources.clear();
       importedLiveChannels.clear();
       final second = LocalStore(prefs);
       addTearDown(second.dispose);
       expect(second.m3uSubscriptions.single.name, '保留订阅');
-      expect(LiveSource.byId('m3u:keep'), isNotNull);
-      expect(importedLiveChannels['m3u:keep']!.length, 3);
+      expect(second.m3uSubscriptions.single.channelCount, 3);
+      expect(LiveSource.byId(record.sourceId), isNotNull);
+      // 重启后频道不常驻内存，点开该源时才从副本加载。
+      expect(importedLiveChannels.containsKey(record.sourceId), isFalse);
+      final repository = LiveRepository();
+      final channels = await repository.channels(
+        LiveSource.byId(record.sourceId)!,
+        const LivePlatform(id: 'all', name: '全部频道'),
+      );
+      expect(channels.length, 3);
+      expect(channels.first.name, 'CCTV-1 综合');
+      final playback = await repository.playback(
+        LiveSource.byId(record.sourceId)!,
+        channels.first,
+      );
+      expect(playback.url, 'https://live.test/cctv1.m3u8');
     });
   });
 }

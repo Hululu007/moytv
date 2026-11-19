@@ -143,6 +143,15 @@ class LivePlaybackController extends ChangeNotifier {
     );
     _subscriptions.add(
       player.stream.playing.listen((value) {
+        // 唤醒锁跟着播放状态走：播就亮着、停就放掉。
+        // 以前只在 pauseForSleep/dispose 时放，点暂停按钮走 playOrPause
+        // 不碰唤醒锁，暂停后屏幕永不灭。ScreenAwake 是引用计数、
+        // enable/disable 各有守卫，重复调是安全的。
+        if (value) {
+          _screenAwake.enable();
+        } else {
+          _screenAwake.disable();
+        }
         if (_disposed || !value) return;
         _stall?.cancel();
         if (_error == null) return;
@@ -320,6 +329,16 @@ class LivePlaybackController extends ChangeNotifier {
   }
 
   Future<void> retry() => play(_index, reconnect: true);
+
+  /// 点播续播：跳到上次看到的位置。直播流不调这个方法；
+  /// seek 失败（流不支持）只吞掉，不打断播放。
+  Future<void> seekTo(Duration position) async {
+    final player = _player;
+    if (_disposed || player == null || position <= Duration.zero) return;
+    try {
+      await player.seek(position);
+    } catch (_) {}
+  }
 
   void _onError(String message) {
     if (_sleepPaused) return;

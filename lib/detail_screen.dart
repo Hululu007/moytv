@@ -132,6 +132,17 @@ class _DetailScreenState extends State<DetailScreen> {
 
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
+
+  /// 文件夹详情的作品列表（vod_tag='folder' 的详情，如 MissAV 女优
+  /// folder）：详情加载后以 folderId/id 作 category 调目录，画成
+  /// 作品卡片网格，不画选集区；目录失败/回空时退回选集 UI 并提示重试。
+  List<Drama> _folderItems = const [];
+  bool _folderLoading = false;
+  bool _folderLoadingMore = false;
+  bool _folderFailed = false;
+  bool _folderMoreFailed = false;
+  bool _folderHasMore = false;
+  int _folderPage = 1;
   // 站方相关接口返回的相关季：只作相关剧集区的优先数据，接口不可
   // 用时该区回落标题规律；空时不额外占位。
   List<HongguoRelatedWork> _apiRelated = const [];
@@ -275,6 +286,93 @@ class _DetailScreenState extends State<DetailScreen> {
     setState(() => _recommended = picked);
   }
 
+  /// 是否文件夹详情：kind/folderId 是 py 侧的 folder 信号；jar 侧
+  /// 的 folder 只在 vod_tag 里（jar 详情把 vod_tag 拆进详情 drama
+  /// 的 tags），所以 tags 含 'folder' 也算。已核对：jar_bridge 的
+  /// detail 与 _vodToDrama 都把 vod_tag 写进 tags，vod_tag='folder'
+  /// 的详情一定命中本判断，无需在详情解析处另补信号。
+  bool _isFolderDrama(Drama drama) {
+    if (drama.isFolder || drama.folderId.isNotEmpty) return true;
+    for (final tag in drama.tags) {
+      if (tag.trim().toLowerCase() == 'folder') return true;
+    }
+    for (final tag in _detail?.tags ?? const <DetailTag>[]) {
+      if (tag.name.trim().toLowerCase() == 'folder') return true;
+    }
+    return false;
+  }
+
+  /// 文件夹目录的 category 参数：folderId 优先，否则取 drama.id；
+  /// 蜘蛛内部会剥 `folder@` 前缀，两种 id 都应能走。
+  /// 已核对浏览网格条目 id 形态：jar 站条目 id 即 vod_id（中继
+  /// detail/category 共用的那一个），py 站条目 folderId 即 vodId。
+  String _folderCategoryId(Drama drama) {
+    var id = drama.folderId.isNotEmpty ? drama.folderId : drama.id;
+    if (id.startsWith('folder@')) id = id.substring('folder@'.length);
+    return id;
+  }
+
+  /// 文件夹作品目录：以 [_folderCategoryId] 调本站目录，分页累加。
+  /// 首屏失败/回空时记 [_folderFailed]，界面退回选集 UI 并提示重试；
+  /// 翻页失败只记 [_folderMoreFailed]，已有卡片保留、“加载更多”
+  /// 按钮变重试。代次守卫：换片后旧请求结果不再写回。
+  Future<void> _loadFolder({bool reset = false}) async {
+    final drama = _detail?.drama ?? widget.drama;
+    final generation = _generation;
+    if (reset) {
+      setState(() {
+        _folderLoading = true;
+        _folderFailed = false;
+        _folderMoreFailed = false;
+        _folderItems = const [];
+        _folderPage = 1;
+        _folderHasMore = false;
+      });
+    } else {
+      if (_folderLoadingMore || !_folderHasMore) return;
+      setState(() {
+        _folderLoadingMore = true;
+        _folderMoreFailed = false;
+      });
+    }
+    final page = reset ? 1 : _folderPage + 1;
+    try {
+      final result = await widget.repository.catalog(
+        drama.source,
+        category: _folderCategoryId(drama),
+        page: page,
+      );
+      if (!mounted ||
+          generation != _generation ||
+          _profileEpoch != widget.store.profileEpoch) {
+        return;
+      }
+      setState(() {
+        _folderItems = reset
+            ? result.items
+            : [..._folderItems, ...result.items];
+        _folderHasMore = result.hasMore;
+        _folderPage = page;
+        _folderLoading = false;
+        _folderLoadingMore = false;
+        _folderMoreFailed = false;
+        // 目录回空：退回选集 UI（_folderFailed 为真时不画网格）。
+        _folderFailed = _folderItems.isEmpty;
+      });
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _folderLoading = false;
+        _folderLoadingMore = false;
+        if (reset || _folderItems.isEmpty) {
+          _folderFailed = true;
+        } else {
+          _folderMoreFailed = true;
+        }
+      });
+    }
+  }
+
   /// 相关剧集区站方数据：只对红果数字 id 的剧调相关接口；接口抛错
   /// 或无数据时留空，相关区回落标题规律。代次守卫同推荐区。
   Future<void> _loadSeriesApi(Drama drama, int generation) async {
@@ -306,6 +404,13 @@ class _DetailScreenState extends State<DetailScreen> {
       _error = null;
       _recommended = const [];
       _apiRelated = const [];
+      _folderItems = const [];
+      _folderLoading = false;
+      _folderLoadingMore = false;
+      _folderFailed = false;
+      _folderMoreFailed = false;
+      _folderHasMore = false;
+      _folderPage = 1;
     });
     try {
       final detail = await widget.repository.detail(widget.drama);
@@ -332,6 +437,9 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_loadTmdb(merged));
       unawaited(_loadRecommended(merged, generation));
       unawaited(_loadSeriesApi(merged, generation));
+      if (_isFolderDrama(merged)) {
+        unawaited(_loadFolder(reset: true));
+      }
       await saveUserChange(context, () => widget.store.refreshDrama(merged));
       if (mounted &&
           generation == _generation &&
@@ -760,6 +868,9 @@ class _DetailScreenState extends State<DetailScreen> {
     final watched = widget.store.watched(drama.id);
     final episodes = _detail == null ? <Episode>[] : _displayEpisodes(_detail!);
     final resumeIndex = resumeEpisodeIndex(episodes, watched);
+    // 文件夹详情且目录未失败时画作品卡片网格、不画选集区；目录失败
+    // 或回空时退回选集 UI（_folderFailed 为真）并在选集区上方提示重试。
+    final showFolder = _isFolderDrama(drama) && !_folderFailed;
     final television = AppLayout.isTelevision(context);
     final allowed =
         widget.store.profileEpoch == _profileEpoch &&
@@ -851,10 +962,30 @@ class _DetailScreenState extends State<DetailScreen> {
                             child:
                                 _loading || _error != null || episodes.isEmpty
                                 ? _episodeStatus()
+                                : showFolder
+                                ? Column(
+                                    children: [
+                                      _folderHeader(),
+                                      if (_folderLoading)
+                                        const Expanded(
+                                          child: Center(
+                                            child:
+                                                CircularProgressIndicator.adaptive(),
+                                          ),
+                                        )
+                                      else
+                                        Expanded(child: _folderGridView()),
+                                      if (_folderHasMore || _folderMoreFailed)
+                                        _folderLoadMore(),
+                                    ],
+                                  )
                                 : Column(
                                     children: [
                                       if (_embeddedArea(episodes) != null)
                                         _embeddedArea(episodes)!,
+                                      if (_isFolderDrama(drama) &&
+                                          _folderFailed)
+                                        _folderErrorBanner(),
                                       _seriesSelector(drama),
                                       _lineSelector(),
                                       Expanded(
@@ -887,6 +1018,15 @@ class _DetailScreenState extends State<DetailScreen> {
                       dramaCover: drama.cover,
                     );
                     final showEpisodes = _episodesExpanded;
+                    // 文件夹网格列数与卡宽：与推荐区同一套算法
+                    // （150 宽一列、2–6 列），窄屏网格与宽屏网格共用。
+                    final folderColumns =
+                        (constraints.maxWidth / 150).floor().clamp(2, 6);
+                    final folderTileWidth =
+                        (constraints.maxWidth -
+                            40 -
+                            (folderColumns - 1) * 10) /
+                        folderColumns;
                     // 内嵌播放器固定在滚动视图之上：以前它是滚动视图
                     // 里的第一个 sliver，上下滑时跟着内容滑走。现在把
                     // 它移出滚动视图、放固定头区（与宽屏/TV 双栏布局
@@ -934,7 +1074,74 @@ class _DetailScreenState extends State<DetailScreen> {
                                   hasScrollBody: false,
                                   child: _episodeStatus(),
                                 )
-                              else ...[
+                              else if (showFolder) ...[
+                                SliverToBoxAdapter(child: _folderHeader()),
+                                if (_folderLoading)
+                                  const SliverToBoxAdapter(
+                                    child: Padding(
+                                      padding: EdgeInsets.all(32),
+                                      child: Center(
+                                        child:
+                                            CircularProgressIndicator.adaptive(),
+                                      ),
+                                    ),
+                                  )
+                                else ...[
+                                  SliverPadding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      4,
+                                      20,
+                                      8,
+                                    ),
+                                    sliver: SliverGrid(
+                                      key: const ValueKey('folder-grid'),
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                            crossAxisCount: folderColumns,
+                                            crossAxisSpacing: 10,
+                                            mainAxisSpacing: 10,
+                                            mainAxisExtent:
+                                                DramaTile.extentFor(
+                                                  context,
+                                                  folderTileWidth,
+                                                ),
+                                          ),
+                                      delegate: SliverChildBuilderDelegate((
+                                        context,
+                                        index,
+                                      ) => _folderTile(index),
+                                      childCount: _folderItems.length),
+                                    ),
+                                  ),
+                                  if (_folderHasMore || _folderMoreFailed)
+                                    SliverToBoxAdapter(
+                                      child: _folderLoadMore(),
+                                    ),
+                                ],
+                                if (!_loading) ...[
+                                  SliverToBoxAdapter(
+                                    child: _seriesSection(drama),
+                                  ),
+                                  SliverToBoxAdapter(
+                                    child: _recommendedSection(drama),
+                                  ),
+                                  SliverToBoxAdapter(
+                                    child: _crossSiteSection(drama),
+                                  ),
+                                  SliverToBoxAdapter(
+                                    child: _descriptionSection(drama),
+                                  ),
+                                  SliverToBoxAdapter(child: _magnetSection()),
+                                  SliverToBoxAdapter(
+                                    child: _relatedSection(drama),
+                                  ),
+                                ],
+                              ] else ...[
+                                if (_isFolderDrama(drama) && _folderFailed)
+                                  SliverToBoxAdapter(
+                                    child: _folderErrorBanner(),
+                                  ),
                                 SliverToBoxAdapter(
                                   child: _seriesSelector(drama),
                                 ),
@@ -1468,6 +1675,104 @@ class _DetailScreenState extends State<DetailScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 文件夹作品区标题：已加载部数只作进度提示，不是总数。
+  Widget _folderHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text('作品', style: Theme.of(context).textTheme.titleMedium),
+          ),
+          if (_folderItems.isNotEmpty)
+            Text(
+              '已加载 ${_folderItems.length} 部',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 文件夹作品卡：与站内其他视频列表同一套 DramaTile，有封面
+  /// 显示封面、无封面显示占位卡；点卡进该作品详情页（正常详情
+  /// 流程、不直播）。
+  DramaTile _folderTile(int index) {
+    final item = _folderItems[index];
+    return DramaTile(
+      key: ValueKey('folder-${item.id}'),
+      drama: item,
+      repository: widget.repository,
+      onTap: () => _openRelated(_folderItems, item),
+    );
+  }
+
+  /// 文件夹目录分页按钮：有更多页时“加载更多”，翻页失败时变重试。
+  Widget _folderLoadMore() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+      child: Center(
+        child: _folderLoadingMore
+            ? const CircularProgressIndicator.adaptive()
+            : TextButton(
+                key: const ValueKey('folder-load-more'),
+                onPressed: () => unawaited(_loadFolder()),
+                child: Text(_folderMoreFailed ? '加载失败，点按重试' : '加载更多'),
+              ),
+      ),
+    );
+  }
+
+  /// 文件夹目录失败横条：目录失败/回空时退回选集 UI，本横条留在
+  /// 选集区上方提示重试，不留空白页。
+  Widget _folderErrorBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const Expanded(child: Text('作品列表加载失败，已显示选集')),
+              TextButton(
+                key: const ValueKey('folder-retry'),
+                onPressed: () => unawaited(_loadFolder(reset: true)),
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 文件夹作品网格（宽屏右栏用）：与窄屏网格同一套卡片与列数算法。
+  Widget _folderGridView() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
+        final tileWidth =
+            (constraints.maxWidth - (columns - 1) * 10) / columns;
+        return GridView.builder(
+          key: const ValueKey('folder-grid'),
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            mainAxisExtent: DramaTile.extentFor(context, tileWidth),
+          ),
+          itemCount: _folderItems.length,
+          itemBuilder: (context, index) => _folderTile(index),
+        );
+      },
     );
   }
 

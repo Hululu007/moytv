@@ -348,8 +348,8 @@ void main() {
     );
   });
 
-  // 2. 多媒体屏：网盘聚合列表（假网盘数据）+ 假刮削补标题/年份。
-  testWidgets('预览 多媒体网盘聚合', (tester) async {
+  // 2. 网盘屏：网盘聚合列表（假网盘数据）+ 假刮削补标题/年份。
+  testWidgets('预览 网盘网盘聚合', (tester) async {
     final repository = _PreviewRepository()
       ..catalogResults = {
         'cloud:115': [
@@ -448,8 +448,8 @@ void main() {
     );
   });
 
-  // 3. 多媒体屏未登录提示态。
-  testWidgets('预览 多媒体未登录', (tester) async {
+  // 3. 网盘屏未登录提示态。
+  testWidgets('预览 网盘未登录', (tester) async {
     final repository = _PreviewRepository();
     final store = await _previewStore();
     await _capture(
@@ -484,15 +484,15 @@ void main() {
     );
   });
 
-  // 5. 底部胶囊栏 7 个：多媒体选中、硬盘图标。
-  testWidgets('预览 底部胶囊栏七个', (tester) async {
+  // 5. 底部胶囊栏 7 个：网盘选中、硬盘图标。
+  testWidgets('预览 底部胶囊栏八个', (tester) async {
     await _capture(
       tester,
-      name: 'bottomtab_7_v2',
-      label: '预览 · 底部胶囊栏 7 个 · 多媒体选中（硬盘图标）· 图标在测试环境渲染为方块',
+      name: 'bottomtab_8_v2',
+      label: '预览 · 底部胶囊栏 8 个 · 网盘选中（硬盘图标）· 图标在测试环境渲染为方块',
       screen: Scaffold(
         body: const Center(
-          child: Text('多媒体页占位 · 底栏为本次预览主体'),
+          child: Text('网盘页占位 · 底栏为本次预览主体'),
         ),
         bottomNavigationBar: NeonCapsuleBar(
           entries: const [
@@ -500,9 +500,10 @@ void main() {
             (LucideIcons.tv, '直播'),
             (LucideIcons.headphones, '听书'),
             (LucideIcons.bookOpen, '阅读'),
-            (LucideIcons.hardDrive, '多媒体'),
+            (LucideIcons.hardDrive, '网盘'),
             (LucideIcons.layoutGrid, '小程序'),
             (LucideIcons.user, '我的'),
+            (LucideIcons.gamepad2, '游戏区'),
           ],
           index: 4,
           onSelect: (_) {},

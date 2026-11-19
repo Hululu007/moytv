@@ -63,4 +63,15 @@ void main() {
       expect(kind.suggestion, isNotEmpty);
     }
   });
+
+  test('EroShort 付费墙文案归为权限而非站源', () {
+    // 蜘蛛原样返回的 msg（见 JarBridge.emptyUrlFailureMessage）：
+    // 「该集需要登录或购买后才能播放」含「登录」，应判权限问题，
+    // 而不是被通用「未返回播放地址」盖成站源问题。
+    const msg = '该集需要登录或购买后才能播放';
+    final kind = classifyPlaybackError(msg);
+    expect(kind, PlaybackErrorKind.permission);
+    expect(kind.label, '权限问题');
+    expect(kind.suggestion, contains('登录'));
+  });
 }

@@ -696,10 +696,10 @@ class NeonIconButton extends StatelessWidget {
   }
 }
 
-/// 底部浮动胶囊导航（首页 / 频道 / ＋ / 多媒体 / 我的）。
+/// 底部浮动胶囊导航（首页 / 频道 / ＋ / 网盘 / 我的）。
 /// 霓虹胶囊栏（通用壳）：胶囊容器 + 若干页签 + 中间一个渐变圆钮。
 ///
-/// 唯一的底部栏实现：首页外层壳（7 个标签）与短剧首页内层胶囊栏
+/// 唯一的底部栏实现：首页外层壳（8 个标签）与短剧首页内层胶囊栏
 /// （4 个页签）共用这一份绘制，只差传入的条目与圆钮位置；配色一律
 /// 取当前主题的 AppThemeConfig，各主题只换色、不换结构。圆钮点按
 /// 走 [onCenter]（外层壳是打开全屏推荐流，内层是进全屏流页签）。
@@ -849,7 +849,7 @@ class NeonCapsuleBar extends StatelessWidget {
   }
 }
 
-/// 短剧首页内层胶囊栏：首页 / 频道 / 多媒体 / 我的 + 中间播放键。
+/// 短剧首页内层胶囊栏：首页 / 频道 / 网盘 / 我的 + 中间播放键。
 ///
 /// 霓虹胶囊壳的 4 页签配置（见 [NeonCapsuleBar]）；外层壳统一为底部
 /// 标签栏后，内层栏只在 hideCapsuleBar 为假时出现（直接用
@@ -862,7 +862,7 @@ class NeonBottomBar extends StatelessWidget {
     required this.onCenter,
   });
 
-  /// 0=首页 1=频道 2=多媒体 3=我的（中间按钮单独处理）
+  /// 0=首页 1=频道 2=网盘 3=我的（中间按钮单独处理）
   final int index;
   final ValueChanged<int> onSelect;
   final VoidCallback onCenter;
@@ -872,7 +872,7 @@ class NeonBottomBar extends StatelessWidget {
     const entries = <(Object, String)>[
       (LucideIcons.house, '首页'),
       ('🎞️', '频道'),
-      (LucideIcons.hardDrive, '多媒体'),
+      (LucideIcons.hardDrive, '网盘'),
       (LucideIcons.user, '我的'),
     ];
     return NeonCapsuleBar(

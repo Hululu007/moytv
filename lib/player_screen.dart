@@ -189,6 +189,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _foreground = true;
   bool _playIntent = true;
   bool _playbackServiceHeld = false;
+  // 切后台只留音频时视频轨的状态：true = 已关掉视频轨。
+  // vid 是播放器级选项，切集/自动连播换片也不复位，不用每集重复关。
+  bool _videoTrackOff = false;
   bool _showControlsOnPlaybackReady = true;
   bool _pendingError = false;
   bool _pictureInPictureSupported = false;
@@ -719,6 +722,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// 切后台只留音频：视频轨一关，mpv 就不再解码视频帧，画面不渲染、
+  /// GPU 不耗电，声音照常在后台播；回前台再开画面。
+  /// 只动 media_kit 那路（TVBox/Exo 原生句柄没有这路子，不碰）。
+  /// 画中画在前台不算后台，轨道保持开着。
+  void _syncVideoTrack(bool visible) {
+    if (_closed || _useNativeHandle) return;
+    if (!visible && !_videoTrackOff && _enginePlaying) {
+      _videoTrackOff = true;
+      unawaited(_player.setVideoTrack(VideoTrack.no()));
+    } else if (visible && _videoTrackOff) {
+      _videoTrackOff = false;
+      unawaited(_player.setVideoTrack(VideoTrack.auto()));
+    }
+  }
+
   void _applyLifecycleVisibility() {
     final windowsInactive =
         Platform.isWindows && _lifecycleState == AppLifecycleState.inactive;
@@ -727,6 +745,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         windowsInactive ||
         _pictureInPictureVisible;
     _foreground = visible;
+    _syncVideoTrack(visible);
     _enhancement.setForeground(_foreground);
     _syncDanmaku();
     _syncPreload();

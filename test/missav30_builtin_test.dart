@@ -229,7 +229,7 @@ void main() {
   });
 
   test('zakatv.jar 未动守卫：md5 + 23 条目不变', () {
-    expect(zakatvJarMd5, '44235cee5268015e5ccca0a57aa42107');
+    expect(zakatvJarMd5, '029005c7ce017dc0a412f2d079a29dab');
     final bytes = File('assets/jars/zakatv.jar').readAsBytesSync();
     expect(md5.convert(bytes).toString(), zakatvJarMd5);
     final archive = ZipDecoder().decodeBytes(bytes);

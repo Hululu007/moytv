@@ -543,6 +543,7 @@ class XpWindowFrame extends StatelessWidget {
     required this.onClose,
     required this.child,
     this.active = true,
+    this.hideTitleBar = false,
   });
 
   final Win7WindowKind kind;
@@ -553,10 +554,14 @@ class XpWindowFrame extends StatelessWidget {
   /// 窗口是否在前台（见 [WindowTitleBarAutoHide.active]）。
   final bool active;
 
+  /// 强制藏标题栏（游戏全屏用，见 [WindowTitleBarAutoHide.hideTitleBar]）。
+  final bool hideTitleBar;
+
   @override
   Widget build(BuildContext context) {
     return WindowTitleBarAutoHide(
       active: active,
+      hideTitleBar: hideTitleBar,
       titleBar: Container(
         height: 32,
         decoration: const BoxDecoration(

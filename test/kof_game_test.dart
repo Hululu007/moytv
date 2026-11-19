@@ -169,7 +169,7 @@ void main() {
       expect(kind.iconGradient, isNot(Win7WindowKind.game.iconGradient));
     });
 
-    test('默认图标表 9 个，kof 在末尾（多媒体之后）', () {
+    test('默认图标表 9 个，kof 在末尾（网盘之后）', () {
       expect(win7DesktopIcons.length, 9);
       expect(win7DesktopIcons.last, Win7WindowKind.kof);
       expect(
@@ -531,7 +531,7 @@ void main() {
     });
   });
 
-  testWidgets('点拳皇97 图标开拳皇97 窗口：标题栏 + 游戏页 + 任务栏条目', (tester) async {
+  testWidgets('点拳皇97 图标开拳皇97 窗口：进全屏（任务栏与标题栏藏、退出钮在）', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -556,15 +556,12 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byKey(const ValueKey('win7-desktop')), findsNothing);
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('win7-window-title'))).data,
-      '拳皇97',
-    );
+    // 进游戏即全屏（用户 2026-11-19 令）：标题栏与任务栏都藏，
+    // 右上角悬浮退出钮；游戏页照常加载。
+    expect(find.byKey(const ValueKey('win7-window-title')), findsNothing);
+    expect(find.byKey(const ValueKey('win7-taskbar')), findsNothing);
+    expect(find.byKey(const ValueKey('win7-game-exit')), findsOneWidget);
     expect(find.byType(WebGamePage), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('win7-taskbar-entry-kof')),
-      findsOneWidget,
-    );
     expect(fakePlatform.lastController?.loadedUrls, [kof97GameUrl]);
   });
 }

@@ -6,6 +6,7 @@ import 'core_bridge.dart';
 import 'import_file_store.dart';
 import 'jar_bridge_handoff.dart';
 import 'imported_site_record.dart';
+import 'json_list_import.dart';
 import 'legado_gbk.dart';
 import 'local_store.dart';
 import 'py_bridge.dart';
@@ -141,7 +142,12 @@ class ImportEngine {
         case 'js':
           return await _importJs(candidate, hash, records, markRecordsChanged);
         case 'json':
-          return await _importJson(candidate, hash);
+          return await _importJson(
+            candidate,
+            hash,
+            records,
+            markRecordsChanged,
+          );
         case 'jar':
           return await _importJar(candidate);
         case 'zip':
@@ -313,7 +319,31 @@ class ImportEngine {
   Future<ImportOutcome> _importJson(
     ImportCandidate candidate,
     String hash,
+    List<ImportedSiteRecord> records,
+    void Function() markRecordsChanged,
   ) async {
+    // 视频列表 JSON 先判：顶层含 parse 键的列表文件会被下面的
+    // TVBox 配置分支误认（配置判定只看有无 parse/sites 等键），
+    // 必须先拦。不是列表（无可用条目）时往下走原有各分支。
+    final listParsed = await parseJsonListBytesAsync(candidate.bytes);
+    if (listParsed.items.isNotEmpty &&
+        hasUsableVideoListItem(listParsed.items)) {
+      return _importJsonList(
+        candidate,
+        hash,
+        records,
+        markRecordsChanged,
+        listParsed,
+      );
+    }
+    // 列表形态但无可用条目：报清“列表为空”，不往下误判成别的格式。
+    if (listParsed.hasListShape) {
+      return ImportOutcome(
+        fileName: candidate.name,
+        status: ImportOutcomeStatus.failed,
+        reason: '视频列表里没有可播的条目：list 为空，或条目都没有播放地址',
+      );
+    }
     final String text;
     try {
       text = utf8.decode(candidate.bytes);
@@ -416,6 +446,81 @@ class ImportEngine {
       reason:
           '无法识别的 JSON：既不是 XBPQ 规则（含主页url/分类/数组等字段）、'
           'TVBox 配置（含 sites/spider），也不是自定义源格式',
+    );
+  }
+
+  /// TVBox 视频列表 JSON 导入：规范化存盘 + 生成读盘蜘蛛 + 登记。
+  /// 干净文件原样存；损坏文件只存找回的条目重编的干净 JSON，
+  /// 蜘蛛只读干净文件。站名从内容取（不拿乱码文件名当站名），
+  /// 成人站显示名带 🔞。ping 只作尽力确认（与 _importPy 同款，
+  /// 运行时不可用时不拦导入）。
+  Future<ImportOutcome> _importJsonList(
+    ImportCandidate candidate,
+    String hash,
+    List<ImportedSiteRecord> records,
+    void Function() markRecordsChanged,
+    JsonListParseResult parsed,
+  ) async {
+    final displayName = jsonListDisplayName(parsed.items, candidate.baseName);
+    final spiderSource = buildJsonListSpiderSource();
+    final validation = validatePySource(spiderSource);
+    if (!validation.ok) {
+      return ImportOutcome(
+        fileName: candidate.name,
+        status: ImportOutcomeStatus.failed,
+        reason: '内置列表蜘蛛校验未通过：${validation.message}',
+      );
+    }
+    final id = _uniqueId('jsonlist', candidate.baseName, records, hash);
+    final List<int> jsonBytes;
+    if (parsed.damaged) {
+      jsonBytes = utf8.encode(
+        jsonEncode({'list': parsed.items, 'parse': 0, 'jx': 0}),
+      );
+    } else {
+      jsonBytes = candidate.bytes;
+    }
+    final jsonFileName = await ImportFileStore.save(id, 'json', jsonBytes);
+    final jsonPath = await ImportFileStore.pathOf(jsonFileName);
+    final pyFileName = await ImportFileStore.save(
+      id,
+      'py',
+      utf8.encode(spiderSource),
+    );
+    records.add(
+      ImportedSiteRecord(
+        id: id,
+        name: displayName,
+        type: ImportedSiteRecord.typeJsonList,
+        fileName: pyFileName,
+        contentHash: hash,
+        importedAtMs: DateTime.now().millisecondsSinceEpoch,
+        ext: jsonListExtFor(path: jsonPath, name: displayName),
+      ),
+    );
+    markRecordsChanged();
+    try {
+      final path = await ImportFileStore.pathOf(pyFileName);
+      final ping = await PyBridge.call(path, {'action': 'ping'});
+      final spiderName = (ping['name'] as String? ?? '').trim();
+      if (spiderName.isNotEmpty && spiderName != displayName) {
+        final index = records.indexWhere((record) => record.id == id);
+        if (index >= 0) {
+          records[index] = records[index].copyWith(name: spiderName);
+          markRecordsChanged();
+        }
+      }
+    } catch (_) {}
+    final damageNote = parsed.damaged
+        ? '（文件有损坏，已只收完好条目${parsed.skipped > 0 ? '，跳过损坏条目 ${parsed.skipped} 条' : ''}）'
+        : '';
+    return ImportOutcome(
+      fileName: candidate.name,
+      status: ImportOutcomeStatus.success,
+      reason:
+          '已注册为 JSON 列表站「$displayName」：${parsed.items.length} 条$damageNote',
+      siteName: displayName,
+      siteId: id,
     );
   }
 

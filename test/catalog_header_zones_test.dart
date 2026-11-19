@@ -56,7 +56,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
   }
 
-  /// 切区全走底部标签栏：0=片库 / 1=直播 / 3=多媒体。
+  /// 切区全走底部标签栏：0=片库 / 1=直播 / 3=网盘。
   Future<void> tapShellTab(WidgetTester tester, int index) async {
     await tester.tap(find.byKey(ValueKey('shell-tab-$index')));
     await tester.pump();
@@ -117,7 +117,7 @@ void main() {
     expect(find.byKey(const ValueKey('source-switch')), findsNothing);
     expect(find.byKey(const ValueKey('drawer-site-box')), findsNothing);
     expect(find.byType(GlassButtonGroup), findsNothing);
-    expect(find.text('多媒体'), findsWidgets);
+    expect(find.text('网盘'), findsWidgets);
     debugDefaultTargetPlatformOverride = null;
   });
 

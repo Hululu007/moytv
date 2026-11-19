@@ -11,6 +11,7 @@ import 'content_tier_filter.dart';
 import 'core_bridge.dart';
 import 'feed_adult_mix.dart';
 import 'feed_playability.dart';
+import 'game_zone_page.dart';
 import 'hero_mix.dart';
 import 'hongguo_comment.dart';
 import 'hongguo_danmaku.dart';
@@ -29,6 +30,7 @@ import 'neon_glass_kit.dart';
 import 'playback_foreground.dart';
 import 'tvbox_player_bridge.dart';
 import 'watchroom/player.dart';
+import 'web_game_page.dart';
 import 'widgets.dart';
 
 bool isHongguoDramaGroup(String groupId) => groupId == 'hongguo';
@@ -62,11 +64,11 @@ Future<int?> hongguoFirstPlayableEpisode({
 }
 
 class HongguoDramaHome extends StatefulWidget {
-  /// “我的”页的内层页签下标（0 全屏流 / 1 多媒体 / 2 我的 / 3 霓虹首页 /
-  /// 4 频道 / 5 小程序 / 6 女优库）。
+  /// “我的”页的内层页签下标（0 全屏流 / 1 网盘 / 2 我的 / 3 霓虹首页 /
+  /// 4 频道 / 5 小程序 / 6 女优库 / 7 游戏区）。
   static const mineTabIndex = 2;
 
-  /// 多媒体页的内层页签下标（原片单位置）。
+  /// 网盘页的内层页签下标（原片单位置）。
   static const multimediaTabIndex = 1;
 
   /// 小程序页的内层页签下标（底部标签栏“小程序”由此进入，与抽屉里
@@ -76,6 +78,10 @@ class HongguoDramaHome extends StatefulWidget {
   /// 女优库页的内层页签下标（底部标签栏“女优库”由此进入，与通用
   /// 分支的女优库区同一页）。
   static const actressTabIndex = 6;
+
+  /// 游戏区页的内层页签下标（底部标签栏“游戏区”由此进入，与通用
+  /// 分支的游戏区同一页）。
+  static const gameZoneTabIndex = 7;
 
   const HongguoDramaHome({
     super.key,
@@ -135,7 +141,7 @@ class HongguoDramaHome extends StatefulWidget {
 
   /// 霓虹首页/频道页放大镜的动作：那两处没有输入框，点放大镜直接
   /// 打开搜索页（平时只搜当前站；全部站源模式下搜全部可见站。
-  /// 多媒体屏自带网盘搜索框，不走这里）。
+  /// 网盘屏自带网盘搜索框，不走这里）。
   final VoidCallback onOpenGlobalSearch;
 
   /// 保留给调用方兼容：2026-11-18 19:49 令后，本组件内的图标点按
@@ -190,14 +196,14 @@ class HongguoDramaHome extends StatefulWidget {
   /// （取流 + 验真，会产生网络请求）。
   final FeedPlayabilityVerifier? playabilityVerifier;
 
-  /// 已登录且显示中的网盘站，供多媒体页签用；为空时多媒体页
+  /// 已登录且显示中的网盘站，供网盘页签用；为空时网盘页
   /// 显示未登录提示。
   final List<SourceSite> driveSites;
 
-  /// 多媒体页未登录提示里的“去网盘登录”跳转。
+  /// 网盘页未登录提示里的“去网盘登录”跳转。
   final VoidCallback? onOpenCloudLogin;
 
-  /// 多媒体页卡片刮削取数（注入假的供测试；为空时用真刮削链）。
+  /// 网盘页卡片刮削取数（注入假的供测试；为空时用真刮削链）。
   final MultimediaMetadataFetcher? metadataFetcher;
 
   @override
@@ -208,7 +214,8 @@ typedef _Channel = ({String key, String label, String? categoryId});
 
 typedef _FeedResume = ({String key, int episode, double position});
 
-class _HongguoDramaHomeState extends State<HongguoDramaHome> {
+class _HongguoDramaHomeState extends State<HongguoDramaHome>
+    with WidgetsBindingObserver {
   static _FeedResume? _resume;
 
   int _tab = 3;
@@ -242,6 +249,11 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   bool _opening = false;
   bool _pendingPlay = false;
   bool _playbackServiceHeld = false;
+  // 切后台期间首页自动播的状态：只恢复切后台前正在播的、
+  // 或切后台期间刚开出来的那一部，用户自己按过暂停的不抢播。
+  bool _backgrounded = false;
+  bool _wasPlayingBeforeBackground = false;
+  bool _openedWhileBackgrounded = false;
   String _videoKeys = '';
 
   /// 霓虹轮播混排结果：null = 尚未混入（只显示基础位）；非空 =
@@ -443,6 +455,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final requested = widget.requestedTab;
     if (requested != null) _tab = requested;
     final locked = _lockedChannelKey;
@@ -485,7 +498,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         _selectTab(widget.requestedTab!);
       } else if (_tab == oldWidget.requestedTab) {
         // 外层请求撤回（点回片库）：若内层仍停在被请求的页签上
-        // （我的/多媒体），回到霓虹首页；用户已在内层自行切走
+        // （我的/网盘），回到霓虹首页；用户已在内层自行切走
         // 时不动，避免抢用户正在看的页。
         _selectTab(_neonHomeTab);
       }
@@ -519,7 +532,35 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // 切后台：首页自动播的短剧停掉，不在后台继续解码视频出声；
+      // 前台服务也一起放掉（回前台不需要它，下一集开播时会重新拿）。
+      _backgrounded = true;
+      _wasPlayingBeforeBackground = _player.playing;
+      if (_player.hasVideo) unawaited(_player.pause());
+      if (_playbackServiceHeld) {
+        _playbackServiceHeld = false;
+        unawaited(PlaybackForeground.release());
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      _backgrounded = false;
+      final shouldResume =
+          (_wasPlayingBeforeBackground || _openedWhileBackgrounded) &&
+          _tab == 0 &&
+          _player.hasVideo &&
+          !_player.playing;
+      _wasPlayingBeforeBackground = false;
+      _openedWhileBackgrounded = false;
+      if (shouldResume) unawaited(_player.play());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _playToken++;
     if (_player.hasVideo && _videos.isNotEmpty) {
       final current = _videos[_index.clamp(0, _videos.length - 1)];
@@ -784,6 +825,13 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
         unawaited(_player.pause());
         return;
       }
+      if (_backgrounded) {
+        // 切后台期间刚开出来的集：先停住，记下来回前台再播，
+        // 不让它在后台出声、也不让它在后台解码。
+        _openedWhileBackgrounded = true;
+        unawaited(_player.pause());
+        return;
+      }
       final episodeIndex = playedIndex;
       final plan = _player.plan;
       if (plan != null) {
@@ -985,7 +1033,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     }
   }
 
-  // 霓虹页签（追加到原有的 0=全屏流 / 1=多媒体 / 2=我的 之后，
+  // 霓虹页签（追加到原有的 0=全屏流 / 1=网盘 / 2=我的 之后，
   // 这样原有播放逻辑完全不受影响）。
   static const _neonHomeTab = 3;
   static const _neonChannelTab = 4;
@@ -994,7 +1042,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   static const _navEntries = [
     ('home', '首页', _neonHomeTab),
     ('channel', '频道', _neonChannelTab),
-    ('multimedia', '多媒体', 1),
+    ('multimedia', '网盘', 1),
     ('feed', '推荐', 0),
   ];
 
@@ -1022,15 +1070,17 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     // 面 switch 的独立分支（不能用 >= 3，否则小程序页被当成频道页）。
     final neonTab = _tab == _neonHomeTab || _tab == _neonChannelTab;
     // 内容档锁定的分类不存在：除“我的”页外，所有内容页签都显示诚实空态。
-    // 档位空态只拦站源内容页签：我的页、多媒体页（用户自己的
-    // 网盘库，不参与内容档位过滤）、小程序页（工具页）与女优库页
-    // （合并名册，不参与内容档位过滤）不受档位限制。
+    // 档位空态只拦站源内容页签：我的页、网盘页（用户自己的
+    // 网盘库，不参与内容档位过滤）、小程序页（工具页）、女优库页
+    // （合并名册，不参与内容档位过滤）与游戏区页（两款游戏，不参与
+    // 内容档位过滤）不受档位限制。
     final tierGated =
         widget.tierEmpty &&
         _tab != HongguoDramaHome.mineTabIndex &&
         _tab != HongguoDramaHome.multimediaTabIndex &&
         _tab != HongguoDramaHome.miniAppTabIndex &&
-        _tab != HongguoDramaHome.actressTabIndex;
+        _tab != HongguoDramaHome.actressTabIndex &&
+        _tab != HongguoDramaHome.gameZoneTabIndex;
     final hideCapsuleBar = widget.hideCapsuleBar;
     final body = tierGated
         ? _tierEmptyView()
@@ -1056,6 +1106,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
             2 => _mine(context),
             5 => const MiniAppHomePage(),
             6 => _actress(context),
+            7 => _gameZone(context),
             _ => _feed(context),
           };
     return Scaffold(
@@ -1063,7 +1114,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
           ? Colors.black
           : (neonTab ? config.backgroundColor : null),
       extendBody: neonTab,
-      // 我的页、小程序页与女优库页不显示内部导航芯片行：回其它页走外层底栏。
+      // 我的页、小程序页、女优库页与游戏区页不显示内部导航芯片行：回其它页走外层底栏。
       // 霓虹首页页签显示合并顶栏（品牌 + 页签 + 搜索/刷新一排），其余
       // 页签仍显示单独的页签行。
       body:
@@ -1071,7 +1122,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
               _tab != 0 &&
               _tab != HongguoDramaHome.mineTabIndex &&
               _tab != HongguoDramaHome.miniAppTabIndex &&
-              _tab != HongguoDramaHome.actressTabIndex
+              _tab != HongguoDramaHome.actressTabIndex &&
+              _tab != HongguoDramaHome.gameZoneTabIndex
           ? Column(
               children: [
                 _tab == _neonHomeTab ? _mergedTopBar() : _internalNavRow(),
@@ -1090,7 +1142,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
-  /// 底部标签样式下的内层页签行：胶囊栏藏起后，首页/频道/多媒体/
+  /// 底部标签样式下的内层页签行：胶囊栏藏起后，首页/频道/网盘/
   /// 推荐四个内层去向改由这行芯片到达（“我的”与“女优库”走外层底栏经
   /// requestedTab 驱动，那两页上不显示这行）。全屏流页签不显示此行，
   /// 改由顶栏返回键退出（全屏流要保持全屏）。霓虹首页页签不用这行，
@@ -1118,7 +1170,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
   /// 合并顶栏（用户 2026-11-17 令，2026-11-18 19:49 令纠正）：底部标签
   /// 样式下，霓虹首页的品牌行与内层页签行并成一排——品牌 + 站名只
   /// 是展示（点按什么都不弹），左上角的图标点按弹站点列表弹窗；
-  /// 再往右是首页/频道/多媒体/推荐页签，搜索与刷新钮同行右置；页签放不
+  /// 再往右是首页/频道/网盘/推荐页签，搜索与刷新钮同行右置；页签放不
   /// 下时中间横滑。行高与页签行一致（54），切页签不跳动。品牌字
   /// 比霓虹品牌样式小一档（16），配色全部取当前主题，不写死颜色。
   Widget _mergedTopBar() {
@@ -1814,8 +1866,8 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
-  /// 多媒体页签（内层页签 1，原片单位置）：网盘媒体库，与底部
-  /// 标签栏的“多媒体”是同一个屏（见 [MultimediaScreen]）。
+  /// 网盘页签（内层页签 1，原片单位置）：网盘媒体库，与底部
+  /// 标签栏的“网盘”是同一个屏（见 [MultimediaScreen]）。
   Widget _multimedia(BuildContext context) {
     return MultimediaScreen(
       repository: widget.repository,
@@ -1847,6 +1899,26 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       repository: widget.repository,
       store: widget.store,
       showTitle: false,
+    );
+  }
+
+  /// 游戏区页：共享的 [GameZonePage]（通用分支点“游戏区”进的是
+  /// 同一页）；点卡推全屏游戏路由（见 _openGameZoneGame 的普通壳
+  /// 路径）；页顶不显示内部导航芯片行（见 build）。
+  Widget _gameZone(BuildContext context) {
+    return GameZonePage(
+      onGameSelected: (game) => unawaited(
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => FullscreenGameScreen(
+              title: game.title,
+              gameUrl: game.url,
+              allowedHost: game.host,
+              keyPrefix: game.keyPrefix,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -119,6 +119,18 @@ enum ActressSexFilter { all, female, male }
 /// 浏览排序：作品数从多到少，或名字升序。
 enum ActressSort { worksDesc, nameAsc }
 
+/// 女优库左上角站点筛选：默认全部；选站后兜底数据与现爬都只走该站。
+/// mjv = mjv011.com（潮流蜘蛛），whos = whos.tv（暂无手机现爬蜘蛛）。
+enum ActressSiteFilter {
+  all('全部', 'all'),
+  mjv('mjv', 'mjv'),
+  whos('whos', 'whos');
+
+  const ActressSiteFilter(this.label, this.siteId);
+  final String label;
+  final String siteId;
+}
+
 /// 第二排册别筛选：按名册自带的标签字段筛（潮流名册 c 字段）。
 /// 无标签的人物（whos/MissAV 名册不带标签）只进 [all]，不进分册。
 enum ActressTagFilter {
@@ -188,6 +200,17 @@ class RosterPerson {
   final Map<String, String> about;
 }
 
+/// 名册源对应的视频站源 id（同步入库的作品封面直取用）：
+/// - MissAV 名册的作品封面走 MissAV 视频站取详情；
+/// - whos 封面只在 XOR 开关打开时才有，站源记 'whos'；
+/// - 潮流名册不带封面，记空（有封面的条目不认站源、不写封面）。
+String actressRosterCoverSource(ActressRosterSourceId source) =>
+    switch (source) {
+      ActressRosterSourceId.missav => 'jar:missav30:ZakaMissav',
+      ActressRosterSourceId.whos => 'whos',
+      ActressRosterSourceId.chaoliu => '',
+    };
+
 /// 名册拉回的一部作品（单源视角）。
 class RosterFilm {
   const RosterFilm({
@@ -203,11 +226,12 @@ class RosterFilm {
   final String title;
   final String date;
 
-  /// whos 封面直链（仅 XOR 开关打开时解析）：写入作品行作封面，
-  /// 开关关闭时恒为空，行为与此前一字不差。
+  /// 封面直链：whos 只在 XOR 开关打开时解析，MissAV 同步时直接
+  /// 取人物页 `.lozad` 图地址；开关关闭/无图时恒为空。
   final String coverUrl;
 
-  /// 作品详情相对地址（whos 影片页路径），封面解析内部用。
+  /// 作品详情相对地址：whos 为影片页路径，MissAV 为视频页路径；
+  /// 封面解析内部用（封面直取的站源见 [actressRosterCoverSource]）。
   final String detailUrl;
 
   String get codeKey => normalizeAvCode(code);

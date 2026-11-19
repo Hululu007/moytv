@@ -275,7 +275,7 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
       builder: (context) => AlertDialog(
         title: const Text('删除导入站'),
         content: Text(
-          '确定删除「${record.name}」吗？${record.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
+          '确定删除「${record.name}」吗？${record.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : record.type == ImportedSiteRecord.typeJsonList ? '导入的 JSON 列表文件与蜘蛛文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
         ),
         actions: [
           TextButton(
@@ -290,14 +290,19 @@ class _ImportCenterSectionState extends State<ImportCenterSection> {
       ),
     );
     if (confirmed != true) return;
-    if (record.type == ImportedSiteRecord.typePy) {
+    if (record.type == ImportedSiteRecord.typePy ||
+        record.type == ImportedSiteRecord.typeJsonList) {
       unawaited(
         ImportFileStore.pathOf(
           record.fileName,
         ).then((path) => PyBridge.dispose(path)),
       );
     }
-    await ImportFileStore.delete(record.fileName);
+    await ImportFileStore.deleteRecordFiles(
+      type: record.type,
+      fileName: record.fileName,
+      ext: record.ext,
+    );
     await widget.store.syncImportedSites([
       for (final item in widget.store.importedSiteRecords)
         if (item.id != record.id) item,

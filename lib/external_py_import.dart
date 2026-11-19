@@ -128,6 +128,7 @@ class _ExternalPyImportListenerState extends State<ExternalPyImportListener>
 
   late final _jsonHandler = SharedJsonImportHandler(
     repository: widget.repository,
+    store: widget.store,
   );
 
   @override

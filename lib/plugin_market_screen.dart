@@ -150,7 +150,7 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   Future<void> _uninstallImportedPy(ImportedSiteRecord record) async {
     final confirmed = await _confirm(
       '卸载插件',
-      '确定卸载「${record.name}」吗？导入的蜘蛛文件副本将一并删除。',
+      '确定卸载「${record.name}」吗？${record.type == ImportedSiteRecord.typeJsonList ? '导入的 JSON 列表文件与蜘蛛文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
     );
     if (!confirmed) return;
     unawaited(
@@ -158,7 +158,11 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
         record.fileName,
       ).then((path) => PyBridge.dispose(path)),
     );
-    await ImportFileStore.delete(record.fileName);
+    await ImportFileStore.deleteRecordFiles(
+      type: record.type,
+      fileName: record.fileName,
+      ext: record.ext,
+    );
     await widget.store.syncImportedSites([
       for (final item in widget.store.importedSiteRecords)
         if (item.id != record.id) item,

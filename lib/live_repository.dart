@@ -138,10 +138,24 @@ class LiveRepository {
     int page = 1,
     bool force = false,
   }) async {
-    final imported = importedLiveChannels[source.id];
-    if (imported != null) {
-      if (imported.isEmpty) throw AppFailure('该订阅暂时没有频道');
-      return imported;
+    if (source.id.startsWith('m3u:')) {
+      // m3u 订阅的频道不再随快照常驻内存：未加载时按需从本地
+      // m3u 副本重解析；force 时重读文件，不读内存里的旧列表。
+      final imported = importedLiveChannels[source.id];
+      if (imported == null || force) {
+        final loader = loadImportedLiveChannels;
+        if (loader != null) {
+          final loaded = await loader(source.id, force: force);
+          if (loaded.isEmpty) throw AppFailure('该订阅暂时没有频道');
+          importedLiveChannels[source.id] = loaded;
+          return loaded;
+        }
+      }
+      if (imported != null) {
+        if (imported.isEmpty) throw AppFailure('该订阅暂时没有频道');
+        return imported;
+      }
+      throw AppFailure('该订阅暂时没有频道');
     }
     final cacheKey = '${source.id}\u0000${platform.id}\u0000$page';
     if (!force) {

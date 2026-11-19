@@ -98,7 +98,7 @@ void main() {
     }
 
     Future<void> openMultimedia(WidgetTester tester) async {
-      // 底部标签栏下标 3 是多媒体（听读合并后）。
+      // 底部标签栏下标 3 是网盘（听读合并后）。
       await tester.tap(find.byKey(const ValueKey('shell-tab-3')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));

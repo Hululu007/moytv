@@ -19,14 +19,17 @@ List<String> actressSearchSiteIds(LocalStore store) => [
 
 /// 双键合流补全：人物页打开时后台跑，把站源搜索结果叠加进本地作品。
 ///
-/// - 名字路：按显示名（+ 首个别名）搜全部可见站，命中按番号对上本地
-///   作品后附封面；番号不在本地的命中新增为跨站发现作品（只限带番号
-///   的命中，无番号命中只附到标题相同的已有行，不新增）；
+/// - 名字路：按显示名（+ 首个别名）搜全部可见站，用流式搜索
+///   `searchAcrossProgressive`，每站结果一到就附封面并通知刷新，
+///   不等整轮搜完；命中按番号对上本地作品后附封面；番号不在本地
+///   的命中新增为跨站发现作品（只限带番号的命中，无番号命中只附
+///   到标题相同的已有行，不新增）；
 /// - whos 路（默认关闭）：名字路一无所获时，用 whos `?name=` 追加
 ///   找人、拉该人作品清单与简介；封面只在 XOR 开关打开时才有，
 ///   简介经硬线过滤后写库；源级开关与本处开关须同时打开才跑；
-/// - 番号路：对仍无封面的作品按番号逐个搜（每轮上限 120 个、并发 4），
-///   只补已有行，不新增；
+/// - 番号路：对仍无封面的作品按番号逐个搜（每轮上限 120 个、并发 6，
+///   每轮墙钟上限 60 秒：超时不再起跑新作品，已贴上的保留、下一轮
+///   续跑），只补已有行，不新增；
 /// - 两路结果都按归一化番号去重（无番号按标题键），同一部只留一张卡；
 /// - 搜过的结果写进库；已记 enrichedAt 且全部作品已有封面时下次
 ///   打开不再跑（[ActressPerson.enrichedAt] 非空且无无封面作品才跳
@@ -38,9 +41,10 @@ class ActressEnrichment {
     required this.repository,
     required this.store,
     required this.db,
-    this.concurrency = 4,
+    this.concurrency = 6,
     this.codeSearchCap = 120,
     this.nameHitsCap = 100,
+    this.codeRoundBudget = const Duration(seconds: 60),
   });
 
   final AppRepository repository;
@@ -49,6 +53,10 @@ class ActressEnrichment {
   final int concurrency;
   final int codeSearchCap;
   final int nameHitsCap;
+
+  /// 番号路每轮墙钟上限：超时不再起跑新作品（已贴上的保留），
+  /// 本轮返回未完成、下次打开续跑。
+  final Duration codeRoundBudget;
 
   /// 跑一轮补全。返回 true 表示本轮已把能查的都查完（调用方记
   /// enrichedAt，下次打开符合跳过条件时不再跑）；返回 false 表示
@@ -111,10 +119,16 @@ class ActressEnrichment {
         .toList();
     final capped = uncovered.length > codeSearchCap;
     final targets = capped ? uncovered.take(codeSearchCap).toList() : uncovered;
-    await _enrichByCode(person, targets, siteIds, isCancelled, notifyChanged);
+    final codeDone = await _enrichByCode(
+      person,
+      targets,
+      siteIds,
+      isCancelled,
+      notifyChanged,
+    );
     if (isCancelled?.call() == true) return false;
     onChanged?.call();
-    return !capped;
+    return !capped && codeDone;
   }
 
   Future<List<ActressWork>> _allWorks(int personId) async {
@@ -135,7 +149,10 @@ class ActressEnrichment {
     return out;
   }
 
-  /// 名字路：返回带封面的有效命中数（whos 路是否追加以此为准）。
+  /// 名字路：流式搜索，每站结果一到就附封面并通知刷新，不等整轮
+  /// 搜完才贴第一张封面。返回带封面的有效命中数（whos 路是否
+  /// 追加以此为准）。每站命中各取前 [nameHitsCap] 条（与旧整轮
+  /// 上限同一数值，逐站计）；对库的附着口径与旧整轮一字不差。
   Future<int> _enrichByName(
     ActressPerson person,
     List<String> siteIds,
@@ -148,41 +165,68 @@ class ActressEnrichment {
     for (final query in queries) {
       if (isCancelled?.call() == true) return useful;
       if (query.trim().isEmpty) continue;
-      List<Drama> hits;
+      // 在途的贴附任务：onSite 是同步回调，贴附本身是异步的，
+      // 先收进 pending、整轮结束前等它们全部落库，useful 计数
+      // 才准；贴附一跑起来就调 notifyChanged，不等整轮。
+      final pending = <Future<int>>[];
       try {
-        final page = await repository.searchAcross(siteIds, query);
-        hits = page.items;
+        await repository.searchAcrossProgressive(
+          siteIds,
+          query,
+          onSite: (source, hits) {
+            pending.add(
+              _attachNameHits(person, hits, isCancelled, notifyChanged),
+            );
+          },
+          shouldStop: isCancelled,
+        );
       } catch (_) {
         continue;
       }
-      var attached = 0;
-      for (final hit in hits.take(nameHitsCap)) {
-        if (isCancelled?.call() == true) return useful;
-        if (actressTextBlocked(hit.title)) continue;
-        final code = extractAvId(
-          title: hit.title,
-          id: hit.id,
-          sourceId: hit.sourceId,
-        );
-        final codeKey = code == null ? '' : normalizeAvCode(code);
-        await db.attachCover(
-          personId: person.localId,
-          codeKey: codeKey,
-          titleKey: actressTitleKey(hit.title),
-          codeDisplay: code ?? '',
-          title: hit.title,
-          coverSource: hit.source,
-          coverDramaId: hit.id,
-          coverUrl: hit.cover,
-          // 无番号的命中只附已有行，不新增（防名字搜索的杂标题淹没列表）。
-          insertIfMissing: codeKey.isNotEmpty,
-        );
-        attached++;
-        if (hit.cover.isNotEmpty) useful++;
-        if (attached % 10 == 0) notifyChanged();
+      for (final delta in await Future.wait(pending)) {
+        useful += delta;
       }
       notifyChanged();
     }
+    return useful;
+  }
+
+  /// 名字路一批站源命中：按番号/标题对上本地作品后附封面，
+  /// 返回其中带封面的有效命中数。
+  Future<int> _attachNameHits(
+    ActressPerson person,
+    List<Drama> hits,
+    bool Function()? isCancelled,
+    void Function() notifyChanged,
+  ) async {
+    var useful = 0;
+    var attached = 0;
+    for (final hit in hits.take(nameHitsCap)) {
+      if (isCancelled?.call() == true) break;
+      if (actressTextBlocked(hit.title)) continue;
+      final code = extractAvId(
+        title: hit.title,
+        id: hit.id,
+        sourceId: hit.sourceId,
+      );
+      final codeKey = code == null ? '' : normalizeAvCode(code);
+      await db.attachCover(
+        personId: person.localId,
+        codeKey: codeKey,
+        titleKey: actressTitleKey(hit.title),
+        codeDisplay: code ?? '',
+        title: hit.title,
+        coverSource: hit.source,
+        coverDramaId: hit.id,
+        coverUrl: hit.cover,
+        // 无番号的命中只附已有行，不新增（防名字搜索的杂标题淹没列表）。
+        insertIfMissing: codeKey.isNotEmpty,
+      );
+      attached++;
+      if (hit.cover.isNotEmpty) useful++;
+      if (attached % 10 == 0) notifyChanged();
+    }
+    notifyChanged();
     return useful;
   }
 
@@ -235,7 +279,11 @@ class ActressEnrichment {
       if (isCancelled?.call() == true) return;
       final films = await whosSource.fetchFilms(slug, fetch: whosFetch);
       if (films.isEmpty) return;
-      await db.upsertWorks(person.localId, films);
+      await db.upsertWorks(
+        person.localId,
+        films,
+        coverSource: actressRosterCoverSource(ActressRosterSourceId.whos),
+      );
       for (final film in films) {
         if (film.coverUrl.isEmpty) continue;
         await db.attachCover(
@@ -254,7 +302,9 @@ class ActressEnrichment {
   /// 番号路：先查兜底 MJV 系（[actressFallbackSiteIds] 里可见的站），
   /// 有带封面的匹配命中就附上、不再查全站；取不到再走全站搜索。
   /// 去重与附着口径不变（归一化番号 + codeKey）。
-  Future<void> _enrichByCode(
+  /// 返回 true 表示本轮目标全部起跑过（调用方可记完成），false
+  /// 表示墙钟上限到了、还有目标没起跑（下次打开续跑）。
+  Future<bool> _enrichByCode(
     ActressPerson person,
     List<ActressWork> targets,
     List<String> siteIds,
@@ -267,6 +317,8 @@ class ActressEnrichment {
     ];
     var next = 0;
     var attached = 0;
+    var stoppedEarly = false;
+    final startedAt = DateTime.now();
 
     /// 在 [hits] 里找第一个带封面且番号匹配的命中，附到 [work] 上。
     Future<bool> attachFirstCover(ActressWork work, List<Drama> hits) async {
@@ -299,6 +351,12 @@ class ActressEnrichment {
       while (true) {
         if (isCancelled?.call() == true) return;
         if (next >= targets.length) return;
+        // 每轮墙钟上限：超时不再起跑新作品，已贴上的保留、
+        // 下次打开续跑；在途的搜索跑完，结果照收。
+        if (DateTime.now().difference(startedAt) > codeRoundBudget) {
+          stoppedEarly = true;
+          return;
+        }
         final work = targets[next++];
         final query = work.codeDisplay.isNotEmpty
             ? work.codeDisplay
@@ -325,7 +383,8 @@ class ActressEnrichment {
     }
 
     final workers = concurrency < targets.length ? concurrency : targets.length;
-    if (workers <= 0) return;
+    if (workers <= 0) return true;
     await Future.wait([for (var i = 0; i < workers; i++) worker()]);
+    return !stoppedEarly;
   }
 }

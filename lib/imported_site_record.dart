@@ -25,6 +25,11 @@ class ImportedSiteRecord {
   static const typeJs = 'js';
   static const typeHtml = 'html';
 
+  /// TVBox 视频列表 JSON 导入站：登记类型是 jsonlist，执行走
+  /// 生成的 py 蜘蛛（见 [json_list_import.dart]），故本地登记
+  /// 与 _pySpiderPath 都按 py 通道处理。
+  static const typeJsonList = 'jsonlist';
+
   ImportedSiteRecord copyWith({bool? enabled, String? name, String? ext}) =>
       ImportedSiteRecord(
         id: id,
@@ -67,6 +72,8 @@ class ImportedSiteRecord {
         ? 'Python 蜘蛛导入站'
         : type == typeHtml
         ? 'HTML 站源导入站'
+        : type == typeJsonList
+        ? 'JSON 列表导入站'
         : 'JS 蜘蛛导入站',
     section: SourceSite.sectionVideo,
     origin: SourceSite.originImport,

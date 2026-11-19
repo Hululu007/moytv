@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'app_layout.dart';
@@ -50,6 +51,8 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   final _focus = FocusNode();
   bool _panel = false;
   bool _playbackServiceHeld = false;
+  // 切后台只留音频时视频轨的状态：true = 已关掉视频轨。
+  bool _videoTrackOff = false;
   bool _immersed = false;
   bool _exiting = false;
   AppOrientationController? _orientationController;
@@ -66,9 +69,24 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
+      // 切后台只留音频：视频轨一关，mpv 不再解码视频帧；
+      // 直播声音照常在后台播，回前台再开画面。
+      final player = _playback.player;
+      if (player != null && player.state.playing && !_videoTrackOff) {
+        _videoTrackOff = true;
+        unawaited(player.setVideoTrack(VideoTrack.no()));
+      }
       if (!_playbackServiceHeld && (_playback.player?.state.playing ?? false)) {
         _playbackServiceHeld = true;
         unawaited(PlaybackForeground.acquire(_playback.channel?.name ?? '直播'));
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      if (_videoTrackOff) {
+        _videoTrackOff = false;
+        final player = _playback.player;
+        if (player != null) {
+          unawaited(player.setVideoTrack(VideoTrack.auto()));
+        }
       }
     }
   }

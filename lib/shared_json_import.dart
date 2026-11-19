@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'content_legado.dart';
 import 'core_bridge.dart';
+import 'import_center.dart';
+import 'json_list_import.dart';
+import 'local_store.dart';
 import 'miniapp/haikuo/haikuo_codec.dart';
 import 'miniapp/haikuo/haikuo_program.dart';
 import 'miniapp/haikuo/haikuo_store.dart';
@@ -14,21 +17,23 @@ import 'tvbox_config.dart';
 /// - TVBox 配置：TvBoxConfigParser 能解出的对象且含 sites/spider 键
 ///   （与导入中心文件导入的判定一致；base64 包裹与尾随逗号由解析器
 ///   自己处理，与导入器实际接受能力一致）；
+/// - 视频列表 JSON：顶层 list 里有带 vod_play_url 的条目
+///   （见 [looksLikeVideoListJson]，与站点列表“导入 JSON”同一判定）；
 /// - 阅读书源：validateLegadoJson（单对象）；数组时逐条用同一判定，
 ///   与阅读区批量导入同一条规则；
 /// - 海阔小程序：HaikuoCodec.parseText 能解析出条目（与小程序页
 ///   文件导入同一套解析，含宽容 JSON、zip、gzip、base64 形态）。
 ///
-/// 判定顺序是 TVBox → 书源 → 海阔：海阔解析器会把 TVBox 配置里
-/// 的每个站点（有 name 又有 api）认成一条小程序，所以配置必须先判；
-/// 书源签名（bookSourceUrl + 四组规则）足够独特，放中间可避免
-/// 被海阔解析器误认。三种都不是时返回 unsupported，调用方诚实
-/// 提示，不崩。
+/// 判定顺序是 TVBox → 视频列表 → 书源 → 海阔：海阔解析器会把
+/// TVBox 配置里的每个站点（有 name 又有 api）认成一条小程序，
+/// 所以配置必须先判；视频列表的签名（vod_play_url）足够独特，
+/// 放配置之后可避免被书源/海阔认走。三种都不是时返回 unsupported，
+/// 调用方诚实提示，不崩。
 ///
 /// 已知边界：带 `//` 注释的 TVBox 配置到不了 TVBox 判定（应用内
 /// 文件导入的严格判定同样拒绝它），会落到海阔解析——与现有各路
 /// 的行为一致，这里不另行处理。
-enum SharedJsonKind { haikuo, legado, tvboxConfig, unsupported }
+enum SharedJsonKind { haikuo, legado, tvboxConfig, jsonList, unsupported }
 
 SharedJsonKind classifySharedJson(String text) {
   final trimmed = text.trim();
@@ -50,6 +55,9 @@ SharedJsonKind classifySharedJson(String text) {
   } catch (_) {
     decoded = null;
   }
+  // 阅读书源之前先判视频列表：签名（vod_play_url）足够独特，
+  // 配置对象与书源都没有这种形态，不会误认。
+  if (looksLikeVideoListJson(decoded)) return SharedJsonKind.jsonList;
   if (decoded is Map) {
     try {
       validateLegadoJson(trimmed);
@@ -99,15 +107,22 @@ typedef TvBoxSharedJsonImportFn =
       String displayName,
     );
 
+/// 视频列表 JSON 导入：默认走 ImportEngine（与站点列表 + 号里
+/// “导入 JSON”同一入口）。没传 store 时无法登记，诚实提示去向。
+typedef JsonListSharedJsonImportFn =
+    Future<String> Function(List<int> bytes, String fileName);
+
 /// 分享 JSON 的分流执行器：两个原生队列的消费处（插件分享通道
 /// 与外部导入监听）共用。返回给用户看的提示文案，各路文案与
 /// 应用内导入一致；认不出时返回诚实提示，不抛错。
 class SharedJsonImportHandler {
   SharedJsonImportHandler({
     AppRepository? repository,
+    LocalStore? store,
     HaikuoSharedJsonImportFn? haikuoImport,
     LegadoSharedJsonImportFn? legadoImport,
     TvBoxSharedJsonImportFn? configImport,
+    JsonListSharedJsonImportFn? jsonListImport,
     Future<void> Function()? onLegadoImported,
   }) : _haikuoImport =
            haikuoImport ??
@@ -127,12 +142,30 @@ class SharedJsonImportHandler {
                displayName: displayName,
              );
            }),
+       _jsonListImport =
+           jsonListImport ??
+           ((bytes, fileName) async {
+             final targetStore = store;
+             final repo = repository;
+             if (targetStore == null || repo == null) {
+               return '该文件是 TVBox 视频列表 JSON，请在站点列表右上角 + 号里选“导入 JSON”';
+             }
+             final engine = ImportEngine(
+               store: targetStore,
+               repository: repo,
+             );
+             final report = await engine.importAll([
+               ImportCandidate(name: fileName, bytes: bytes),
+             ]);
+             return report.summary;
+           }),
        _onLegadoImported =
            onLegadoImported ?? NovelSourceStore.applyToRegistry;
 
   final HaikuoSharedJsonImportFn _haikuoImport;
   final LegadoSharedJsonImportFn _legadoImport;
   final TvBoxSharedJsonImportFn _configImport;
+  final JsonListSharedJsonImportFn _jsonListImport;
   final Future<void> Function() _onLegadoImported;
 
   /// 分流并导入，返回提示文案。调用方保证 [bytes] 非空；
@@ -192,8 +225,14 @@ class SharedJsonImportHandler {
         } catch (error) {
           return '导入失败：$error';
         }
+      case SharedJsonKind.jsonList:
+        try {
+          return await _jsonListImport(bytes, fileName);
+        } catch (error) {
+          return '导入失败：$error';
+        }
       case SharedJsonKind.unsupported:
-        return '文件「$fileName」不是可识别的 JSON：不是小程序规则、书源或 TVBox 配置';
+        return '文件「$fileName」不是可识别的 JSON：不是小程序规则、书源、TVBox 配置或视频列表';
     }
   }
 }

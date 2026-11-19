@@ -26,17 +26,30 @@ class SourcePickerEntry {
 }
 
 class SourcePickerGroup {
-  const SourcePickerGroup({required this.title, required this.entries});
+  const SourcePickerGroup({
+    required this.title,
+    required this.entries,
+    this.zone = zoneBuiltin,
+  });
 
   final String title;
   final List<SourcePickerEntry> entries;
+
+  /// 3D 翻页分区：builtin=内置区，import=导入区（本地导入 +
+  /// 远程配置）。默认 builtin；直播/阅读弹窗不分区，不传即全进
+  /// 内置区、不翻页。
+  static const zoneBuiltin = 'builtin';
+  static const zoneImport = 'import';
+
+  final String zone;
 }
 
 class _EditableGroup {
-  _EditableGroup(this.title, this.entries);
+  _EditableGroup(this.title, this.entries, {this.zone = ''});
 
   final String title;
   final List<SourcePickerEntry> entries;
+  final String zone;
 }
 
 Future<String?> showSitePickerDialog(
@@ -56,6 +69,14 @@ Future<String?> showSitePickerDialog(
   /// 弹窗改渲染 3D 方块列；为空时永远是普通列表（直播/阅读区
   /// 不传，方块只在片库区出现）。
   AppRepository? repository,
+
+  /// 3D 翻页双区开关（只在片库区传 true）：内置区 / 导入区
+  /// 用翻书式 3D 动效切换；不传时保持原来的单列表。
+  bool enableZoneFlip = false,
+
+  /// 打开时默认显示的区：0 内置区，1 导入区。导入成功后调用方
+  /// 重开弹窗传 1，列表自动落到导入区。
+  int initialZoneIndex = 0,
 }) => showDialog<String>(
   context: context,
   builder: (context) => SitePickerDialog(
@@ -66,6 +87,8 @@ Future<String?> showSitePickerDialog(
     onDeleteSite: onDeleteSite,
     onImport: onImport,
     repository: repository,
+    enableZoneFlip: enableZoneFlip,
+    initialZoneIndex: initialZoneIndex,
   ),
 );
 
@@ -79,6 +102,8 @@ class SitePickerDialog extends StatefulWidget {
     this.onDeleteSite,
     this.onImport,
     this.repository,
+    this.enableZoneFlip = false,
+    this.initialZoneIndex = 0,
   });
 
   final String sectionName;
@@ -88,6 +113,8 @@ class SitePickerDialog extends StatefulWidget {
   final Future<bool> Function(SourcePickerEntry entry)? onDeleteSite;
   final Future<void> Function()? onImport;
   final AppRepository? repository;
+  final bool enableZoneFlip;
+  final int initialZoneIndex;
 
   @override
   State<SitePickerDialog> createState() => _SitePickerDialogState();
@@ -95,7 +122,6 @@ class SitePickerDialog extends StatefulWidget {
 
 class _SitePickerDialogState extends State<SitePickerDialog> {
   final _searchController = TextEditingController();
-  final _scrollController = ScrollController();
   final _currentKey = GlobalKey();
   String _query = '';
   bool _scrolledToCurrent = false;
@@ -104,14 +130,52 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   late bool _editMode;
   late List<_EditableGroup> _groups;
 
+  /// 3D 翻页：0 内置区，1 导入区；每区一个滚动控制器（翻页过渡
+  /// 期两区列表同时在树里，共用一个控制器会断言失败）。
+  late int _zoneIndex;
+  int _flipDirection = 1;
+  final _zoneScrollControllers = [ScrollController(), ScrollController()];
+
+  /// 翻页只在片库区开：调用方传 enableZoneFlip 才翻；直播/阅读
+  /// 弹窗不传，永远是原来的单列表。
+  bool get _flipEnabled => widget.enableZoneFlip;
+
+  List<_EditableGroup> _zoneGroups(int zone) => [
+    for (final group in _groups)
+      if ((zone == 1) == (group.zone == SourcePickerGroup.zoneImport)) group,
+  ];
+
+  int _zoneEntryCount(int zone) =>
+      _zoneGroups(zone).fold(0, (sum, group) => sum + group.entries.length);
+
+  ScrollController get _activeScrollController =>
+      _zoneScrollControllers[_flipEnabled ? _zoneIndex : 0];
+
   @override
   void initState() {
     super.initState();
     _editMode = widget.initialEditMode && widget.onDeleteSite != null;
+    _zoneIndex = widget.initialZoneIndex == 1 ? 1 : 0;
     _groups = [
       for (final group in widget.groups)
-        _EditableGroup(group.title, List.of(group.entries)),
+        _EditableGroup(group.title, List.of(group.entries), zone: group.zone),
     ];
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
+  }
+
+  /// 切区：点区签或左右滑触发；翻页方向记下来给过渡动效用，
+  /// 切完重定位当前站（在新区里才滚）。
+  void _setZone(int index) {
+    if (!_flipEnabled || index == _zoneIndex || index < 0 || index > 1) {
+      return;
+    }
+    setState(() {
+      _flipDirection = index > _zoneIndex ? 1 : -1;
+      _zoneIndex = index;
+      _scrolledToCurrent = false;
+      _scrollSteps = 0;
+      _lastMaxExtent = -1;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
@@ -121,6 +185,13 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   /// 跳、直到它出现再 ensureVisible；到底且范围不再变就放弃。
   void _scrollToCurrent() {
     if (_scrolledToCurrent || !mounted || _scrollSteps >= 80) return;
+    // 当前站不在活动区时不滚（导入区打开时当前站多半在内置区）。
+    if (_flipEnabled) {
+      final inZone = _zoneGroups(
+        _zoneIndex,
+      ).any((group) => group.entries.any((entry) => entry.id == widget.currentId));
+      if (!inZone) return;
+    }
     final targetContext = _currentKey.currentContext;
     if (targetContext != null) {
       _scrolledToCurrent = true;
@@ -132,11 +203,11 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       return;
     }
     _scrollSteps++;
-    if (_scrollController.hasClients) {
-      final position = _scrollController.position;
+    if (_activeScrollController.hasClients) {
+      final position = _activeScrollController.position;
       final max = position.maxScrollExtent;
       if (position.pixels < max) {
-        _scrollController.jumpTo(
+        _activeScrollController.jumpTo(
           math.min(position.pixels + position.viewportDimension, max),
         );
         _lastMaxExtent = max;
@@ -152,7 +223,9 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   @override
   void dispose() {
     _searchController.dispose();
-    _scrollController.dispose();
+    for (final controller in _zoneScrollControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -184,8 +257,10 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final searching = _query.isNotEmpty;
+    // 翻页开时只取活动区的分组；不开时全取，与原来一致。
+    final zoneGroups = _flipEnabled ? _zoneGroups(_zoneIndex) : _groups;
     final visible = <({String title, List<SourcePickerEntry> entries})>[];
-    for (final group in _groups) {
+    for (final group in zoneGroups) {
       final entries = searching
           ? group.entries
                 .where((entry) => entry.name.toLowerCase().contains(_query))
@@ -272,35 +347,72 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                   ),
                 ),
               ],
+              if (_flipEnabled) ...[
+                _zoneTabs(theme, colors),
+                const SizedBox(height: 8),
+              ],
               const SizedBox(height: 8),
               Expanded(
-                child: visible.isEmpty
-                    ? Center(
-                        child: Text(
-                          '没有匹配的站点',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colors.onSurfaceVariant,
+                child: _flipEnabled
+                    ? GestureDetector(
+                        // 左右滑切区：左滑进导入区，右滑回内置区。
+                        onHorizontalDragEnd: (details) {
+                          final velocity =
+                              details.primaryVelocity ?? 0;
+                          if (velocity < -80) {
+                            _setZone(_zoneIndex + 1);
+                          } else if (velocity > 80) {
+                            _setZone(_zoneIndex - 1);
+                          }
+                        },
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 320),
+                          transitionBuilder: (child, animation) {
+                            // 关键：transitionBuilder 只在建条目时调一次，
+                            // 直接读 animation.value 会把首帧角度焊死
+                            // （初始页建时 value=0，列表会以 90° 立着、
+                            // 看不见也滑不动）。用 AnimatedBuilder 包起来，
+                            // 每帧按当前动画值重算角度，翻页才是真翻。
+                            return AnimatedBuilder(
+                              animation: animation,
+                              builder: (context, child) {
+                                // 出场（reverse）与入场（forward）同向绕边翻：
+                                // 前进时旧页绕右边走、新页绕左边来，后退时反过来。
+                                final isOutgoing =
+                                    animation.status ==
+                                    AnimationStatus.reverse;
+                                final dir = _flipDirection.toDouble();
+                                final progress = isOutgoing
+                                    ? 1 - animation.value
+                                    : animation.value;
+                                final angle = isOutgoing
+                                    ? progress * dir * (math.pi / 2)
+                                    : (1 - progress) * dir * (math.pi / 2);
+                                final alignment = isOutgoing
+                                    ? (dir > 0
+                                          ? Alignment.centerRight
+                                          : Alignment.centerLeft)
+                                    : (dir > 0
+                                          ? Alignment.centerLeft
+                                          : Alignment.centerRight);
+                                return Transform(
+                                  alignment: alignment,
+                                  transform: Matrix4.identity()
+                                    ..setEntry(3, 2, 0.0012)
+                                    ..rotateY(angle),
+                                  child: child,
+                                );
+                              },
+                              child: child,
+                            );
+                          },
+                          child: KeyedSubtree(
+                            key: ValueKey('site-picker-zone-$_zoneIndex'),
+                            child: _listBody(visible, searching, cubeMode),
                           ),
                         ),
                       )
-                    : cubeMode
-                    ? _cubeList(visible, searching)
-                    : ListView(
-                        controller: _scrollController,
-                        children: [
-                          for (final group in visible) ...[
-                            if (!searching && group.title.isNotEmpty)
-                              NeonSectionTitle(
-                                '${group.title}（${group.entries.length}）',
-                                padding: const EdgeInsets.only(
-                                  top: 12,
-                                  bottom: 4,
-                                ),
-                              ),
-                            _siteGrid(group),
-                          ],
-                        ],
-                      ),
+                    : _listBody(visible, searching, cubeMode),
               ),
               const SizedBox(height: 8),
               Row(
@@ -323,6 +435,90 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 列表区本体（翻页与不翻页共用）：空态 / 方块列 / 普通宫格列表。
+  /// 导入区空时给去处提示，不留白屏。
+  Widget _listBody(
+    List<({String title, List<SourcePickerEntry> entries})> visible,
+    bool searching,
+    bool cubeMode,
+  ) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    if (visible.isEmpty) {
+      final emptyText = _flipEnabled && _zoneIndex == 1 && !searching
+          ? '导入区还没有站，点右上角 + 导入一个'
+          : '没有匹配的站点';
+      return Center(
+        child: Text(
+          emptyText,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+    if (cubeMode) return _cubeList(visible, searching);
+    return ListView(
+      controller: _activeScrollController,
+      children: [
+        for (final group in visible) ...[
+          if (!searching && group.title.isNotEmpty)
+            NeonSectionTitle(
+              '${group.title}（${group.entries.length}）',
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+            ),
+          _siteGrid(group),
+        ],
+      ],
+    );
+  }
+
+  /// 区签栏：内置区 / 导入区（带站数），在翻页区外面——翻页时
+  /// 区签与顶栏 + 号都不动，只有下面的列表翻。
+  Widget _zoneTabs(ThemeData theme, ColorScheme colors) {
+    final config = AppThemeConfig.of(context);
+    Widget tab(int index, String label) {
+      final selected = _zoneIndex == index;
+      final count = _zoneEntryCount(index);
+      return Expanded(
+        child: InkWell(
+          key: ValueKey(
+            index == 0
+                ? 'site-picker-zone-builtin'
+                : 'site-picker-zone-import',
+          ),
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => _setZone(index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: selected
+                  ? config.primaryColor
+                  : colors.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$label（$count）',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: selected ? config.selectedText : config.unselectedText,
+                fontWeight: selected ? FontWeight.w600 : null,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        tab(0, '内置区'),
+        const SizedBox(width: 8),
+        tab(1, '导入区'),
+      ],
     );
   }
 
@@ -478,7 +674,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       }
     }
     return ListView.builder(
-      controller: _scrollController,
+      controller: _activeScrollController,
       itemCount: rows.length,
       itemBuilder: (context, index) {
         final row = rows[index];

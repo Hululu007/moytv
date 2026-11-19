@@ -837,7 +837,8 @@ class NativeRepository extends AppRepository {
   HongguoDiscoverySession? _hongguoFilterSession;
 
   static bool isPySource(String source) =>
-      SourceSite.importedSites[source]?.importType == 'py';
+      SourceSite.importedSites[source]?.importType == 'py' ||
+      SourceSite.importedSites[source]?.importType == 'jsonlist';
   static bool isJsSource(String source) =>
       SourceSite.importedSites[source]?.importType == 'js';
 

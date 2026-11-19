@@ -3,7 +3,6 @@
 // 一测一张：调过 toImage 的测试在收尾时会挂起（旧预览测试同样如此，
 // PNG 已落地），跑单测、看到 PNG 出现就杀掉；不要把多张放进同一个测试体。
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -168,13 +167,13 @@ void main() {
     return key;
   }
 
-  testWidgets('预览 7标签霓虹胶囊栏', (tester) async {
+  testWidgets('预览 8标签霓虹胶囊栏', (tester) async {
     final key = await pumpShell(
       tester,
       source: 'huangdou',
-      label: '预览·假数据 · 7 标签霓虹胶囊栏 · 小程序在第 6 位 · 中间播放键开全屏流',
+      label: '预览·假数据 · 8 标签霓虹胶囊栏 · 小程序在第 6 位 · 游戏区在末尾 · 中间播放键开全屏流',
     );
-    await _capturePng(tester, boundaryKey: key, name: 'shell_7tabs_neon');
+    await _capturePng(tester, boundaryKey: key, name: 'shell_8tabs_neon');
   });
 
   testWidgets('预览 小程序标签页', (tester) async {
@@ -210,7 +209,9 @@ void main() {
         ],
       },
     );
-    await tester.tap(find.byKey(const ValueKey('shell-tab-5')));
+    // 小程序在第 4 位（2026-11-19 “我的”挪到最后一位后仍是 4；
+    // 旧代码误点了 5 号“我的”，截图名却是小程序，随本次改对）。
+    await tester.tap(find.byKey(const ValueKey('shell-tab-4')));
     await _settle(tester);
     await _capturePng(tester, boundaryKey: key, name: 'shell_miniapp_tab');
   });

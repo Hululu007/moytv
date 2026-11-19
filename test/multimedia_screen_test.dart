@@ -97,7 +97,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
   }
 
-  group('多媒体屏（第 6 件）', () {
+  group('网盘屏（第 6 件）', () {
     testWidgets('未登录时诚实提示 + 跳转按钮回调', (tester) async {
       var tapped = false;
       await pumpScreen(
@@ -223,7 +223,7 @@ void main() {
     });
   });
 
-  group('多媒体屏刮削（第 7 件）', () {
+  group('网盘屏刮削（第 7 件）', () {
     testWidgets('刮削命中显示刮削标题与年份类型副标题', (tester) async {
       await pumpScreen(
         tester,

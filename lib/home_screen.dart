@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'actress/actress_list_page.dart';
+import 'game_zone_page.dart';
 import 'app_layout.dart';
 import 'auto_refresh_gate.dart';
 import 'back_history.dart';
@@ -227,8 +228,8 @@ class _HomeScreenState extends State<HomeScreen>
   /// 页签驱到“我的”页；离开片库区或点其它 Tab 时清掉。
   bool _mineRequested = false;
 
-  /// 底部 Tab 点了“多媒体”后为真：短剧首页分支据此把内层页签驱
-  /// 到多媒体页，通用分支改渲染多媒体屏；离开片库区或点其它
+  /// 底部 Tab 点了“网盘”后为真：短剧首页分支据此把内层页签驱
+  /// 到网盘页，通用分支改渲染网盘屏；离开片库区或点其它
   /// Tab 时清掉（与 _mineRequested 同一口径）。
   bool _multimediaRequested = false;
 
@@ -241,6 +242,17 @@ class _HomeScreenState extends State<HomeScreen>
   /// 到女优库页，通用分支改渲染女优库列表页；离开片库区或点其它
   /// Tab 时清掉（与 _mineRequested 同一口径）。
   bool _actressRequested = false;
+
+  /// 底部 Tab 点了“游戏区”后为真（用户 2026-11-19 令新增）：
+  /// 通用分支改渲染游戏区页（红警2、拳皇97 两张卡）；离开片库
+  /// 区或点其它 Tab 时清掉（与 _actressRequested 同一口径）。
+  bool _gameZoneRequested = false;
+
+  /// 游戏全屏中（用户 2026-11-19 令）：红警2/拳皇97 窗口在
+  /// Win7/XP 桌面壳前台时为真——系统栏沉浸式、任务栏不渲染、
+  /// 窗口无标题栏边框、右上角悬浮“退出”钮；退出时全部恢复，
+  /// 游戏窗口最小化回桌面（实例常驻在 Offstage 槽位，重开续玩）。
+  bool _gameFullscreen = false;
 
   /// 戏剧首页钉住标记：频道/戏剧首页内切站时为真，换站后仍渲染
   /// 戏剧首页分支（分组 id 随站源变化，单凭分组判断会跳到通用
@@ -296,15 +308,16 @@ class _HomeScreenState extends State<HomeScreen>
 
   bool get _isCatalogZone => _zone == HomeZone.library;
 
-  /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：多媒体/小程序/
-  /// 我的/女优库页虽在片库区内，但各有自己的顶栏，片库顶栏元素不该
+  /// 片库目录顶栏（站源条 + 工具胶囊）是否显示：网盘/小程序/
+  /// 我的/女优库/游戏区页虽在片库区内，但各有自己的顶栏，片库顶栏元素不该
   /// 出现在它们上面。
   bool get _showCatalogHeader =>
       _isCatalogZone &&
       !_multimediaRequested &&
       !_miniAppRequested &&
       !_mineRequested &&
-      !_actressRequested;
+      !_actressRequested &&
+      !_gameZoneRequested;
 
   String get _zoneTitle => switch (_zone) {
     HomeZone.library => '片库',
@@ -453,7 +466,15 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _maybeAutoRefresh();
+    if (state == AppLifecycleState.resumed) {
+      _updater.setPaused(false);
+      _maybeAutoRefresh();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // 切后台：站源状态轮询停掉，不在后台刷桥接、也不触发全屏重建。
+      _updater.setPaused(true);
+    }
   }
 
   /// 戏剧首页是否正显示在前台：与 build 里的分支口径一致（通用壳：
@@ -620,12 +641,19 @@ class _HomeScreenState extends State<HomeScreen>
                   site.origin == SourceSite.originBuiltin,
             ),
         ],
+        // 3D 翻页分区：内置组进内置区，导入/导入配置组进导入区。
+        zone: group.origin == SourceSite.originBuiltin
+            ? SourcePickerGroup.zoneBuiltin
+            : SourcePickerGroup.zoneImport,
       ),
   ];
 
   String _sourcePickerSectionName() => '片库';
 
-  Future<void> _pickSource({bool editMode = false}) async {
+  Future<void> _pickSource({
+    bool editMode = false,
+    int initialZoneIndex = 0,
+  }) async {
     final picked = await showSitePickerDialog(
       context,
       sectionName: _sourcePickerSectionName(),
@@ -639,9 +667,15 @@ class _HomeScreenState extends State<HomeScreen>
           repository: widget.repository,
           store: widget.store,
         );
-        if (imported && mounted) setState(() {});
+        if (imported && mounted) {
+          setState(() {});
+          // 导入成功自动进导入区：重开弹窗并切到导入区。
+          unawaited(_pickSource(initialZoneIndex: 1));
+        }
       },
       repository: widget.repository,
+      enableZoneFlip: true,
+      initialZoneIndex: initialZoneIndex,
     );
     if (picked == null || !mounted) return;
     _applySourcePick(picked);
@@ -665,7 +699,7 @@ class _HomeScreenState extends State<HomeScreen>
         builder: (context) => AlertDialog(
           title: const Text('删除导入站'),
           content: Text(
-            '确定删除「${imported.name}」吗？${imported.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
+            '确定删除「${imported.name}」吗？${imported.type == ImportedSiteRecord.typeHtml ? '导入的 HTML 文件副本将一并删除。' : imported.type == ImportedSiteRecord.typeJsonList ? '导入的 JSON 列表文件与蜘蛛文件副本将一并删除。' : '导入的蜘蛛文件副本将一并删除。'}',
           ),
           actions: [
             TextButton(
@@ -680,14 +714,19 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       );
       if (confirmed != true) return false;
-      if (imported.type == ImportedSiteRecord.typePy) {
+      if (imported.type == ImportedSiteRecord.typePy ||
+          imported.type == ImportedSiteRecord.typeJsonList) {
         unawaited(
           ImportFileStore.pathOf(
             imported.fileName,
           ).then((path) => PyBridge.dispose(path)),
         );
       }
-      await ImportFileStore.delete(imported.fileName);
+      await ImportFileStore.deleteRecordFiles(
+        type: imported.type,
+        fileName: imported.fileName,
+        ext: imported.ext,
+      );
       await widget.store.syncImportedSites([
         for (final item in widget.store.importedSiteRecords)
           if (item.id != imported.id) item,
@@ -963,7 +1002,24 @@ class _HomeScreenState extends State<HomeScreen>
       _win7Open(Win7WindowKind.actress);
       return;
     }
-    _onBottomTab(6);
+    _onBottomTab(5);
+  }
+
+  /// 游戏区点卡进游戏（普通壳，用户 2026-11-19 令）：推全屏游戏
+  /// 路由，进来即沉浸式、系统栏与底部标签栏一起藏；退出路由即恢复。
+  void _openGameZoneGame(GameZoneGame game) {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => FullscreenGameScreen(
+            title: game.title,
+            gameUrl: game.url,
+            allowedHost: game.host,
+            keyPrefix: game.keyPrefix,
+          ),
+        ),
+      ),
+    );
   }
 
   /// 当前是否 Win7/XP 桌面壳：与 build 里 _win7Shell 的分派条件一致。
@@ -1614,15 +1670,17 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听读、3 多媒体、
-  /// 4 小程序、5 我的、6 女优库（听书/阅读已并为“听读”，两子区同指下标 2）。
-  /// 多媒体/小程序/我的/女优库只是片库区内的请求态，先于区判断（与
+  /// 外层壳当前选中的标签下标：0 片库、1 直播、2 听读、3 网盘、
+  /// 4 小程序、5 女优库、6 游戏区、7 我的（用户 2026-11-19 令：除
+  /// Windows 主题外，“我的”固定到最后一位；听书/阅读已并为“听读”，两子区同指下标 2）。
+  /// 网盘/小程序/我的/女优库/游戏区只是片库区内的请求态，先于区判断（与
   /// _onBottomTab 的递出顺序一致）。
   int get _bottomTabIndex {
     if (_zone == HomeZone.library && _multimediaRequested) return 3;
     if (_zone == HomeZone.library && _miniAppRequested) return 4;
-    if (_zone == HomeZone.library && _mineRequested) return 5;
-    if (_zone == HomeZone.library && _actressRequested) return 6;
+    if (_zone == HomeZone.library && _actressRequested) return 5;
+    if (_zone == HomeZone.library && _gameZoneRequested) return 6;
+    if (_zone == HomeZone.library && _mineRequested) return 7;
     return switch (_zone) {
       HomeZone.library => 0,
       HomeZone.live => 1,
@@ -1632,10 +1690,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onBottomTab(int tabIndex) {
-    final wantMine = tabIndex == 5;
+    final wantMine = tabIndex == 7;
     final wantMultimedia = tabIndex == 3;
     final wantMiniApp = tabIndex == 4;
-    final wantActress = tabIndex == 6;
+    final wantActress = tabIndex == 5;
+    final wantGameZone = tabIndex == 6;
     final zone = switch (tabIndex) {
       1 => HomeZone.live,
       2 => _lastListenReadZone,
@@ -1645,23 +1704,27 @@ class _HomeScreenState extends State<HomeScreen>
         wantMultimedia == _multimediaRequested &&
         wantMiniApp == _miniAppRequested &&
         wantActress == _actressRequested &&
+        wantGameZone == _gameZoneRequested &&
         zone == _zone) {
       return;
     }
-    // 同区点“我的”/“多媒体”/“小程序”/“女优库”时 _setZone 会提前返回，必须先
+    // 同区点“我的”/“网盘”/“小程序”/“女优库”/“游戏区”时 _setZone 会提前返回，必须先
     // setState 递出请求。
     setState(() {
       _mineRequested = wantMine;
       _multimediaRequested = wantMultimedia;
       _miniAppRequested = wantMiniApp;
       _actressRequested = wantActress;
+      _gameZoneRequested = wantGameZone;
     });
     _setZone(zone);
   }
 
   /// 底部标签样式的霓虹胶囊壳：只在手机端显示；电视/桌面走各自导航，
   /// 选片模式下隐藏。全部主题共用同一壳子（见 NeonCapsuleBar），只换
-  /// 主题配色。中间播放键点开全屏推荐流，无内容时变暗不响应。
+  /// 主题配色。中间播放键固定居中（centerAfter: 4，左右各 4 个等宽
+  /// 页签，圆钮落在网盘与小程序之间，用户 2026-11-19 令），点开
+  /// 全屏推荐流，无内容时变暗不响应。
   Widget? _bottomTabBar({required bool television, required bool desktop}) {
     if (television || desktop || _selectionMode) {
       return null;
@@ -1670,17 +1733,19 @@ class _HomeScreenState extends State<HomeScreen>
       (LucideIcons.clapperboard, '片库'),
       (LucideIcons.tv, '直播'),
       (LucideIcons.bookHeadphones, '听读'),
-      (LucideIcons.hardDrive, '多媒体'),
+      (LucideIcons.hardDrive, '网盘'),
       (LucideIcons.layoutGrid, '小程序'),
-      (LucideIcons.user, '我的'),
       (LucideIcons.users, '演员库'),
+      (LucideIcons.gamepad2, '游戏区'),
+      // “我的”固定最后一位（用户 2026-11-19 令，非 Windows 主题）。
+      (LucideIcons.user, '我的'),
     ];
     return NeonCapsuleBar(
       entries: entries,
       index: _bottomTabIndex,
       onSelect: _onBottomTab,
       onCenter: _openFullscreenFeed,
-      centerAfter: 3,
+      centerAfter: 4,
       centerEnabled: _feedCenterEnabled,
       tabKeyPrefix: 'shell-tab',
       centerKey: 'shell-center',
@@ -1700,6 +1765,7 @@ class _HomeScreenState extends State<HomeScreen>
         _multimediaRequested = false;
         _miniAppRequested = false;
         _actressRequested = false;
+        _gameZoneRequested = false;
         _dramaHomePinned = false;
       }
       _selectionMode = false;
@@ -1767,7 +1833,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// 头像点按：抽屉拆除后，点头像进“我的”页（与底部栏“我的”
   /// 标签同一目的地）。
-  void _openMine() => _onBottomTab(5);
+  void _openMine() => _onBottomTab(7);
 
   Widget _mineAvatarButton() => IconButton(
     key: const ValueKey('open-mine-page'),
@@ -2285,13 +2351,15 @@ class _HomeScreenState extends State<HomeScreen>
     if (_selectionMode) {
       title = Text('选择视频', style: largeTitle);
     } else if (_multimediaRequested) {
-      title = Text('多媒体', style: largeTitle);
+      title = Text('网盘', style: largeTitle);
     } else if (_miniAppRequested) {
       title = Text('小程序', style: largeTitle);
     } else if (_mineRequested) {
       title = Text('我的', style: largeTitle);
     } else if (_actressRequested) {
       title = Text('演员库', style: largeTitle);
+    } else if (_gameZoneRequested) {
+      title = Text('游戏区', style: largeTitle);
     } else if (_showCatalogHeader) {
       // 窄屏放不下整排时横向滚动，站图标始终在最左第一位。
       title = SingleChildScrollView(
@@ -2380,6 +2448,33 @@ class _HomeScreenState extends State<HomeScreen>
       _win7Foreground = kind;
     });
     _win7ApplyForeground(kind, targetId, targetAll, explicitSourceId: sourceId);
+    // 游戏窗进前台即全屏（用户 2026-11-19 令）：桌面图标、开始菜单、
+    // 游戏区卡片、任务栏恢复都走这一个入口，全收敛到这里。
+    if (kind == Win7WindowKind.game || kind == Win7WindowKind.kof) {
+      _enterGameFullscreen();
+    }
+  }
+
+  /// 进游戏全屏（Win7/XP 桌面壳）：系统栏沉浸式 + 任务栏不渲染 +
+  /// 窗口标题栏强制藏起；右上角悬浮“退出”钮。已在全屏时不再重复进。
+  void _enterGameFullscreen() {
+    if (_gameFullscreen) return;
+    setState(() => _gameFullscreen = true);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  /// 退出游戏全屏（Win7/XP 桌面壳）：三种栏全部恢复（系统栏回
+  /// edgeToEdge、任务栏重新渲染、窗口标题栏回来），游戏窗口最小化
+  /// 回桌面，实例常驻在 Offstage 槽位、重开续玩。
+  void _exitGameFullscreen() {
+    if (!_gameFullscreen) return;
+    final kind = _win7Foreground;
+    setState(() => _gameFullscreen = false);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    if (kind != null &&
+        (kind == Win7WindowKind.game || kind == Win7WindowKind.kof)) {
+      _win7Minimize(kind);
+    }
   }
 
   /// 新开窗口的默认站点：取各区当前选中的站（没有则空，由各区
@@ -2399,6 +2494,7 @@ class _HomeScreenState extends State<HomeScreen>
     Win7WindowKind.multimedia => null,
     Win7WindowKind.mine => null,
     Win7WindowKind.actress => null,
+    Win7WindowKind.gameZone => null,
     Win7WindowKind.game => null,
     Win7WindowKind.kof => null,
   };
@@ -2457,6 +2553,7 @@ class _HomeScreenState extends State<HomeScreen>
           _multimediaRequested = false;
           _miniAppRequested = false;
           _actressRequested = false;
+          _gameZoneRequested = false;
           // _changeSource 遇红果组会钉住戏剧首页，这里以窗口种类为准
           // 再拨一次：短剧窗钉住，片库窗不钉。
           _dramaHomePinned = kind == Win7WindowKind.drama;
@@ -2496,6 +2593,7 @@ class _HomeScreenState extends State<HomeScreen>
           _multimediaRequested = false;
           _miniAppRequested = false;
           _actressRequested = false;
+          _gameZoneRequested = false;
         });
       case Win7WindowKind.actress:
         // 女优库窗前台时把区域请求拨到女优库：切回普通主题后
@@ -2506,6 +2604,17 @@ class _HomeScreenState extends State<HomeScreen>
           _multimediaRequested = false;
           _miniAppRequested = false;
           _actressRequested = true;
+        });
+      case Win7WindowKind.gameZone:
+        // 游戏区窗前台时把区域请求拨到游戏区：与女优库同一口径，
+        // 切回普通主题后底部标签仍选中游戏区、内容仍是游戏区页。
+        _applyZoneChange(HomeZone.library);
+        setState(() {
+          _mineRequested = false;
+          _multimediaRequested = false;
+          _miniAppRequested = false;
+          _actressRequested = false;
+          _gameZoneRequested = true;
         });
     }
   }
@@ -2520,7 +2629,14 @@ class _HomeScreenState extends State<HomeScreen>
   /// 关闭：窗口从树里摘掉，界面状态丢弃，重开即全新。
   /// 听书播放是应用级单例，关窗口不影响正在播的音频（既有行为）。
   void _win7Close(Win7WindowKind kind) {
+    // 全屏中的游戏窗被关（正常路径走退出钮，这里是兜底）：先恢复系统栏。
+    final wasFullscreenGame = _gameFullscreen &&
+        (kind == Win7WindowKind.game || kind == Win7WindowKind.kof);
+    if (wasFullscreenGame) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     setState(() {
+      if (wasFullscreenGame) _gameFullscreen = false;
       _win7Windows.remove(kind);
       if (_win7Foreground == kind) _win7Foreground = null;
     });
@@ -2559,7 +2675,7 @@ class _HomeScreenState extends State<HomeScreen>
     _setZone(zone);
   }
 
-  /// 开始菜单树：按区（片库/直播/听读/短剧/小程序/多媒体）分组，
+  /// 开始菜单树：按区（片库/直播/听读/短剧/小程序/网盘）分组，
   /// 组下挂该区真实站点，名全部取注册表。听读组下再分听书/阅读
   /// 两层（一级分类），各挂该分区的站点。空组挂一行“暂无可用站点”
   /// （点按无动作）。女优库是独立区域、不是站点：末尾一个单叶节点，
@@ -2643,7 +2759,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
         ]),
       ),
-      // 小程序/多媒体屏不接受直达某项的参数，树节点只开窗口。
+      // 小程序/网盘屏不接受直达某项的参数，树节点只开窗口。
       Win7TreeNode(
         label: '小程序',
         kind: Win7WindowKind.miniApp,
@@ -2657,7 +2773,7 @@ class _HomeScreenState extends State<HomeScreen>
         ]),
       ),
       Win7TreeNode(
-        label: '多媒体',
+        label: '网盘',
         kind: Win7WindowKind.multimedia,
         children: orEmpty([
           for (final site in _cloudDriveSites)
@@ -2672,6 +2788,11 @@ class _HomeScreenState extends State<HomeScreen>
       const Win7TreeNode(
         label: '演员库',
         kind: Win7WindowKind.actress,
+      ),
+      // 游戏区单叶：点按开游戏区窗口（见 _win7TreeGroups 注释）。
+      const Win7TreeNode(
+        label: '游戏区',
+        kind: Win7WindowKind.gameZone,
       ),
     ];
   }
@@ -2751,6 +2872,17 @@ class _HomeScreenState extends State<HomeScreen>
           store: widget.store,
           showTitle: false,
         );
+      case Win7WindowKind.gameZone:
+        // 游戏区窗口：与普通壳底部标签同一页、同一构造，只加窗口 key；
+        // 点卡开对应的游戏窗口（进窗即全屏，见 _win7Open）。
+        return GameZonePage(
+          key: const ValueKey('win7-gamezone'),
+          onGameSelected: (game) => _win7Open(
+            game == GameZoneGame.kof
+                ? Win7WindowKind.kof
+                : Win7WindowKind.game,
+          ),
+        );
       case Win7WindowKind.game:
         // 网页游戏窗口：无 AppBar、无地址栏、无网址字串的 WebView 页；
         // key 固定，实例靠 Offstage 槽位常驻，最小化不重载。
@@ -2791,7 +2923,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 窗口槽位：直播/听读/小程序/多媒体/我的/女优库/游戏体常驻（Offstage 藏起），
+  /// 窗口槽位：直播/听读/小程序/网盘/我的/女优库/游戏体常驻（Offstage 藏起），
   /// 状态完整保留；片库/短剧体共用首页目录状态（同一 _scroll
   /// 控制器挂两份滚动视图会崩），只在前台时建体，最小化时槽位
   /// 只留一个空占位、描述留在 _win7Windows 里供恢复换站。
@@ -2814,6 +2946,12 @@ class _HomeScreenState extends State<HomeScreen>
       removeBottom: true,
       child: _win7WindowBody(window, glass: glass, maxWidth: maxWidth),
     );
+    // 游戏全屏时强制藏起前台游戏窗的标题栏：只改帧内渲染条件，
+    // 槽位结构不动，WebView 实例不重建、游戏不重载。
+    final hideGameTitleBar = _gameFullscreen &&
+        isForeground &&
+        (window.kind == Win7WindowKind.game ||
+            window.kind == Win7WindowKind.kof);
     return Offstage(
       key: slotKey,
       offstage: !isForeground,
@@ -2830,6 +2968,7 @@ class _HomeScreenState extends State<HomeScreen>
                 onMinimize: () => _win7Minimize(window.kind),
                 onClose: () => _win7Close(window.kind),
                 active: isForeground,
+                hideTitleBar: hideGameTitleBar,
                 child: body,
               )
             : Win7WindowFrame(
@@ -2837,6 +2976,7 @@ class _HomeScreenState extends State<HomeScreen>
                 onMinimize: () => _win7Minimize(window.kind),
                 onClose: () => _win7Close(window.kind),
                 active: isForeground,
+                hideTitleBar: hideGameTitleBar,
                 child: body,
               ),
       ),
@@ -2860,6 +3000,7 @@ class _HomeScreenState extends State<HomeScreen>
         : _win7Windows[foregroundKind];
     return PopScope(
       canPop:
+          !_gameFullscreen &&
           foregroundWindow == null &&
           !_win7MenuOpen &&
           !_selectionMode &&
@@ -2867,7 +3008,9 @@ class _HomeScreenState extends State<HomeScreen>
           _search.text.isEmpty,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_win7MenuOpen) {
+        if (_gameFullscreen) {
+          _exitGameFullscreen();
+        } else if (_win7MenuOpen) {
           setState(() => _win7MenuOpen = false);
         } else if (_selectionMode) {
           _cancelSelection();
@@ -2915,27 +3058,47 @@ class _HomeScreenState extends State<HomeScreen>
                             onDismiss: () =>
                                 setState(() => _win7MenuOpen = false),
                           ),
+                  // 游戏全屏退出口子：右上角常驻“退出”钮（在窗口槽位
+                  // 之上，点它退出全屏回桌面；系统返回同此行为）。
+                  if (_gameFullscreen &&
+                      (foregroundKind == Win7WindowKind.game ||
+                          foregroundKind == Win7WindowKind.kof))
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: FilledButton.tonalIcon(
+                        key: const ValueKey('win7-game-exit'),
+                        onPressed: _exitGameFullscreen,
+                        icon: const Icon(Icons.close),
+                        label: const Text('退出'),
+                      ),
+                    ),
                 ],
               ),
             ),
             // 任务栏落在手势条上方，不被系统手势小横条压住底边。
-            SafeArea(
-              top: false,
-              bottom: true,
-              child: xp
-                  ? XpTaskbar(
-                      openWindows: _win7Windows.keys.toList(),
-                      foreground: foregroundKind,
-                      onStartTap: _win7ToggleMenu,
-                      onEntryTap: _win7ToggleEntry,
-                    )
-                  : Win7Taskbar(
-                      openWindows: _win7Windows.keys.toList(),
-                      foreground: foregroundKind,
-                      onStartTap: _win7ToggleMenu,
-                      onEntryTap: _win7ToggleEntry,
-                    ),
-            ),
+            // 游戏全屏时任务栏整个不渲染（用户 2026-11-19 令：进游戏
+            // 连任务栏一起藏），退出时恢复。
+            if (_gameFullscreen)
+              const SizedBox.shrink()
+            else
+              SafeArea(
+                top: false,
+                bottom: true,
+                child: xp
+                    ? XpTaskbar(
+                        openWindows: _win7Windows.keys.toList(),
+                        foreground: foregroundKind,
+                        onStartTap: _win7ToggleMenu,
+                        onEntryTap: _win7ToggleEntry,
+                      )
+                    : Win7Taskbar(
+                        openWindows: _win7Windows.keys.toList(),
+                        foreground: foregroundKind,
+                        onStartTap: _win7ToggleMenu,
+                        onEntryTap: _win7ToggleEntry,
+                      ),
+              ),
           ],
         ),
       ),
@@ -2986,6 +3149,8 @@ class _HomeScreenState extends State<HomeScreen>
           ? HongguoDramaHome.mineTabIndex
           : _actressRequested
           ? HongguoDramaHome.actressTabIndex
+          : _gameZoneRequested
+          ? HongguoDramaHome.gameZoneTabIndex
           : null,
       hideCapsuleBar: hideCapsuleBar,
       driveSites: _cloudDriveSites,
@@ -3008,13 +3173,15 @@ class _HomeScreenState extends State<HomeScreen>
       title: _selectionMode
           ? const Text('选择视频', maxLines: 1, overflow: TextOverflow.ellipsis)
           : _multimediaRequested
-          ? const Text('多媒体')
+          ? const Text('网盘')
           : _miniAppRequested
           ? const Text('小程序')
           : _mineRequested
           ? const Text('我的')
           : _actressRequested
           ? const Text('演员库')
+          : _gameZoneRequested
+          ? const Text('游戏区')
           : _showCatalogHeader
           ? Row(
               mainAxisSize: MainAxisSize.min,
@@ -3302,13 +3469,13 @@ class _HomeScreenState extends State<HomeScreen>
   );
 
   /// 显示中的网盘站（已登录的网盘在源显示列表里可见的才算），
-  /// 供多媒体屏聚合浏览。
+  /// 供网盘屏聚合浏览。
   List<SourceSite> get _cloudDriveSites => CloudDriveStations.stations
       .where((site) => widget.store.siteVisible(site.id))
       .toList();
 
   /// 打开网盘登录中心（与设置里是同一个屏）；回来后刷新，
-  /// 刚登录的网盘立即出现在多媒体屏里。
+  /// 刚登录的网盘立即出现在网盘屏里。
   Future<void> _openCloudLogin() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -3342,7 +3509,7 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       );
     }
-    // 多媒体：与短剧首页内层页签是同一个屏；网盘数据不依赖
+    // 网盘：与短剧首页内层页签是同一个屏；网盘数据不依赖
     // 片库站源，放在“暂无站源”空态判断之前。
     if (_multimediaRequested) {
       return MultimediaScreen(
@@ -3376,6 +3543,12 @@ class _HomeScreenState extends State<HomeScreen>
         repository: widget.repository,
         store: widget.store,
         showTitle: false,
+      );
+    }
+    // 游戏区：与女优库同一口径的独立区，两张游戏卡，点卡进全屏游戏。
+    if (_gameZoneRequested) {
+      return GameZonePage(
+        onGameSelected: _openGameZoneGame,
       );
     }
     if (_librarySources.isEmpty) {

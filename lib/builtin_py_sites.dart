@@ -1168,6 +1168,19 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const qilinyingshiSiteId = 'qilinyingshi';
+  static const qilinyingshiAssetPath = 'assets/py_spiders/qilinyingshi.py';
+  static const qilinyingshiFileId = 'builtin_qilinyingshi';
+
+  static const qilinyingshiSite = SourceSite(
+    qilinyingshiSiteId,
+    '麒麟影视',
+    '内置 py · qilinyingshi',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   static const t8090kaifucomSiteId = 't8090kaifucom';
   static const t8090kaifucomAssetPath = 'assets/py_spiders/t8090kaifucom.py';
   static const t8090kaifucomFileId = 'builtin_t8090kaifucom';
@@ -1700,6 +1713,7 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: nbsjyySiteId, site: nbsjyySite, assetPath: nbsjyyAssetPath, fileId: nbsjyyFileId),
     BuiltinPyEntry(siteId: odseliftSiteId, site: odseliftSite, assetPath: odseliftAssetPath, fileId: odseliftFileId),
     BuiltinPyEntry(siteId: qikantoukanSiteId, site: qikantoukanSite, assetPath: qikantoukanAssetPath, fileId: qikantoukanFileId),
+    BuiltinPyEntry(siteId: qilinyingshiSiteId, site: qilinyingshiSite, assetPath: qilinyingshiAssetPath, fileId: qilinyingshiFileId),
     BuiltinPyEntry(siteId: t8090kaifucomSiteId, site: t8090kaifucomSite, assetPath: t8090kaifucomAssetPath, fileId: t8090kaifucomFileId),
     BuiltinPyEntry(siteId: zjldSiteId, site: zjldSite, assetPath: zjldAssetPath, fileId: zjldFileId),
     BuiltinPyEntry(siteId: baofengzySiteId, site: baofengzySite, assetPath: baofengzyAssetPath, fileId: baofengzyFileId),

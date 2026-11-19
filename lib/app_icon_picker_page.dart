@@ -7,7 +7,7 @@ import 'app_icon_switcher.dart';
 /// 刷新速度取决于启动器，部分启动器需稍等或重进桌面才刷新。
 class AppIconPickerPage extends StatefulWidget {
   const AppIconPickerPage({super.key, AppIconSwitcher? switcher})
-      : switcher = switcher ?? const AppIconSwitcher();
+    : switcher = switcher ?? const AppIconSwitcher();
 
   final AppIconSwitcher switcher;
 
@@ -19,6 +19,10 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
   String? _currentId;
   bool _busy = false;
 
+  /// 上次切换是否被系统拒绝过。拒绝记下来后不再让用户反复点选，
+  /// 改显横条、停掉点选（降级），“再试一次”可恢复点选。
+  bool _denied = false;
+
   @override
   void initState() {
     super.initState();
@@ -26,29 +30,54 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
   }
 
   Future<void> _load() async {
-    final id = await widget.switcher.currentIconId();
+    final results = await (
+      widget.switcher.currentIconId(),
+      widget.switcher.isSwitchDenied(),
+    ).wait;
     if (!mounted) return;
-    setState(() => _currentId = id);
+    setState(() {
+      _currentId = results.$1;
+      _denied = results.$2;
+    });
   }
 
   Future<void> _apply(AppIconOption option) async {
-    if (_busy || _currentId == option.id) return;
+    if (_busy || _denied || _currentId == option.id) return;
     setState(() => _busy = true);
-    final ok = await widget.switcher.setIcon(option.id);
+    final result = await widget.switcher.switchIcon(option.id);
     if (!mounted) return;
     setState(() {
       _busy = false;
-      if (ok) _currentId = option.id;
+      if (result.ok) {
+        _currentId = option.id;
+        _denied = false;
+      } else if (result.failure == AppIconSwitchFailure.denied) {
+        _denied = true;
+      }
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          ok
-              ? '已切换为「${option.name}」，桌面图标稍后刷新'
-              : '切换失败，当前桌面可能不支持换图标',
+          result.ok ? '已切换为「${option.name}」，桌面图标稍后刷新' : _failureText(result),
         ),
       ),
     );
+  }
+
+  Future<void> _retry() async {
+    await widget.switcher.clearSwitchDenied();
+    if (!mounted) return;
+    setState(() => _denied = false);
+  }
+
+  static String _failureText(AppIconSwitchResult result) {
+    final detail = result.detail;
+    final suffix = detail == null ? '' : '（$detail）';
+    return switch (result.failure) {
+      AppIconSwitchFailure.denied => '切换失败：系统拒绝了换图标，当前桌面或容器不允许$suffix',
+      AppIconSwitchFailure.missing => '切换失败：图标组件未找到$suffix',
+      _ => '切换失败，当前桌面可能不支持换图标$suffix',
+    };
   }
 
   @override
@@ -76,6 +105,30 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
             '有的要重进一次桌面才变。',
           ),
         ),
+        if (_denied)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Card(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '上次切换被系统拒绝了：当前桌面或容器不允许换图标，'
+                        '点选不会生效。换个桌面启动器再试，或点“再试一次”重测。',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                    TextButton(onPressed: _retry, child: const Text('再试一次')),
+                  ],
+                ),
+              ),
+            ),
+          ),
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
@@ -93,7 +146,7 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
                 key: ValueKey('app-icon-${option.id}'),
                 option: option,
                 selected: selected,
-                busy: _busy,
+                busy: _busy || _denied,
                 onTap: () => _apply(option),
                 theme: theme,
               );

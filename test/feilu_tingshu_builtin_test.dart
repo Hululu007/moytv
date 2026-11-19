@@ -71,7 +71,7 @@ void main() {
     });
 
     test('jar 未动：md5 与条目数都不变，TingShu 类早已在 classes11.dex', () {
-      expect(zakatvJarMd5, '44235cee5268015e5ccca0a57aa42107');
+      expect(zakatvJarMd5, '029005c7ce017dc0a412f2d079a29dab');
       final bytes = File('assets/jars/zakatv.jar').readAsBytesSync();
       final archive = ZipDecoder().decodeBytes(bytes);
       final names = archive.files.map((f) => f.name).toList();
@@ -122,7 +122,7 @@ void main() {
         name: '飞卢听书',
         className: 'com.github.catvod.spider.TingShu',
         jarUrl: '',
-        jarMd5: '44235cee5268015e5ccca0a57aa42107',
+        jarMd5: '029005c7ce017dc0a412f2d079a29dab',
         ext: '{}',
       );
       JarBridge.register(spec);

@@ -282,4 +282,33 @@ void main() {
       );
     });
   });
+
+  group('emptyUrlFailureMessage（取流空地址时的报错文案）', () {
+    test('有蜘蛛 msg 时原样透传', () {
+      expect(
+        JarBridge.emptyUrlFailureMessage(const {
+          'parse': 0,
+          'playUrl': '',
+          'url': '',
+          'header': '',
+          'msg': '该集需要登录或购买后才能播放',
+        }, 'EroShort'),
+        '该集需要登录或购买后才能播放',
+      );
+    });
+
+    test('无 msg 时回落通用文案', () {
+      expect(
+        JarBridge.emptyUrlFailureMessage(const {'parse': 0, 'url': ''}, '测试站'),
+        'jar 站点「测试站」未返回播放地址',
+      );
+    });
+
+    test('msg 只有空白时回落通用文案', () {
+      expect(
+        JarBridge.emptyUrlFailureMessage(const {'url': '', 'msg': '  '}, '测试站'),
+        'jar 站点「测试站」未返回播放地址',
+      );
+    });
+  });
 }

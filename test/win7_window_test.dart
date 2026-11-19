@@ -78,6 +78,10 @@ void main() {
       if (kind == Win7WindowKind.drama) {
         continue;
       }
+      // 游戏区没有桌面图标（只走底部标签与开始菜单），与短剧同口径跳过。
+      if (kind == Win7WindowKind.gameZone) {
+        continue;
+      }
       expect(
         win7Key('win7-desktop-icon-${kind.name}'),
         findsOneWidget,
@@ -86,8 +90,10 @@ void main() {
     }
     // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
     expect(win7Key('win7-desktop-icon-drama'), findsNothing);
+    // 游戏区同样没有桌面图标。
+    expect(win7Key('win7-desktop-icon-gameZone'), findsNothing);
     // 默认顺序：我的电脑置顶第一位，其余按听读、片库、
-    // 直播、小程序、女优库、游戏、多媒体往下排；一列排满换
+    // 直播、小程序、女优库、游戏、网盘往下排；一列排满换
     // 第二列，所以按列优先比位置：同列看纵坐标递增，换列看
     // 横坐标递增。
     Offset pos(String name) =>
@@ -143,22 +149,22 @@ void main() {
     expect(win7Key('win7-taskbar-entry-mine'), findsOneWidget);
   });
 
-  testWidgets('点“多媒体”图标开“多媒体”窗口：标题栏 + 多媒体页', (tester) async {
+  testWidgets('点“网盘”图标开“网盘”窗口：标题栏 + 网盘页', (tester) async {
     await pumpWin7Home(tester);
     await tester.tap(win7Key('win7-desktop-icon-multimedia'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(win7Key('win7-desktop'), findsNothing);
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '多媒体');
+    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '网盘');
     expect(find.byType(MultimediaScreen), findsOneWidget);
     expect(win7Key('win7-taskbar-entry-multimedia'), findsOneWidget);
   });
 
   testWidgets('桌面图标上色：9 个彩色底块 + “我的电脑”显示器图标', (tester) async {
-    // “我的”窗口改叫“我的电脑”，图标换显示器样式（与多媒体窗的
+    // “我的”窗口改叫“我的电脑”，图标换显示器样式（与网盘窗的
     // 整机图标区分）；普通壳底部标签的“我的”不在这套定义里，不动。
     expect(Win7WindowKind.mine.title, '我的电脑');
-    expect(Win7WindowKind.multimedia.title, '多媒体');
+    expect(Win7WindowKind.multimedia.title, '网盘');
     expect(Win7WindowKind.mine.icon, Icons.desktop_windows);
     expect(
       Win7WindowKind.mine.icon,
@@ -167,7 +173,7 @@ void main() {
     await pumpWin7Home(tester);
     expect(find.byType(DesktopIconBadge), findsNWidgets(9));
     expect(find.text('我的电脑'), findsOneWidget);
-    expect(find.text('多媒体'), findsOneWidget);
+    expect(find.text('网盘'), findsOneWidget);
     expect(find.text('拳皇97'), findsOneWidget);
     expect(find.text('听读'), findsOneWidget);
     // 9 个底块渐变色各不相同（成套彩色，不撞色）。
@@ -300,8 +306,8 @@ void main() {
     await pumpWin7Home(tester);
     await tester.tap(win7Key('win7-start-button'));
     await tester.pump();
-    // 女优库是末尾单叶（第 7 个顶级节点，下标 6）：无须展开，点按
-    // 直接开女优库窗口、菜单关闭。
+    // 女优库是第 7 个顶级节点（下标 6）：无须展开，点按
+    // 直接开女优库窗口、菜单关闭（末尾单叶现为游戏区，下标 7）。
     final leaf = win7Key('win7-tree-node-6');
     expect(leaf, findsOneWidget);
     await tester.tap(leaf);
@@ -411,7 +417,7 @@ void main() {
       ],
     ),
     Win7TreeNode(
-      label: '多媒体',
+      label: '网盘',
       kind: Win7WindowKind.multimedia,
       children: [
         const Win7TreeNode(
@@ -573,7 +579,7 @@ void main() {
     expect(find.byType(SiteIcon), findsOneWidget);
   });
 
-  testWidgets('组行显示区图标，多媒体组行是硬盘图标', (tester) async {
+  testWidgets('组行显示区图标，网盘组行是硬盘图标', (tester) async {
     await pumpWin7StartMenu(
       tester,
       mockPrefs: {

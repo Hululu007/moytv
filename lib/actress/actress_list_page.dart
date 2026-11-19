@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 
 import 'actress_database.dart';
 import 'actress_detail_page.dart';
+import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_ranking_page.dart';
 import 'actress_roster_sources.dart';
 import 'actress_search.dart';
+import 'actress_site_crawl.dart';
 import 'actress_stacking.dart';
 import 'actress_sync.dart';
 import 'actress_widgets.dart';
@@ -29,6 +31,8 @@ class ActressListPage extends StatefulWidget {
     this.database,
     this.syncService,
     this.stackingService,
+    this.fallback,
+    this.crawlService,
     this.showTitle = true,
   });
 
@@ -49,6 +53,12 @@ class ActressListPage extends StatefulWidget {
   @visibleForTesting
   final ActressStackingService? stackingService;
 
+  /// 测试/预览注入：JSON 兜底与现爬服务；不传时现建。
+  @visibleForTesting
+  final ActressJsonFallback? fallback;
+  @visibleForTesting
+  final ActressSiteCrawlService? crawlService;
+
   @override
   State<ActressListPage> createState() => _ActressListPageState();
 }
@@ -63,9 +73,12 @@ class _ActressListPageState extends State<ActressListPage> {
   late final ActressDatabase _db;
   late final ActressSyncService _sync;
   late final ActressStackingService _stacking;
+  late final ActressJsonFallback _fallback;
+  late final ActressSiteCrawlService _crawl;
   ContentHttp? _http;
   StreamSubscription<ActressSyncProgress>? _progressSub;
   StreamSubscription<ActressStackingProgress>? _stackingSub;
+  StreamSubscription<ActressSiteCrawlProgress>? _crawlSub;
 
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
@@ -81,8 +94,21 @@ class _ActressListPageState extends State<ActressListPage> {
   var _query = '';
   var _generation = 0;
 
+  /// 左上角站点筛选：默认全部；选站后列表只留该站有 JSON 兜底条目的
+  /// 人（按女优名或本地作品番号对），详情页兜底与现爬也只走该站。
+  var _source = ActressSiteFilter.all;
+
+  /// 站点过滤时的原始偏移（过滤后页内人数会少于 60，翻页必须按
+  /// 原始偏移走，不能按过滤后的人数走）。
+  var _rawOffset = 0;
+
+  /// 每人本地作品番号集合缓存（站点过滤用，按需取一次）。
+  final _siteCodeKeys = <int, Set<String>>{};
+
   ActressSyncProgress _progress = ActressSyncProgress.idle;
   ActressStackingProgress _stackingProgress = ActressStackingProgress.idle;
+  ActressSiteCrawlProgress _crawlProgress =
+      const ActressSiteCrawlProgress();
   ActressSyncOverview? _overview;
   var _lastSyncFailed = false;
   var _autoSyncStarted = false;
@@ -121,6 +147,12 @@ class _ActressListPageState extends State<ActressListPage> {
       );
     }
     _stackingSub = _stacking.progress.listen(_onStackingProgress);
+    _fallback = widget.fallback ?? ActressJsonFallback();
+    _crawl =
+        widget.crawlService ??
+        ActressSiteCrawlService(repository: widget.repository, db: _db);
+    _crawlSub = _crawl.progress.listen(_onCrawlProgress);
+    unawaited(_fallback.load());
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
     _bootstrap();
@@ -130,6 +162,9 @@ class _ActressListPageState extends State<ActressListPage> {
   void dispose() {
     _progressSub?.cancel();
     _stackingSub?.cancel();
+    _crawlSub?.cancel();
+    _crawl.cancel();
+    _crawl.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     _searchDebounce?.cancel();
@@ -238,6 +273,69 @@ class _ActressListPageState extends State<ActressListPage> {
     });
   }
 
+  void _onCrawlProgress(ActressSiteCrawlProgress progress) {
+    if (!mounted) return;
+    setState(() => _crawlProgress = progress);
+    if (!progress.running && progress.done) {
+      // 现爬写了新的本地 JSON：重读兜底再刷新列表，爬到的条目立刻可见。
+      unawaited(_fallback.load().then((_) {
+        if (mounted) unawaited(_loadPage(reset: true));
+      }));
+    }
+  }
+
+  /// 选站后触发该站分类现爬（mjv 现爬、whos 报缺口走兜底）。
+  Future<void> _runSiteCrawl() async {
+    if (_crawl.running) return;
+    await _crawl.start(site: _source.siteId);
+  }
+
+  void _setSiteFilter(ActressSiteFilter source) {
+    if (source == _source) return;
+    setState(() => _source = source);
+    unawaited(_loadPage(reset: true));
+    if (source != ActressSiteFilter.all) {
+      unawaited(_runSiteCrawl());
+    }
+  }
+
+  Future<Set<String>> _codeKeysFor(ActressPerson person) async {
+    final cached = _siteCodeKeys[person.localId];
+    if (cached != null) return cached;
+    final works = await _db.worksForPerson(
+      person.localId,
+      offset: 0,
+      limit: 500,
+    );
+    final keys = {
+      for (final work in works)
+        if (work.codeKey.isNotEmpty) work.codeKey,
+    };
+    _siteCodeKeys[person.localId] = keys;
+    return keys;
+  }
+
+  /// 站点过滤：只留该站有 JSON 兜底条目的人（按女优名或本地作品番号对）。
+  /// 全部时不过滤。过滤后页内人数可能少于 60，翻页偏移另用 _rawOffset。
+  Future<List<ActressPerson>> _applySiteFilter(
+    List<ActressPerson> persons,
+  ) async {
+    if (_source == ActressSiteFilter.all) return persons;
+    if (!_fallback.loaded) await _fallback.load();
+    final kept = <ActressPerson>[];
+    for (final person in persons) {
+      final codeKeys = await _codeKeysFor(person);
+      if (await _fallback.hasSiteEntriesForPersonAsync(
+        names: [person.displayName, ...person.aliases],
+        codeKeys: codeKeys,
+        site: _source.siteId,
+      )) {
+        kept.add(person);
+      }
+    }
+    return kept;
+  }
+
   Future<void> _loadPage({bool reset = false}) async {
     if (reset) {
       final generation = ++_generation;
@@ -246,7 +344,8 @@ class _ActressListPageState extends State<ActressListPage> {
         _persons = [];
         _hasMore = true;
       });
-      final persons = await _db.listPersons(
+      _rawOffset = 0;
+      final raw = await _db.listPersons(
         sex: _sex,
         sort: _sort,
         query: _query,
@@ -254,10 +353,12 @@ class _ActressListPageState extends State<ActressListPage> {
         offset: 0,
         limit: _pageSize,
       );
+      _rawOffset = raw.length;
+      final persons = await _applySiteFilter(raw);
       if (!mounted || generation != _generation) return;
       setState(() {
         _persons = persons;
-        _hasMore = persons.length >= _pageSize;
+        _hasMore = raw.length >= _pageSize;
         _loading = false;
       });
       return;
@@ -265,18 +366,20 @@ class _ActressListPageState extends State<ActressListPage> {
     if (_loadingMore || !_hasMore) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    final persons = await _db.listPersons(
+    final raw = await _db.listPersons(
       sex: _sex,
       sort: _sort,
       query: _query,
       tag: _tagFilter.tagValue,
-      offset: _persons.length,
+      offset: _rawOffset,
       limit: _pageSize,
     );
+    _rawOffset += raw.length;
+    final persons = await _applySiteFilter(raw);
     if (!mounted || generation != _generation) return;
     setState(() {
       _persons = [..._persons, ...persons];
-      _hasMore = persons.length >= _pageSize;
+      _hasMore = raw.length >= _pageSize;
       _loadingMore = false;
     });
   }
@@ -290,6 +393,8 @@ class _ActressListPageState extends State<ActressListPage> {
           repository: widget.repository,
           store: widget.store,
           database: _db,
+          siteFilter: _source,
+          fallback: _fallback,
         ),
       ),
     );
@@ -325,6 +430,27 @@ class _ActressListPageState extends State<ActressListPage> {
             ? null
             : Text('${overview.persons} 位演员'),
         actions: [
+          PopupMenuButton<ActressSiteFilter>(
+            key: const ValueKey('actress-site-filter'),
+            tooltip: '站点筛选',
+            initialValue: _source,
+            onSelected: _setSiteFilter,
+            itemBuilder: (_) => [
+              for (final filter in ActressSiteFilter.values)
+                PopupMenuItem(
+                  value: filter,
+                  child: Text(filter.label),
+                ),
+            ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.public_outlined, size: 18),
+                const SizedBox(width: 2),
+                Text(_source.label),
+              ],
+            ),
+          ),
           IconButton(
             key: const ValueKey('open-actress-ranking'),
             tooltip: '演员排行榜',
@@ -345,6 +471,7 @@ class _ActressListPageState extends State<ActressListPage> {
         children: [
           _buildSyncBanner(colors),
           _buildStackingBanner(colors),
+          _buildCrawlBanner(colors),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
             child: TextField(
@@ -449,6 +576,71 @@ class _ActressListPageState extends State<ActressListPage> {
     if (filter == _tagFilter) return;
     setState(() => _tagFilter = filter);
     unawaited(_loadPage(reset: true));
+  }
+
+  /// 手机现爬横幅：跑着时显示分类/页码与取消；失败/缺口时显示原因；
+  /// 跑完显示条数与已补流数。无现爬时不显示。
+  Widget _buildCrawlBanner(ColorScheme colors) {
+    final crawl = _crawlProgress;
+    if (!crawl.running && crawl.error.isEmpty && !crawl.done) {
+      return const SizedBox.shrink();
+    }
+    const bannerPadding = EdgeInsetsDirectional.only(
+      start: 16,
+      top: 2,
+      end: 4,
+      bottom: 2,
+    );
+    if (crawl.running) {
+      return MaterialBanner(
+        key: const ValueKey('actress-crawl-banner'),
+        backgroundColor: colors.surfaceContainerHigh,
+        padding: bannerPadding,
+        content: Row(
+          children: [
+            const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(crawl.label)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('cancel-actress-crawl'),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: _crawl.cancel,
+            child: const Text('取消'),
+          ),
+        ],
+      );
+    }
+    return MaterialBanner(
+      key: const ValueKey('actress-crawl-banner'),
+      backgroundColor: colors.surfaceContainerHigh,
+      padding: bannerPadding,
+      content: Text(crawl.label),
+      actions: [
+        TextButton(
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: const Size(0, 28),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          onPressed: () {
+            setState(
+              () => _crawlProgress = const ActressSiteCrawlProgress(),
+            );
+          },
+          child: const Text('知道了'),
+        ),
+      ],
+    );
   }
 
   Widget _buildSyncBanner(ColorScheme colors) {

@@ -34,8 +34,9 @@ void main() {
     await pumpHome(tester);
     expect(find.byType(Drawer), findsNothing);
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
-    // 底栏 7 个标签都在（听书/阅读已并为“听读”一个标签）。
-    for (final label in ['片库', '直播', '听读', '多媒体', '小程序', '我的', '女优库']) {
+    // 底栏 8 个标签都在（听书/阅读已并为“听读”一个标签；“我的”在
+    // 最后一位，用户 2026-11-19 令；栏上标签叫“演员库”不是“女优库”）。
+    for (final label in ['片库', '直播', '听读', '网盘', '小程序', '演员库', '游戏区', '我的']) {
       expect(find.text(label), findsOneWidget);
     }
   }, skip: !allSourcesEnabled);
@@ -78,8 +79,9 @@ void main() {
     expect(find.byType(Drawer), findsNothing);
     expect(find.byKey(const ValueKey('source-switch')), findsOneWidget);
     expect(find.byType(NeonCapsuleBar), findsOneWidget);
-    // 切到小程序页签后小退，回来仍在小程序页。
-    await tester.tap(find.byKey(const ValueKey('shell-tab-5')));
+    // 切到小程序页签后小退，回来仍在小程序页（小程序在第 4 位；
+    // 旧代码误点了 5 号“我的”，随 2026-11-19 挪位改对）。
+    await tester.tap(find.byKey(const ValueKey('shell-tab-4')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);

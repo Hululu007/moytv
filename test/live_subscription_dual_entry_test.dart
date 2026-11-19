@@ -110,7 +110,7 @@ void main() {
   });
 
   test('m3u 订阅只有单个直播入口', () {
-    const sub = M3uSubscription(
+    final sub = M3uSubscription(
       id: 'abc',
       name: '我的 m3u',
       kind: M3uSubscription.kindUrl,

@@ -152,8 +152,11 @@ class JarBridge {
 
   /// 封面须走蜘蛛实例 localProxy 解密的 jar 站点 id 集合：这类蜘蛛的
   /// 封面地址指向加密图床，只有蜘蛛自己的 localProxy 会拉取并解密。
-  /// 目前只有一点播（csp_One，图床字节经 AES 加密，直取无法解码）。
-  static const imageProxySiteIds = {'jar:one:One'};
+  /// 目前为空：一点播旧蜘蛛（csp_One，图床字节经 AES 加密）已于
+  /// 2026-11-19 换成新蜘蛛重写版，封面是明文 JPEG 直链，不再需要
+  /// localProxy；新蜘蛛也没有 localProxy 方法，继续钉着它封面全挂。
+  /// 机制保留，今后有加密图床的站再往里加。
+  static const imageProxySiteIds = <String>{};
 
   static final Map<String, JarSiteSpec> _specs = {};
   static final Map<String, String> _jarPaths = {};
@@ -649,7 +652,7 @@ class JarBridge {
     });
     final url = result['url']?.toString() ?? '';
     if (url.isEmpty) {
-      throw JarBridgeFailure('jar 站点「${spec.name}」未返回播放地址');
+      throw JarBridgeFailure(emptyUrlFailureMessage(result, spec.name));
     }
     final headers = <String, String>{};
     final rawHeaders = result['header'];
@@ -669,6 +672,20 @@ class JarBridge {
     }
     final needsParse = _parseFlag(result['parse']) || _parseFlag(result['jx']);
     return PlaybackPlan(url: url, headers: headers, needsParse: needsParse);
+  }
+
+  /// 取流回空地址时的报错文案：蜘蛛给了明确原因（如 EroShort
+  /// 「该集需要登录或购买后才能播放」）时原样透传，别用通用
+  /// 「未返回播放地址」把它盖掉——否则用户只看到「站源问题」，不知道是付费墙。
+  /// 无 msg 时回落通用文案。
+  @visibleForTesting
+  static String emptyUrlFailureMessage(
+    Map<String, dynamic> result,
+    String siteName,
+  ) {
+    final spiderMsg = result['msg']?.toString().trim() ?? '';
+    if (spiderMsg.isNotEmpty) return spiderMsg;
+    return 'jar 站点「$siteName」未返回播放地址';
   }
 
   static Map<String, String> parseProxyParams(String proxyUrl) {

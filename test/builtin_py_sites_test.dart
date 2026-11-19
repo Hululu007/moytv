@@ -686,4 +686,19 @@ void main() {
       expect(isVodZoneSource(BuiltinPySites.memojavSite), isTrue);
     });
   });
+
+  group('内置 py 视频站', () {
+    test('麒麟影视站注册值：视频分区、内置来源、py 类型', () {
+      final site = BuiltinPySites.qilinyingshiSite;
+      expect(site.id, 'qilinyingshi');
+      expect(site.name, '麒麟影视');
+      expect(site.section, SourceSite.sectionVideo);
+      expect(site.origin, SourceSite.originBuiltin);
+      expect(site.importType, 'py');
+      expect(BuiltinPySites.qilinyingshiAssetPath, 'assets/py_spiders/qilinyingshi.py');
+    });
+    test('麒麟影视站进点播区（统一视频区）', () {
+      expect(isVodZoneSource(BuiltinPySites.qilinyingshiSite), isTrue);
+    });
+  });
 }

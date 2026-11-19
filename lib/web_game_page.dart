@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
@@ -232,6 +233,74 @@ class WebGameScreen extends StatelessWidget {
         allowedHost: allowedHost,
         headers: headers,
         keyPrefix: keyPrefix,
+      ),
+    );
+  }
+}
+
+/// 全屏网页游戏屏（用户 2026-11-19 令）：游戏区点卡进游戏的目标。
+/// 进来即沉浸式全屏——系统状态栏 + 系统导航栏一起藏（immersiveSticky），
+/// 没有 AppBar、没有标题栏，壳自己的底部标签栏被路由盖住；右上角
+/// 常驻半透明“退出”钮（`fullscreen-game-exit`），点它或按系统
+/// 返回都退出游戏、恢复系统栏（edgeToEdge，与 main.dart 启动态
+/// 一致）。退出口子只有一个但一直在屏上，不会把用户锁在全屏里。
+class FullscreenGameScreen extends StatefulWidget {
+  const FullscreenGameScreen({
+    super.key,
+    required this.title,
+    required this.gameUrl,
+    required this.allowedHost,
+    this.headers = const {},
+    this.keyPrefix = 'game',
+  });
+
+  final String title;
+  final String gameUrl;
+  final String allowedHost;
+  final Map<String, String> headers;
+  final String keyPrefix;
+
+  @override
+  State<FullscreenGameScreen> createState() => _FullscreenGameScreenState();
+}
+
+class _FullscreenGameScreenState extends State<FullscreenGameScreen> {
+  @override
+  void initState() {
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  @override
+  void dispose() {
+    // 路由弹出（点退出钮或系统返回）都会走这里：恢复系统栏。
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          WebGamePage(
+            gameUrl: widget.gameUrl,
+            allowedHost: widget.allowedHost,
+            headers: widget.headers,
+            keyPrefix: widget.keyPrefix,
+          ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: FilledButton.tonalIcon(
+              key: const ValueKey('fullscreen-game-exit'),
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.close),
+              label: const Text('退出'),
+            ),
+          ),
+        ],
       ),
     );
   }

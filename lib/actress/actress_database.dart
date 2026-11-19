@@ -105,7 +105,15 @@ abstract class ActressDatabase {
 
   /// 作品清单合并入库：番号键去重、无番号标题键去重；命中硬线词的
   /// 条目跳过；写完刷新人物的 works_count。
-  Future<void> upsertWorks(int personId, List<RosterFilm> films);
+  /// [coverSource] 是这批作品封面的来源站（见
+  /// [actressRosterCoverSource]）：有封面的新建行按它写
+  /// cover_source；不传时默认 'whos'（与旧行为一致）；传空表示
+  /// 该源不带可用封面，有封面地址的条目也不认站源、不写封面。
+  Future<void> upsertWorks(
+    int personId,
+    List<RosterFilm> films, {
+    String coverSource = 'whos',
+  });
 
   /// 全站搜索补封面：按番号键（无番号按标题键）命中则更新封面与
   /// 标题，命中不到则按 [insertIfMissing] 决定是否新增一条跨站发现
@@ -683,7 +691,11 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
-  Future<void> upsertWorks(int personId, List<RosterFilm> films) async {
+  Future<void> upsertWorks(
+    int personId,
+    List<RosterFilm> films, {
+    String coverSource = 'whos',
+  }) async {
     final db = await _open();
     await db.transaction((txn) async {
       for (final film in films) {
@@ -695,12 +707,13 @@ class SqfliteActressDatabase implements ActressDatabase {
         if (codeKey.isEmpty && titleKey.isEmpty) continue;
         final codeDisplay = film.code.trim();
         final title = film.title.trim();
-        // whos XOR 封面（开关打开时才有）：只在新建行时写入，
-        // 开关关闭时三字段恒为空，与此前行为一字不差。
-        final coverFields = film.coverUrl.isEmpty
+        // 同步时已取到的封面（whos XOR 开关打开时、MissAV 人物页
+        // 直取）：只在新建行时写入；开关关闭/无图时三字段恒为空。
+        // 封面来源站按调用方传入的 [coverSource] 写，不再写死。
+        final coverFields = film.coverUrl.isEmpty || coverSource.isEmpty
             ? const <String, Object?>{}
             : <String, Object?>{
-                'cover_source': 'whos',
+                'cover_source': coverSource,
                 'cover_drama_id': film.detailUrl,
                 'cover_url': film.coverUrl,
               };
@@ -1225,7 +1238,11 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
-  Future<void> upsertWorks(int personId, List<RosterFilm> films) async {
+  Future<void> upsertWorks(
+    int personId,
+    List<RosterFilm> films, {
+    String coverSource = 'whos',
+  }) async {
     for (final film in films) {
       if (actressTextBlocked(film.code) || actressTextBlocked(film.title)) {
         continue;
@@ -1249,10 +1266,17 @@ class MemoryActressDatabase implements ActressDatabase {
         codeDisplay: codeDisplay,
         title: title == codeDisplay ? '' : title,
         date: film.date.trim(),
-        // whos XOR 封面（开关打开时才有）：开关关闭时三字段恒为空。
-        coverSource: film.coverUrl.isEmpty ? '' : 'whos',
-        coverDramaId: film.coverUrl.isEmpty ? '' : film.detailUrl,
-        coverUrl: film.coverUrl,
+        // 同步时已取到的封面：开关关闭/无图/来源站为空时三字段恒为空；
+        // 封面来源站按调用方传入的 [coverSource] 写，不再写死。
+        coverSource: film.coverUrl.isEmpty || coverSource.isEmpty
+            ? ''
+            : coverSource,
+        coverDramaId: film.coverUrl.isEmpty || coverSource.isEmpty
+            ? ''
+            : film.detailUrl,
+        coverUrl: film.coverUrl.isEmpty || coverSource.isEmpty
+            ? ''
+            : film.coverUrl,
       );
     }
     _refreshWorksCount(personId);

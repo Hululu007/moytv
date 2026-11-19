@@ -20,8 +20,8 @@ import 'zakatv_builtin.dart';
 /// 插件粒度（用户 2026-11-14 纠正：不拆 jar）：
 /// - jar 插件 1 个：整个 zakatv.jar，安装即注册全部 140 个站点配置
 ///   （139 个可见站点 + 1 个纯音频配置），卸载即整个一起撤掉；
-/// - jar 插件 1 个：一点播独立 jar（SelfCheck 只认本 jar 的 dex，不
-///   能合进 zakatv.jar），1 个站点配置，独立安装/卸载；
+/// - jar 插件 1 个：一点播独立 jar（新蜘蛛重写版，无 Auth/SelfCheck，
+///   独立加载器，独立安装/卸载），1 个站点配置；
 /// - jar 插件 1 个：MissAV v30 独立 jar（用户 2026-11-18 发来的新版
 ///   jar 原样内置，里面代码一个字节不改），3 个站点配置（ZakaMissav /
 ///   ZakaMissavOff / missavt，2026-11-19 从 zakatv.jar 挪过来，key/

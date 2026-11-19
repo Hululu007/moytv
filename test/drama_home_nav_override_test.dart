@@ -151,11 +151,11 @@ void main() {
       expect(find.byKey(const ValueKey('drama-nav-feed')), findsOneWidget);
     });
 
-    testWidgets('胶囊栏多媒体项进多媒体屏且无片单残留', (tester) async {
+    testWidgets('胶囊栏网盘项进网盘屏且无片单残留', (tester) async {
       await pumpDramaHome(tester);
-      expect(find.text('多媒体'), findsOneWidget);
+      expect(find.text('网盘'), findsOneWidget);
       expect(find.text('片单'), findsNothing);
-      await tester.tap(find.text('多媒体'));
+      await tester.tap(find.text('网盘'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('还没有登录任何网盘'), findsOneWidget);
@@ -168,7 +168,7 @@ void main() {
       expect(find.byKey(const ValueKey('drama-internal-nav')), findsNothing);
     });
 
-    testWidgets('胶囊栏图标：频道🎞️/多媒体硬盘/中间播放三角', (tester) async {
+    testWidgets('胶囊栏图标：频道🎞️/网盘硬盘/中间播放三角', (tester) async {
       await pumpDramaHome(tester);
       expect(find.text('🎞️'), findsOneWidget);
       expect(find.byIcon(LucideIcons.hardDrive), findsOneWidget);
@@ -178,7 +178,7 @@ void main() {
       expect(find.byIcon(LucideIcons.layoutGrid), findsNothing);
     });
 
-    testWidgets('芯片切换内层页签：频道/多媒体/推荐/首页', (tester) async {
+    testWidgets('芯片切换内层页签：频道/网盘/推荐/首页', (tester) async {
       await pumpDramaHome(tester, hideCapsuleBar: true);
       expect(find.byType(NeonHomeView), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('drama-nav-channel')));
@@ -188,7 +188,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('drama-nav-multimedia')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
-      // 未传网盘站：多媒体屏显示未登录提示。
+      // 未传网盘站：网盘屏显示未登录提示。
       expect(find.text('还没有登录任何网盘'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('drama-nav-feed')));
       await tester.pump();

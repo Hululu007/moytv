@@ -13,14 +13,17 @@ import 'imported_site_record.dart';
 import 'local_store.dart';
 import 'tvbox_config.dart';
 
-/// 站点选择弹窗 + 号的导入分流：本地 py、远程配置与 HTML 站源三条。
+/// 站点选择弹窗 + 号的导入分流：本地 py、远程配置、HTML 站源
+/// 与 JSON（TVBox 视频列表 .json 文件）四条。
 ///
 /// 逻辑原样搬自已删的“内容源管理”页（`_importPy` / `_addInterface` /
 /// `_AddInterfaceDialog`），只改挂名、不重写；弹窗一律用当前主题色
 /// （AlertDialog / Dialog 主题），不固定白底。HTML 一条为新增：
 /// 导入 .html 单文件首页或 .json 注入清单，注册成普通站点条目。
+/// JSON 一条：.json 文件交给 ImportEngine 按内容分流，视频列表
+/// 注册为本地站，TVBox 配置 / XBPQ 规则 / 自定义源走各自原有分支。
 
-enum _SiteImportChoice { localPy, remoteConfig, htmlSite }
+enum _SiteImportChoice { localPy, remoteConfig, htmlSite, localJson }
 
 /// 打开导入分流弹窗，跑完一条导入流程后返回是否导进了东西。
 /// 调用方据此决定是否刷新站源列表。
@@ -45,10 +48,16 @@ Future<bool> showSiteImportFlow({
       return addRemoteInterface(context: context, repository: repository);
     case _SiteImportChoice.htmlSite:
       return importLocalHtmlFiles(context: context, store: store);
+    case _SiteImportChoice.localJson:
+      return importLocalJsonFiles(
+        context: context,
+        repository: repository,
+        store: store,
+      );
   }
 }
 
-/// 分流弹窗本体：两个选项，主题色 AlertDialog。
+/// 分流弹窗本体：四个选项，主题色 AlertDialog。
 class SiteImportChoiceDialog extends StatelessWidget {
   const SiteImportChoiceDialog({super.key});
 
@@ -83,6 +92,13 @@ class SiteImportChoiceDialog extends StatelessWidget {
             subtitle: const Text('选 .html 单文件首页或 .json 注入清单'),
             onTap: () => Navigator.pop(context, _SiteImportChoice.htmlSite),
           ),
+          ListTile(
+            key: const ValueKey('site-import-local-json'),
+            leading: Icon(Icons.list_alt_rounded, color: colors.primary),
+            title: const Text('导入 JSON'),
+            subtitle: const Text('选 TVBox 视频列表 .json 文件'),
+            onTap: () => Navigator.pop(context, _SiteImportChoice.localJson),
+          ),
         ],
       ),
       actions: [
@@ -110,6 +126,37 @@ Future<bool> importLocalPyFiles({
   final files = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: ['py'],
+  );
+  if (files.isEmpty || !context.mounted) return false;
+  try {
+    final candidates = <ImportCandidate>[];
+    for (final file in files) {
+      candidates.add(
+        ImportCandidate(name: file.name, bytes: await file.readAsBytes()),
+      );
+    }
+    final engine = ImportEngine(store: store, repository: repository);
+    final report = await engine.importAll(candidates);
+    if (context.mounted) _showSiteImportMessage(context, report.summary);
+    return report.successCount > 0;
+  } catch (error) {
+    if (context.mounted) _showSiteImportMessage(context, error.toString());
+    return false;
+  }
+}
+
+/// JSON 导入：选 .json 文件，交给 ImportEngine 按内容分流
+/// （视频列表 JSON 注册为本地站；TVBox 配置 / XBPQ 规则 /
+/// 自定义源走各自原有分支）。视频列表的站名从内容取，重复
+/// 内容按哈希认出，失败原因由引擎逐条报清。
+Future<bool> importLocalJsonFiles({
+  required BuildContext context,
+  required AppRepository repository,
+  required LocalStore store,
+}) async {
+  final files = await FilePicker.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: ['json'],
   );
   if (files.isEmpty || !context.mounted) return false;
   try {

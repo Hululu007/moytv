@@ -162,6 +162,15 @@ class LivePlayback {
 
 final Map<String, List<LiveChannel>> importedLiveChannels = {};
 
+/// m3u 订阅频道的按需加载器：LocalStore 在构造时装上，dispose 时撤掉。
+/// 仓库取不到已加载的频道时调它读本地 m3u 副本重解析；没装上时
+/// （如尚未建好 LocalStore）走原先的“暂时没有频道”报错。
+/// force 为真时重读文件，不读内存里的旧列表。
+typedef ImportedLiveChannelsLoader =
+    Future<List<LiveChannel>> Function(String sourceId, {bool force});
+
+ImportedLiveChannelsLoader? loadImportedLiveChannels;
+
 const livePageSize = 60;
 const liveUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -262,4 +271,73 @@ class LiveGroupMemory {
     _lastGroupBySource.clear();
     _offsets.clear();
   }
+}
+
+/// 上次观看的直播：源 + 分组 + 频道 + 点播进度，持久化在
+/// SharedPreferences（LiveStore，键 live.lastWatched），重启 App 还在。
+/// 频道用 key 认（源\0分组名\0频道名），不用 url：url 会过期，
+/// 续播时一律按 key 在新拉的频道列表里重找，找不到就回退并清掉。
+class LiveLastWatched {
+  const LiveLastWatched({
+    required this.sourceId,
+    required this.groupId,
+    required this.groupName,
+    required this.channelKey,
+    required this.channelName,
+    this.positionMs = 0,
+    required this.updatedAtMs,
+  });
+
+  final String sourceId;
+
+  /// 续播要进的分组 id（平台 id）。收藏里播的频道没有分组 id，
+  /// 此时为空，靠 groupName 按名匹配。
+  final String groupId;
+
+  /// 分组名（平台名 / 频道自身的 group）：平台 id 变了时按名兜底。
+  final String groupName;
+  final String channelKey;
+  final String channelName;
+
+  /// 点播（m3u 文件型）上次看到的毫秒位置；直播流恒为 0。
+  final int positionMs;
+  final int updatedAtMs;
+
+  Map<String, dynamic> toJson() => {
+    'sourceId': sourceId,
+    'groupId': groupId,
+    'groupName': groupName,
+    'channelKey': channelKey,
+    'channelName': channelName,
+    'positionMs': positionMs,
+    'updatedAtMs': updatedAtMs,
+  };
+
+  static LiveLastWatched? fromJson(Map<String, dynamic> json) {
+    final sourceId = json['sourceId'] as String? ?? '';
+    final channelKey = json['channelKey'] as String? ?? '';
+    final channelName = json['channelName'] as String? ?? '';
+    if (sourceId.isEmpty || channelKey.isEmpty || channelName.isEmpty) {
+      return null;
+    }
+    return LiveLastWatched(
+      sourceId: sourceId,
+      groupId: json['groupId'] as String? ?? '',
+      groupName: json['groupName'] as String? ?? '',
+      channelKey: channelKey,
+      channelName: channelName,
+      positionMs: (json['positionMs'] as num?)?.toInt() ?? 0,
+      updatedAtMs: (json['updatedAtMs'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  LiveLastWatched withPosition(int value) => LiveLastWatched(
+    sourceId: sourceId,
+    groupId: groupId,
+    groupName: groupName,
+    channelKey: channelKey,
+    channelName: channelName,
+    positionMs: value < 0 ? 0 : value,
+    updatedAtMs: updatedAtMs,
+  );
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_database.dart';
 import 'app_theme_config.dart';
 import 'content_registry.dart';
+import 'core_bridge.dart';
 import 'custom_headers.dart';
 import 'jar_import.dart';
 import 'imported_site_record.dart';
@@ -27,8 +29,13 @@ import 'xigua/watch_stats.dart';
 
 class LocalStore extends ChangeNotifier {
   LocalStore(this.preferences) {
+    _m3uLoader = loadM3uChannels;
+    loadImportedLiveChannels = _m3uLoader;
     _initialize();
   }
+
+  /// 直播仓库按需加载 m3u 频道时走的加载器（见 loadM3uChannels）。
+  late final ImportedLiveChannelsLoader _m3uLoader;
 
   final SharedPreferences preferences;
   LocalSnapshot? _snapshot;
@@ -362,7 +369,8 @@ class LocalStore extends ChangeNotifier {
       if (!record.enabled) continue;
       SourceSite.importedSites[record.id] = record.asSite;
       _registeredImportIds.add(record.id);
-      if (record.type == ImportedSiteRecord.typePy) {
+      if (record.type == ImportedSiteRecord.typePy ||
+          record.type == ImportedSiteRecord.typeJsonList) {
         SourceSite.importedPyFiles[record.id] = record.fileName;
       }
       if (record.type == ImportedSiteRecord.typeJs) {
@@ -407,6 +415,27 @@ class LocalStore extends ChangeNotifier {
       _m3uSubscriptions = [];
     }
     _syncM3uRegistry();
+    _shrinkM3uSnapshotIfNeeded();
+  }
+
+  /// 老快照瘦身：旧版快照里含 channels，一次性重写为元数据版，
+  /// 否则旧的大快照会一直占着 16MB 额度，其他提交也跟着报错。
+  /// 只在内容确实变了时写一次；写失败也不影响使用。
+  void _shrinkM3uSnapshotIfNeeded() {
+    final stored = _string('m3uSubscriptions');
+    if (stored == null) return;
+    final slim = jsonEncode(
+      _m3uSubscriptions.map((sub) => sub.toJson()).toList(),
+    );
+    if (slim == stored) return;
+    unawaited(
+      _queue(() async {
+        if (locked) return;
+        try {
+          await _commit({'m3uSubscriptions': slim});
+        } catch (_) {}
+      }),
+    );
   }
 
   void _syncM3uRegistry() {
@@ -423,9 +452,52 @@ class LocalStore extends ChangeNotifier {
         protocol: LiveProtocol.list,
         builtin: false,
       );
-      importedLiveChannels[sub.sourceId] = sub.channels;
+      // 只注册已加载在内存里的频道；没加载的订阅不在表里，
+      // 直播页点开时仓库走按需加载器读本地副本重解析。
+      if (sub.channels.isNotEmpty) {
+        importedLiveChannels[sub.sourceId] = sub.channels;
+      }
       _registeredM3uIds.add(sub.sourceId);
     }
+  }
+
+  /// 按需加载某 m3u 订阅的频道（直播页点开该源时由仓库调起）。
+  /// 内存里只留一个订阅的频道：加载新订阅时，把其他有本地副本
+  /// （可重解析）的订阅的内存频道丢掉；无副本的订阅（仅内存有
+  /// 频道）不丢，那是它唯一的份。force 时重读文件。
+  Future<List<LiveChannel>> loadM3uChannels(
+    String sourceId, {
+    bool force = false,
+  }) async {
+    var result = const <LiveChannel>[];
+    await _queue(() async {
+      if (locked) throw AppFailure('当前配置未恢复，无法加载订阅频道');
+      final index = _m3uSubscriptions.indexWhere(
+        (sub) => sub.sourceId == sourceId,
+      );
+      if (index < 0) throw AppFailure('订阅不存在或已被删除');
+      final sub = _m3uSubscriptions[index];
+      if (!force && sub.channels.isNotEmpty) {
+        result = sub.channels;
+        return;
+      }
+      final loaded = await M3uSubscriptionService.loadChannels(
+        sub,
+        force: force,
+      );
+      result = loaded;
+      _m3uSubscriptions = [
+        for (final item in _m3uSubscriptions)
+          if (item.id == sub.id)
+            item.copyWith(channels: loaded, channelCount: loaded.length)
+          else if (item.fileName.isNotEmpty && item.channels.isNotEmpty)
+            item.copyWith(channels: const [])
+          else
+            item,
+      ];
+      _syncM3uRegistry();
+    });
+    return result;
   }
 
   Future<void> syncM3uSubscriptions(List<M3uSubscription> subscriptions) async {
@@ -438,7 +510,16 @@ class LocalStore extends ChangeNotifier {
       if (serialized != _string('m3uSubscriptions')) {
         await _commit({'m3uSubscriptions': serialized});
       }
-      _m3uSubscriptions = List.of(subscriptions);
+      // 频道只留内存一份：有本地副本的订阅（可按需重解析）立即
+      // 丢掉内存频道，避免连续导入 9 份大文件时 30 万条频道全
+      // 挤在内存；无副本的订阅保留内存频道，那是它唯一的份。
+      _m3uSubscriptions = [
+        for (final sub in subscriptions)
+          if (sub.fileName.isNotEmpty && sub.channels.isNotEmpty)
+            sub.copyWith(channels: const [])
+          else
+            sub,
+      ];
       _syncM3uRegistry();
       _notify();
     });
@@ -1513,6 +1594,9 @@ class LocalStore extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    if (identical(loadImportedLiveChannels, _m3uLoader)) {
+      loadImportedLiveChannels = null;
+    }
     super.dispose();
   }
 }

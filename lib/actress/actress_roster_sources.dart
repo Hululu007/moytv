@@ -541,8 +541,10 @@ List<RosterFilm> parseWhosFilms(String body, {bool decodeCover = false}) {
 
 /// MissAV 女优库：结构取自树内海阔内置规则 🔞MissAV（手机已验可播）
 /// 的女优列表与排行选择器，基址与 UA 与规则一致。
-/// 人物页即视频列表，封面不取（需 Referer，`Image.network` 设不了头，
-/// 封面统一走跨站补全）。
+/// 人物页即视频列表，封面直接取 `.lozad` 图的 data-src（无则 src，
+/// 再无则 data-srcset 首个地址），封面加载走 `repository.cover()`
+/// 的 HTTP 客户端（可带 UA），不再走跨站补全；详情地址取条目链接
+/// 的相对路径，封面直取的站源记 MissAV 视频站。
 class MissavRosterSource extends ActressRosterSource {
   static const base = 'https://missav.live/dm16/cn/';
   static const maxPages = 5000;
@@ -645,7 +647,9 @@ List<RosterPerson> parseMissavRoster(String body) {
 }
 
 /// 解析 MissAV 人物页（视频列表）：项选择器 `.grid.relative`，
-/// 标题取 `.lozad` 的 alt、番号只认标题打头的番号形 token。
+/// 标题取 `.lozad` 的 alt、番号只认标题打头的番号形 token；
+/// 封面取同一张 `.lozad` 图的 data-src（无则 src，再无则
+/// data-srcset 首个地址），详情地址取条目链接的相对路径。
 List<RosterFilm> parseMissavFilms(String body) {
   final document = html_parser.parse(body);
   final out = <RosterFilm>[];
@@ -653,17 +657,40 @@ List<RosterFilm> parseMissavFilms(String body) {
   for (final item in document.querySelectorAll('.grid.relative')) {
     final href = item.querySelector('a')?.attributes['href'] ?? '';
     if (href.isNotEmpty && !seen.add(href)) continue;
-    final title = item.querySelector('.lozad')?.attributes['alt']?.trim() ?? '';
+    final img = item.querySelector('.lozad');
+    final title = img?.attributes['alt']?.trim() ?? '';
     if (title.isEmpty) continue;
     final code = extractLeadingAvCode(title);
     out.add(
       RosterFilm(
         code: code,
         title: code.isNotEmpty && title == code ? '' : title,
+        coverUrl: _resolveUrl(
+          MissavRosterSource.base,
+          _missavCoverSrc(img),
+        ),
+        detailUrl: _relativePath(href),
       ),
     );
   }
   return out;
+}
+
+/// MissAV 封面图地址：data-src 优先，其次 src，最后 data-srcset
+/// 的首个地址（`url 100w, url 200w` 只取第一个 url）。
+String _missavCoverSrc(Element? img) {
+  if (img == null) return '';
+  final dataSrc = img.attributes['data-src']?.trim() ?? '';
+  if (dataSrc.isNotEmpty) return dataSrc;
+  final src = img.attributes['src']?.trim() ?? '';
+  if (src.isNotEmpty) return src;
+  final srcset = img.attributes['data-srcset'] ?? '';
+  for (final candidate in srcset.split(',')) {
+    final parts = candidate.trim().split(RegExp(r'\s+'));
+    final url = parts.isEmpty ? '' : parts.first;
+    if (url.isNotEmpty) return url;
+  }
+  return '';
 }
 
 String _firstNonEmpty(List<String?> values) {

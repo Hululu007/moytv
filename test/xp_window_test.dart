@@ -62,6 +62,10 @@ void main() {
       if (kind == Win7WindowKind.drama) {
         continue;
       }
+      // 游戏区没有桌面图标（只走底部标签与开始菜单），与短剧同口径跳过。
+      if (kind == Win7WindowKind.gameZone) {
+        continue;
+      }
       expect(
         xpKey('xp-desktop-icon-${kind.name}'),
         findsOneWidget,
@@ -70,8 +74,10 @@ void main() {
     }
     // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
     expect(xpKey('xp-desktop-icon-drama'), findsNothing);
+    // 游戏区同样没有桌面图标。
+    expect(xpKey('xp-desktop-icon-gameZone'), findsNothing);
     // 默认顺序与 Win7 同一份：我的电脑置顶第一位，其余按听读、
-    // 片库、直播、小程序、女优库、游戏、多媒体往下排；
+    // 片库、直播、小程序、女优库、游戏、网盘往下排；
     // 一列排满换第二列，按列优先比位置：同列看纵坐标递增，
     // 换列看横坐标递增。
     Offset pos(String name) =>
@@ -109,18 +115,18 @@ void main() {
     await pumpXpHome(tester);
     expect(find.byType(DesktopIconBadge), findsNWidgets(9));
     expect(find.text('我的电脑'), findsOneWidget);
-    expect(find.text('多媒体'), findsOneWidget);
+    expect(find.text('网盘'), findsOneWidget);
     expect(find.text('拳皇97'), findsOneWidget);
     expect(find.text('听读'), findsOneWidget);
   });
 
-  testWidgets('点“多媒体”图标开“多媒体”窗口：XP 标题栏 + 多媒体页', (tester) async {
+  testWidgets('点“网盘”图标开“网盘”窗口：XP 标题栏 + 网盘页', (tester) async {
     await pumpXpHome(tester);
     await tester.tap(xpKey('xp-desktop-icon-multimedia'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(xpKey('xp-desktop'), findsNothing);
-    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '多媒体');
+    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '网盘');
     expect(find.byType(MultimediaScreen), findsOneWidget);
     expect(xpKey('xp-taskbar-entry-multimedia'), findsOneWidget);
   });
@@ -225,8 +231,8 @@ void main() {
     await pumpXpHome(tester);
     await tester.tap(xpKey('xp-start-button'));
     await tester.pump();
-    // 女优库是末尾单叶（第 7 个顶级节点，下标 6）：无须展开，点按
-    // 直接开女优库窗口、菜单关闭。
+    // 女优库是第 7 个顶级节点（下标 6）：无须展开，点按
+    // 直接开女优库窗口、菜单关闭（末尾单叶现为游戏区，下标 7）。
     final leaf = xpKey('xp-tree-node-6');
     expect(leaf, findsOneWidget);
     await tester.tap(leaf);
@@ -300,7 +306,7 @@ void main() {
       ],
     ),
     Win7TreeNode(
-      label: '多媒体',
+      label: '网盘',
       kind: Win7WindowKind.multimedia,
       children: [
         const Win7TreeNode(
@@ -365,7 +371,7 @@ void main() {
     expect(find.byType(SiteIcon), findsOneWidget);
   });
 
-  testWidgets('组行显示区图标，多媒体组行是硬盘图标', (tester) async {
+  testWidgets('组行显示区图标，网盘组行是硬盘图标', (tester) async {
     await pumpXpStartMenu(
       tester,
       mockPrefs: {

@@ -18,51 +18,35 @@ void main() {
     expect(md5.convert(bytes).toString(), oneJarMd5);
   });
 
-  test('one jar keeps classes.dex + SIG matching the SelfCheck transform', () {
+  test('one jar is the new spider rewrite: 4 classes, markers, no SIG', () {
     final bytes = File('assets/jars/one.jar').readAsBytesSync();
     final archive = ZipDecoder().decodeBytes(bytes);
     final names = [for (final f in archive.files) f.name];
     expect(names, contains('classes.dex'));
-    expect(names, contains('META-INF/SIG'));
+    expect(names, isNot(contains('META-INF/SIG')));
+    expect(names, contains('META-INF/MANIFEST.MF'));
     final dex = List<int>.from(
       archive.files.singleWhere((f) => f.name == 'classes.dex').content
           as List<int>,
     );
-    final sig = utf8
-        .decode(
-          archive.files.singleWhere((f) => f.name == 'META-INF/SIG').content
-              as List<int>,
-        )
-        .trim();
-    expect(sig.length, 32);
-    // SelfCheck 变换：全部 32 个 '0' 占位串换成 32 个 'X'，dex 头
-    // [8,32) 清零，再 MD5。占位串须恰好出现 1 次（EXPECT 字段自身）。
-    var runs = 0;
-    final transformed = List<int>.from(dex);
-    for (var i = 0; i + 32 <= transformed.length; i++) {
-      var match = true;
-      for (var j = 0; j < 32; j++) {
-        if (transformed[i + j] != 0x30) {
-          match = false;
-          break;
-        }
-      }
-      if (match) {
-        runs++;
-        for (var j = 0; j < 32; j++) {
-          transformed[i + j] = 0x58;
-        }
-        i += 31;
-      }
-    }
-    expect(runs, 1);
-    for (var i = 8; i < 32; i++) {
-      transformed[i] = 0;
-    }
-    expect(md5.convert(transformed).toString(), sig);
     final text = latin1.decode(dex);
+    // 新蜘蛛 4 个类：Json、One$1、One$2、One；One 的父类是壳内 Spider。
+    expect(text, contains('Lcom/github/catvod/spider/Json;'));
+    expect(text, contains('Lcom/github/catvod/spider/One\$1;'));
+    expect(text, contains('Lcom/github/catvod/spider/One\$2;'));
     expect(text, contains('Lcom/github/catvod/spider/One;'));
-    expect(text, contains('Lcom/github/catvod/spider/csp_One;'));
+    expect(text, contains('Lcom/github/catvod/crawler/Spider;'));
+    // 域名分发与新后端接口的标记都在。
+    expect(text, contains('Appdomain'));
+    expect(text, contains('luatiaonli'));
+    expect(text, contains('grpc'));
+    expect(text, contains('girlGetList'));
+    expect(text, contains('showvideo'));
+    // 旧实现的拉闸/Auth/SelfCheck/csp_One 一律不在。
+    expect(text, isNot(contains('SelfCheck')));
+    expect(text, isNot(contains('Lcom/github/catvod/spider/Auth;')));
+    expect(text, isNot(contains('csp_One')));
+    expect(text, isNot(contains('META-INF/SIG')));
   });
 
   test('one builtin site registry', () {
@@ -102,7 +86,7 @@ void main() {
 
   test('zakatv registry untouched by the One builtin', () {
     expect(zakatvBuiltinSites.length, 140);
-    expect(zakatvJarMd5, '44235cee5268015e5ccca0a57aa42107');
+    expect(zakatvJarMd5, '029005c7ce017dc0a412f2d079a29dab');
     expect(zakatvBuiltinSites.any((site) => site.key == 'One'), isFalse);
   });
 }

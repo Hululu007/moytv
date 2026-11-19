@@ -30,6 +30,10 @@ enum Win7WindowKind {
   multimedia,
   mine,
   actress,
+  // 游戏区（用户 2026-11-19 令新增）：独立区、两张游戏卡；只走
+  // 底部标签与开始菜单单叶，不进桌面图标表（桌面图标还是两个
+  // 游戏各自的，不动）。
+  gameZone,
   game,
   kof;
 
@@ -40,9 +44,10 @@ enum Win7WindowKind {
     Win7WindowKind.live => '直播',
     Win7WindowKind.listenRead => '听读',
     Win7WindowKind.miniApp => '小程序',
-    Win7WindowKind.multimedia => '多媒体',
+    Win7WindowKind.multimedia => '网盘',
     Win7WindowKind.mine => '我的电脑',
     Win7WindowKind.actress => '演员库',
+    Win7WindowKind.gameZone => '游戏区',
     Win7WindowKind.game => '红警2',
     Win7WindowKind.kof => '拳皇97',
   };
@@ -57,13 +62,14 @@ enum Win7WindowKind {
     Win7WindowKind.multimedia => Icons.storage,
     Win7WindowKind.mine => Icons.desktop_windows,
     Win7WindowKind.actress => Icons.people_alt_outlined,
+    Win7WindowKind.gameZone => Icons.sports_esports,
     Win7WindowKind.game => Icons.sports_esports,
     Win7WindowKind.kof => Icons.sports_esports,
   };
 
   /// 桌面图标底块的渐变色（一深一浅，左上到右下）：成套彩色，
   /// Win7/XP 桌面共用同一套；任务栏与标题栏的小图标仍用白色，
-  /// 不走这套配色。mine（我的电脑）与 multimedia（多媒体）图标
+  /// 不走这套配色。mine（我的电脑）与 multimedia（网盘）图标
   /// 与配色刻意区分：mine 是显示器 + XP 蓝，multimedia 是硬盘
   /// + slate 灰，桌面与任务栏上能分清。
   List<Color> get iconGradient => switch (this) {
@@ -76,6 +82,8 @@ enum Win7WindowKind {
     Win7WindowKind.multimedia => const [Color(0xFF64748B), Color(0xFF475569)],
     Win7WindowKind.mine => const [Color(0xFF3A93FF), Color(0xFF0058E6)],
     Win7WindowKind.actress => const [Color(0xFFEC4899), Color(0xFFDB2777)],
+    // 游戏区：金色，与其余 10 对渐变均不撞（kof 测试钉全员互异）。
+    Win7WindowKind.gameZone => const [Color(0xFFEAB308), Color(0xFFA16207)],
     Win7WindowKind.game => const [Color(0xFFB91C1C), Color(0xFF7F1D1D)],
     Win7WindowKind.kof => const [Color(0xFF14B8A6), Color(0xFF0F766E)],
   };
@@ -121,10 +129,10 @@ class DesktopIconBadge extends StatelessWidget {
 }
 
 /// 桌面图标默认顺序与内容：9 个。短剧没有桌面图标、只在开始
-/// 菜单树里；多媒体有桌面图标（排末尾），窗口标题叫“多媒体”，
+/// 菜单树里；网盘有桌面图标（排末尾），窗口标题叫“网盘”，
 /// 不再与桌面顶上的“我的电脑”图标撞名。顺序口径（用户
 /// 2026-11-18 令）：我的电脑置顶排第一位，其余按听读、片库、
-/// 直播、小程序、女优库、游戏、多媒体的相对顺序往下排（听书与
+/// 直播、小程序、女优库、游戏、网盘的相对顺序往下排（听书与
 /// 阅读已并为一个“听读”图标，占原来听书的位置）。用户长按拖拽
 /// 换过顺序后，以存下来的顺序为准（见 [loadDesktopIconOrder]），
 /// 这份默认顺序只作没存过时的回落；以前拖过的手机保留自己拖的
@@ -1060,6 +1068,7 @@ class WindowTitleBarAutoHide extends StatefulWidget {
     required this.titleBar,
     required this.child,
     this.active = true,
+    this.hideTitleBar = false,
   });
 
   /// 标题栏（32px 高那条）；收起时整条从树里拿掉，内容区顶满。
@@ -1070,6 +1079,10 @@ class WindowTitleBarAutoHide extends StatefulWidget {
 
   /// 窗口是否在前台。后台窗口（Offstage 藏起）不计时。
   final bool active;
+
+  /// 强制藏标题栏（游戏全屏用）：标题栏不渲染、收起遮罩不挡事件，
+  /// 内容体直接可点。只改渲染条件、不改树形，内容体 State 不重建。
+  final bool hideTitleBar;
 
   @override
   State<WindowTitleBarAutoHide> createState() => _WindowTitleBarAutoHideState();
@@ -1140,16 +1153,17 @@ class _WindowTitleBarAutoHideState extends State<WindowTitleBarAutoHide> {
         children: [
           AbsorbPointer(
             // 标题栏收起时整窗不接事件：收起时的点按只放下标题栏，
-            // 绝不点透到底下内容。
-            absorbing: !_titleVisible,
+            // 绝不点透到底下内容。强制藏栏（游戏全屏）时不吸收，
+            // 游戏内容直接可点。
+            absorbing: !_titleVisible && !widget.hideTitleBar,
             child: Column(
               children: [
-                if (_titleVisible) widget.titleBar,
+                if (_titleVisible && !widget.hideTitleBar) widget.titleBar,
                 Expanded(child: widget.child),
               ],
             ),
           ),
-          if (!_titleVisible)
+          if (!_titleVisible && !widget.hideTitleBar)
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.opaque,
@@ -1171,6 +1185,7 @@ class Win7WindowFrame extends StatelessWidget {
     required this.onClose,
     required this.child,
     this.active = true,
+    this.hideTitleBar = false,
   });
 
   final Win7WindowKind kind;
@@ -1181,10 +1196,14 @@ class Win7WindowFrame extends StatelessWidget {
   /// 窗口是否在前台（见 [WindowTitleBarAutoHide.active]）。
   final bool active;
 
+  /// 强制藏标题栏（游戏全屏用，见 [WindowTitleBarAutoHide.hideTitleBar]）。
+  final bool hideTitleBar;
+
   @override
   Widget build(BuildContext context) {
     return WindowTitleBarAutoHide(
       active: active,
+      hideTitleBar: hideTitleBar,
       titleBar: Container(
         height: 32,
         decoration: const BoxDecoration(

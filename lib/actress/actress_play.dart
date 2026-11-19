@@ -28,6 +28,8 @@ class ActressPlayCandidate {
 ///   无果或候选全部预检失败后才探；
 /// - 起播前每候选都过 resolve 预检（单候选超时），首个解出的才推
 ///   播放器；预检失败的静默跳过，不弹错；
+/// - 单次 [nextPlayable] 调用有总预算（默认 45 秒）：预算耗尽时
+///   尚未起跑的波次不再起跑、直接判无源，在途探活跑完、结果照收；
 /// - 无番号的作品走标题模式：按标题搜全部可见站，取标题相符的命中
 ///   （每站首个）成链，其余流程相同；
 /// - 每推一个候选前都查 [LocalStore.allowsSource] 并校验 profileEpoch
@@ -43,16 +45,17 @@ class ActressPlayChain {
     this.titleQuery = '',
     this.candidateSites,
     CrossSiteProbeService? probeService,
-    this.resolveTimeout = const Duration(seconds: 20),
-    this.probeConcurrency = 4,
+    this.resolveTimeout = const Duration(seconds: 12),
+    this.probeConcurrency = 6,
     this.titleHitsCap = 8,
+    this.totalBudget = const Duration(seconds: 45),
   }) : _probeService =
            probeService ??
            CrossSiteProbeService(
              repository: repository,
-             perSiteTimeout: const Duration(seconds: 15),
+             perSiteTimeout: const Duration(seconds: 10),
              eagerBudget: const Duration(seconds: 30),
-             concurrency: 4,
+             concurrency: 6,
              maxVersions: 1,
            ) {
     final plans = planCrossSiteRows(
@@ -98,6 +101,10 @@ class ActressPlayChain {
   final int probeConcurrency;
   final int titleHitsCap;
 
+  /// 单次 [nextPlayable] 调用的总预算：预算耗尽时尚未起跑的波次
+  /// 不再起跑、直接判无源；在途探活跑到单站超时为止，结果照收。
+  final Duration totalBudget;
+
   final _candidates = <ActressPlayCandidate>[];
   var _next = 0;
   late List<CrossSiteRowPlan> _pendingFallback;
@@ -114,11 +121,15 @@ class ActressPlayChain {
 
   /// 取下一个可播候选：按链序预检，首个解出的返回；链耗尽返回 null。
   /// 已试过的候选不再试；[shouldStop] 为真时立即停（界面已取消）。
+  /// 总预算 [totalBudget] 耗尽时尚未起跑的波次不再起跑，直接返回 null。
   Future<ActressPlayCandidate?> nextPlayable({
     required int profileEpoch,
     bool Function()? shouldStop,
   }) async {
     if (avId.isEmpty && titleQuery.isEmpty) return null;
+    final stopwatch = Stopwatch()..start();
+    bool overBudget() => stopwatch.elapsed >= totalBudget;
+    bool stopRequested() => shouldStop?.call() == true || overBudget();
     while (true) {
       if (shouldStop?.call() == true) return null;
       if (store.profileEpoch != profileEpoch) return null;
@@ -128,19 +139,22 @@ class ActressPlayChain {
         if (await _resolves(candidate, profileEpoch)) return candidate;
         continue;
       }
+      if (overBudget()) return null;
       if (avId.isNotEmpty) {
         if (_pendingFallback.isNotEmpty) {
-          final found = await _probeWave(_pendingFallback, shouldStop);
+          final found = await _probeWave(_pendingFallback, stopRequested);
           _candidates.addAll(found);
           if (found.isNotEmpty) continue;
         }
+        if (overBudget()) return null;
         if (_pendingEager.isNotEmpty) {
-          final found = await _probeWave(_pendingEager, shouldStop);
+          final found = await _probeWave(_pendingEager, stopRequested);
           _candidates.addAll(found);
           if (found.isNotEmpty) continue;
         }
+        if (overBudget()) return null;
         if (_pendingLazy.isNotEmpty) {
-          final found = await _probeWave(_pendingLazy, shouldStop);
+          final found = await _probeWave(_pendingLazy, stopRequested);
           _candidates.addAll(found);
           if (found.isNotEmpty) continue;
         }
@@ -148,7 +162,7 @@ class ActressPlayChain {
       }
       if (!_titleWaveDone) {
         _titleWaveDone = true;
-        final found = await _probeTitleWave(shouldStop);
+        final found = await _probeTitleWave(stopRequested);
         _candidates.addAll(found);
         if (found.isNotEmpty) continue;
       }

@@ -312,7 +312,8 @@ class PluginShareIntent {
           zipInstaller ??
           ZipPickInstaller.forApp(store: store, repository: repository),
       jsonHandler:
-          jsonHandler ?? SharedJsonImportHandler(repository: repository),
+          jsonHandler ??
+          SharedJsonImportHandler(repository: repository, store: store),
     );
     _controller = controller;
     controller.start();

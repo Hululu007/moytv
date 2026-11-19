@@ -20,6 +20,10 @@ const _legadoJson =
 const _configJson =
     '{"sites":[{"key":"a","name":"A站","type":3,"api":"https://example.com/api"}],'
     '"spider":"https://example.com/spider.jar"}';
+const _listJson =
+    '{"list":[{"vod_id":"1","vod_name":"AV","vod_play_from":"直播",'
+    '"vod_play_url":"1\$http://x/1.m3u8#2\$http://x/2.m3u8"}],'
+    '"parse":0,"jx":0}';
 
 NovelImportRecord _record(String name) =>
     NovelImportRecord(id: 'novel_1', name: name, fileName: 'f.json');
@@ -63,6 +67,14 @@ void main() {
       // 每个站点都有 name 又有 api，海阔解析器会认成小程序，
       // 判定顺序必须保证配置先判。
       expect(classifySharedJson(_configJson), isNot(SharedJsonKind.haikuo));
+    });
+
+    test('视频列表 JSON（含 vod_play_url）认作 jsonList', () {
+      expect(classifySharedJson(_listJson), SharedJsonKind.jsonList);
+    });
+
+    test('带 parse/jx 键的视频列表不进配置分支', () {
+      expect(classifySharedJson(_listJson), isNot(SharedJsonKind.tvboxConfig));
     });
 
     test('base64 包裹的 TVBox 配置', () {
@@ -194,6 +206,32 @@ void main() {
         message,
         '已导入「测试配置」：站点 2 个（接口 2 · jar 0 · py 0 · T4 0 · JS 0）、直播 1 个、解析 0 个',
       );
+    });
+
+    test('视频列表路由调 JSON 列表导入并返回摘要', () async {
+      var called = false;
+      final handler = SharedJsonImportHandler(
+        jsonListImport: (bytes, fileName) async {
+          called = true;
+          expect(fileName, 'av.json');
+          return '已导入 🔞AV';
+        },
+      );
+      final message = await handler.handle(
+        utf8.encode(_listJson),
+        fileName: 'av.json',
+      );
+      expect(called, isTrue);
+      expect(message, '已导入 🔞AV');
+    });
+
+    test('视频列表默认导入无 store 时指路到站点列表 + 号', () async {
+      final handler = SharedJsonImportHandler();
+      final message = await handler.handle(
+        utf8.encode(_listJson),
+        fileName: 'av.json',
+      );
+      expect(message, contains('导入 JSON'));
     });
 
     test('配置内容为空时报未导入任何内容', () async {

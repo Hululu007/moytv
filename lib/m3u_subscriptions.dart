@@ -8,7 +8,7 @@ import 'live_models.dart';
 import 'live_parser.dart';
 
 class M3uSubscription {
-  const M3uSubscription({
+  M3uSubscription({
     required this.id,
     required this.name,
     required this.kind,
@@ -17,11 +17,16 @@ class M3uSubscription {
     this.fileName = '',
     this.groupCount = 0,
     this.updatedAtMs = 0,
-  });
+    int? channelCount,
+  }) : channelCount = channelCount ?? channels.length;
+
+  /// 原 5000 条上限已删：它会静默丢掉大文件约 85% 的条目
+  ///（女优合集每份约 34447 条），且解析本身已全量跑过，
+  /// 截断省不了性能；内存改由按需加载兜底（一次只留一个
+  /// 订阅的频道在内存，切订阅即丢，见 LocalStore.loadM3uChannels）。
 
   static const kindFile = 'file';
   static const kindUrl = 'url';
-  static const maxChannels = 5000;
 
   final String id;
   final String name;
@@ -32,7 +37,9 @@ class M3uSubscription {
   final int updatedAtMs;
   final List<LiveChannel> channels;
 
-  int get channelCount => channels.length;
+  /// 订阅的频道总数（解析出的真实条数，不随内存加载状态变）。
+  /// 快照只存这个数，不存频道本身；频道按需从本地 m3u 副本重解析。
+  final int channelCount;
   String get sourceId => 'm3u:$id';
   bool get isUrl => kind == kindUrl;
 
@@ -42,6 +49,7 @@ class M3uSubscription {
     int? groupCount,
     int? updatedAtMs,
     String? fileName,
+    int? channelCount,
   }) => M3uSubscription(
     id: id,
     name: name ?? this.name,
@@ -51,8 +59,16 @@ class M3uSubscription {
     groupCount: groupCount ?? this.groupCount,
     updatedAtMs: updatedAtMs ?? this.updatedAtMs,
     channels: channels ?? this.channels,
+    // 注意：换频道列表时不自动从 channels 推导总数——“卸载”
+    // 传的是空列表（表示未加载），不是 0 个频道；换列表的
+    // 调用方须同时传 channelCount（加载时传解析出的条数）。
+    channelCount: channelCount ?? this.channelCount,
   );
 
+  /// 快照只写元数据：频道存在本地 m3u 副本里，用时重解析，
+  /// 不再把几千上万条频道塞进 SharedPreferences 单键快照
+  ///（此前每订阅 5000 条约 3MB，9 份约 28MB，超 16MB 上限
+  /// 就报“本地记录超过保存上限”）。
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -61,24 +77,29 @@ class M3uSubscription {
     'fileName': fileName,
     'groupCount': groupCount,
     'updatedAtMs': updatedAtMs,
-    'channels': [for (final channel in channels) channel.toFavourite()],
+    'channelCount': channelCount,
   };
 
-  factory M3uSubscription.fromJson(Map<String, dynamic> json) =>
-      M3uSubscription(
-        id: json['id'] as String? ?? '',
-        name: json['name'] as String? ?? '',
-        kind: json['kind'] as String? ?? kindFile,
-        url: json['url'] as String? ?? '',
-        fileName: json['fileName'] as String? ?? '',
-        groupCount: json['groupCount'] as int? ?? 0,
-        updatedAtMs: json['updatedAtMs'] as int? ?? 0,
-        channels: [
-          for (final row in json['channels'] as List? ?? const [])
-            if (row is Map)
-              LiveChannel.fromFavourite(Map<String, dynamic>.from(row)),
-        ],
-      );
+  factory M3uSubscription.fromJson(Map<String, dynamic> json) {
+    // 老快照兼容：旧版 toJson 写过 channels，读出来继续用，
+    // 新版不再写它；下次提交时自然瘦身。
+    final legacyChannels = [
+      for (final row in json['channels'] as List? ?? const [])
+        if (row is Map)
+          LiveChannel.fromFavourite(Map<String, dynamic>.from(row)),
+    ];
+    return M3uSubscription(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      kind: json['kind'] as String? ?? kindFile,
+      url: json['url'] as String? ?? '',
+      fileName: json['fileName'] as String? ?? '',
+      groupCount: json['groupCount'] as int? ?? 0,
+      updatedAtMs: json['updatedAtMs'] as int? ?? 0,
+      channels: legacyChannels,
+      channelCount: json['channelCount'] as int? ?? legacyChannels.length,
+    );
+  }
 }
 
 class M3uParseReport {
@@ -86,13 +107,11 @@ class M3uParseReport {
     required this.groups,
     required this.badEntries,
     required this.totalEntries,
-    required this.truncated,
   });
 
   final List<LiveGroup> groups;
   final int badEntries;
   final int totalEntries;
-  final bool truncated;
 
   int get channelCount =>
       groups.fold(0, (total, group) => total + group.channels.length);
@@ -133,25 +152,11 @@ M3uParseReport analyzeM3u(String text, {required String source}) {
           : '未解析到任何频道：请确认文件是标准 m3u（含 #EXTINF 与播放地址）',
     );
   }
-  var groups = parsed.groups;
-  var truncated = false;
-  if (parsed.channelCount > M3uSubscription.maxChannels) {
-    truncated = true;
-    var remaining = M3uSubscription.maxChannels;
-    final trimmed = <LiveGroup>[];
-    for (final group in groups) {
-      if (remaining <= 0) break;
-      final take = group.channels.take(remaining).toList();
-      remaining -= take.length;
-      if (take.isNotEmpty) trimmed.add(LiveGroup(group.name, take));
-    }
-    groups = trimmed;
-  }
+  // 不再截断：见 M3uSubscription 上的说明。
   return M3uParseReport(
-    groups: groups,
+    groups: parsed.groups,
     badEntries: badEntries,
     totalEntries: totalEntries,
-    truncated: truncated,
   );
 }
 
@@ -246,5 +251,20 @@ class M3uSubscriptionService {
       updatedAtMs: DateTime.now().millisecondsSinceEpoch,
       channels: report.channels,
     );
+  }
+
+  /// 按需取频道：内存里有就直接用，没有就读本地 m3u 副本重解析。
+  /// 无副本（极老订阅或副本被删）且内存也没有时报 AppFailure，
+  /// 调用方提示用户删掉重导。force 时跳过内存里的旧列表重读文件。
+  static Future<List<LiveChannel>> loadChannels(
+    M3uSubscription sub, {
+    bool force = false,
+  }) async {
+    if (!force && sub.channels.isNotEmpty) return sub.channels;
+    if (sub.fileName.isEmpty) {
+      throw AppFailure('本地 m3u 副本不存在，请删除该订阅后重新导入');
+    }
+    final text = await M3uFileStore.readText(sub.fileName);
+    return analyzeM3u(text, source: sub.sourceId).channels;
   }
 }
