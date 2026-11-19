@@ -179,13 +179,13 @@ void main() {
     );
     final chip = find.byKey(const ValueKey('drama-nav-home'));
     expect(tester.getSize(chip), const Size(48, 48));
-    expect(find.text('魔蚁box'), findsOneWidget);
+    expect(find.text('魔蚁TV'), findsOneWidget);
     expect(find.byKey(const ValueKey('neon-avatar')), findsOneWidget);
     expect(find.byKey(const ValueKey('neon-top-source')), findsOneWidget);
     expect(find.byKey(const ValueKey('neon-top-search')), findsOneWidget);
     expect(find.byKey(const ValueKey('neon-top-refresh')), findsOneWidget);
     // 品牌、芯片、搜索钮纵向重叠 = 同在一排、齐平。
-    final brandRect = tester.getRect(find.text('魔蚁box'));
+    final brandRect = tester.getRect(find.text('魔蚁TV'));
     final chipRect = tester.getRect(chip);
     final searchRect = tester.getRect(
       find.byKey(const ValueKey('neon-top-search')),

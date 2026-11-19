@@ -172,19 +172,33 @@ const crossSitePrioritySiteIds = <String>[
   'memojav',
   'chaoliu',
   'jar:zakatv:zakav01',
-  'jar:zakatv:ZakaMissav',
-  'jar:zakatv:ZakaMissavOff',
+  'jar:missav30:ZakaMissav',
+  'jar:missav30:ZakaMissavOff',
   'jar:zakatv:ZakaMirror',
-  'jar:zakatv:missavt',
+  'jar:missav30:missavt',
   'jar:zakatv:ZakaJable',
+];
+
+/// 演员库兜底站序（用户令）：MJV 一家优先——jar、py、Go 槽；18AV
+/// 双生站（与 MJV 同系统、同一内容库）作同库替补排在 MJV 之后；
+/// 其余站再后。id 口径与站源表一致：jar 站为 `jar:zakatv:<key>`，
+/// MissAV 三站已挪到 `jar:missav30:<key>`（2026-11-19）。
+/// MJV 在树里只有一个域名 https://mjv011.com，没有多域名表。
+/// 演员库点卡探查与番号补封面都按此序先查兜底站。
+const actressFallbackSiteIds = <String>[
+  'jar:zakatv:ZakaMjv011',
+  'chaoliu',
+  'v_mjv011',
+  'jar:zakatv:av18avmcg',
+  'jar:zakatv:av18av',
 ];
 
 /// 慢站/盾站：永远懒查，不占自动探活名额（旧模型同口径）。
 const crossSiteLazySiteIds = <String>{
-  'jar:zakatv:ZakaMissav',
-  'jar:zakatv:ZakaMissavOff',
+  'jar:missav30:ZakaMissav',
+  'jar:missav30:ZakaMissavOff',
   'jar:zakatv:ZakaMirror',
-  'jar:zakatv:missavt',
+  'jar:missav30:missavt',
   'jar:zakatv:ZakaJable',
 };
 

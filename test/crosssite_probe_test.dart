@@ -141,7 +141,7 @@ void main() {
       SourceSite('cloud:pan115', '115网盘', '', section: video),
       SourceSite('plain1', '普通站', '', section: video),
       SourceSite('jar:zakatv:ZakaJable', 'Jable', '', section: video),
-      SourceSite('jar:zakatv:ZakaMissav', 'MissAV', '', section: video),
+      SourceSite('jar:missav30:ZakaMissav', 'MissAV', '', section: video),
     ];
 
     test('video sites only, priority order, no unconnected rows', () {
@@ -149,7 +149,7 @@ void main() {
       expect(plans.map((plan) => plan.provider.id), [
         'javmenu',
         'jar:zakatv:zakav01',
-        'jar:zakatv:ZakaMissav',
+        'jar:missav30:ZakaMissav',
         'jar:zakatv:ZakaJable',
         'other1',
         'plain1',
@@ -252,14 +252,19 @@ void main() {
             'assets/py_spiders/chaoliu.py',
           );
         } else {
-          expect(siteId.startsWith('jar:zakatv:'), isTrue);
-          final key = siteId.substring('jar:zakatv:'.length);
-          expect(JarSiteSpec.siteIdFor('zakatv', key), siteId);
+          expect(
+            siteId.startsWith('jar:zakatv:') ||
+                siteId.startsWith('jar:missav30:'),
+            isTrue,
+          );
+          final jarId = siteId.split(':')[1];
+          final key = siteId.substring('jar:$jarId:'.length);
+          expect(JarSiteSpec.siteIdFor(jarId, key), siteId);
         }
       }
       expect(
         crossSiteLazySiteIds,
-        containsAll(['jar:zakatv:ZakaMissav', 'jar:zakatv:ZakaJable']),
+        containsAll(['jar:missav30:ZakaMissav', 'jar:zakatv:ZakaJable']),
       );
     });
   });
@@ -650,7 +655,7 @@ void main() {
           section: SourceSite.sectionVideo,
         ),
         SourceSite(
-          'jar:zakatv:ZakaMissav',
+          'jar:missav30:ZakaMissav',
           'MissAV',
           '',
           section: SourceSite.sectionVideo,

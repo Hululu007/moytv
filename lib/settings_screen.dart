@@ -18,6 +18,7 @@ import 'dns_settings_screen.dart';
 import 'nexhub_scraper/network/network_config_service.dart';
 import 'cloud_drive/cloud_drive_screen.dart';
 import 'app_update_screen.dart';
+import 'app_icon_picker_page.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
 import 'clearance_bridge.dart';
@@ -419,6 +420,14 @@ class _SettingsScreenState extends State<SettingsScreen>
           onTap: () => _push(
             PluginMarketScreen(repository: widget.repository, store: store),
           ),
+        ),
+        _SettingsItem(
+          keyName: 'app-icon-entry',
+          icon: Icons.image,
+          lucide: LucideIcons.image,
+          title: '应用图标',
+          detail: '换桌面图标 · 默认 + 5 张机械蚂蚁图',
+          onTap: () => _push(const AppIconPickerPage()),
         ),
         _SettingsItem(
           keyName: 'site-check-entry',

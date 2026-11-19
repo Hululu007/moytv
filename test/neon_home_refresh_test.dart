@@ -25,6 +25,7 @@ void main() {
     Future<void> Function()? onRefresh,
     required VoidCallback onSourceTap,
     required VoidCallback onSearch,
+    VoidCallback? onAvatar,
   }) async {
     tester.view.physicalSize = const Size(400, 1400);
     tester.view.devicePixelRatio = 1.0;
@@ -42,6 +43,7 @@ void main() {
             onSourceTap: onSourceTap,
             onLongPress: (_) {},
             onRefresh: onRefresh,
+            onAvatar: onAvatar,
           ),
         ),
       ),
@@ -66,7 +68,7 @@ void main() {
     expect(searchCalls, 0);
   });
 
-  testWidgets('点标题只触发换站源，不触发刷新', (tester) async {
+  testWidgets('点标题什么都不触发（2026-11-18 19:49 令：点名称不弹）', (tester) async {
     var refreshCalls = 0;
     var sourceCalls = 0;
     await pumpView(
@@ -75,7 +77,25 @@ void main() {
       onSourceTap: () => sourceCalls++,
       onSearch: () {},
     );
-    await tester.tap(find.byKey(const ValueKey('neon-top-source')));
+    expect(find.byKey(const ValueKey('neon-top-source')), findsNothing);
+    await tester.tap(find.text('魔蚁box'));
+    await tester.pump();
+    expect(sourceCalls, 0);
+    expect(refreshCalls, 0);
+  });
+
+  testWidgets('点图标触发换站源', (tester) async {
+    var refreshCalls = 0;
+    var sourceCalls = 0;
+    await pumpView(
+      tester,
+      onRefresh: () async => refreshCalls++,
+      onSourceTap: () => sourceCalls++,
+      onSearch: () {},
+      // 调用方把弹站点列表的回调传给 onAvatar（与 _neonHome 一致）。
+      onAvatar: () => sourceCalls++,
+    );
+    await tester.tap(find.byKey(const ValueKey('neon-avatar')));
     await tester.pump();
     expect(sourceCalls, 1);
     expect(refreshCalls, 0);
@@ -100,11 +120,7 @@ void main() {
 
   testWidgets('onRefresh 为空时点 🔄 钮不动', (tester) async {
     var sourceCalls = 0;
-    await pumpView(
-      tester,
-      onSourceTap: () => sourceCalls++,
-      onSearch: () {},
-    );
+    await pumpView(tester, onSourceTap: () => sourceCalls++, onSearch: () {});
     await tester.tap(find.byKey(const ValueKey('neon-top-refresh')));
     await tester.pump();
     expect(sourceCalls, 0);
@@ -132,9 +148,7 @@ void main() {
     });
 
     test('tryClaim 认领一次后窗内再认领失败，且失败不重置计时', () {
-      final gate = AutoRefreshGate(
-        lastRefresh: DateTime(2026, 11, 16, 20, 0),
-      );
+      final gate = AutoRefreshGate(lastRefresh: DateTime(2026, 11, 16, 20, 0));
       expect(gate.tryClaim(DateTime(2026, 11, 16, 20, 6)), true);
       expect(gate.tryClaim(DateTime(2026, 11, 16, 20, 7)), false);
       // 失败的认领没改时间戳：距成功认领满 5 分钟即可再次认领。
@@ -142,9 +156,7 @@ void main() {
     });
 
     test('markRefreshed 重置计时', () {
-      final gate = AutoRefreshGate(
-        lastRefresh: DateTime(2026, 11, 16, 20, 0),
-      );
+      final gate = AutoRefreshGate(lastRefresh: DateTime(2026, 11, 16, 20, 0));
       gate.markRefreshed(DateTime(2026, 11, 16, 20, 6));
       expect(gate.tryClaim(DateTime(2026, 11, 16, 20, 10)), false);
       expect(gate.tryClaim(DateTime(2026, 11, 16, 20, 11)), true);
@@ -256,7 +268,11 @@ void main() {
         MaterialApp(
           navigatorObservers: [homeRouteObserver],
           theme: AppThemeConfig.forTheme(AppThemeMode.purpleNeon).toThemeData(),
-          home: HomeScreen(repository: repo, store: store, autoRefreshGate: gate),
+          home: HomeScreen(
+            repository: repo,
+            store: store,
+            autoRefreshGate: gate,
+          ),
         ),
       );
       await tester.pump();
@@ -269,8 +285,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
 
-    testWidgets('回前台刷新一次、窗内不再刷、手点 🔄 照样刷且重置计时',
-        (tester) async {
+    testWidgets('回前台刷新一次、窗内不再刷、手点 🔄 照样刷且重置计时', (tester) async {
       final repo = _CountingRepository();
       final gate = AutoRefreshGate(
         lastRefresh: DateTime.now().subtract(const Duration(minutes: 6)),

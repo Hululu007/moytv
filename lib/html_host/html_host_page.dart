@@ -113,6 +113,18 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
         ),
         sendToPage: _sendToPage,
         gatewayPort: server.port,
+        // fm.req 默认 UA 取本 WebView 的 UA，与解题票据绑定的 UA
+        // 一致，否则 cf_clearance 带上也会被重拦（见桥 _req）。
+        // 闭包每次现取 _controller：桥建在 controller 之前。
+        userAgentReader: () async {
+          final controller = _controller;
+          if (controller == null) return null;
+          try {
+            return await controller.getUserAgent();
+          } catch (_) {
+            return null;
+          }
+        },
       );
       _bridge = bridge;
       final controller = WebViewController()

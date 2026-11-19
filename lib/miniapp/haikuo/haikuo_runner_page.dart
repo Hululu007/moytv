@@ -4224,6 +4224,23 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
   String? _error;
   bool _resolving = false;
   bool _panel = false;
+  // 断线自动重试：流错误/打开失败时退避重开、断点续播，耗尽后才亮错卡。
+  // 最多 3 次，退避 1s/2s/4s；进度超过断点 3 秒即认为本链恢复，清零计数。
+  static const int _maxAutoRetries = 3;
+  static const List<Duration> _retryBackoff = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+  ];
+  static const Duration _recoveryProgress = Duration(seconds: 3);
+  int _autoRetryCount = 0;
+  Timer? _retryTimer;
+  Duration _lastPosition = Duration.zero;
+  Duration _retryAnchor = Duration.zero;
+  bool _retrying = false;
+  // 打开代次：换集/换线路时加一，旧打开的滞后失败不再触发新内容的重试。
+  int _openGeneration = 0;
+  bool _mpvResilienceApplied = false;
 
   bool get _hasEpisodes => widget.episodes.isNotEmpty;
   bool get _hasPrev => _hasEpisodes && _index > 0;
@@ -4249,17 +4266,24 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     if (_index < 0 || _index >= widget.episodes.length) _index = 0;
     widget.controller?.onDeliver = _onDelivered;
     widget.controller?.onRequestEpisode = _switchEpisode;
-    _errorSubscription = _player.stream.error.listen((error) {
-      if (!mounted || _error != null) return;
-      setState(() => _error = error);
-    });
-    _positionSubscription = _player.stream.position.listen((_) {
+    _errorSubscription = _player.stream.error.listen(_handlePlaybackError);
+    _positionSubscription = _player.stream.position.listen((position) {
+      // 最后已知位置是断点续播的锚：0 位置事件（刚打开时）不抹掉旧锚。
+      if (position > Duration.zero) _lastPosition = position;
+      // 本链恢复：进度超过断点 3 秒，清零重试计数。
+      if (_autoRetryCount > 0 && position > _retryAnchor + _recoveryProgress) {
+        _autoRetryCount = 0;
+        _retryAnchor = Duration.zero;
+      }
       unawaited(_speedTracker.tick());
       _reportState();
       _syncDanmu();
     });
     _completedSubscription = _player.stream.completed.listen((completed) {
-      if (completed && _hasNext) _switchEpisode(_index + 1);
+      if (!completed) return;
+      // 正常播完：挂起的重试不再有意义，取消并清零。
+      _cancelRetryTimer();
+      if (_hasNext) _switchEpisode(_index + 1);
     });
     _playingSubscription = _player.stream.playing.listen((_) {
       _reportState();
@@ -4358,6 +4382,9 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
 
   @override
   void dispose() {
+    // 挂起的重试随视图一起死：关闭/退出时绝不再重开。
+    _retryTimer?.cancel();
+    _retryTimer = null;
     widget.controller?.onDeliver = null;
     widget.controller?.onRequestEpisode = null;
     _danmuController.removeListener(_onDanmuChanged);
@@ -4376,9 +4403,17 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     super.dispose();
   }
 
-  Future<void> _open() async {
+  Future<void> _open({Duration? resumeFrom}) async {
+    final ticket = _openGeneration;
     try {
-      await _player.open(Media(_url, httpHeaders: _headers));
+      await _applyMpvResilience();
+      // 断点续播：Media.start 由原生层在加载时经 mpv start 属性生效，
+      // 比打开后再 seek 更稳；2 秒内从头播即可，不必带 start。
+      final start =
+          resumeFrom != null && resumeFrom > const Duration(seconds: 2)
+          ? resumeFrom
+          : null;
+      await _player.open(Media(_url, httpHeaders: _headers, start: start));
       await _player.setRate(_speed);
       // 条目自带字幕：加载为外挂字幕，失败不影响播放。
       if (_subtitleUrl.isNotEmpty) {
@@ -4390,9 +4425,67 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
       }
       _reportState();
     } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = '$error');
+      // 滞后失败（已换集/换线路）不触发新内容的重试。
+      if (!mounted || ticket != _openGeneration) return;
+      _handlePlaybackError('$error');
     }
+  }
+
+  /// MPV 断线容错参数：只对原生 mpv 生效（假播放器/非原生平台跳过），
+  /// 每个播放器只设一次，任一属性失败都不影响播放。
+  /// 依据：media_kit 1.2.6 的 NativePlayer.setProperty（mpv_set_property_string），
+  /// 选项语义见 mpv/FFmpeg 文档；手机实测前只认接口真实、效果待验。
+  Future<void> _applyMpvResilience() async {
+    if (_mpvResilienceApplied) return;
+    _mpvResilienceApplied = true;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    for (final entry in const {
+      // FFmpeg http 层断线重连：读超时/断流时由 FFmpeg 自己重建连接续读，
+      // mpv 不再直接报 ffurl_read 超时错。
+      'stream-lavf-o':
+          'reconnect=1,reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=5',
+      // HLS 分片拉取失败时 demuxer 层多试几次。
+      'demuxer-lavf-o': 'seg_max_retry=3',
+      // 慢网多等一会再判超时。
+      'network-timeout': '30',
+    }.entries) {
+      try {
+        await platform.setProperty(entry.key, entry.value);
+      } catch (_) {
+        // 单个属性失败忽略，继续设下一个。
+      }
+    }
+  }
+
+  /// 流错误处理：先退避重试续播，耗尽后才亮错卡。
+  void _handlePlaybackError(String message) {
+    if (!mounted || _error != null) return;
+    // 同一次故障可能连发多条错误：已有重试在等时，后到的不再重复排队。
+    if (_retryTimer != null) return;
+    if (_autoRetryCount >= _maxAutoRetries) {
+      setState(() => _error = message);
+      return;
+    }
+    final ticket = _openGeneration;
+    _autoRetryCount++;
+    _retryAnchor = _lastPosition;
+    final resumeFrom = _lastPosition;
+    setState(() => _retrying = true);
+    _retryTimer = Timer(_retryBackoff[_autoRetryCount - 1], () {
+      _retryTimer = null;
+      if (!mounted || ticket != _openGeneration) return;
+      setState(() => _retrying = false);
+      unawaited(_open(resumeFrom: resumeFrom));
+    });
+  }
+
+  /// 取消挂起的重试并清零计数（换集/换线路/播完/手动重试时调用）。
+  void _cancelRetryTimer() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _autoRetryCount = 0;
+    _retryAnchor = Duration.zero;
   }
 
   void _onDelivered({
@@ -4405,6 +4498,9 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     String danmuUrl = '',
   }) {
     if (!mounted) return;
+    // 新内容：旧内容的重试链作废，代次加一防滞后失败串扰。
+    _openGeneration++;
+    _cancelRetryTimer();
     setState(() {
       _url = url;
       _title = title;
@@ -4418,6 +4514,7 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
       _danmuUrl = danmuUrl;
       _resolving = false;
       _error = null;
+      _retrying = false;
     });
     widget.onCurrentChanged?.call(index, title);
     _danmuController.reset();
@@ -4653,6 +4750,9 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     final line = _lines[index];
     if (line.url.isEmpty) return;
     _switchingLine = true;
+    // 换线路是新打开：旧重试链作废，代次加一防滞后失败串扰。
+    _openGeneration++;
+    _cancelRetryTimer();
     final resume = _player.state.position;
     try {
       setState(() {
@@ -4660,6 +4760,7 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
         _url = line.url;
         _headers = line.headers;
         _error = null;
+        _retrying = false;
       });
       _danmuController.reset();
       await _open();
@@ -4766,8 +4867,14 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
                   const SizedBox(height: 16),
                   FilledButton(
                     onPressed: () {
-                      setState(() => _error = null);
-                      unawaited(_open());
+                      // 手动重试也从断点续播，并给一次新的自动重试额度。
+                      final resumeFrom = _lastPosition;
+                      _cancelRetryTimer();
+                      setState(() {
+                        _error = null;
+                        _retrying = false;
+                      });
+                      unawaited(_open(resumeFrom: resumeFrom));
                     },
                     child: const Text('重试'),
                   ),
@@ -4785,6 +4892,20 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
                   CircularProgressIndicator(),
                   SizedBox(height: 12),
                   Text('正在解析…', style: TextStyle(color: Colors.white70)),
+                ],
+              ),
+            ),
+          )
+        else if (_retrying)
+          const ColoredBox(
+            color: Colors.black45,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text('网络波动，正在重连…', style: TextStyle(color: Colors.white70)),
                 ],
               ),
             ),

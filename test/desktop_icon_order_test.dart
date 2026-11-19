@@ -22,9 +22,10 @@ void main() {
         'game',
         'library',
         'live',
-        'audio',
-        'novel',
+        'listenRead',
         'miniApp',
+        'multimedia',
+        'kof',
       ];
       expect(
         resolveDesktopIconOrder(stored).map((kind) => kind.name).toList(),
@@ -37,18 +38,18 @@ void main() {
         'bogus',
         'mine',
         'mine',
-        'audio',
+        'listenRead',
       ]);
       expect(resolved.first, Win7WindowKind.mine);
-      expect(resolved[1], Win7WindowKind.audio);
+      expect(resolved[1], Win7WindowKind.listenRead);
       expect(resolved.length, win7DesktopIcons.length);
     });
 
-    test('不在桌面列表里的种类丢弃', () {
+    test('不在桌面列表里的种类丢弃、在表里的保留', () {
       final resolved = resolveDesktopIconOrder(['drama', 'multimedia', 'mine']);
       expect(resolved, isNot(contains(Win7WindowKind.drama)));
-      expect(resolved, isNot(contains(Win7WindowKind.multimedia)));
-      expect(resolved.first, Win7WindowKind.mine);
+      expect(resolved[0], Win7WindowKind.multimedia);
+      expect(resolved[1], Win7WindowKind.mine);
     });
 
     test('缺的种类按默认相对顺序追加到末尾', () {
@@ -58,12 +59,13 @@ void main() {
         Win7WindowKind.library,
       ]);
       expect(resolved.sublist(2), [
-        Win7WindowKind.audio,
-        Win7WindowKind.novel,
+        Win7WindowKind.listenRead,
         Win7WindowKind.live,
         Win7WindowKind.miniApp,
         Win7WindowKind.actress,
         Win7WindowKind.game,
+        Win7WindowKind.multimedia,
+        Win7WindowKind.kof,
       ]);
     });
   });
@@ -77,9 +79,10 @@ void main() {
         Win7WindowKind.game,
         Win7WindowKind.library,
         Win7WindowKind.live,
-        Win7WindowKind.audio,
-        Win7WindowKind.novel,
+        Win7WindowKind.listenRead,
         Win7WindowKind.miniApp,
+        Win7WindowKind.multimedia,
+        Win7WindowKind.kof,
       ];
       await saveDesktopIconOrder(order);
       expect(await loadDesktopIconOrder(), order);
@@ -96,7 +99,7 @@ void main() {
       WidgetTester tester, {
       ValueChanged<Win7WindowKind>? onIconTap,
     }) async {
-      // 手机尺寸视口：8 个图标在默认 600 高视口里排不下。
+      // 手机尺寸视口：9 个图标在默认 600 高视口里排不下。
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -120,8 +123,7 @@ void main() {
           'actress',
           'library',
           'live',
-          'audio',
-          'novel',
+          'listenRead',
           'miniApp',
         ],
       });
@@ -142,20 +144,22 @@ void main() {
     testWidgets('长按拖拽换位置并存盘', (tester) async {
       SharedPreferences.setMockInitialValues({});
       await pumpDesktop(tester);
-      // “游戏”在最下，拖到“听书”身上：应挪到听书上面。
+      // “游戏”拖到“听读”身上：应挪到听读上面。
       final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(const ValueKey('win7-desktop-icon-game'))),
       );
       await tester.pump(const Duration(milliseconds: 600));
       await gesture.moveTo(
-        tester.getCenter(find.byKey(const ValueKey('win7-desktop-icon-audio'))),
+        tester.getCenter(
+          find.byKey(const ValueKey('win7-desktop-icon-listenRead')),
+        ),
       );
       await tester.pump();
       await gesture.up();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
-      expect(top(tester, 'game'), lessThan(top(tester, 'audio')));
-      expect(top(tester, 'audio'), lessThan(top(tester, 'novel')));
+      expect(top(tester, 'game'), lessThan(top(tester, 'listenRead')));
+      expect(top(tester, 'listenRead'), lessThan(top(tester, 'library')));
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getStringList(desktopIconOrderKey)?[1], 'game');
     });
@@ -166,18 +170,19 @@ void main() {
       expect(win7DesktopIcons.first, Win7WindowKind.mine);
       expect(win7DesktopIcons, [
         Win7WindowKind.mine,
-        Win7WindowKind.audio,
-        Win7WindowKind.novel,
+        Win7WindowKind.listenRead,
         Win7WindowKind.library,
         Win7WindowKind.live,
         Win7WindowKind.miniApp,
         Win7WindowKind.actress,
         Win7WindowKind.game,
+        Win7WindowKind.multimedia,
+        Win7WindowKind.kof,
       ]);
     });
 
     test('splitDesktopIconsIntoColumns：不足一列只有一列', () {
-      final order = [Win7WindowKind.mine, Win7WindowKind.audio];
+      final order = [Win7WindowKind.mine, Win7WindowKind.listenRead];
       expect(splitDesktopIconsIntoColumns(order, 8), [order]);
     });
 
@@ -186,27 +191,31 @@ void main() {
       expect(columns.length, 3);
       expect(columns[0], [
         Win7WindowKind.mine,
-        Win7WindowKind.audio,
-        Win7WindowKind.novel,
+        Win7WindowKind.listenRead,
+        Win7WindowKind.library,
       ]);
       expect(columns[1], [
-        Win7WindowKind.library,
         Win7WindowKind.live,
         Win7WindowKind.miniApp,
+        Win7WindowKind.actress,
       ]);
-      expect(columns[2], [Win7WindowKind.actress, Win7WindowKind.game]);
+      expect(columns[2], [
+        Win7WindowKind.game,
+        Win7WindowKind.multimedia,
+        Win7WindowKind.kof,
+      ]);
     });
 
     test('splitDesktopIconsIntoColumns：空顺序与过小每列数', () {
       expect(splitDesktopIconsIntoColumns([], 3), isEmpty);
       expect(
         splitDesktopIconsIntoColumns(
-          [Win7WindowKind.mine, Win7WindowKind.audio],
+          [Win7WindowKind.mine, Win7WindowKind.listenRead],
           0,
         ),
         [
           [Win7WindowKind.mine],
-          [Win7WindowKind.audio],
+          [Win7WindowKind.listenRead],
         ],
       );
     });
@@ -222,8 +231,10 @@ void main() {
       WidgetTester tester, {
       required double height,
     }) async {
-      // 手机尺寸视口：SizedBox 的高度不能超过视口高，否则会被钳制。
-      tester.view.physicalSize = const Size(390, 844);
+      // 手机尺寸视口：SizedBox 的高度不能超过视口高，否则会被钳制；
+      // 要求高于 844 时视口跟着长高（只影响本用例的布局约束）。
+      final viewportHeight = height > 844 ? height : 844.0;
+      tester.view.physicalSize = Size(390, viewportHeight);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -275,7 +286,7 @@ void main() {
     });
 
     testWidgets('高度足够时只有一列：顺序往下排、纵坐标递增', (tester) async {
-      await pumpColumn(tester, height: 800);
+      await pumpColumn(tester, height: 1100);
       for (var i = 1; i < win7DesktopIcons.length; i++) {
         expect(
           pos(tester, win7DesktopIcons[i].name).dy,

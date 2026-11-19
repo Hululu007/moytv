@@ -82,13 +82,17 @@ bool _isPublicSiteAddress(String address) {
 /// 字段取第一个像站点首页的地址再派生。ext 缺失、不是 JSON、没有
 /// 可用地址时返回空——调用方一律回落图案标。
 ///
-/// 站 id 形如 `jar:<配置>:<key>`；key 与 [zakatvBuiltinSites] 对上
-/// 才查得到，其余 id 直接返回空。
+/// 站 id 形如 `jar:<配置>:<key>`；key 与内置 jar 登记表（zakatv /
+/// missav30 / one 三张表）对上才查得到，其余 id 直接返回空。
 List<String> jarSiteIconCandidates(String siteId) {
   final key = siteId.contains(':') ? siteId.split(':').last : siteId;
   if (key.isEmpty) return const [];
   ZakatvBuiltinSite? match;
-  for (final site in zakatvBuiltinSites) {
+  for (final site in [
+    ...zakatvBuiltinSites,
+    ...missav30BuiltinSites,
+    ...oneBuiltinSites,
+  ]) {
     if (site.key == key) {
       match = site;
       break;

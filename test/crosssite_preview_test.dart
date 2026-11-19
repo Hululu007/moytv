@@ -127,34 +127,45 @@ Future<void> _dragSheetTo(WidgetTester tester, Finder target) async {
 /// 保持一致（选线区从 store.visibleSources 取候选站）。
 void _registerProbeSpecs() {
   const wanted = {'zakav01', 'ZakaMissav', 'ZakaJable'};
-  for (final builtin in zakatvBuiltinSites) {
-    if (!wanted.contains(builtin.key)) continue;
-    final siteId = JarSiteSpec.siteIdFor(zakatvJarId, builtin.key);
-    JarBridge.register(
-      JarSiteSpec(
-        siteId: siteId,
-        configId: zakatvJarId,
-        name: builtin.name,
-        className: builtin.className,
-        jarUrl: '',
-        jarMd5: zakatvJarMd5,
-        ext: builtin.ext,
-      ),
-    );
-    SourceSite.importedSites[siteId] = SourceSite(
-      siteId,
-      builtin.name,
-      'ZakaTV jar 内置 · ${builtin.className}',
-      section: builtin.section,
-      origin: SourceSite.originImport,
-      importType: 'jar',
-    );
+  const table = [
+    (zakatvJarId, zakatvBuiltinSites),
+    (missav30JarId, missav30BuiltinSites),
+  ];
+  for (final (jarId, sites) in table) {
+    for (final builtin in sites) {
+      if (!wanted.contains(builtin.key)) continue;
+      final siteId = JarSiteSpec.siteIdFor(jarId, builtin.key);
+      final jarMd5 = jarId == missav30JarId ? missav30JarMd5 : zakatvJarMd5;
+      JarBridge.register(
+        JarSiteSpec(
+          siteId: siteId,
+          configId: jarId,
+          name: builtin.name,
+          className: builtin.className,
+          jarUrl: '',
+          jarMd5: jarMd5,
+          ext: builtin.ext,
+        ),
+      );
+      SourceSite.importedSites[siteId] = SourceSite(
+        siteId,
+        builtin.name,
+        'ZakaTV jar 内置 · ${builtin.className}',
+        section: builtin.section,
+        origin: SourceSite.originImport,
+        importType: 'jar',
+      );
+    }
   }
 }
 
 void _unregisterProbeSpecs() {
-  for (final key in ['zakav01', 'ZakaMissav', 'ZakaJable']) {
-    final siteId = JarSiteSpec.siteIdFor(zakatvJarId, key);
+  for (final (jarId, key) in [
+    (zakatvJarId, 'zakav01'),
+    (missav30JarId, 'ZakaMissav'),
+    (zakatvJarId, 'ZakaJable'),
+  ]) {
+    final siteId = JarSiteSpec.siteIdFor(jarId, key);
     JarBridge.unregister(siteId);
     SourceSite.importedSites.remove(siteId);
   }
@@ -373,10 +384,10 @@ void main() {
   // 懒查后：MissAV/Jable 点过懒查后也探出版本与线路。
   testWidgets('预览 跨站选线 懒查后', (tester) async {
     final repository = _repositoryWithAv01()
-      ..searchResults['jar:zakatv:ZakaMissav'] = [
+      ..searchResults['jar:missav30:ZakaMissav'] = [
         const Drama(
           id: 'hmn-927',
-          source: 'jar:zakatv:ZakaMissav',
+          source: 'jar:missav30:ZakaMissav',
           title: 'hmn-927',
         ),
       ]
@@ -405,11 +416,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         await _dragSheetTo(
           tester,
-          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
+          find.byKey(const ValueKey('crosssite-rowtap-jar:missav30:ZakaMissav')),
         );
         await tester.pump();
         await tester.tap(
-          find.byKey(const ValueKey('crosssite-rowtap-jar:zakatv:ZakaMissav')),
+          find.byKey(const ValueKey('crosssite-rowtap-jar:missav30:ZakaMissav')),
         );
         await tester.pump(const Duration(milliseconds: 100));
         await _dragSheetTo(

@@ -845,6 +845,30 @@
       "name": "柚子爱看",
       "api": "csp_YzAikan",
       "ext": ""
+    },
+    {
+      "key": "One",
+      "name": "🔞一点播",
+      "api": "csp_One",
+      "ext": ""
+    },
+    {
+      "key": "EroShort",
+      "name": "🔞EroShort",
+      "api": "csp_EroShort",
+      "ext": ""
+    },
+    {
+      "key": "Xhs",
+      "name": "Xhs",
+      "api": "csp_Xhs",
+      "ext": ""
+    },
+    {
+      "key": "go_tingshu",
+      "name": "听书",
+      "api": "csp_TingShu",
+      "ext": "{}"
     }
   ]
 }

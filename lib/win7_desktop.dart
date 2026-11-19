@@ -3,6 +3,7 @@ import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'site_icon.dart';
@@ -16,62 +17,67 @@ import 'site_icon.dart';
 /// 由 home_screen 里的窗口管理器管（见 _win7Windows）。
 
 /// Win7 窗口种类：一种区一个窗口位（同种区只开一个窗口，再点
-/// 只是切到前台，不重复开）。
+/// 只是切到前台，不重复开）。听书与阅读已并为一个“听读”窗口
+/// （用户 2026-11-18 令）：窗口内听书/阅读胶囊切换子区，不再
+/// 各开一个窗口；旧版分开的 audio/novel 两个种类已取消，存下来
+/// 的旧顺序名字由 [resolveDesktopIconOrder] 映射到听读。
 enum Win7WindowKind {
   library,
   drama,
   live,
-  audio,
-  novel,
+  listenRead,
   miniApp,
   multimedia,
   mine,
   actress,
-  game;
+  game,
+  kof;
 
   /// 窗口标题栏与任务栏条目上显示的区名（取桌面图标叫法）。
   String get title => switch (this) {
     Win7WindowKind.library => '片库',
     Win7WindowKind.drama => '短剧',
     Win7WindowKind.live => '直播',
-    Win7WindowKind.audio => '听书',
-    Win7WindowKind.novel => '阅读',
+    Win7WindowKind.listenRead => '听读',
     Win7WindowKind.miniApp => '小程序',
-    Win7WindowKind.multimedia => '我的电脑',
+    Win7WindowKind.multimedia => '多媒体',
     Win7WindowKind.mine => '我的电脑',
     Win7WindowKind.actress => '演员库',
     Win7WindowKind.game => '红警2',
+    Win7WindowKind.kof => '拳皇97',
   };
 
   IconData get icon => switch (this) {
     Win7WindowKind.library => Icons.video_library,
     Win7WindowKind.drama => Icons.play_circle,
     Win7WindowKind.live => Icons.live_tv,
-    Win7WindowKind.audio => Icons.headphones,
-    Win7WindowKind.novel => Icons.menu_book,
+    // 与底部“听读”标签同一字形（书 + 耳机）。
+    Win7WindowKind.listenRead => LucideIcons.bookHeadphones,
     Win7WindowKind.miniApp => Icons.apps,
     Win7WindowKind.multimedia => Icons.storage,
     Win7WindowKind.mine => Icons.desktop_windows,
     Win7WindowKind.actress => Icons.people_alt_outlined,
     Win7WindowKind.game => Icons.sports_esports,
+    Win7WindowKind.kof => Icons.sports_esports,
   };
 
   /// 桌面图标底块的渐变色（一深一浅，左上到右下）：成套彩色，
   /// Win7/XP 桌面共用同一套；任务栏与标题栏的小图标仍用白色，
-  /// 不走这套配色。mine（我的电脑）与 multimedia（多媒体窗）
-  /// 标题同名，图标与配色刻意区分：mine 是显示器 + XP 蓝，
-  /// multimedia 是硬盘 + slate 灰，任务栏上能分清。
+  /// 不走这套配色。mine（我的电脑）与 multimedia（多媒体）图标
+  /// 与配色刻意区分：mine 是显示器 + XP 蓝，multimedia 是硬盘
+  /// + slate 灰，桌面与任务栏上能分清。
   List<Color> get iconGradient => switch (this) {
     Win7WindowKind.library => const [Color(0xFF6366F1), Color(0xFF4338CA)],
     Win7WindowKind.drama => const [Color(0xFFA855F7), Color(0xFF7E22CE)],
     Win7WindowKind.live => const [Color(0xFFF25022), Color(0xFFC2410C)],
-    Win7WindowKind.audio => const [Color(0xFFF59E0B), Color(0xFFD97706)],
-    Win7WindowKind.novel => const [Color(0xFF22A06B), Color(0xFF15803D)],
+    // 听读：听书琥珀到阅读绿的渐变，两边各取一头，合并不丢色。
+    Win7WindowKind.listenRead => const [Color(0xFFF59E0B), Color(0xFF15803D)],
     Win7WindowKind.miniApp => const [Color(0xFF06B6D4), Color(0xFF0284C7)],
     Win7WindowKind.multimedia => const [Color(0xFF64748B), Color(0xFF475569)],
     Win7WindowKind.mine => const [Color(0xFF3A93FF), Color(0xFF0058E6)],
     Win7WindowKind.actress => const [Color(0xFFEC4899), Color(0xFFDB2777)],
     Win7WindowKind.game => const [Color(0xFFB91C1C), Color(0xFF7F1D1D)],
+    Win7WindowKind.kof => const [Color(0xFF14B8A6), Color(0xFF0F766E)],
   };
 }
 
@@ -114,23 +120,26 @@ class DesktopIconBadge extends StatelessWidget {
   }
 }
 
-/// 桌面图标默认顺序与内容：8 个。短剧、多媒体没有桌面图标、
-/// 只在开始菜单树里（多媒体窗口标题也叫“我的电脑”，与桌面
-/// 顶上的“我的电脑”图标是两个窗口，图标与配色不同）。顺序口径
-/// （用户 2026-11-18 令）：我的电脑置顶排第一位，其余按听书、
-/// 阅读、片库、直播、小程序、女优库、游戏的相对顺序往下排。
-/// 用户长按拖拽换过顺序后，以存下来的顺序为准（见
-/// [loadDesktopIconOrder]），这份默认顺序只作没存过时的回落；
-/// 以前拖过的手机保留自己拖的顺序，不自动改（可长按再拖回来）。
+/// 桌面图标默认顺序与内容：9 个。短剧没有桌面图标、只在开始
+/// 菜单树里；多媒体有桌面图标（排末尾），窗口标题叫“多媒体”，
+/// 不再与桌面顶上的“我的电脑”图标撞名。顺序口径（用户
+/// 2026-11-18 令）：我的电脑置顶排第一位，其余按听读、片库、
+/// 直播、小程序、女优库、游戏、多媒体的相对顺序往下排（听书与
+/// 阅读已并为一个“听读”图标，占原来听书的位置）。用户长按拖拽
+/// 换过顺序后，以存下来的顺序为准（见 [loadDesktopIconOrder]），
+/// 这份默认顺序只作没存过时的回落；以前拖过的手机保留自己拖的
+/// 顺序，不自动改（可长按再拖回来），旧顺序里的听书/阅读两键由
+/// [resolveDesktopIconOrder] 并成一个听读、占先出现者的位置。
 const List<Win7WindowKind> win7DesktopIcons = [
   Win7WindowKind.mine,
-  Win7WindowKind.audio,
-  Win7WindowKind.novel,
+  Win7WindowKind.listenRead,
   Win7WindowKind.library,
   Win7WindowKind.live,
   Win7WindowKind.miniApp,
   Win7WindowKind.actress,
   Win7WindowKind.game,
+  Win7WindowKind.multimedia,
+  Win7WindowKind.kof,
 ];
 
 /// 桌面图标顺序存 SharedPreferences 的键（Win7/XP 共用同一份顺序）。
@@ -139,15 +148,22 @@ const String desktopIconOrderKey = 'moyi_desktop_icon_order';
 /// 把存下来的名字表解析成图标顺序：未知名字、重复名字、已不在
 /// 桌面列表里的种类一律丢弃；默认列表里有但存表里没有的种类
 /// （新加的图标）按默认相对顺序追加到末尾。空/没存过时回默认顺序。
+/// 旧版两个图标名字的迁移：存表里的 'audio'（听书）与 'novel'
+/// （阅读）都映射成听读图标，先出现的那处占位、另一处去重丢弃，
+/// 其余图标的相对顺序一律不动，不重置用户拖过的顺序。
 List<Win7WindowKind> resolveDesktopIconOrder(List<String>? stored) {
   final resolved = <Win7WindowKind>[];
   if (stored != null) {
     for (final name in stored) {
       Win7WindowKind? match;
-      for (final kind in Win7WindowKind.values) {
-        if (kind.name == name) {
-          match = kind;
-          break;
+      if (name == 'audio' || name == 'novel') {
+        match = Win7WindowKind.listenRead;
+      } else {
+        for (final kind in Win7WindowKind.values) {
+          if (kind.name == name) {
+            match = kind;
+            break;
+          }
         }
       }
       if (match == null) continue;
@@ -184,14 +200,19 @@ Future<void> saveDesktopIconOrder(List<Win7WindowKind> order) async {
 }
 
 /// 单个桌面图标项的高度：图标 48 + 图标与标题间距 4 + 标题行高
-/// + 底部留白 20。标题行高用 TextPainter 按两边标题同一字号
-/// （13 号）与当前文字缩放实测，不写死行高值；字号或缩放变了，
-/// 每列个数跟着变，图标不会被任务栏盖住。行高不低于字号本身：
-/// 字体未就绪的首帧实测会偏小，下限挡住这种低估，避免首帧
-/// 多排一项溢出（真机字体行高本就大于字号，下限不生效）。
+/// + 底部留白 20。标题行高用 TextPainter 按真实标题的样式实测：
+/// ambient DefaultTextStyle 与 13 号字合并（与图标标题的 Text
+/// 同一字体、同一字号），再按当前文字缩放算；只按裸 13 号字测
+/// 会低估行高（实测 13，真机渲染 19），一列个数算多、末尾图标
+/// 压进任务栏。行高不低于字号本身：字体未就绪的首帧实测会偏
+/// 小，下限挡住这种低估，避免首帧多排一项溢出（真机字体行高
+/// 本就大于字号，下限不生效）。
 double desktopIconItemHeight(BuildContext context) {
+  final style = DefaultTextStyle.of(context).style.merge(
+    const TextStyle(fontSize: 13),
+  );
   final painter = TextPainter(
-    text: const TextSpan(text: '标题', style: TextStyle(fontSize: 13)),
+    text: TextSpan(text: '标题', style: style),
     textDirection: TextDirection.ltr,
     textScaler: MediaQuery.textScalerOf(context),
   )..layout();
@@ -554,8 +575,9 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
 
   Widget _item(Win7WindowKind kind, {required bool hovered}) {
     return Padding(
-      // 8 个图标竖排：行距 20，844 高视口 + 底部安全边距里
-      // 第 8 个图标的标题刚好不被任务栏盖住（24 时标题被盖）。
+      // 图标竖排：行距 20，844 高视口 + 底部安全边距里一列放
+      // 8 个，第 9 个起换第二列；一列 8 个时第 8 个图标的标题
+      // 刚好不被任务栏盖住（24 时标题被盖）。
       padding: const EdgeInsets.only(bottom: 20),
       child: Container(
         decoration: hovered
@@ -654,6 +676,10 @@ class Win7Desktop extends StatelessWidget {
           Positioned(
             top: 40,
             left: 16,
+            // bottom 必须给：不给时 Stack 给图标列的高度约束是
+            // 无限，满列换列算不出每列个数、图标会一直往下排
+            // 进任务栏（第 9 个图标实测压在任务栏下点不到）。
+            bottom: 0,
             child: DesktopIconColumn(
               keyPrefix: 'win7-desktop-icon',
               onIconTap: onIconTap,
@@ -1018,6 +1044,125 @@ class _Win7StartMenuState extends State<Win7StartMenu> {
 
 /// 窗口框：Win7 玻璃蓝标题栏（区名 + 右上角最小化/关闭）+ 内容区。
 /// 标题栏按钮是 Win7 风格的半透明小方钮，关闭钮带红底。
+/// 桌面窗口标题栏自动隐藏壳（Win7 / XP 两套窗口框共用）。
+///
+/// 行为（用户 2026-11-18 令）：窗口内 3 秒无操作收起标题栏，内容区
+/// 顶到窗口顶边；点一下屏幕标题栏放下来，3 秒无操作再收起；收起时
+/// 的点按只放下标题栏、不触发底下内容；任务栏在壳外，不受影响。
+///
+/// 无操作计时：窗口内的点按、拖动、滚轮都算操作（标题栏自身按钮的
+/// 点按也算），任一操作都重新计时。窗口退到后台（[active] 为假）
+/// 时停掉计时器，回到前台时标题栏重新放下并重新计时；窗口销毁时
+/// 计时器取消，不泄漏。
+class WindowTitleBarAutoHide extends StatefulWidget {
+  const WindowTitleBarAutoHide({
+    super.key,
+    required this.titleBar,
+    required this.child,
+    this.active = true,
+  });
+
+  /// 标题栏（32px 高那条）；收起时整条从树里拿掉，内容区顶满。
+  final Widget titleBar;
+
+  /// 窗口内容体。
+  final Widget child;
+
+  /// 窗口是否在前台。后台窗口（Offstage 藏起）不计时。
+  final bool active;
+
+  @override
+  State<WindowTitleBarAutoHide> createState() => _WindowTitleBarAutoHideState();
+}
+
+class _WindowTitleBarAutoHideState extends State<WindowTitleBarAutoHide> {
+  /// 无操作多久收起标题栏（用户令：3 秒）。
+  static const _hideAfter = Duration(seconds: 3);
+
+  bool _titleVisible = true;
+  Timer? _hideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _restartTimer();
+  }
+
+  @override
+  void didUpdateWidget(WindowTitleBarAutoHide oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active == oldWidget.active) return;
+    if (widget.active) {
+      // 回到前台：标题栏放下，重新计时。
+      if (!_titleVisible) _titleVisible = true;
+      _restartTimer();
+    } else {
+      _hideTimer?.cancel();
+      _hideTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _restartTimer() {
+    _hideTimer?.cancel();
+    if (!widget.active) {
+      _hideTimer = null;
+      return;
+    }
+    _hideTimer = Timer(_hideAfter, () {
+      if (!mounted) return;
+      setState(() => _titleVisible = false);
+    });
+  }
+
+  /// 窗口内有操作：标题栏放下（已放下则不动），重新计时。
+  void _noteActivity() {
+    _restartTimer();
+    if (!_titleVisible) setState(() => _titleVisible = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      // 点按、拖动、滚轮都算操作：任一活动都重新计时。Listener
+      // 不拦手势，底下的按钮/列表照常收到事件。
+      onPointerDown: (_) => _noteActivity(),
+      onPointerMove: (_) => _noteActivity(),
+      onPointerSignal: (_) => _noteActivity(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          AbsorbPointer(
+            // 标题栏收起时整窗不接事件：收起时的点按只放下标题栏，
+            // 绝不点透到底下内容。
+            absorbing: !_titleVisible,
+            child: Column(
+              children: [
+                if (_titleVisible) widget.titleBar,
+                Expanded(child: widget.child),
+              ],
+            ),
+          ),
+          if (!_titleVisible)
+            Positioned.fill(
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (_) => _noteActivity(),
+                child: const SizedBox.expand(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class Win7WindowFrame extends StatelessWidget {
   const Win7WindowFrame({
     super.key,
@@ -1025,6 +1170,7 @@ class Win7WindowFrame extends StatelessWidget {
     required this.onMinimize,
     required this.onClose,
     required this.child,
+    this.active = true,
   });
 
   final Win7WindowKind kind;
@@ -1032,74 +1178,76 @@ class Win7WindowFrame extends StatelessWidget {
   final VoidCallback onClose;
   final Widget child;
 
+  /// 窗口是否在前台（见 [WindowTitleBarAutoHide.active]）。
+  final bool active;
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          height: 32,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF4A90D9), Color(0xFF1E5AA8)],
-            ),
-          ),
-          child: Row(
-            children: [
-              const SizedBox(width: 12),
-              Icon(kind.icon, size: 18, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  kind.title,
-                  key: const ValueKey('win7-window-title'),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              InkWell(
-                key: const ValueKey('win7-window-minimize'),
-                onTap: onMinimize,
-                child: Container(
-                  width: 40,
-                  height: 28,
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(
-                    Icons.minimize,
-                    size: 16,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              InkWell(
-                key: const ValueKey('win7-window-close'),
-                onTap: onClose,
-                child: Container(
-                  width: 40,
-                  height: 28,
-                  margin: const EdgeInsets.only(right: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE81123).withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.close, size: 16, color: Colors.white),
-                ),
-              ),
-            ],
+    return WindowTitleBarAutoHide(
+      active: active,
+      titleBar: Container(
+        height: 32,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF4A90D9), Color(0xFF1E5AA8)],
           ),
         ),
-        Expanded(child: child),
-      ],
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            Icon(kind.icon, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                kind.title,
+                key: const ValueKey('win7-window-title'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            InkWell(
+              key: const ValueKey('win7-window-minimize'),
+              onTap: onMinimize,
+              child: Container(
+                width: 40,
+                height: 28,
+                margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Icon(
+                  Icons.minimize,
+                  size: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            InkWell(
+              key: const ValueKey('win7-window-close'),
+              onTap: onClose,
+              child: Container(
+                width: 40,
+                height: 28,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE81123).withValues(alpha: 0.85),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Icon(Icons.close, size: 16, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+      child: child,
     );
   }
 }

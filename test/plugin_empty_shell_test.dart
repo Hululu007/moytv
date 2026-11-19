@@ -19,8 +19,8 @@ void main() {
     if (emptyShellBuild) {
       expect(plugins, isEmpty);
     } else {
-      // 1 个 jar 插件 + 45 个 py 插件（jinguo 一文件双站并为一组）。
-      expect(plugins.length, 46);
+      // 3 个 jar 插件（zakatv + 一点播独立 jar + MissAV v30 独立 jar）+ 121 个 py 插件。
+      expect(plugins.length, 124);
       expect(plugins.first.id, PluginManager.jarPluginId);
     }
   });

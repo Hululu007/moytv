@@ -242,6 +242,7 @@ class SniffWebViewPage extends StatefulWidget {
     this.initialCandidates = const [],
     this.autoPlay = false,
     this.embedded = false,
+    this.onLoadFailed,
   });
 
   final String pageUrl;
@@ -250,6 +251,11 @@ class SniffWebViewPage extends StatefulWidget {
   final ValueChanged<String> onMediaFound;
   final bool autoPlay;
   final bool embedded;
+
+  /// 页面本身加载失败时回调（主框架 HTTP 错误如 404、主框架资源
+  /// 错误）：调用方据此关嗅探、走换线/报错，不再把错误页挂着。
+  /// 子资源失败不报；整个页面生命周期内只报一次。不传则不报。
+  final void Function(String message)? onLoadFailed;
 
   @override
   State<SniffWebViewPage> createState() => _SniffWebViewPageState();
@@ -261,8 +267,28 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
   Timer? _timer;
   bool _polling = false;
   bool _autoPlayed = false;
+  bool _loadFailedReported = false;
 
   bool get _supported => Platform.isAndroid || Platform.isIOS;
+
+  /// 只报一次加载失败：已报过、或已嗅到媒体（页面已活）时不再报。
+  void _reportLoadFailed(String message) {
+    if (_loadFailedReported || _service.candidates.isNotEmpty) return;
+    _loadFailedReported = true;
+    widget.onLoadFailed?.call(message);
+  }
+
+  /// 该 URL 是不是正在加载的页面本身（忽略查询串与锚点）：
+  /// Android 的 onHttpError 不区分主框架与子资源，只认页面本身
+  /// 的 URL 才报，子资源 404 不误报。
+  bool _isPageUrl(Uri? uri) {
+    if (uri == null) return false;
+    final page = Uri.tryParse(widget.pageUrl);
+    if (page == null) return false;
+    return uri.scheme == page.scheme &&
+        uri.host == page.host &&
+        uri.path == page.path;
+  }
 
   @override
   void initState() {
@@ -274,6 +300,26 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (_) => unawaited(_injectAndPoll()),
+          onHttpError: (error) {
+            // response.uri 在 Android 上为空，以 request.uri 为准。
+            final uri = error.request?.uri ?? error.response?.uri;
+            if (_isPageUrl(uri)) {
+              _reportLoadFailed(
+                'HTTP ${error.response?.statusCode ?? ''}'.trim(),
+              );
+            }
+          },
+          onWebResourceError: (error) {
+            // 只报主框架错误（isForMainFrame 为 null 时按主框架算，
+            // 子资源错误平台都会明确标 false）。
+            if (error.isForMainFrame != false) {
+              _reportLoadFailed(
+                error.description.isNotEmpty
+                    ? error.description
+                    : '网页加载失败',
+              );
+            }
+          },
           onNavigationRequest: (request) {
             if (MediaSniffer.isMediaUrl(request.url)) {
               final added = _service.add(request.url);

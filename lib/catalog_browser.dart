@@ -202,6 +202,10 @@ class CatalogBrowser {
     final session = _sessions.putIfAbsent(key, _CatalogSession.new);
     final generation = ++session.generation;
     final failures = <String, String>{};
+    // 现抓直接抛错的站源（区别于“成功返回但带 warning”）：全部站源
+    // 现抓都抛错时本次加载算失败、必须抛给调用方，哪怕缓存占位已
+    // 把快照填满——否则调用方会把旧缓存当成新结果、不再补拉。
+    final thrown = <String>{};
     final sourceOrder = requests.keys.toList();
     for (final source in sourceOrder) {
       session.entries.putIfAbsent(source, _CatalogEntry.new);
@@ -345,16 +349,22 @@ class CatalogBrowser {
         } else {
           failures.remove(source);
         }
+        thrown.remove(source);
       } catch (error) {
         if (generation != session.generation) return;
         entry.nextPage = page;
         entry.hasMore = query.isEmpty || SourceSite.byId(source).pagedSearch;
         entry.fresh = false;
         failures[source] = error.toString();
+        thrown.add(source);
       }
     });
     final result = snapshot();
-    if (result.items.isEmpty && failures.isNotEmpty) {
+    // 全部站源现抓都抛错即加载失败：快照非空（缓存占位）时同样抛，
+    // 调用方凭此区分“旧缓存占位”与“新内容已到”，决定是否补拉；
+    // 部分站源成功时照常返回合并快照、不抛。
+    if (thrown.isNotEmpty &&
+        sourceOrder.every((source) => thrown.contains(source))) {
       throw AppFailure(result.warning);
     }
     return result;

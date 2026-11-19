@@ -20,6 +20,9 @@ class ActressPlayCandidate {
 
 /// 静默换线播放链：点卡后按番号把各站候选排成一条链，挨个试。
 ///
+/// - 兜底波次先探：[actressFallbackSiteIds] 里的站（MJV 系 + 18AV
+///   双生站）按表序先探一波，命中即成链、不等其余站；无果才探
+///   eager 波次与懒查波次；
 /// - 候选顺序 = 跨站探活计划顺序（优先序表 → 🔞站 → 其余站），确定性
 ///   优先，不按延迟排；懒查计划（慢站/盾站/超名额）只在 eager 波次
 ///   无果或候选全部预检失败后才探；
@@ -56,14 +59,30 @@ class ActressPlayChain {
       sites: candidateSites ?? store.visibleSources,
       siteVisible: store.siteVisible,
     );
-    _pendingEager = [
-      for (final plan in plans)
-        if (!plan.provider.lazy && plan.siteId != null) plan,
-    ];
-    _pendingLazy = [
-      for (final plan in plans)
-        if (plan.provider.lazy && plan.siteId != null) plan,
-    ];
+    final fallbackOrder = <String, int>{
+      for (var i = 0; i < actressFallbackSiteIds.length; i++)
+        actressFallbackSiteIds[i]: i,
+    };
+    final fallbackPlans = <CrossSiteRowPlan>[];
+    final eagerPlans = <CrossSiteRowPlan>[];
+    final lazyPlans = <CrossSiteRowPlan>[];
+    for (final plan in plans) {
+      final siteId = plan.siteId;
+      if (siteId == null) continue;
+      if (fallbackOrder.containsKey(siteId)) {
+        fallbackPlans.add(plan);
+      } else if (!plan.provider.lazy) {
+        eagerPlans.add(plan);
+      } else {
+        lazyPlans.add(plan);
+      }
+    }
+    fallbackPlans.sort(
+      (a, b) => fallbackOrder[a.siteId]! - fallbackOrder[b.siteId]!,
+    );
+    _pendingFallback = fallbackPlans;
+    _pendingEager = eagerPlans;
+    _pendingLazy = lazyPlans;
   }
 
   final AppRepository repository;
@@ -81,12 +100,14 @@ class ActressPlayChain {
 
   final _candidates = <ActressPlayCandidate>[];
   var _next = 0;
+  late List<CrossSiteRowPlan> _pendingFallback;
   late List<CrossSiteRowPlan> _pendingEager;
   late List<CrossSiteRowPlan> _pendingLazy;
   var _titleWaveDone = false;
 
   bool get hasMore =>
       _next < _candidates.length ||
+      _pendingFallback.isNotEmpty ||
       _pendingEager.isNotEmpty ||
       _pendingLazy.isNotEmpty ||
       (!_titleWaveDone && avId.isEmpty && titleQuery.isNotEmpty);
@@ -108,6 +129,11 @@ class ActressPlayChain {
         continue;
       }
       if (avId.isNotEmpty) {
+        if (_pendingFallback.isNotEmpty) {
+          final found = await _probeWave(_pendingFallback, shouldStop);
+          _candidates.addAll(found);
+          if (found.isNotEmpty) continue;
+        }
         if (_pendingEager.isNotEmpty) {
           final found = await _probeWave(_pendingEager, shouldStop);
           _candidates.addAll(found);

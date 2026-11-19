@@ -33,7 +33,7 @@ python3 scripts/package_release.py --platform android --abi arm64-v8a [--all-sou
 
 | 组件 | 版本 |
 | --- | --- |
-| Flutter | 3.47.0（`stable`） |
+| Flutter | 3.50.0（`stable`） |
 | Dart | >= 3.13.0 |
 | Go | 见 `native/go.mod` |
 | JDK | 21（AGP 9.1 / Kotlin 2.4 要求 17+） |

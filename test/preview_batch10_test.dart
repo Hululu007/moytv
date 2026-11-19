@@ -254,7 +254,7 @@ void main() {
             title: 'HMN-927',
           ),
         ],
-        'jar:zakatv:ZakaMissav': [],
+        'jar:missav30:ZakaMissav': [],
         'py:demo': [],
       }
       ..searchDelays = {
@@ -323,7 +323,7 @@ void main() {
                 _videoSite('avdb', '🔞AVDB'),
                 _videoSite('memojav', '🔞MemoJav'),
                 _videoSite('jar:zakatv:zakav01', '🔞AV01'),
-                _videoSite('jar:zakatv:ZakaMissav', '🔞MissAV'),
+                _videoSite('jar:missav30:ZakaMissav', '🔞MissAV'),
                 _videoSite('jar:zakatv:ZakaJable', '🔞Jable'),
                 _videoSite('py:demo', '🔞示例站'),
               ],

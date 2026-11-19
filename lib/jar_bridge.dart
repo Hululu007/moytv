@@ -150,6 +150,11 @@ class JarBridge {
   /// 封面下载单文件上限：原先无上限 pipe 落盘，异常大响应会撑满磁盘。
   static const maxCoverBytes = 8 << 20;
 
+  /// 封面须走蜘蛛实例 localProxy 解密的 jar 站点 id 集合：这类蜘蛛的
+  /// 封面地址指向加密图床，只有蜘蛛自己的 localProxy 会拉取并解密。
+  /// 目前只有一点播（csp_One，图床字节经 AES 加密，直取无法解码）。
+  static const imageProxySiteIds = {'jar:one:One'};
+
   static final Map<String, JarSiteSpec> _specs = {};
   static final Map<String, String> _jarPaths = {};
   static final Map<String, Future<String>> _jarPathInflight = {};
@@ -701,6 +706,44 @@ class JarBridge {
     return 'http://127.0.0.1:$port/jarproxy?d=$encoded';
   }
 
+  static final _loopbackProxyUrlPattern = RegExp(
+    r'http://(?:127\.0\.0\.1|localhost):9978/proxy\?[^\s"<>]+',
+  );
+
+  /// 蜘蛛侧本地代理约定地址：部分 jar 蜘蛛（如 EroShort）直接吐
+  /// `http://127.0.0.1:9978/proxy?do=...` 形式的播放地址，而 9978 上壳内
+  /// 并无服务监听。命中该形态时返回查询参数（供改写成本地 /jarproxy
+  /// 地址），其余地址返回 null，原样不动。
+  static Map<String, String>? loopbackProxyParams(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    if (uri.scheme != 'http') return null;
+    if (uri.host != '127.0.0.1' && uri.host != 'localhost') return null;
+    if (uri.port != 9978) return null;
+    if (uri.path != '/proxy') return null;
+    return Map<String, String>.from(uri.queryParameters);
+  }
+
+  /// 改写正文里嵌的蜘蛛侧本地代理地址：代理返回的 m3u8 母播放列表里
+  /// 常带下一级 9978 地址（播放器直接取、壳拦不到），逐个改写成
+  /// 本站点的 /jarproxy 地址，播放器后续请求才能走到蜘蛛代理。
+  /// 无命中时原样返回同一字符串。
+  static String rewriteLoopbackProxyUrls(
+    String body, {
+    required int port,
+    required JarSiteSpec spec,
+  }) {
+    if (!body.contains('127.0.0.1:9978/proxy') &&
+        !body.contains('localhost:9978/proxy')) {
+      return body;
+    }
+    return body.replaceAllMapped(_loopbackProxyUrlPattern, (match) {
+      final params = loopbackProxyParams(match.group(0)!);
+      if (params == null) return match.group(0)!;
+      return jarProxyLocalUrl(port, jarProxyPayload(spec, params));
+    });
+  }
+
   static Future<Map<String, dynamic>> jarProxy(
     JarSiteSpec spec,
     Map<String, String> param,
@@ -709,9 +752,11 @@ class JarBridge {
     try {
       final result = await _channel
           .invokeMapMethod<String, dynamic>('jarProxy', {
+            'siteId': spec.siteId,
             'configId': spec.configId,
             'jarPath': jarPath,
             'className': spec.className,
+            'ext': spec.ext,
             'param': param,
           })
           .timeout(_effectiveTimeout);
@@ -744,10 +789,20 @@ class JarBridge {
     final directory = await getTemporaryDirectory();
     final cacheDir = Directory(path.join(directory.path, 'jar_covers'));
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
+    // 须走蜘蛛实例 localProxy 解密的站点：封面地址指向加密图床，直取
+    // 只能拿到密文。命中时封面经 jarProxy 取回解密后的字节再落盘，
+    // 绝不直取；缓存文件名加 px_ 前缀，与旧版直取落盘的密文文件彻底
+    // 隔离，绝不复用已污染的缓存。
+    final spec = specFor(drama.source);
+    final proxied = spec != null && imageProxySiteIds.contains(drama.source);
     final file = File(
-      path.join(cacheDir.path, '${_fnv1a(url)}${_extensionOf(url)}'),
+      path.join(
+        cacheDir.path,
+        '${proxied ? 'px_' : ''}${_fnv1a(url)}${_extensionOf(url)}',
+      ),
     );
     if (await file.exists() && await file.length() > 0) return file.path;
+    if (proxied) return _proxiedCoverFile(spec, url, file);
     // 原先无任何超时、无大小上限：卡住的封面请求永久挂起，异常大
     // 响应直接 pipe 落盘。现全程共用一个 30 秒截止期（测试缝可覆盖），
     // 正文先收进内存验上限再一次性落盘，失败不留残文件。
@@ -783,6 +838,31 @@ class JarBridge {
     } finally {
       client.close();
     }
+  }
+
+  /// 经蜘蛛实例 localProxy 取封面：只传 url 一个参数（不带 k——蜘蛛
+  /// 的签名校验只在 k 非空时生效，空 k 直接放行；签名密钥在蜘蛛内，
+  /// 壳侧绝不复现）。失败绝不回落直取：直取的密文落盘会污染缓存。
+  static Future<String> _proxiedCoverFile(
+    JarSiteSpec spec,
+    String url,
+    File file,
+  ) async {
+    final result = await jarProxy(spec, {'url': url});
+    late final List<int> bytes;
+    try {
+      bytes = base64Decode(result['bodyBase64'] as String? ?? '');
+    } on FormatException {
+      throw JarBridgeFailure('封面下载失败：本地代理返回异常');
+    }
+    if (bytes.isEmpty) {
+      throw JarBridgeFailure('封面下载失败：本地代理未返回内容');
+    }
+    if (bytes.length > maxCoverBytes) {
+      throw JarBridgeFailure('封面下载失败：文件过大');
+    }
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
   }
 
   /// 收正文并验上限，超限抛 JarBridgeFailure；供封面下载使用。

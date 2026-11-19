@@ -50,7 +50,7 @@ void main() {
       section: SourceSite.sectionVideo,
     ),
     SourceSite(
-      'jar:zakatv:ZakaMissav',
+      'jar:missav30:ZakaMissav',
       'MissAV',
       '',
       section: SourceSite.sectionVideo,

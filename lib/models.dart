@@ -1123,10 +1123,13 @@ class Drama {
   final String releaseStatus;
 
   /// 目录条目类型：video=视频卡（缺省）；folder=文件夹卡，点击以
-  /// [folderId] 作为 category 参数再次请求目录实现下钻（层级不限）。
+  /// [folderId] 作为 category 参数再次请求目录实现下钻（层级不限）；
+  /// action=动作卡，点击不走详情/播放，直接按 [sourceId] 里的动作
+  /// JSON 打开对应界面（见 action_protocol.dart）。
   final String kind;
   final String folderId;
   bool get isFolder => kind == 'folder';
+  bool get isAction => kind == 'action';
   bool get isTagFolder => isFolder && folderId.startsWith('tag:');
   final List<Drama> peers;
   String get releaseLabel => switch (releaseStatus) {

@@ -72,7 +72,9 @@ object JarBridge {
                         result.error("jar_invalid", "缺少 jar 代理调用参数", null)
                     } else {
                         val param = call.argument<Map<String, Any?>>("param") ?: emptyMap()
-                        runAsync(result) { jarProxy(context, configId, jarPath, className, param) }
+                        val siteId = call.argument<String>("siteId").orEmpty()
+                        val ext = call.argument<String>("ext").orEmpty()
+                        runAsync(result) { jarProxy(context, siteId, configId, jarPath, className, ext, param) }
                     }
                 }
                 "setJarFingerprint" -> {
@@ -783,9 +785,11 @@ object JarBridge {
 
     private fun jarProxy(
         context: Context,
+        siteId: String,
         configId: String,
         jarPath: String,
         className: String,
+        ext: String,
         param: Map<String, Any?>
     ): Map<String, Any?> {
         val loader = loaderFor(context, configId, jarPath)
@@ -811,28 +815,100 @@ object JarBridge {
             if (loader is GuardDexClassLoader) {
                 guardProxyInvoke(loader, args)
             } else {
-                throw IllegalStateException("jar 类 $className 未实现静态 proxy 方法，无法处理本地代理请求")
+                // 无静态 proxy 方法的蜘蛛改走实例 localProxy(String)：一点播
+                // 等蜘蛛只实现实例方法，静态分发永远到不了它们。
+                localProxyFallback(context, siteId, configId, jarPath, className, ext, args)
             }
         } catch (error: InvocationTargetException) {
             throw IllegalStateException("jar 类 $className.proxy 执行失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}")
         }
-        val array = returned as? Array<*>
-            ?: throw IllegalStateException("jar 类 $className.proxy 返回格式错误：需要 [状态码、类型、字节流] 三元组")
-        if (array.size < 3) {
-            throw IllegalStateException("jar 类 $className.proxy 返回格式错误：需要 [状态码、类型、字节流] 三元组")
-        }
-        val status = (array[0] as? Number)?.toInt() ?: 200
-        val mime = array[1] as? String ?: "application/octet-stream"
-        val body = when (val raw = array[2]) {
+        val triple = proxyTriple(returned, className)
+        val body = when (val raw = triple.third) {
             is ByteArray -> raw
             is String -> raw.toByteArray(Charsets.UTF_8)
             is java.io.InputStream -> raw.use { it.readBytes() }
             else -> throw IllegalStateException("jar 类 $className.proxy 返回的字节流类型不受支持：${raw?.javaClass?.simpleName ?: "空"}")
         }
         return mapOf(
-            "status" to status,
-            "mime" to mime,
+            "status" to triple.first,
+            "mime" to triple.second,
             "bodyBase64" to android.util.Base64.encodeToString(body, android.util.Base64.NO_WRAP),
         )
+    }
+
+    /**
+     * 实例 localProxy 分发：复用本站点的蜘蛛实例（与 callSpider 同一
+     * 实例、同一 ext 初始化），参数按 FongMi 惯例拼成 URL 编码的查询串
+     * 交给 localProxy(String)。壳内 Spider 基类没有 localProxy 方法，
+     * 找不到该方法时再试实例 proxyLocal(Map)：EroShort 等蜘蛛只实现
+     * 该形态，参数直接给 Map、返回值同为三元组 Array，由 proxyTriple
+     * 归一。三种形态都没有才如实报错。
+     */
+    private fun localProxyFallback(
+        context: Context,
+        siteId: String,
+        configId: String,
+        jarPath: String,
+        className: String,
+        ext: String,
+        args: HashMap<String, String>
+    ): Any? {
+        if (siteId.isEmpty()) {
+            throw IllegalStateException("jar 类 $className 未实现静态 proxy 方法，无法处理本地代理请求")
+        }
+        val spider = spiderFor(context, siteId, configId, jarPath, className, ext)
+        val param = args.entries.joinToString("&") { (key, value) ->
+            java.net.URLEncoder.encode(key, "UTF-8") + "=" + java.net.URLEncoder.encode(value, "UTF-8")
+        }
+        try {
+            val method = spider.javaClass.getMethod("localProxy", String::class.java)
+            return method.invoke(spider, param)
+        } catch (error: NoSuchMethodException) {
+            // 无 localProxy(String) 时再试 proxyLocal(Map)，见本方法注释。
+        } catch (error: InvocationTargetException) {
+            throw IllegalStateException("jar 类 $className.localProxy 执行失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}")
+        }
+        return try {
+            val method = spider.javaClass.getMethod("proxyLocal", Map::class.java)
+            method.invoke(spider, args)
+        } catch (error: NoSuchMethodException) {
+            throw IllegalStateException("jar 类 $className 未实现静态 proxy 方法与实例 localProxy/proxyLocal 方法，无法处理本地代理请求")
+        } catch (error: InvocationTargetException) {
+            throw IllegalStateException("jar 类 $className.proxyLocal 执行失败：${error.targetException?.message ?: error.targetException?.javaClass?.simpleName ?: "未知错误"}")
+        }
+    }
+
+    /**
+     * 代理返回值归一为 [状态码、类型、正文] 三元组：静态 proxy 与实例
+     * proxyLocal 回 Array，实例 localProxy 通常回 org.json.JSONArray
+     * （一点播即此），其余按裸正文处理（200 + 默认类型）。
+     */
+    private fun proxyTriple(returned: Any?, className: String): Triple<Int, String, Any?> {
+        return when (returned) {
+            is Array<*> -> {
+                if (returned.size < 3) {
+                    throw IllegalStateException("jar 类 $className.proxy 返回格式错误：需要 [状态码、类型、字节流] 三元组")
+                }
+                Triple(
+                    (returned[0] as? Number)?.toInt() ?: 200,
+                    returned[1] as? String ?: "application/octet-stream",
+                    returned[2]
+                )
+            }
+            is org.json.JSONArray -> {
+                if (returned.length() < 3) {
+                    throw IllegalStateException("jar 类 $className.localProxy 返回格式错误：需要 [状态码、类型、字节流] 三元组")
+                }
+                Triple(
+                    returned.optInt(0, 200),
+                    returned.optString(1, "application/octet-stream"),
+                    returned.get(2)
+                )
+            }
+            is ByteArray -> Triple(200, "application/octet-stream", returned)
+            is String -> Triple(200, "text/plain", returned)
+            is java.io.InputStream -> Triple(200, "application/octet-stream", returned)
+            else -> throw IllegalStateException("jar 类 $className.proxy 返回格式错误：需要 [状态码、类型、字节流] 三元组")
+        }
     }
 }

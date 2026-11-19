@@ -120,6 +120,7 @@ void main() {
       'tingyou',
       'hysxs',
       'asmrmoon',
+      'jar_tingshu',
     ]);
     expect(novel.length, 71);
     expect(
@@ -131,8 +132,8 @@ void main() {
       containsAll(ContentRegistry.novelJsonBuiltins.map((s) => s.id)),
     );
     // 无门禁：成人源 id 都在列；全表 id 不重复。
-    // 听书 8 个 + 阅读 73 个（实测），id 无重叠，去重后 81。
-    expect(targets.map((t) => t.source.id).toSet().length, 81);
+    // 听书 9 个 + 阅读 73 个（实测），id 无重叠，去重后 82。
+    expect(targets.map((t) => t.source.id).toSet().length, 82);
   });
 
   test('去重：同 id 两区都出现只留一个，听书优先', () {

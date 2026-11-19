@@ -41,6 +41,9 @@ import 'viewing_experience_settings.dart';
 typedef DetailTagTap =
     void Function(String sourceId, String tagId, String tagName);
 
+/// 详情页换线回调的返回值：下一条线路的详情与起播集序号。
+typedef DetailNextLine = ({DramaDetail detail, int episodeIndex});
+
 Drama _dramaWithCover(Drama drama, String cover) => Drama(
   id: drama.id,
   source: drama.source,
@@ -68,6 +71,9 @@ class DetailScreen extends StatefulWidget {
     required this.repository,
     required this.store,
     this.resumeOnOpen = false,
+    this.autoPlayOnOpen = false,
+    this.autoPlayEpisodeIndex = 0,
+    this.nextLineOnExhausted,
     this.onTagTap,
     this.queue,
     this.playerFactory,
@@ -77,6 +83,16 @@ class DetailScreen extends StatefulWidget {
   final AppRepository repository;
   final LocalStore store;
   final bool resumeOnOpen;
+
+  /// 进页即播：详情取回后立即播 [autoPlayEpisodeIndex] 指定的集
+  /// （演员库点卡流程注入，MJV 命中直进详情页并播放）。
+  final bool autoPlayOnOpen;
+  final int autoPlayEpisodeIndex;
+
+  /// 播放耗尽时的换线回调（演员库点卡流程注入）：内嵌播放或跨站
+  /// 线路播放耗尽时调用，返回下一条可播线路；返回 null 表示链
+  /// 耗尽，保留播放器原错误界面。不传时行为与此前一字不差。
+  final Future<DetailNextLine?> Function()? nextLineOnExhausted;
 
   /// 标签点击回调：以 sourceId + tagId 打开该标签的目录列表。
   /// TODO(shell): 目录侧标签列表入口由壳子代理提供并在构造 DetailScreen 时
@@ -333,6 +349,15 @@ class _DetailScreenState extends State<DetailScreen> {
               resume: true,
             ),
           );
+        } else if (widget.autoPlayOnOpen) {
+          unawaited(
+            _play(
+              widget.autoPlayEpisodeIndex.clamp(
+                0,
+                detail.episodes.length - 1,
+              ),
+            ),
+          );
         }
       }
     } catch (error) {
@@ -434,6 +459,9 @@ class _DetailScreenState extends State<DetailScreen> {
         store: widget.store,
         queue: widget.queue,
         startFullscreen: fullscreen,
+        onPlaybackExhausted: widget.nextLineOnExhausted == null
+            ? null
+            : _onPushedPlayerExhausted,
       );
       if (mounted) {
         setState(() {});
@@ -485,7 +513,8 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   /// 跨站选线路起播：与本源线路同一条播放链（pushPlayer），
-  /// 详情与集序号来自探活取回的对方站源详情。
+  /// 详情与集序号来自探活取回的对方站源详情。换线回调非空时
+  /// （演员库点卡流程），播耗尽继续向回调要下一条线路。
   Future<void> _playCrossSite(DramaDetail detail, int index) async {
     if (index < 0 ||
         index >= detail.episodes.length ||
@@ -501,10 +530,45 @@ class _DetailScreenState extends State<DetailScreen> {
       repository: widget.repository,
       store: widget.store,
       queue: widget.queue,
+      onPlaybackExhausted: widget.nextLineOnExhausted == null
+          ? null
+          : _onPushedPlayerExhausted,
     );
     if (mounted) {
       setState(() {});
     }
+  }
+
+  /// 内嵌播放耗尽：向换线回调要下一条线路，有就关内嵌、推新线
+  /// 路的播放页；链耗尽时什么都不做，内嵌播放器原错误界面留着
+  /// （不另弹提示，避免与播放器自身的错误提示打架）。
+  Future<void> _onEmbeddedExhausted(BuildContext _) async {
+    final nextLine = widget.nextLineOnExhausted;
+    if (nextLine == null || !mounted) return;
+    final next = await nextLine();
+    if (!mounted || _profileEpoch != widget.store.profileEpoch) return;
+    if (next == null) return;
+    _closeEmbedded();
+    await _playCrossSite(next.detail, next.episodeIndex);
+  }
+
+  /// 推出去的播放页耗尽：弹掉当前播放页，换链上下一条线路；链
+  /// 耗尽时什么都不做，播放器原错误界面留着。
+  Future<void> _onPushedPlayerExhausted(BuildContext playerContext) async {
+    if (!mounted) return;
+    final route = ModalRoute.of(playerContext);
+    if (route == null || !route.isCurrent) return;
+    final nextLine = widget.nextLineOnExhausted;
+    if (nextLine == null) return;
+    final next = await nextLine();
+    if (!mounted || _profileEpoch != widget.store.profileEpoch) return;
+    if (next == null) return;
+    // 换线等待期间用户可能已手动退出：再验一次路由仍在最上层，
+    // 且播放器 context 仍挂载。
+    if (!route.isCurrent || !playerContext.mounted) return;
+    Navigator.of(playerContext).pop();
+    if (!mounted) return;
+    await _playCrossSite(next.detail, next.episodeIndex);
   }
 
   /// 跨站选线路区：只有带番号的片才显示，无番号返回空盒子。
@@ -586,6 +650,9 @@ class _DetailScreenState extends State<DetailScreen> {
       onEmbeddedIndexChanged: (value) {
         if (mounted) setState(() => _embeddedIndex = value);
       },
+      onPlaybackExhausted: widget.nextLineOnExhausted == null
+          ? null
+          : _onEmbeddedExhausted,
       playerFactory: widget.playerFactory,
       videoBuilder: widget.videoBuilder,
     );

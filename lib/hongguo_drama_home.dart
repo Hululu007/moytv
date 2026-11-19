@@ -138,7 +138,10 @@ class HongguoDramaHome extends StatefulWidget {
   /// 多媒体屏自带网盘搜索框，不走这里）。
   final VoidCallback onOpenGlobalSearch;
 
-  /// 霓虹首页头像的动作：抽屉拆除后，点头像进“我的”页。
+  /// 保留给调用方兼容：2026-11-18 19:49 令后，本组件内的图标点按
+  /// 改走 [onPickSource] 弹站点列表，头像进“我的”已不在此接线；
+  /// 目录胶囊栏的头像仍由外层经其它回调进“我的”。字段留着不动，
+  /// 避免牵动全部调用点，清理另立项。
   final VoidCallback onAvatarPressed;
   final VoidCallback onFilterPressed;
   final VoidCallback onRankingsPressed;
@@ -1112,11 +1115,10 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     );
   }
 
-  /// 合并顶栏（用户 2026-11-17 令，2026-11-18 令改顺序）：底部标签
-  /// 样式下，霓虹首页的品牌行与内层页签行并成一排——左上角第一位
-  /// 是品牌 + 站名（点按弹站点列表弹窗，与目录顶栏左上角站图标
-  /// 弹弹窗的口径一致），头像紧随其后（点按进“我的”页），再往右
-  /// 是首页/频道/多媒体/推荐页签，搜索与刷新钮同行右置；页签放不
+  /// 合并顶栏（用户 2026-11-17 令，2026-11-18 19:49 令纠正）：底部标签
+  /// 样式下，霓虹首页的品牌行与内层页签行并成一排——品牌 + 站名只
+  /// 是展示（点按什么都不弹），左上角的图标点按弹站点列表弹窗；
+  /// 再往右是首页/频道/多媒体/推荐页签，搜索与刷新钮同行右置；页签放不
   /// 下时中间横滑。行高与页签行一致（54），切页签不跳动。品牌字
   /// 比霓虹品牌样式小一档（16），配色全部取当前主题，不写死颜色。
   Widget _mergedTopBar() {
@@ -1127,67 +1129,59 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
       child: Row(
         children: [
           ConstrainedBox(
+            key: const ValueKey('neon-top-source'),
             constraints: const BoxConstraints(maxWidth: 120),
-            child: Semantics(
-              label: '切换站源',
-              button: true,
-              child: GestureDetector(
-                key: const ValueKey('neon-top-source'),
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onPickSource,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            // 品牌块只展示、不响应点按（用户 2026-11-18 19:49 令：点
+            // 名称什么都不弹）；下拉小箭头一并去掉，免得看着像能点。
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ShaderMask(
+                  shaderCallback: (rect) => LinearGradient(
+                    colors: [config.textPrimary, config.secondaryColor],
+                  ).createShader(rect),
+                  child: Text(
+                    '魔蚁TV',
+                    style: Neon.brandStyle.copyWith(
+                      color: config.textPrimary,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    ShaderMask(
-                      shaderCallback: (rect) => LinearGradient(
-                        colors: [config.textPrimary, config.secondaryColor],
-                      ).createShader(rect),
+                    Flexible(
                       child: Text(
-                        '魔蚁box',
-                        style: Neon.brandStyle.copyWith(
-                          color: config.textPrimary,
-                          fontSize: 16,
+                        widget.sourceLabel,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: config.textSecondary,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            widget.sourceLabel,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: config.textSecondary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 2),
-                        Icon(
-                          LucideIcons.chevronDown,
-                          size: 12,
-                          color: config.textSecondary,
-                        ),
-                      ],
-                    ),
                   ],
                 ),
-              ),
+              ],
             ),
           ),
           const SizedBox(width: 10),
-          GestureDetector(
-            key: const ValueKey('neon-avatar'),
-            onTap: widget.onAvatarPressed,
-            child: ClipOval(
-              child: Image.asset(
-                'assets/ant_logo.png',
-                width: 38,
-                height: 38,
-                fit: BoxFit.cover,
+          Semantics(
+            label: '切换站源',
+            button: true,
+            child: GestureDetector(
+              key: const ValueKey('neon-avatar'),
+              onTap: widget.onPickSource,
+              child: ClipOval(
+                child: Image.asset(
+                  'assets/ant_logo.png',
+                  width: 38,
+                  height: 38,
+                  fit: BoxFit.cover,
+                ),
               ),
             ),
           ),
@@ -1273,14 +1267,16 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome> {
     return NeonHomeView(
       items: widget.dramas,
       repository: widget.repository,
-      brand: '魔蚁box',
+      brand: '魔蚁TV',
       sourceLabel: widget.sourceLabel,
       onOpen: widget.onOpenDrama,
       onSearch: widget.onOpenGlobalSearch,
       onSourceTap: widget.onPickSource,
       onLongPress: widget.onOpenDrama,
       onRefresh: widget.onRefresh,
-      onAvatar: widget.onAvatarPressed,
+      // 图标点按弹站点列表（用户 2026-11-18 19:49 令）；标题不再
+      // 可点，NeonHomeView 内已把 onTitleTap 置空。
+      onAvatar: widget.onPickSource,
       onRankings: widget.onRankingsPressed,
       onFeaturedPlay: widget.onOpenFeatured ?? widget.onOpenDrama,
       featuredItems: _heroMixed,

@@ -14,9 +14,9 @@ class PyContract {
 
   static Drama itemToDrama(String source, Map<String, dynamic> item) {
     final vodId = _text(item['vod_id']);
-    final folder =
-        _text(item['vod_tag']) == 'folder' ||
-        _text(item['vod_tag']) == 'folder卡';
+    final tag = _text(item['vod_tag']);
+    final folder = tag == 'folder' || tag == 'folder卡';
+    final action = tag == 'action';
     return Drama(
       id: '$source:$vodId',
       source: source,
@@ -24,7 +24,7 @@ class PyContract {
       title: _text(item['vod_name']).isEmpty ? '未命名' : _text(item['vod_name']),
       description: _text(item['vod_remarks']),
       cover: _text(item['vod_pic']),
-      kind: folder ? 'folder' : 'video',
+      kind: folder ? 'folder' : action ? 'action' : 'video',
       folderId: folder ? vodId : '',
     );
   }

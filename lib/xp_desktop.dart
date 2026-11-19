@@ -52,6 +52,10 @@ class XpDesktop extends StatelessWidget {
           Positioned(
             top: 40,
             left: 16,
+            // bottom 必须给：不给时 Stack 给图标列的高度约束是
+            // 无限，满列换列算不出每列个数、图标会一直往下排
+            // 进任务栏（与 Win7 同一问题，见 win7_desktop.dart）。
+            bottom: 0,
             child: DesktopIconColumn(
               keyPrefix: 'xp-desktop-icon',
               onIconTap: onIconTap,
@@ -538,6 +542,7 @@ class XpWindowFrame extends StatelessWidget {
     required this.onMinimize,
     required this.onClose,
     required this.child,
+    this.active = true,
   });
 
   final Win7WindowKind kind;
@@ -545,82 +550,84 @@ class XpWindowFrame extends StatelessWidget {
   final VoidCallback onClose;
   final Widget child;
 
+  /// 窗口是否在前台（见 [WindowTitleBarAutoHide.active]）。
+  final bool active;
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          height: 32,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [XpTheme.titleLeft, XpTheme.titleMid, XpTheme.titleRight],
-              stops: [0.0, 0.55, 1.0],
-            ),
-          ),
-          child: Row(
-            children: [
-              const SizedBox(width: 12),
-              Icon(kind.icon, size: 18, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  kind.title,
-                  key: const ValueKey('xp-window-title'),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    shadows: [Shadow(color: Colors.black38, blurRadius: 2)],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              InkWell(
-                key: const ValueKey('xp-window-minimize'),
-                onTap: onMinimize,
-                child: Container(
-                  width: 40,
-                  height: 28,
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.25),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(
-                    Icons.minimize,
-                    size: 16,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              InkWell(
-                key: const ValueKey('xp-window-close'),
-                onTap: onClose,
-                child: Container(
-                  width: 40,
-                  height: 28,
-                  margin: const EdgeInsets.only(right: 8),
-                  decoration: BoxDecoration(
-                    color: XpTheme.closeOrange,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.close, size: 16, color: Colors.white),
-                ),
-              ),
-            ],
+    return WindowTitleBarAutoHide(
+      active: active,
+      titleBar: Container(
+        height: 32,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [XpTheme.titleLeft, XpTheme.titleMid, XpTheme.titleRight],
+            stops: [0.0, 0.55, 1.0],
           ),
         ),
-        Expanded(child: child),
-      ],
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            Icon(kind.icon, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                kind.title,
+                key: const ValueKey('xp-window-title'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  shadows: [Shadow(color: Colors.black38, blurRadius: 2)],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            InkWell(
+              key: const ValueKey('xp-window-minimize'),
+              onTap: onMinimize,
+              child: Container(
+                width: 40,
+                height: 28,
+                margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.7),
+                  ),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Icon(
+                  Icons.minimize,
+                  size: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            InkWell(
+              key: const ValueKey('xp-window-close'),
+              onTap: onClose,
+              child: Container(
+                width: 40,
+                height: 28,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: XpTheme.closeOrange,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.7),
+                  ),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Icon(Icons.close, size: 16, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+      child: child,
     );
   }
 }

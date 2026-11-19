@@ -50,6 +50,8 @@ void main() {
       for (final e in BuiltinPySites.entries) e.siteId,
       for (final s in SourceSite.allValues) s.id,
       for (final c in zakatvBuiltinSites) c.key,
+      for (final c in missav30BuiltinSites) c.key,
+      for (final c in oneBuiltinSites) c.key,
       for (final s in builtinLegadoSources) s.id,
       for (final f in Directory('assets/novel_spiders').listSync())
         if (f.path.endsWith('.py'))
@@ -59,7 +61,7 @@ void main() {
       expect(known, contains(key), reason: '图标映射 $key 不在任何注册表里');
     }
     // 注册表计数不变：图标只配站，不加站。
-    expect(BuiltinPySites.entries.length, 121);
+    expect(BuiltinPySites.entries.length, 122);
     expect(zakatvBuiltinSites.length, 140);
     expect(builtinLegadoSources.length, 52);
   });

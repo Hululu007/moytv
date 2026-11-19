@@ -747,7 +747,9 @@ class HaikuoStore {
   /// 132 条顺序标题不动；2879 摘除详情播放文字行）。
   /// v13：2026-11-18 Phase 3，Jav精品规则同步模块文件（规则本体未动，
   /// 仅 fixlog 与 version；模块文件换成与内嵌页同一份代码）。
-  static const builtinBundleVersion = 13;
+  /// v14：2026-11-19 MissAV 规则 v6 多域名回落（条数与顺序不变，其余
+  /// 145 条一字未动；MissAV 模块新增 hosts 回落表与 get/ok/origin）。
+  static const builtinBundleVersion = 14;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 

@@ -65,7 +65,7 @@ android {
             abiFilters.clear()
             abiFilters.addAll(listOf("arm64-v8a"))
         }
-        manifestPlaceholders["appLabel"] = "魔蚁box"
+        manifestPlaceholders["appLabel"] = "魔蚁TV"
         manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
     }
 

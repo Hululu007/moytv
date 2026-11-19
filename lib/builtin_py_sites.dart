@@ -1584,6 +1584,19 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const yikmSiteId = 'yikm';
+  static const yikmAssetPath = 'assets/py_spiders/yikm.py';
+  static const yikmFileId = 'builtin_yikm';
+
+  static const yikmSite = SourceSite(
+    yikmSiteId,
+    '小霸王游戏',
+    '内置 py · yikm',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   static const zuidazySiteId = 'zuidazy';
   static const zuidazyAssetPath = 'assets/py_spiders/zuidazy.py';
   static const zuidazyFileId = 'builtin_zuidazy';
@@ -1719,6 +1732,7 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: xiguazySiteId, site: xiguazySite, assetPath: xiguazyAssetPath, fileId: xiguazyFileId),
     BuiltinPyEntry(siteId: yayazySiteId, site: yayazySite, assetPath: yayazyAssetPath, fileId: yayazyFileId),
     BuiltinPyEntry(siteId: yuanlibzySiteId, site: yuanlibzySite, assetPath: yuanlibzyAssetPath, fileId: yuanlibzyFileId),
+    BuiltinPyEntry(siteId: yikmSiteId, site: yikmSite, assetPath: yikmAssetPath, fileId: yikmFileId),
     BuiltinPyEntry(siteId: zuidazySiteId, site: zuidazySite, assetPath: zuidazyAssetPath, fileId: zuidazyFileId),
   ];
 

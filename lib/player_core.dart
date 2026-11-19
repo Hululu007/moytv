@@ -21,9 +21,22 @@ enum PlayerCore {
   );
 }
 
+/// 按站固定的播放器内核：命中的站永远走指定内核，与全局设置无关；
+/// 未命中的站仍走全局设置。只钉用户点名的站，别往里加别的站。
+const Map<String, PlayerCore> pinnedSitePlayerCores = {
+  'jar:zakatv:EroShort': PlayerCore.ijk,
+};
+
 PlayerCore effectivePlayerCore({
   required PlayerCore stored,
-}) => stored;
+  String? siteId,
+}) {
+  if (siteId != null) {
+    final pinned = pinnedSitePlayerCores[siteId];
+    if (pinned != null) return pinned;
+  }
+  return stored;
+}
 
 class PlayerCoreOption {
   const PlayerCoreOption({

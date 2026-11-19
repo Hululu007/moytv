@@ -251,6 +251,9 @@ class ActressEnrichment {
     } catch (_) {}
   }
 
+  /// 番号路：先查兜底 MJV 系（[actressFallbackSiteIds] 里可见的站），
+  /// 有带封面的匹配命中就附上、不再查全站；取不到再走全站搜索。
+  /// 去重与附着口径不变（归一化番号 + codeKey）。
   Future<void> _enrichByCode(
     ActressPerson person,
     List<ActressWork> targets,
@@ -258,8 +261,40 @@ class ActressEnrichment {
     bool Function()? isCancelled,
     void Function() notifyChanged,
   ) async {
+    final fallbackIds = [
+      for (final id in actressFallbackSiteIds)
+        if (siteIds.contains(id)) id,
+    ];
     var next = 0;
     var attached = 0;
+
+    /// 在 [hits] 里找第一个带封面且番号匹配的命中，附到 [work] 上。
+    Future<bool> attachFirstCover(ActressWork work, List<Drama> hits) async {
+      final query = work.codeDisplay.isNotEmpty
+          ? work.codeDisplay
+          : work.codeKey;
+      for (final hit in hits) {
+        if (actressTextBlocked(hit.title)) continue;
+        if (hit.cover.isEmpty) continue;
+        if (!crossSiteHitMatches(title: hit.title, id: hit.id, avId: query)) {
+          continue;
+        }
+        await db.attachCover(
+          personId: person.localId,
+          codeKey: work.codeKey,
+          titleKey: work.titleKey,
+          coverSource: hit.source,
+          coverDramaId: hit.id,
+          coverUrl: hit.cover,
+          insertIfMissing: false,
+        );
+        attached++;
+        if (attached % 10 == 0) notifyChanged();
+        return true;
+      }
+      return false;
+    }
+
     Future<void> worker() async {
       while (true) {
         if (isCancelled?.call() == true) return;
@@ -269,6 +304,15 @@ class ActressEnrichment {
             ? work.codeDisplay
             : work.codeKey;
         if (query.isEmpty) continue;
+        if (fallbackIds.isNotEmpty) {
+          try {
+            final page = await repository.searchAcross(fallbackIds, query);
+            if (await attachFirstCover(work, page.items)) continue;
+          } catch (_) {
+            // 兜底站查失败，回落全站搜索，不丢这部作品。
+          }
+          if (isCancelled?.call() == true) return;
+        }
         List<Drama> hits;
         try {
           final page = await repository.searchAcross(siteIds, query);
@@ -276,25 +320,7 @@ class ActressEnrichment {
         } catch (_) {
           continue;
         }
-        for (final hit in hits) {
-          if (actressTextBlocked(hit.title)) continue;
-          if (hit.cover.isEmpty) continue;
-          if (!crossSiteHitMatches(title: hit.title, id: hit.id, avId: query)) {
-            continue;
-          }
-          await db.attachCover(
-            personId: person.localId,
-            codeKey: work.codeKey,
-            titleKey: work.titleKey,
-            coverSource: hit.source,
-            coverDramaId: hit.id,
-            coverUrl: hit.cover,
-            insertIfMissing: false,
-          );
-          attached++;
-          if (attached % 10 == 0) notifyChanged();
-          break;
-        }
+        await attachFirstCover(work, hits);
       }
     }
 

@@ -159,16 +159,18 @@ void main() {
       expect(kind.iconGradient.length, 2);
     });
 
-    test('默认图标表含 game，mine 置顶第一位，game 在末尾', () {
-      expect(win7DesktopIcons.length, 8);
+    test('默认图标表含 game、multimedia 与 kof，mine 置顶第一位，kof 在末尾', () {
+      expect(win7DesktopIcons.length, 9);
       expect(win7DesktopIcons, contains(Win7WindowKind.game));
+      expect(win7DesktopIcons, contains(Win7WindowKind.multimedia));
+      expect(win7DesktopIcons, contains(Win7WindowKind.kof));
       expect(win7DesktopIcons.first, Win7WindowKind.mine);
-      expect(win7DesktopIcons.last, Win7WindowKind.game);
+      expect(win7DesktopIcons.last, Win7WindowKind.kof);
     });
 
     test('已存顺序缺 game 时 resolve 会追加', () {
-      // 老用户存下来的 7 个图标顺序（没 game）：game 按默认
-      // 相对顺序追加到末尾，不丢已有顺序。
+      // 老用户存下来的 7 个图标顺序（没 game、没 multimedia、没 kof）：
+      // game、multimedia、kof 按默认相对顺序追加到末尾，不丢已有顺序。
       final resolved = resolveDesktopIconOrder([
         'mine',
         'actress',
@@ -178,8 +180,10 @@ void main() {
         'novel',
         'miniApp',
       ]);
-      expect(resolved.length, 8);
-      expect(resolved.last, Win7WindowKind.game);
+      expect(resolved.length, 9);
+      expect(resolved.last, Win7WindowKind.kof);
+      expect(resolved[resolved.length - 2], Win7WindowKind.multimedia);
+      expect(resolved[resolved.length - 3], Win7WindowKind.game);
       expect(resolved.first, Win7WindowKind.mine);
     });
   });

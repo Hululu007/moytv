@@ -24,10 +24,10 @@ import 'tmdb/tmdb_metadata.dart';
 /// 刮削顺序（只试这张有名表）：MissAV 四个 jar 站 → Jable → AV01 →
 /// JavMenu → MemoJav → AVDB 殿后。未注册/不可见的站静默跳过。
 const adultScrapeSiteIds = <String>[
-  'jar:zakatv:ZakaMissav',
-  'jar:zakatv:ZakaMissavOff',
+  'jar:missav30:ZakaMissav',
+  'jar:missav30:ZakaMissavOff',
   'jar:zakatv:ZakaMirror',
-  'jar:zakatv:missavt',
+  'jar:missav30:missavt',
   'jar:zakatv:ZakaJable',
   'jar:zakatv:zakav01',
   BuiltinPySites.javmenuSiteId,

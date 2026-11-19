@@ -129,6 +129,74 @@
                 <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.JSON"/>
             </intent-filter>
         </activity>
+        <!-- 备选应用图标：默认关闭，设置里换图标时由 IconSwitchBridge 启用其中一个、
+             同时停用主 Activity 的启动入口；切回默认则反向操作。别名类名与
+             lib/app_icon_switcher.dart 的 aliasSuffix 一一对应，改一处必须改另一处。 -->
+        <activity-alias
+            android:name=".IconAntFlame"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ant_flame"
+            android:roundIcon="@mipmap/ic_launcher_ant_flame"
+            android:label="${appLabel}"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconAntLens"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ant_lens"
+            android:roundIcon="@mipmap/ic_launcher_ant_lens"
+            android:label="${appLabel}"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconAntWin12"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ant_win12"
+            android:roundIcon="@mipmap/ic_launcher_ant_win12"
+            android:label="${appLabel}"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconAntStorm"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ant_storm"
+            android:roundIcon="@mipmap/ic_launcher_ant_storm"
+            android:label="${appLabel}"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconAntMeadow"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ant_meadow"
+            android:roundIcon="@mipmap/ic_launcher_ant_meadow"
+            android:label="${appLabel}"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

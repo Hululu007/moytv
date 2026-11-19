@@ -50,7 +50,7 @@ void main() {
     }
     // 表里不许有多余条目（防编造/漂移）。
     expect(pySiteHomepages.keys.toSet(), checked);
-    expect(pySiteHomepages.length, 144);
+    expect(pySiteHomepages.length, 145);
   });
 
   test('Go 映射：值确是 origin、主机名确在 Go 核源码里', () {

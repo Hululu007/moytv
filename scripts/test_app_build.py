@@ -47,7 +47,7 @@ class AppBuildTests(unittest.TestCase):
         variant = BuildVariant.from_dart_defines(dart_defines(
             'OTHER=中文', 'ALL_SOURCES=true', 'VALUE=a=b'))
         self.assertTrue(variant.all_sources)
-        self.assertEqual(variant.name, '魔蚁box')
+        self.assertEqual(variant.name, '魔蚁TV')
         self.assertEqual(variant.slug, 'moyi')
 
     def test_ios_branding_can_switch_editions_without_replacing_bundle_identity(self):
@@ -58,8 +58,8 @@ class AppBuildTests(unittest.TestCase):
             for enabled in [True, False]:
                 configure(path, dart_defines('ALL_SOURCES=' + str(enabled).lower()))
                 actual = plistlib.loads(path.read_bytes())
-                self.assertEqual(actual['CFBundleDisplayName'], '魔蚁box' if enabled else '短剧视界')
-                self.assertEqual(actual['CFBundleName'], '魔蚁box' if enabled else '短剧视界')
+                self.assertEqual(actual['CFBundleDisplayName'], '魔蚁TV' if enabled else '短剧视界')
+                self.assertEqual(actual['CFBundleName'], '魔蚁TV' if enabled else '短剧视界')
                 for key, value in original.items():
                     self.assertEqual(actual[key], value)
 

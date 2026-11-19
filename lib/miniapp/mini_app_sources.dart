@@ -73,8 +73,9 @@ class _ResolvedSite {
 
 /// 默认实现：只读复用站点区同一套内置注册表，不另起一份。
 ///
-/// jar 站读静态表 zakatvBuiltinSites（跳过纯音频站，与站点区注册口径
-/// 一致）；py 站读运行时注册表 SourceSite.importedSites，按
+/// jar 站读静态表 zakatvBuiltinSites + missav30BuiltinSites（跳过纯
+/// 音频站，与站点区注册口径一致；一点播 oneBuiltinSites 不在此列，
+/// 与搬 MissAV 之前一致）；py 站读运行时注册表 SourceSite.importedSites，按
 /// importType == 'py' 且 origin == 'builtin' 过滤，只含内置的 44 个。
 /// 取数走宿主现有链路：jar 经 JarBridge.callJson，py 经 PyBridge.call，
 /// 不另写爬虫。Go 核站（红果等）不是 TVBox 蜘蛛形态，不在此列。
@@ -123,9 +124,12 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   @override
   Future<List<Map<String, dynamic>>> listSites() async {
     final sites = <Map<String, dynamic>>[];
-    for (final builtin in zakatvBuiltinSites) {
+    for (final (jarId, builtin) in [
+      for (final b in zakatvBuiltinSites) (zakatvJarId, b),
+      for (final b in missav30BuiltinSites) (missav30JarId, b),
+    ]) {
       if (builtin.audioOnly) continue;
-      final siteId = JarSiteSpec.siteIdFor(zakatvJarId, builtin.key);
+      final siteId = JarSiteSpec.siteIdFor(jarId, builtin.key);
       sites.add(<String, dynamic>{
         'key': siteId,
         'name': builtin.name,
@@ -299,7 +303,8 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
 
   /// 只认内置站：jar 看静态表，py 看运行时注册表里的 builtin 条目。
   /// 用户导入/配置的站不在开放范围，一律报 SITE_NOT_FOUND。
-  /// jar 既认站点区完整 id（`jar:zakatv:<key>`），也认短 key。
+  /// jar 既认站点区完整 id（`jar:zakatv:<key>` / `jar:missav30:<key>`），
+  /// 也认短 key。
   _ResolvedSite _resolveSite(String siteKey) {
     final key = siteKey.trim();
     if (key.isEmpty) {
@@ -309,14 +314,20 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
       );
     }
     var shortKey = key;
-    const prefix = 'jar:$zakatvJarId:';
-    if (key.startsWith(prefix)) {
-      shortKey = key.substring(prefix.length);
+    for (final candidate in [zakatvJarId, missav30JarId]) {
+      final prefix = 'jar:$candidate:';
+      if (key.startsWith(prefix)) {
+        shortKey = key.substring(prefix.length);
+        break;
+      }
     }
-    for (final builtin in zakatvBuiltinSites) {
+    for (final (candidateJarId, builtin) in [
+      for (final b in zakatvBuiltinSites) (zakatvJarId, b),
+      for (final b in missav30BuiltinSites) (missav30JarId, b),
+    ]) {
       if (builtin.audioOnly || builtin.key != shortKey) continue;
-      if (key != shortKey && key != '$prefix$shortKey') continue;
-      final siteId = JarSiteSpec.siteIdFor(zakatvJarId, builtin.key);
+      if (key != shortKey && key != 'jar:$candidateJarId:$shortKey') continue;
+      final siteId = JarSiteSpec.siteIdFor(candidateJarId, builtin.key);
       final spec = JarBridge.specFor(siteId);
       if (spec == null) {
         throw MiniAppSourceFailure(

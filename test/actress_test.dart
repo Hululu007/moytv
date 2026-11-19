@@ -54,7 +54,7 @@ const _testSiteC = SourceSite(
   origin: SourceSite.originImport,
 );
 const _lazySite = SourceSite(
-  'jar:zakatv:ZakaMissav',
+  'jar:missav30:ZakaMissav',
   '🔞懒查站',
   '测试站',
   section: SourceSite.sectionVideo,
@@ -1169,14 +1169,14 @@ void main() {
       final probe = _ScriptedProbeService(
         repository: repository,
         results: {
-          'jar:zakatv:ZakaMissav': _foundResult(
+          'jar:missav30:ZakaMissav': _foundResult(
             const CrossSiteProvider(
-              id: 'jar:zakatv:ZakaMissav',
+              id: 'jar:missav30:ZakaMissav',
               name: 'lazy',
-              siteIds: ['jar:zakatv:ZakaMissav'],
+              siteIds: ['jar:missav30:ZakaMissav'],
               lazy: true,
             ),
-            'jar:zakatv:ZakaMissav',
+            'jar:missav30:ZakaMissav',
             'drama-lazy',
           ),
         },
@@ -1192,7 +1192,7 @@ void main() {
         profileEpoch: store.profileEpoch,
       );
       expect(candidate!.detail.drama.id, 'drama-lazy');
-      expect(probe.probed, ['test-site-b', 'jar:zakatv:ZakaMissav']);
+      expect(probe.probed, ['test-site-b', 'jar:missav30:ZakaMissav']);
     });
 
     test('全部失败返回空', () async {

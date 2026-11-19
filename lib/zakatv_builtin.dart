@@ -18,12 +18,61 @@ class ZakatvBuiltinSite {
 }
 
 const String zakatvJarAsset = 'assets/jars/zakatv.jar';
-const String zakatvJarMd5 = '6917f0a00bf495d88a28d4ac2643ec44';
+const String zakatvJarMd5 = '44235cee5268015e5ccca0a57aa42107';
 const String youtubeJarAsset = 'assets/jars/youtube.jar';
 const String youtubeJarMd5 = 'd294ce251d3b2aa8528efff12cc4bf19';
 const String youtubeConfigAsset = 'assets/youtube3.json';
 const String youtubeSpiderClass = 'com.github.catvod.spider.YouTube';
 const String zakatvJarId = 'zakatv';
+const String oneJarAsset = 'assets/jars/one.jar';
+const String oneJarMd5 = '1bae661a921446497c35f7cfee65dc6e';
+const String oneJarId = 'one';
+const String missav30JarAsset = 'assets/jars/missav30.jar';
+const String missav30JarMd5 = '15efee5d3f3f4b2433bd25bc16ccf139';
+const String missav30JarId = 'missav30';
+
+/// 一点播独立 jar 的内置站点：绝不能合进 zakatv.jar——蜘蛛自带
+/// SelfCheck，只认本 jar 的 classes.dex + META-INF/SIG，合 dex 必
+/// 静默空白。拉闸检查已在 smali 层改恒通过，SIG 已按原算法重算
+/// （见 ~/workspace/one_builtin_20261118/REPORT.md）。
+const List<ZakatvBuiltinSite> oneBuiltinSites = [
+  ZakatvBuiltinSite(
+    'One',
+    '🔞一点播',
+    'com.github.catvod.spider.One',
+    '',
+  ),
+];
+
+/// MissAV v30 独立 jar 的内置站点：2026-11-19 从 zakatv.jar 挪过来，
+/// key/显示名/类名/ext 一字不动，只换 jar 归属（jar:zakatv:<key> →
+/// jar:missav30:<key>）。jar 文件原样内置，里面代码一个字节不改。
+/// ZakaMirror 不在新 jar 里，仍留在 zakatv.jar 上。
+///
+/// 注意：本 jar 除下面 3 个蜘蛛外还带助手类 ZakaMissavFix（及内部类
+/// ZakaMissavFix$ProxyHandler），提供 hosts()/tHost() 域名池，是助手、
+/// 不是站点，绝不注册成站点（见 test/missav30_builtin_test.dart 的
+/// dex 类表断言：含 Fix 类、且登记表里无它）。
+const List<ZakatvBuiltinSite> missav30BuiltinSites = [
+  ZakatvBuiltinSite(
+    'ZakaMissav',
+    '🔞MissAV官方┃过盾',
+    'com.github.catvod.spider.ZakaMissavAmns',
+    '{"base":"https://tv506.ystv.top","miss":"https://missav.ws286.ystv.top"}',
+  ),
+  ZakatvBuiltinSite(
+    'ZakaMissavOff',
+    '🔞MissAV官方┃原生',
+    'com.github.catvod.spider.ZakaMissavOffAmns',
+    '{"host":"https://missav.live","relay":"https://tv506.ystv.top","flare":"http://192.168.31.2:8191/v1"}',
+  ),
+  ZakatvBuiltinSite(
+    'missavt',
+    '🔞MissAVt┃原生',
+    'com.github.catvod.spider.ZakaMissavtAmns',
+    '',
+  ),
+];
 const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
   ZakatvBuiltinSite(
     'ZakaMjv011',
@@ -436,12 +485,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '',
   ),
   ZakatvBuiltinSite(
-    'ZakaMissav',
-    '🔞MissAV官方┃过盾',
-    'com.github.catvod.spider.ZakaMissavAmns',
-    '{"base":"https://tv506.ystv.top","miss":"https://missav.ws286.ystv.top"}',
-  ),
-  ZakatvBuiltinSite(
     'ZakaJavRank',
     '🔞🏆JAV排行榜┃1769部战力榜',
     'com.github.catvod.spider.ZakaJavRankAmns',
@@ -501,12 +544,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '🔞🖼八色套图┃1.4万套',
     'com.github.catvod.spider.ZakaSe8Amns',
     '{"host":"https://8se.me","cdn":"https://img.xchina.io","brand":"🖼 八色套图","relays":"https://tv506.ystv.top"}',
-  ),
-  ZakatvBuiltinSite(
-    'ZakaMissavOff',
-    '🔞MissAV官方┃原生',
-    'com.github.catvod.spider.ZakaMissavOffAmns',
-    '{"host":"https://missav.live","relay":"https://tv506.ystv.top","flare":"http://192.168.31.2:8191/v1"}',
   ),
   ZakatvBuiltinSite(
     'ZakaMirror',
@@ -827,12 +864,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '',
   ),
   ZakatvBuiltinSite(
-    'missavt',
-    '🔞MissAVt┃原生',
-    'com.github.catvod.spider.ZakaMissavtAmns',
-    '',
-  ),
-  ZakatvBuiltinSite(
     'hgkpz',
     '🔞黄瓜┃黄瓜看片',
     'com.github.catvod.spider.ZakaHgkpzAmns',
@@ -857,5 +888,24 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '柚子爱看',
     'com.github.catvod.spider.YzAikan',
     '',
+  ),
+  ZakatvBuiltinSite(
+    'EroShort',
+    '🔞EroShort',
+    'com.github.catvod.spider.EroShort',
+    '',
+  ),
+  ZakatvBuiltinSite(
+    'Xhs',
+    'Xhs',
+    'com.github.catvod.spider.Xhs',
+    '',
+  ),
+  ZakatvBuiltinSite(
+    'go_tingshu',
+    '飞卢听书',
+    'com.github.catvod.spider.TingShu',
+    '{}',
+    audioOnly: true,
   ),
 ];

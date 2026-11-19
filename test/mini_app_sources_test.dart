@@ -307,13 +307,17 @@ void main() {
     test('list reads the same builtin registries as the zone', () async {
       final provider = HostMiniAppSourceProvider();
       final sites = await provider.listSites();
-      final jarCount = zakatvBuiltinSites
-          .where((site) => !site.audioOnly)
-          .length;
+      final jarCount =
+          zakatvBuiltinSites.where((site) => !site.audioOnly).length +
+          missav30BuiltinSites.where((site) => !site.audioOnly).length;
       final jarEntries = sites.where((e) => e['type'] == 'jar').toList();
       expect(jarEntries.length, jarCount);
       for (final entry in jarEntries) {
-        expect(entry['key'], startsWith('jar:$zakatvJarId:'));
+        expect(
+          (entry['key'] as String).startsWith('jar:zakatv:') ||
+              (entry['key'] as String).startsWith('jar:missav30:'),
+          isTrue,
+        );
         expect(entry['searchable'], isTrue);
         expect(entry['name'], isA<String>());
       }

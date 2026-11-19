@@ -34,6 +34,21 @@ import (
 
 const mirrorSeedHost = "https://www.thisav.my"
 
+// mirrorSeedHosts: mirror entry points tried in order by mirrorFetch.
+// The learned host (redirect target) is always tried first; seeds are
+// the fallback order. Only hosts verified to serve real MissAV catalog
+// pages belong here; the historic seed stays first.
+var mirrorSeedHosts = []string{
+	mirrorSeedHost,
+	// Live-verified 2026-11-19: /cn/new -> 301 -> /dm539/cn/new, 200,
+	// 146 catalog links. Direct fallback when the thisav.my redirect
+	// chain fails; the redirect target is learned and tried first.
+	"https://www.missav06.net",
+	// Live-verified 2026-11-19: /cn/new 200, 161 catalog links, same
+	// MissAV frontend and /cn/ paths as the official domains.
+	"https://missav.fans",
+}
+
 // mirrorPlayReferer: the surrit media CDN whitelists the canonical
 // MissAV origin as Referer and 403s the rotating mirror hosts
 // (live-verified 2026-10-23: Referer https://www.missav06.net/ -> 403,
@@ -65,8 +80,25 @@ func mirrorHost() string {
 	return mirrorState.host
 }
 
+// mirrorOrderedHosts returns the hosts mirrorFetch should try, in
+// order: the learned host first, then the seeds, deduplicated.
+func mirrorOrderedHosts() []string {
+	seen := map[string]bool{}
+	ordered := []string{}
+	for _, h := range append([]string{mirrorHost()}, mirrorSeedHosts...) {
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		ordered = append(ordered, h)
+	}
+	return ordered
+}
+
 // mirrorFetch GETs host+path following redirects, learns the live
-// mirror host from the final URL, and caches pages for 120s.
+// mirror host from the final URL, and caches pages for 120s. Hosts
+// are tried in mirrorOrderedHosts order: the learned host first,
+// then each seed; the first host returning a real page wins.
 func mirrorFetch(path string) (string, error) {
 	mirrorState.mu.Lock()
 	if e, ok := mirrorState.cache[path]; ok && time.Since(e.at) < 120*time.Second {
@@ -77,53 +109,61 @@ func mirrorFetch(path string) (string, error) {
 	mirrorState.mu.Unlock()
 
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		host := mirrorHost()
-		req, err := http.NewRequest("GET", host+path, nil)
-		if err != nil {
-			return "", err
-		}
-		for k, v := range mirrorHeaders() {
-			req.Header.Set(k, v)
-		}
-		resp, err := mirrorClient.Do(req)
+	for _, host := range mirrorOrderedHosts() {
+		text, err := mirrorTryHost(host, path)
 		if err == nil {
-			body, rerr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-			resp.Body.Close()
-			if rerr == nil && resp.StatusCode == 200 && !isChallengePage(string(body)) {
-				text := string(body)
-				if resp.Request != nil && resp.Request.URL != nil {
-					final := resp.Request.URL.Scheme + "://" + resp.Request.URL.Host
-					if final != host {
-						mirrorState.mu.Lock()
-						mirrorState.host = final
-						mirrorState.mu.Unlock()
-					}
-				}
-				mirrorState.mu.Lock()
-				mirrorState.cache[path] = whosPageEntry{at: time.Now(), text: text}
-				mirrorState.mu.Unlock()
-				return text, nil
-			}
-			if rerr != nil {
-				lastErr = rerr
-			} else if resp.StatusCode != 200 {
-				lastErr = fmt.Errorf("mirror fetch %s -> %d", path, resp.StatusCode)
-			} else {
-				lastErr = fmt.Errorf("mirror fetch %s: challenge page", path)
-			}
-		} else {
-			lastErr = err
-		}
-		if tb, code, _, terr := tlsGet(host+path, mirrorHeaders()); terr == nil && code == 200 && !isChallengePage(string(tb)) {
-			text := string(tb)
 			mirrorState.mu.Lock()
 			mirrorState.cache[path] = whosPageEntry{at: time.Now(), text: text}
 			mirrorState.mu.Unlock()
 			return text, nil
-		} else if terr != nil {
-			lastErr = terr
 		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+// mirrorTryHost fetches path from one host: a plain GET first, then
+// the TLS-fingerprint fallback. A success learns the redirect target
+// host for subsequent calls.
+func mirrorTryHost(host, path string) (string, error) {
+	req, err := http.NewRequest("GET", host+path, nil)
+	if err != nil {
+		return "", err
+	}
+	for k, v := range mirrorHeaders() {
+		req.Header.Set(k, v)
+	}
+	resp, err := mirrorClient.Do(req)
+	var lastErr error
+	if err == nil {
+		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+		if rerr == nil && resp.StatusCode == 200 && !isChallengePage(string(body)) {
+			text := string(body)
+			if resp.Request != nil && resp.Request.URL != nil {
+				final := resp.Request.URL.Scheme + "://" + resp.Request.URL.Host
+				if final != host {
+					mirrorState.mu.Lock()
+					mirrorState.host = final
+					mirrorState.mu.Unlock()
+				}
+			}
+			return text, nil
+		}
+		if rerr != nil {
+			lastErr = rerr
+		} else if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("mirror fetch %s -> %d", path, resp.StatusCode)
+		} else {
+			lastErr = fmt.Errorf("mirror fetch %s: challenge page", path)
+		}
+	} else {
+		lastErr = err
+	}
+	if tb, code, _, terr := tlsGet(host+path, mirrorHeaders()); terr == nil && code == 200 && !isChallengePage(string(tb)) {
+		return string(tb), nil
+	} else if terr != nil {
+		lastErr = terr
 	}
 	return "", lastErr
 }

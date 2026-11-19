@@ -141,6 +141,7 @@ class HtmlBridge {
     this.httpClientFactory,
     this.cookieReader,
     this.cookieWriter,
+    this.userAgentReader,
   });
 
   final String siteKey;
@@ -160,8 +161,16 @@ class HtmlBridge {
   final Future<List<WebViewCookie>> Function(Uri url)? cookieReader;
   final Future<void> Function(WebViewCookie cookie)? cookieWriter;
 
+  /// 宿主 WebView 的 UA 读口：宿主页面接 controller.getUserAgent，
+  /// _req 默认 UA 取它（与解题票据绑定的 UA 一致）。测试注假；
+  /// 未注入时 _req 沿用 Dart 默认 UA（旧行为）。
+  final Future<String?> Function()? userAgentReader;
+
   Map<String, dynamic> _lastPlayState = {};
   final List<String> _extLog = [];
+
+  /// 宿主 WebView UA 缓存：一页生命周期内 UA 不变，只取一次。
+  String? _cachedUserAgent;
 
   List<String> get extLog => List.unmodifiable(_extLog);
 
@@ -395,12 +404,26 @@ class HtmlBridge {
           .openUrl(method, uri)
           .timeout(Duration(milliseconds: timeoutMs));
       final headers = params['headers'];
+      var pageSetUserAgent = false;
       if (headers is Map) {
         headers.forEach((key, value) {
           final name = key.toString().toLowerCase();
+          if (name == 'user-agent') pageSetUserAgent = true;
           if (_skipReqHeaders.contains(name)) return;
           request.headers.set(name, value.toString());
         });
+      }
+      if (!pageSetUserAgent) {
+        // 默认 UA 取宿主 WebView 的 UA：CF 的 cf_clearance 绑定解题
+        // 时的 UA；_req 若用 Dart 默认 UA 发请求，票据带上也会被
+        // 重拦，复用就断了。取不到时沿用旧行为，不让请求失败。
+        // UA 不是凭据，与 credentials 取值无关，omit 也照发。
+        try {
+          final ua = await _readUserAgent();
+          if (ua != null && ua.isNotEmpty) {
+            request.headers.set('user-agent', ua);
+          }
+        } catch (_) {}
       }
       if (credentials != 'omit') {
         try {
@@ -498,6 +521,18 @@ class HtmlBridge {
   Future<List<WebViewCookie>> _readCookies(Uri uri) async {
     if (cookieReader != null) return cookieReader!(uri);
     return WebViewCookieManager().getCookies(domain: uri);
+  }
+
+  /// 宿主 WebView 的 UA：未注入读口时返回 null。非空结果缓存，
+  /// 取失败（空/抛错）时不缓存，下次再试。
+  Future<String?> _readUserAgent() async {
+    final cached = _cachedUserAgent;
+    if (cached != null && cached.isNotEmpty) return cached;
+    final reader = userAgentReader;
+    if (reader == null) return null;
+    final ua = await reader();
+    if (ua != null && ua.isNotEmpty) _cachedUserAgent = ua;
+    return ua;
   }
 
   Future<void> _storeCookies(Uri uri, List<String> setCookie) async {

@@ -17,8 +17,8 @@ void main() {
       SourceSite(id, '🔞$id', '', section: SourceSite.sectionVideo),
   ];
 
-  const missav = 'jar:zakatv:ZakaMissav';
-  const missavOff = 'jar:zakatv:ZakaMissavOff';
+  const missav = 'jar:missav30:ZakaMissav';
+  const missavOff = 'jar:missav30:ZakaMissavOff';
   const mirror = 'jar:zakatv:ZakaMirror';
 
   DramaDetail richDetail({required String id, required String source}) =>

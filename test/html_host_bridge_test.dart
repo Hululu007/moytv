@@ -257,6 +257,7 @@ void main() {
     HtmlBridge reqBridge({
       Future<List<WebViewCookie>> Function(Uri)? cookieReader,
       Future<void> Function(WebViewCookie)? cookieWriter,
+      Future<String?> Function()? userAgentReader,
     }) => HtmlBridge(
       siteKey: 'html:demo',
       siteName: '演示站',
@@ -270,6 +271,7 @@ void main() {
       cookieReader: cookieReader ?? (_) async => const [],
       cookieWriter:
           cookieWriter ?? (cookie) async => storedCookies.add(cookie),
+      userAgentReader: userAgentReader,
     );
 
     setUp(() async {
@@ -349,6 +351,89 @@ void main() {
       expect(storedCookies, hasLength(1));
       expect(storedCookies.single.name, 'sid');
       expect(storedCookies.single.value, 'abc123');
+    });
+
+    test('default UA comes from the host WebView reader', () async {
+      // cf_clearance 绑定解题时的 UA：_req 默认必须发宿主 WebView
+      // 的 UA，Dart 默认 UA 会让票据作废、复用断掉。
+      const webviewUa =
+          'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36';
+      final req = reqBridge(userAgentReader: () async => webviewUa);
+      final result = await req.dispatch('fm.req', {
+        'url': stubUrl('/echo'),
+      }) as Map<String, dynamic>;
+      final echoed = jsonDecode(result['body'] as String) as Map;
+      expect(echoed['ua'], webviewUa);
+    });
+
+    test('page-supplied User-Agent wins and the reader is not consulted', () async {
+      var readerCalls = 0;
+      final req = reqBridge(
+        userAgentReader: () async {
+          readerCalls++;
+          return 'webview-ua';
+        },
+      );
+      final result = await req.dispatch('fm.req', {
+        'url': stubUrl('/echo'),
+        'headers': {'User-Agent': 'page-ua'},
+      }) as Map<String, dynamic>;
+      final echoed = jsonDecode(result['body'] as String) as Map;
+      expect(echoed['ua'], 'page-ua');
+      expect(readerCalls, 0);
+    });
+
+    test('reader returning null or throwing keeps the request working', () async {
+      for (final reader in <Future<String?> Function()?>[
+        () async => null,
+        () async => throw StateError('no controller'),
+      ]) {
+        final req = reqBridge(userAgentReader: reader);
+        final result = await req.dispatch('fm.req', {
+          'url': stubUrl('/echo'),
+        }) as Map<String, dynamic>;
+        final echoed = jsonDecode(result['body'] as String) as Map;
+        expect((echoed['ua'] as String).startsWith('Dart/'), isTrue);
+      }
+    });
+
+    test('WebView UA is resolved once and cached', () async {
+      var readerCalls = 0;
+      final req = reqBridge(
+        userAgentReader: () async {
+          readerCalls++;
+          return 'webview-ua';
+        },
+      );
+      for (var i = 0; i < 2; i++) {
+        final result = await req.dispatch('fm.req', {
+          'url': stubUrl('/echo'),
+        }) as Map<String, dynamic>;
+        final echoed = jsonDecode(result['body'] as String) as Map;
+        expect(echoed['ua'], 'webview-ua');
+      }
+      expect(readerCalls, 1);
+    });
+
+    test('credentials omit still sends the WebView UA but no cookies', () async {
+      final req = reqBridge(
+        cookieReader: (uri) async => [
+          WebViewCookie(
+            name: 'pre',
+            value: '1',
+            domain: uri.host,
+            path: '/',
+          ),
+        ],
+        userAgentReader: () async => 'webview-ua',
+      );
+      final result = await req.dispatch('fm.req', {
+        'url': stubUrl('/echo'),
+        'credentials': 'omit',
+      }) as Map<String, dynamic>;
+      final echoed = jsonDecode(result['body'] as String) as Map;
+      expect(echoed['ua'], 'webview-ua');
+      expect(echoed['cookie'], isNull);
     });
 
     test('non-200 status does not throw', () async {

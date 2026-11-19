@@ -24,7 +24,16 @@ void main() {
     JarBridge.register(
         spec('ZakaHjApp', 'com.github.catvod.spider.ZakaHjAppAmns'));
     JarBridge.register(
-        spec('ZakaMissav', 'com.github.catvod.spider.ZakaMissavAmns'));
+      JarSiteSpec(
+        siteId: 'jar:missav30:ZakaMissav',
+        configId: 'missav30',
+        name: 'ZakaMissav',
+        className: 'com.github.catvod.spider.ZakaMissavAmns',
+        jarUrl: '',
+        jarMd5: '',
+        ext: '',
+      ),
+    );
     expect(JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHaijiao'),
         'v_haijiao');
     expect(JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHj1'),
@@ -33,7 +42,7 @@ void main() {
         JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHjw'), 'v_hjw');
     expect(JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHjApp'),
         'v_haijiao_fanguo');
-    expect(JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaMissav'),
+    expect(JarHaijiaoTakeover.goSourceForJarSite('jar:missav30:ZakaMissav'),
         isNull);
   });
 

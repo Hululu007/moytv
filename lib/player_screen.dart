@@ -338,7 +338,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       (_plan?.decryptionKey.isEmpty ?? true) &&
       (_plan?.forceMpv != true) &&
       _backendManager?.current != PlaybackBackend.main;
-  PlayerCore get _effectiveCore => effectivePlayerCore(stored: _core);
+  PlayerCore get _effectiveCore => effectivePlayerCore(
+    stored: _core,
+    siteId: widget.detail.drama.source,
+  );
   bool get _useExoCore =>
       !_television && Platform.isAndroid && _effectiveCore == PlayerCore.exo;
   bool get _useIjkCore => !_television && _effectiveCore == PlayerCore.ijk;
@@ -2170,6 +2173,28 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 嗅探页本身加载失败（如 HTTP 404）：关掉嗅探页，不再把服务器
+  /// 的错误页挂在播放区；走与恢复耗尽同一条路——留错误界面，
+  /// 有换线回调时下一帧通知调用方换下一条线，链耗尽才停在错误
+  /// 界面。嗅探页只报一次失败，这里不重复通知。
+  void _onSniffLoadFailed(String message) {
+    if (!_sniffEmbedded || _closed || !mounted) return;
+    final onExhausted = widget.onPlaybackExhausted;
+    setState(() {
+      _sniffEmbedded = false;
+      _sniffPreviousError = null;
+      _loading = false;
+      _error = onExhausted == null
+          ? '网页加载失败（$message），请重试或换一集。'
+          : '网页加载失败（$message）。';
+    });
+    if (onExhausted != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) onExhausted(context);
+      });
+    }
+  }
+
   String _queueSwipe(int direction) {
     final queue = widget.queue;
     if (queue == null || queue.isEmpty) {
@@ -3427,6 +3452,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   headers: _plan?.headers ?? const {},
                   embedded: true,
                   onMediaFound: _onSniffedMedia,
+                  onLoadFailed: _onSniffLoadFailed,
                 ),
               if (_sniffEmbedded && !hideOverlayForPictureInPicture)
                 Positioned(

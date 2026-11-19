@@ -74,6 +74,8 @@ import 'live_store.dart';
 import 'live_sources.dart';
 import 'content_registry.dart';
 import 'ra2_game_page.dart';
+import 'web_game_page.dart';
+import 'action_protocol.dart';
 import 'miniapp/mini_app_store.dart';
 import 'miniapp/mini_app_manifest.dart';
 import 'win7_desktop.dart';
@@ -191,6 +193,12 @@ class _HomeScreenState extends State<HomeScreen>
   bool _loadingMore = false;
   bool _hasMore = true;
   String? _error;
+
+  /// 最近一次目录现抓是否落空（抛错）：只由 [_load] 写——新尝试开始
+  /// 时清零、现抓结果到达时清零、现抓抛错时置真；缓存占位到达
+  /// （onCached）不碰它。补拉循环据此判断“只剩旧缓存、现抓没到”，
+  /// 不能只看 [_items] 是否为空（旧缓存也会把 [_items] 填满）。
+  bool _catalogLoadFailed = false;
   int _generation = 0;
   HomeZone _zone = HomeZone.library;
 
@@ -842,7 +850,9 @@ class _HomeScreenState extends State<HomeScreen>
       _error = null;
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
-    _load(useCache: true);
+    // 切分类与切站同口径：首次现抓落空时自动补拉，页面不因一次
+    // 抖动就停在旧缓存/空列表上等手动刷新；首发仍先读缓存占位。
+    unawaited(_loadWithAutoRetry(useCache: true));
   }
 
   /// 文件夹卡下钻：以 folderId 作为 category 参数再次请求目录，
@@ -865,7 +875,7 @@ class _HomeScreenState extends State<HomeScreen>
       _error = null;
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
-    _load(useCache: true);
+    unawaited(_loadWithAutoRetry(useCache: true));
   }
 
   void _drillTo(int depth) {
@@ -881,7 +891,7 @@ class _HomeScreenState extends State<HomeScreen>
       _error = null;
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
-    _load(useCache: true);
+    unawaited(_loadWithAutoRetry(useCache: true));
   }
 
   /// 按标签下钻（tag: 前缀 folderId），与文件夹下钻共用同一栈。
@@ -1204,7 +1214,9 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     for (var attempt = 0; attempt < 2; attempt++) {
       if (_loading || _loadingMore || _showRecommendations) return;
-      if (_items.isNotEmpty) return;
+      // 现抓落空也要补拉：缓存占位已把 _items 填满时只看 _items
+      // 会误以为已拿到新内容、停在旧缓存上（见 _catalogLoadFailed）。
+      if (_items.isNotEmpty && !_catalogLoadFailed) return;
       if (_librarySources.isEmpty) return;
       if (attempt > 0) {
         await _cancellableRetryDelay();
@@ -1212,7 +1224,7 @@ class _HomeScreenState extends State<HomeScreen>
             _loading ||
             _loadingMore ||
             _showRecommendations ||
-            _items.isNotEmpty) {
+            (_items.isNotEmpty && !_catalogLoadFailed)) {
           return;
         }
       }
@@ -1234,6 +1246,7 @@ class _HomeScreenState extends State<HomeScreen>
     final group = _effectiveGroup;
     final query = _canSearchOnline ? _search.text.trim() : '';
     setState(() {
+      _catalogLoadFailed = false;
       if (!silent) _error = null;
       if (query.isNotEmpty && !silent) {
         _categorySelections[_categoryKey(group.id)] = '';
@@ -1248,6 +1261,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
     void accept(CatalogPage result, {bool cached = false}) {
       if (!mounted || generation != _generation) return;
+      // 只有现抓结果到达才算本次加载成功；缓存占位到达时现抓还在
+      // 路上，落空标记留给现抓的 accept/catch 决定。
+      if (!cached) _catalogLoadFailed = false;
       if (_firstLaunch && !cached && result.items.isNotEmpty) {
         _firstLaunch = false;
         unawaited(
@@ -1295,6 +1311,7 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() {
         _loading = false;
         _loadingMore = false;
+        _catalogLoadFailed = true;
         if (!silent) _error = error.toString();
       });
     }
@@ -1465,6 +1482,14 @@ class _HomeScreenState extends State<HomeScreen>
       );
 
   void _openDrama(Drama drama, {bool resume = false, PlaybackQueue? queue}) {
+    // 动作卡（vod_tag='action'）：点卡直接开 WebView 游戏窗，不走
+    // 详情页、不走视频嗅探；动作 JSON 解析失败时回落原有路径。
+    final action = drama.isAction ? parseBrowserAction(drama.sourceId) : null;
+    if (action != null) {
+      _pauseCatalog();
+      unawaited(openBrowserAction(context, action));
+      return;
+    }
     if (_openingPlayback) return;
     _pauseCatalog();
     final contextQueue = queue ?? _queueAround(drama, _visible);
@@ -1958,6 +1983,9 @@ class _HomeScreenState extends State<HomeScreen>
   List<Drama> get _visible {
     final view = widget.store.catalogView;
     final key = [
+      // 站源/分组进键：切站后纵使新旧列表长度相同、对象哈希巧合
+      // 相同，也绝不命中旧站的过滤结果。
+      _group.id,
       identityHashCode(_items),
       _items.length,
       _category,
@@ -2351,7 +2379,7 @@ class _HomeScreenState extends State<HomeScreen>
       );
       _win7Foreground = kind;
     });
-    _win7ApplyForeground(kind, targetId, targetAll);
+    _win7ApplyForeground(kind, targetId, targetAll, explicitSourceId: sourceId);
   }
 
   /// 新开窗口的默认站点：取各区当前选中的站（没有则空，由各区
@@ -2361,13 +2389,18 @@ class _HomeScreenState extends State<HomeScreen>
     Win7WindowKind.drama => _hongguoSource()?.id ?? _source.id,
     Win7WindowKind.live =>
       _liveEntrySourceId.isEmpty ? null : _liveEntrySourceId,
-    Win7WindowKind.audio => _contentBinding.selectedIdFor(ContentSection.audio),
-    Win7WindowKind.novel => _contentBinding.selectedIdFor(ContentSection.novel),
+    // 听读窗取当前子区（上次停的子区）选中的站。
+    Win7WindowKind.listenRead => _contentBinding.selectedIdFor(
+      _lastListenReadZone == HomeZone.audio
+          ? ContentSection.audio
+          : ContentSection.novel,
+    ),
     Win7WindowKind.miniApp => null,
     Win7WindowKind.multimedia => null,
     Win7WindowKind.mine => null,
     Win7WindowKind.actress => null,
     Win7WindowKind.game => null,
+    Win7WindowKind.kof => null,
   };
 
   SourceSite? _hongguoSource() {
@@ -2384,14 +2417,32 @@ class _HomeScreenState extends State<HomeScreen>
     return null;
   }
 
+  /// 站点 id 所属的听读分区：先查听书、再查阅读，哪个分区有名册
+  /// 里有它就属哪个；两边都没有（或 id 为空）回 null，调用方回落
+  /// 上次停的子区。开始菜单叶子只带 kind 与 siteId，子区靠它分辨。
+  ContentSection? _sectionForSourceId(String? sourceId) {
+    if (sourceId == null || sourceId.isEmpty) return null;
+    for (final section in ContentSection.values) {
+      for (final source in ContentRegistry.sourcesFor(section)) {
+        if (source.id == sourceId) return section;
+      }
+    }
+    return null;
+  }
+
   /// 把首页共享状态拨到前台窗口的描述：片库/短剧拨区与站点，
   /// 听读拨 binding 选站，其余只拨区（内容体由窗口描述直供参数）。
   /// 不记区历史：窗口层面的返回是最小化回桌面，不走区历史。
+  /// [explicitSourceId] 是调用方这次显式带来的站点（开始菜单叶子）：
+  /// 只有它非空时听读窗才按站点所属分区切子区；最小化恢复、桌面
+  /// 图标重开这类没带站的调用，听读窗沿用上次停的子区，不被窗口
+  /// 描述里记的老站点 id 拨回另一个子区。
   void _win7ApplyForeground(
     Win7WindowKind kind,
     String? sourceId,
-    bool allSources,
-  ) {
+    bool allSources, {
+    String? explicitSourceId,
+  }) {
     switch (kind) {
       case Win7WindowKind.library:
       case Win7WindowKind.drama:
@@ -2412,27 +2463,33 @@ class _HomeScreenState extends State<HomeScreen>
         });
       case Win7WindowKind.live:
         _applyZoneChange(HomeZone.live);
-      case Win7WindowKind.audio:
-      case Win7WindowKind.novel:
-        final section = kind == Win7WindowKind.audio
-            ? ContentSection.audio
-            : ContentSection.novel;
-        if (sourceId != null &&
-            _contentBinding.selectedIdFor(section) != sourceId) {
+      case Win7WindowKind.listenRead:
+        // 子区由显式带来的站点所属分区决定（开始菜单叶子带站时）：
+        // 站属于哪个分区，窗口就切到哪个子区并选中该站；没带站时
+        // （桌面图标、任务栏恢复）沿用上次停的子区。内部区键与
+        // binding 分区一律不动，只合窗口。
+        final section =
+            _sectionForSourceId(explicitSourceId) ??
+            (_lastListenReadZone == HomeZone.audio
+                ? ContentSection.audio
+                : ContentSection.novel);
+        if (explicitSourceId != null &&
+            _contentBinding.selectedIdFor(section) != explicitSourceId) {
           for (final source in ContentRegistry.sourcesFor(section)) {
-            if (source.id == sourceId) {
+            if (source.id == explicitSourceId) {
               _contentBinding.select(section, source);
               break;
             }
           }
         }
         _applyZoneChange(
-          kind == Win7WindowKind.audio ? HomeZone.audio : HomeZone.novel,
+          section == ContentSection.audio ? HomeZone.audio : HomeZone.novel,
         );
       case Win7WindowKind.miniApp:
       case Win7WindowKind.multimedia:
       case Win7WindowKind.mine:
       case Win7WindowKind.game:
+      case Win7WindowKind.kof:
         _applyZoneChange(HomeZone.library);
         setState(() {
           _mineRequested = false;
@@ -2494,22 +2551,24 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /// 窗口内听读子区切换（听书/阅读胶囊）= 切到另一个听读窗口，
-  /// 各窗口保留各自状态。
+  /// 窗口内听读子区切换（听书/阅读胶囊）= 同一个听读窗口内换
+  /// 子区（与底部标签同一条切区路径），不再另开一个窗口；窗口
+  /// 实例与任务栏条目都只有一个，子区状态由 [_lastListenReadZone]
+  /// 记住。
   void _win7ListenReadSwitch(HomeZone zone) {
-    _win7Open(
-      zone == HomeZone.audio ? Win7WindowKind.audio : Win7WindowKind.novel,
-    );
+    _setZone(zone);
   }
 
   /// 开始菜单树：按区（片库/直播/听读/短剧/小程序/多媒体）分组，
   /// 组下挂该区真实站点，名全部取注册表。听读组下再分听书/阅读
-  /// 两层，演示任意层级展开。空组挂一行“暂无可用站点”（点按无动作）。
-  /// 女优库是独立区域、不是站点：末尾一个单叶节点，点按只开女优库
-  /// 窗口，不挂任何站点（模块内绝不显示站点来源信息）。
+  /// 两层（一级分类），各挂该分区的站点。空组挂一行“暂无可用站点”
+  /// （点按无动作）。女优库是独立区域、不是站点：末尾一个单叶节点，
+  /// 点按只开女优库窗口，不挂任何站点（模块内绝不显示站点来源信息）。
   /// 组节点也带 kind（只用来画组行图标；点按仍是展开/收起，isLeaf
   /// 按 children 判，不受影响）。听读组没有对应的单一区 kind，不带
-  /// kind、组行不画图标；听书/阅读两个子组各带自己的 kind。
+  /// kind、组行不画图标；听书/阅读两个子组与叶子都带听读 kind（只
+  /// 开一个听读窗口，子区由叶子站点所属分区决定，见
+  /// [_sectionForSourceId]）。
   List<Win7TreeNode> _win7TreeGroups() {
     List<Win7TreeNode> orEmpty(List<Win7TreeNode> children) =>
         children.isEmpty ? const [Win7TreeNode(label: '暂无可用站点')] : children;
@@ -2543,28 +2602,28 @@ class _HomeScreenState extends State<HomeScreen>
         children: [
           Win7TreeNode(
             label: '听书',
-            kind: Win7WindowKind.audio,
+            kind: Win7WindowKind.listenRead,
             children: orEmpty([
               for (final source in ContentRegistry.sourcesFor(
                 ContentSection.audio,
               ))
                 Win7TreeNode(
                   label: source.name,
-                  kind: Win7WindowKind.audio,
+                  kind: Win7WindowKind.listenRead,
                   siteId: source.id,
                 ),
             ]),
           ),
           Win7TreeNode(
             label: '阅读',
-            kind: Win7WindowKind.novel,
+            kind: Win7WindowKind.listenRead,
             children: orEmpty([
               for (final source in ContentRegistry.sourcesFor(
                 ContentSection.novel,
               ))
                 Win7TreeNode(
                   label: source.name,
-                  kind: Win7WindowKind.novel,
+                  kind: Win7WindowKind.listenRead,
                   siteId: source.id,
                 ),
             ]),
@@ -2638,11 +2697,10 @@ class _HomeScreenState extends State<HomeScreen>
           initialSourceId: window.sourceId ?? '',
           initialSourceNonce: window.nonce,
         );
-      case Win7WindowKind.audio:
-      case Win7WindowKind.novel:
-        final zone = window.kind == Win7WindowKind.audio
-            ? HomeZone.audio
-            : HomeZone.novel;
+      case Win7WindowKind.listenRead:
+        // 单一听读窗口：子区取上次停的子区（胶囊切换与开始菜单
+        // 叶子换站都会拨它），窗口内换子区不换窗口实例。
+        final zone = _lastListenReadZone;
         final section = zone == HomeZone.audio
             ? ContentSection.audio
             : ContentSection.novel;
@@ -2697,6 +2755,15 @@ class _HomeScreenState extends State<HomeScreen>
         // 网页游戏窗口：无 AppBar、无地址栏、无网址字串的 WebView 页；
         // key 固定，实例靠 Offstage 槽位常驻，最小化不重载。
         return const Ra2GamePage(key: ValueKey('win7-game'));
+      case Win7WindowKind.kof:
+        // 拳皇97 窗口：与红警2同一通用游戏窗，直达小霸王游戏源
+        // 的拳皇97 页；key 固定，实例靠 Offstage 槽位常驻。
+        return const WebGamePage(
+          key: ValueKey('win7-kof'),
+          gameUrl: kof97GameUrl,
+          allowedHost: kof97GameHost,
+          keyPrefix: 'kof',
+        );
       case Win7WindowKind.library:
       case Win7WindowKind.drama:
         return _win7LibraryBody(glass: glass, maxWidth: maxWidth);
@@ -2762,12 +2829,14 @@ class _HomeScreenState extends State<HomeScreen>
                 kind: window.kind,
                 onMinimize: () => _win7Minimize(window.kind),
                 onClose: () => _win7Close(window.kind),
+                active: isForeground,
                 child: body,
               )
             : Win7WindowFrame(
                 kind: window.kind,
                 onMinimize: () => _win7Minimize(window.kind),
                 onClose: () => _win7Close(window.kind),
+                active: isForeground,
                 child: body,
               ),
       ),

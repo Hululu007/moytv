@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -32,9 +33,12 @@ const _verifyNotes = <String, String>{
 };
 
 class CloudDriveScreen extends StatefulWidget {
-  const CloudDriveScreen({super.key, required this.store});
+  const CloudDriveScreen({super.key, required this.store, this.providers});
 
   final LocalStore store;
+
+  /// 注入网盘列表（单测用假 provider；不传则用五家真实 provider）。
+  final List<CloudDriveProvider>? providers;
 
   @override
   State<CloudDriveScreen> createState() => _CloudDriveScreenState();
@@ -42,7 +46,7 @@ class CloudDriveScreen extends StatefulWidget {
 
 class _CloudDriveScreenState extends State<CloudDriveScreen> {
   final _client = http.Client();
-  final _providers = createCloudDriveProviders();
+  late final _providers = widget.providers ?? createCloudDriveProviders();
   CloudCredentialStore? _credentialStore;
   Set<String> _loggedIn = {};
   bool _loading = true;
@@ -118,7 +122,11 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('获取二维码失败：$e')),
+        SnackBar(
+          content: Text(
+            _qrErrorMessage(e, '获取二维码失败，请检查网络后重试'),
+          ),
+        ),
       );
       return;
     }
@@ -362,6 +370,12 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
   }
 }
 
+/// 扫码流程里给用户看的错误文案：网盘侧抛的中文说明（[CloudDriveException]，
+/// 文案是写死的中文、不含地址）直接显示；其余异常一律用干净的通用文案，
+/// 绝不把异常原文（可能含完整请求地址与凭证参数）显示出来。
+String _qrErrorMessage(Object error, String fallback) =>
+    error is CloudDriveException ? error.message : fallback;
+
 /// 扫码登录弹窗：二维码 + 轮询 + 过期重取 + 内容链接复制。
 class _QrLoginDialog extends StatefulWidget {
   const _QrLoginDialog({
@@ -379,11 +393,20 @@ class _QrLoginDialog extends StatefulWidget {
 }
 
 class _QrLoginDialogState extends State<_QrLoginDialog> {
+  /// 连续瞬时网络失败达到这么多次才判失败（轮询间隔 2 秒，5 次约
+  /// 10 秒，盖住一次网络抖动；超过就是真断网，没必要再等）。
+  static const _maxConsecutivePollFailures = 5;
+
   Timer? _timer;
   String _status = '';
   bool _expired = false;
   bool _failed = false;
   QrLoginSession? _currentSession;
+  int _consecutivePollFailures = 0;
+
+  /// 一次轮询请求在途时跳过后续 tick：请求超时 20 秒、tick 间隔
+  /// 2 秒，不加这个网络一挂就会叠起一串并发请求。
+  bool _pollInFlight = false;
 
   @override
   void initState() {
@@ -401,12 +424,14 @@ class _QrLoginDialogState extends State<_QrLoginDialog> {
 
   void _startPolling() {
     _timer?.cancel();
+    _consecutivePollFailures = 0;
+    _pollInFlight = false;
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _pollOnce());
   }
 
   Future<void> _pollOnce() async {
     final session = _currentSession;
-    if (session == null) return;
+    if (session == null || _pollInFlight) return;
     if (DateTime.now().isAfter(session.expiresAt)) {
       _timer?.cancel();
       if (mounted) {
@@ -417,19 +442,42 @@ class _QrLoginDialogState extends State<_QrLoginDialog> {
       }
       return;
     }
+    _pollInFlight = true;
     QrPollResult result;
     try {
       result = await widget.provider.pollQrLogin(widget.client, session);
     } catch (e) {
       if (!mounted) return;
+      // 瞬时网络错（连接被断/重置/超时）不终结轮询：继续等下一个
+      // tick，只提示“正在重试”；连续失败到上限才判失败。一次抖动
+      // 就停轮询是 2026-11-18 用户手机上 115 扫码报障的根因。
+      if (_isTransientPollError(e)) {
+        _consecutivePollFailures++;
+        if (_consecutivePollFailures >= _maxConsecutivePollFailures) {
+          _timer?.cancel();
+          setState(() {
+            _failed = true;
+            _status = '网络不稳定，获取扫码状态失败，请重新获取';
+          });
+        } else {
+          setState(() {
+            _status = '网络波动，正在重试…';
+          });
+        }
+        return;
+      }
       _timer?.cancel();
       setState(() {
         _failed = true;
-        _status = '轮询出错：$e';
+        _status = _qrErrorMessage(e, '获取扫码状态失败，请重新获取');
       });
       return;
+    } finally {
+      _pollInFlight = false;
     }
     if (!mounted) return;
+    // 拿到任何一次正常结果都清零：只数“连续”失败。
+    _consecutivePollFailures = 0;
     switch (result.status) {
       case QrPollStatus.success:
         _timer?.cancel();
@@ -453,6 +501,17 @@ class _QrLoginDialogState extends State<_QrLoginDialog> {
     }
   }
 
+  /// 轮询里可重试的瞬时网络错：连接被断/重置（http 客户端包成
+  /// [http.ClientException]，用户截图里就是这一种）、Socket/Http 层
+  /// 错误、请求超时。其余异常（返回解析失败、不支持的操作等）不是
+  /// 网络抖动，不重试，立即判失败。
+  bool _isTransientPollError(Object error) {
+    return error is TimeoutException ||
+        error is SocketException ||
+        error is HttpException ||
+        error is http.ClientException;
+  }
+
   Future<void> _refreshQr() async {
     setState(() {
       _expired = false;
@@ -471,7 +530,7 @@ class _QrLoginDialogState extends State<_QrLoginDialog> {
       if (!mounted) return;
       setState(() {
         _failed = true;
-        _status = '获取二维码失败：$e';
+        _status = _qrErrorMessage(e, '获取二维码失败，请检查网络后重试');
       });
     }
   }

@@ -1070,6 +1070,15 @@ class NativeRepository extends AppRepository {
     }
   }
 
+  static bool _startsWithExtM3u(List<int> body) {
+    const marker = [0x23, 0x45, 0x58, 0x54, 0x4D, 0x33, 0x55]; // '#EXTM3U'
+    if (body.length < marker.length) return false;
+    for (var i = 0; i < marker.length; i++) {
+      if (body[i] != marker[i]) return false;
+    }
+    return true;
+  }
+
   Future<void> _handleJarProxyRequest(HttpRequest request) async {
     try {
       final payload = request.uri.queryParameters['d'] ?? '';
@@ -1091,12 +1100,31 @@ class NativeRepository extends AppRepository {
         });
       }
       final result = await JarBridge.jarProxy(spec, param);
-      final body = base64Decode(result['bodyBase64'] as String? ?? '');
+      final mime = result['mime'] as String? ?? 'application/octet-stream';
+      var body = base64Decode(result['bodyBase64'] as String? ?? '');
+      // 代理回的文本正文（m3u8 母列表）里嵌的下一级 9978 地址须一并
+      // 改写成本地 /jarproxy 地址，否则播放器直接取 9978 无人监听；
+      // 二进制分片正文绝不碰（类型与 #EXTM3U 头双重把关）。
+      final isPlaylistText =
+          mime.contains('mpegurl') ||
+          mime.startsWith('text/') ||
+          _startsWithExtM3u(body);
+      if (isPlaylistText) {
+        final port = request.connectionInfo?.localPort ?? _pyProxyServer?.port;
+        if (port != null) {
+          final text = utf8.decode(body, allowMalformed: true);
+          final rewritten = JarBridge.rewriteLoopbackProxyUrls(
+            text,
+            port: port,
+            spec: spec,
+          );
+          if (rewritten != text) {
+            body = utf8.encode(rewritten);
+          }
+        }
+      }
       request.response.statusCode = result['status'] as int? ?? 200;
-      request.response.headers.set(
-        HttpHeaders.contentTypeHeader,
-        result['mime'] as String? ?? 'application/octet-stream',
-      );
+      request.response.headers.set(HttpHeaders.contentTypeHeader, mime);
       request.response.add(body);
       await request.response.close();
     } catch (error) {
@@ -2148,12 +2176,15 @@ class NativeRepository extends AppRepository {
     JarSiteSpec spec,
     PlaybackPlan plan,
   ) async {
-    if (!plan.url.startsWith('proxy://') && !plan.url.startsWith('proxy:')) {
+    final loopbackParams = JarBridge.loopbackProxyParams(plan.url);
+    final isProxyScheme =
+        plan.url.startsWith('proxy://') || plan.url.startsWith('proxy:');
+    if (loopbackParams == null && !isProxyScheme) {
       return plan;
     }
     try {
       final server = await _ensurePyProxyServer();
-      final param = JarBridge.parseProxyParams(plan.url);
+      final param = loopbackParams ?? JarBridge.parseProxyParams(plan.url);
       final local = JarBridge.jarProxyLocalUrl(
         server.port,
         JarBridge.jarProxyPayload(spec, param),

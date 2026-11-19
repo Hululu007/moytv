@@ -45,9 +45,16 @@ class NeonHomeView extends StatefulWidget {
   final String sourceLabel;
   final ValueChanged<Drama> onOpen;
   final VoidCallback onSearch;
+
+  /// 保留给调用方兼容：2026-11-18 19:49 令后标题不再可点，本字段
+  /// 不再被本组件接线；点图标弹站点列表走 [onAvatar]。字段留着不
+  /// 动，避免牵动全部调用点，清理另立项。
   final VoidCallback onSourceTap;
   final void Function(Drama drama) onLongPress;
   final Future<void> Function()? onRefresh;
+
+  /// 顶栏图标（leading）的点按动作：调用方按 2026-11-18 19:49 令
+  /// 传入弹站点列表的回调；为空时不画图标。
   final VoidCallback? onAvatar;
   final VoidCallback? onRankings;
   final ValueChanged<Drama>? onFeaturedPlay;
@@ -162,7 +169,9 @@ class _NeonHomeViewState extends State<NeonHomeView> {
               child: NeonTopBar(
                 brand: widget.brand,
                 subtitle: widget.sourceLabel,
-                onTitleTap: widget.onSourceTap,
+                // 标题不可点（用户 2026-11-18 19:49 令：点名称什么都
+                // 不弹）；点图标弹站点列表，见 leading 的 onAvatar。
+                onTitleTap: null,
                 leading: widget.onAvatar == null
                     ? null
                     : GestureDetector(

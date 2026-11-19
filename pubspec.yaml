@@ -63,6 +63,8 @@ flutter:
     - assets/py_spiders/
     - assets/jars/zakatv.jar
     - assets/jars/youtube.jar
+    - assets/jars/one.jar
+    - assets/jars/missav30.jar
     - assets/youtube3.json
     - assets/jar_site_configs.json
     - assets/haikuo_samples.json
@@ -75,3 +77,4 @@ flutter:
     - assets/xp_wallpaper.jpg
     - assets/xp_boot_video.mp4
     - assets/ant_logo.png
+    - assets/app_icons/

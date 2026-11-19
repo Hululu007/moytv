@@ -7,9 +7,10 @@ import 'actress_models.dart';
 import 'actress_play.dart';
 import 'actress_search.dart';
 import 'actress_widgets.dart';
+import '../app_page_route.dart';
 import '../core_bridge.dart';
+import '../detail_screen.dart';
 import '../local_store.dart';
-import '../player_picker.dart';
 import '../widgets.dart';
 
 /// 人物详情页：头像、名、标签、作品数 + 作品卡片网格。
@@ -19,8 +20,11 @@ import '../widgets.dart';
 /// - 打开即后台跑双键合流补封面（缓存优先：已补过且全部作品已有
 ///   封面时下次不再跑；仍有无封面作品时重新补），退出页即停，
 ///   不挡列表显示；
-/// - 点卡走静默换线链：探活 + 预检 + 播放中途回调换线，全程不显示
-///   任何站点来源信息，全部候选失败才报“暂无可播片源”。
+/// - 点卡先查兜底 MJV：按番号先探 MJV 系（jar/py/Go 槽）与 18AV
+///   双生站，命中立即进详情页并播放（MJV 作首选线路），不等全站
+///   探完；无果回落全站探查；其余站的结果由详情页跨站线路区挂
+///   线路，播耗尽时自动向同一条链换下一条线；全部候选失败才报
+///   “暂无可播片源”。
 class ActressDetailPage extends StatefulWidget {
   const ActressDetailPage({
     super.key,
@@ -256,46 +260,35 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       ).showSnackBar(const SnackBar(content: Text('暂无可播片源')));
       return;
     }
-    await _pushCandidate(chain, candidate);
+    await _openDetailWithChain(chain, candidate);
   }
 
-  Future<void> _pushCandidate(
+  /// 兜底命中直进详情页：首选线路进页即播；详情页跨站线路区继续
+  /// 挂其余站的线路；播耗尽时详情页向同一条链要下一条线路。
+  Future<void> _openDetailWithChain(
     ActressPlayChain chain,
     ActressPlayCandidate candidate,
   ) async {
-    await pushPlayer<void>(
-      context,
-      detail: candidate.detail,
-      initialIndex: candidate.episodeIndex,
-      repository: widget.repository,
-      store: widget.store,
-      onPlaybackExhausted: (playerContext) =>
-          _onPlaybackExhausted(chain, playerContext),
+    await Navigator.of(context).push(
+      appPageRoute<void>(
+        settings: const RouteSettings(name: 'detail'),
+        builder: (_) => DetailScreen(
+          drama: candidate.detail.drama,
+          repository: widget.repository,
+          store: widget.store,
+          autoPlayOnOpen: true,
+          autoPlayEpisodeIndex: candidate.episodeIndex,
+          nextLineOnExhausted: () async {
+            final next = await chain.nextPlayable(
+              profileEpoch: widget.store.profileEpoch,
+            );
+            if (next == null) return null;
+            return (detail: next.detail, episodeIndex: next.episodeIndex);
+          },
+        ),
+      ),
     );
     if (mounted) setState(() {});
-  }
-
-  /// 播放中途恢复耗尽：弹掉当前播放页，换链上下一个候选；链耗尽
-  /// 时什么都不做，播放器原错误界面留着（不弹“暂无可播片源”，
-  /// 避免与播放器自身的错误提示打架）。
-  Future<void> _onPlaybackExhausted(
-    ActressPlayChain chain,
-    BuildContext playerContext,
-  ) async {
-    if (!mounted) return;
-    final route = ModalRoute.of(playerContext);
-    if (route == null || !route.isCurrent) return;
-    final candidate = await chain.nextPlayable(
-      profileEpoch: widget.store.profileEpoch,
-    );
-    if (!mounted) return;
-    if (candidate == null) return;
-    // 换线等待期间用户可能已手动退出：再验一次路由仍在最上层，
-    // 且播放器 context 仍挂载。
-    if (!route.isCurrent || !playerContext.mounted) return;
-    Navigator.of(playerContext).pop();
-    if (!mounted) return;
-    await _pushCandidate(chain, candidate);
   }
 
   @override

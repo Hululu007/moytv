@@ -12,11 +12,12 @@ void main() {
     );
   });
 
-  test('deleted go_tingshu site is gone from the builtin list', () {
-    expect(
-      zakatvBuiltinSites.any((site) => site.key == 'go_tingshu'),
-      isFalse,
-    );
+  test('go_tingshu site exists in the builtin list as an audio-only Listen-Read site', () {
+    final site =
+        zakatvBuiltinSites.singleWhere((site) => site.key == 'go_tingshu');
+    expect(site.name, '飞卢听书');
+    expect(site.className, 'com.github.catvod.spider.TingShu');
+    expect(site.audioOnly, isTrue);
   });
 
   test('merged zakatv jar md5 matches the asset on disk', () {

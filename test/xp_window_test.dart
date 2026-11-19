@@ -4,6 +4,7 @@ import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/home_screen.dart';
 import 'package:moyi/local_store.dart';
+import 'package:moyi/multimedia_screen.dart';
 import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/site_icon.dart';
 import 'package:moyi/win7_desktop.dart';
@@ -22,7 +23,7 @@ void main() {
     // 为空时不写该键，菜单走首次随机抽。
     List<String>? pinnedSites,
   }) async {
-    // 8 个桌面图标在默认 600 高视口里排不下（第 8 个中心点在视口外、
+    // 9 个桌面图标在默认 600 高视口里排不下（第 9 个中心点在视口外、
     // 点按命中不了）；用手机尺寸视口（与预览测试一致）。
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1.0;
@@ -53,12 +54,12 @@ void main() {
 
   Finder xpKey(String name) => find.byKey(ValueKey(name));
 
-  testWidgets('XP 桌面：山丘墙纸 + 8 图标 + Luna 任务栏 + 无胶囊栏', (tester) async {
+  testWidgets('XP 桌面：山丘墙纸 + 9 图标 + Luna 任务栏 + 无胶囊栏', (tester) async {
     await pumpXpHome(tester);
     expect(xpKey('xp-desktop'), findsOneWidget);
     expect(find.byType(CustomPaint), findsWidgets);
     for (final kind in Win7WindowKind.values) {
-      if (kind == Win7WindowKind.drama || kind == Win7WindowKind.multimedia) {
+      if (kind == Win7WindowKind.drama) {
         continue;
       }
       expect(
@@ -69,28 +70,30 @@ void main() {
     }
     // 短剧图标已从桌面拿掉（桌面有片库即够用），短剧窗只走开始菜单。
     expect(xpKey('xp-desktop-icon-drama'), findsNothing);
-    // 多媒体窗口没有桌面图标，只走开始菜单（桌面顶上的“我的电脑”
-    // 是“我的”窗口，与多媒体窗是两个窗口）。
-    expect(xpKey('xp-desktop-icon-multimedia'), findsNothing);
-    // 默认顺序与 Win7 同一份：我的电脑置顶第一位，其余按听书、
-    // 阅读、片库、直播、小程序、女优库、游戏往下排。
-    double top(String name) =>
-        tester.getTopLeft(xpKey('xp-desktop-icon-$name')).dy;
+    // 默认顺序与 Win7 同一份：我的电脑置顶第一位，其余按听读、
+    // 片库、直播、小程序、女优库、游戏、多媒体往下排；
+    // 一列排满换第二列，按列优先比位置：同列看纵坐标递增，
+    // 换列看横坐标递增。
+    Offset pos(String name) =>
+        tester.getTopLeft(xpKey('xp-desktop-icon-$name'));
     final order = [
       'mine',
-      'audio',
-      'novel',
+      'listenRead',
       'library',
       'live',
       'miniApp',
       'actress',
       'game',
+      'multimedia',
+      'kof',
     ];
     for (var i = 1; i < order.length; i++) {
+      final prev = pos(order[i - 1]);
+      final curr = pos(order[i]);
       expect(
-        top(order[i]),
-        greaterThan(top(order[i - 1])),
-        reason: '${order[i - 1]} 应在 ${order[i]} 上面',
+        curr.dy > prev.dy || curr.dx > prev.dx,
+        isTrue,
+        reason: '${order[i - 1]} 应在 ${order[i]} 前面',
       );
     }
     expect(xpKey('xp-taskbar'), findsOneWidget);
@@ -102,10 +105,24 @@ void main() {
     expect(find.byKey(const ValueKey('win7-taskbar')), findsNothing);
   });
 
-  testWidgets('XP 桌面图标上色：8 个彩色底块 + “我的电脑”标签', (tester) async {
+  testWidgets('XP 桌面图标上色：9 个彩色底块 + “我的电脑”标签', (tester) async {
     await pumpXpHome(tester);
-    expect(find.byType(DesktopIconBadge), findsNWidgets(8));
+    expect(find.byType(DesktopIconBadge), findsNWidgets(9));
     expect(find.text('我的电脑'), findsOneWidget);
+    expect(find.text('多媒体'), findsOneWidget);
+    expect(find.text('拳皇97'), findsOneWidget);
+    expect(find.text('听读'), findsOneWidget);
+  });
+
+  testWidgets('点“多媒体”图标开“多媒体”窗口：XP 标题栏 + 多媒体页', (tester) async {
+    await pumpXpHome(tester);
+    await tester.tap(xpKey('xp-desktop-icon-multimedia'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(xpKey('xp-desktop'), findsNothing);
+    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '多媒体');
+    expect(find.byType(MultimediaScreen), findsOneWidget);
+    expect(xpKey('xp-taskbar-entry-multimedia'), findsOneWidget);
   });
 
   testWidgets('点片库图标开窗口：XP 标题栏 + 最小化/关闭', (tester) async {
@@ -163,13 +180,13 @@ void main() {
     await tester.pump();
     await tester.tap(xpKey('xp-window-minimize'));
     await tester.pump();
-    // 短剧图标已从桌面拿掉（与 Win7 测试同款：第二窗口改用听书）。
-    await tester.tap(xpKey('xp-desktop-icon-audio'));
+    // 短剧图标已从桌面拿掉（与 Win7 测试同款：第二窗口改用听读）。
+    await tester.tap(xpKey('xp-desktop-icon-listenRead'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(xpKey('xp-taskbar-entry-library'), findsOneWidget);
-    expect(xpKey('xp-taskbar-entry-audio'), findsOneWidget);
-    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '听书');
+    expect(xpKey('xp-taskbar-entry-listenRead'), findsOneWidget);
+    expect(tester.widget<Text>(xpKey('xp-window-title')).data, '听读');
     await tester.tap(xpKey('xp-taskbar-entry-library'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
