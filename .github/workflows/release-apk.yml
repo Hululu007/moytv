@@ -1,0 +1,52 @@
+name: release-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "来源 run id（把某次 build-android 的产物挂到 Release）"
+        required: true
+      tag:
+        description: "Release 标签"
+        required: true
+        default: "v20"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 下载来源 run 的构建产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          REPO="${{ github.repository }}"
+          RUN="${{ inputs.run_id }}"
+          ID=$(gh api "repos/$REPO/actions/runs/$RUN/artifacts" --jq '.artifacts | map(select(.name | startswith("apk-"))) | .[0].id')
+          echo "artifact id: $ID"
+          gh api "repos/$REPO/actions/artifacts/$ID/zip" > artifact.zip
+          mkdir -p dist
+          unzip -o artifact.zip -d dist
+          ls -lh dist
+          cat dist/SHA256SUMS.txt || true
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: 魔蚁TV 20版（女优库修复）
+          body: |
+            魔蚁TV 20版（arm64-v8a）
+
+            女优库 8 项修复：合并新规、站点筛选扩站、每分类现爬 50 页、黑颜登记、摘小霸王、零作品也爬取新增、最新 JSON 内置、内置 JSON 随爬取增长。
+
+            包名 com.moyi.box，应用名魔蚁TV，与 19 版同一把签名，可直接覆盖安装。
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
