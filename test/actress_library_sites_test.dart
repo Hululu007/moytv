@@ -225,12 +225,6 @@ void main() {
         }),
       );
       final fallback = ActressJsonFallback(
-        assetReader: (asset) async => jsonEncode({
-          'list': <Map<String, dynamic>>[],
-          'parse': 0,
-          'jx': 0,
-          'last_update': '',
-        }),
         documentsDir: temp,
         m3uIndex: _FakeM3uIndex(),
       );

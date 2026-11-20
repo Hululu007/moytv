@@ -1,4 +1,5 @@
-// 女优库 JSON 兜底（2026-11-19）：随包 mjv011.json / whos.json 原样对接。
+// 女优库 JSON 兜底（2026-11-21）：随包快照已删，只读本地现爬文件。
+// 不读任何随包 asset；本地没有的条目走 m3u 行补。
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,24 +7,82 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_models.dart';
 
-Future<String> _readRealAsset(String asset) async =>
-    File(asset).readAsString();
+Map<String, dynamic> _row({
+  required String id,
+  required String name,
+  required String actor,
+  required String playFrom,
+  required String playUrl,
+  required String code,
+  String typeName = '日本AV',
+}) {
+  return <String, dynamic>{
+    'vod_id': id,
+    'vod_name': name,
+    'vod_pic': '',
+    'vod_actor': actor,
+    'vod_director': '',
+    'vod_remarks': '高清',
+    'vod_pubdate': '',
+    'vod_area': '日本',
+    'vod_year': '',
+    'vod_content': '<p>test</p>',
+    'vod_play_from': playFrom,
+    'vod_play_url': playUrl,
+    'type_name': typeName,
+    'vod_code': code,
+    'vod_actress_pic': '',
+  };
+}
+
+String _doc(List<Map<String, dynamic>> rows) => jsonEncode(<String, dynamic>{
+  'list': rows,
+  'parse': 0,
+  'jx': 0,
+  'last_update': '2026-11-20T00:00:00',
+});
+
+Map<String, dynamic> _mjvDoc() => jsonDecode(_doc([
+  _row(
+    id: 'a1',
+    name: '作品一',
+    actor: '波多野結衣',
+    playFrom: 'mjv011',
+    playUrl: '正片\$https://a.example/1.m3u8',
+    code: 'SSIS-001',
+  ),
+  _row(
+    id: 'a2',
+    name: '作品二',
+    actor: '大槻ひびき',
+    playFrom: 'mjv011',
+    playUrl: '正片\$https://a.example/2.m3u8',
+    code: 'SSIS-002',
+  ),
+  _row(
+    id: 'a3',
+    name: '作品三',
+    actor: '波多野結衣',
+    playFrom: 'mjv011',
+    playUrl: '正片\$https://a.example/3.m3u8',
+    code: 'SSIS-003',
+  ),
+])) as Map<String, dynamic>;
+
+Map<String, dynamic> _whosDoc() => jsonDecode(_doc([
+  _row(
+    id: 'b1',
+    name: '作品三合演',
+    actor: '大槻響，波多野結衣',
+    playFrom: 'whos',
+    playUrl: '正片\$https://b.example/3.m3u8',
+    code: 'SSIS-003',
+  ),
+])) as Map<String, dynamic>;
 
 void main() {
-  late final Map<String, dynamic> mjvDoc;
-  late final Map<String, dynamic> whosDoc;
-
-  setUpAll(() {
-    mjvDoc =
-        jsonDecode(File('assets/actress_json/mjv011.json').readAsStringSync())
-            as Map<String, dynamic>;
-    whosDoc =
-        jsonDecode(File('assets/actress_json/whos.json').readAsStringSync())
-            as Map<String, dynamic>;
-  });
-
-  test('随包两份 JSON 合 hsck 格式：顶层四键、每行 15 字段同顺序', () {
-    for (final entry in {'mjv011': mjvDoc, 'whos': whosDoc}.entries) {
+  test('本地文件合 hsck 格式：顶层四键、每行 15 字段同顺序', () {
+    for (final entry in {'mjv': _mjvDoc(), 'whos': _whosDoc()}.entries) {
       expect(
         () => validateActressJsonDocument(entry.value, entry.key),
         returnsNormally,
@@ -42,14 +101,10 @@ void main() {
         expect(row['vod_remarks'], '高清');
       }
     }
-    // 本次快照条数（爬取还在涨，只断言下限，不钉死具体数；下限按
-    // 2026-11-20 内置的 5337/201 行快照取，旧 321/171 行文件
-    // 若被误恢复，下限即拦住）。
-    expect((mjvDoc['list'] as List).length, greaterThanOrEqualTo(5000));
-    expect((whosDoc['list'] as List).length, greaterThanOrEqualTo(200));
   });
 
   test('格式不对就报错：缺顶层键、字段顺序错、播放地址不是正片\$地址', () {
+    final mjvDoc = _mjvDoc();
     final missingKey = Map<String, dynamic>.from(mjvDoc)..remove('jx');
     expect(
       () => validateActressJsonDocument(missingKey, '缺键'),
@@ -77,95 +132,105 @@ void main() {
     );
   });
 
-  test('加载器：按番号与女优名匹配，两站各留各的', () async {
-    final fallback = ActressJsonFallback(assetReader: _readRealAsset);
+  test('加载器只读本地文件：按番号与女优名匹配，两站各留各的', () async {
+    final temp = Directory.systemTemp.createTempSync();
+    addTearDown(() => temp.deleteSync(recursive: true));
+    final localDir = Directory('${temp.path}/actress_json')
+      ..createSync(recursive: true);
+    File('${localDir.path}/mjv.json').writeAsStringSync(_doc(
+      (_mjvDoc()['list'] as List).cast<Map<String, dynamic>>(),
+    ));
+    File('${localDir.path}/whos.json').writeAsStringSync(_doc(
+      (_whosDoc()['list'] as List).cast<Map<String, dynamic>>(),
+    ));
+    final fallback = ActressJsonFallback(documentsDir: temp);
     await fallback.load();
     expect(fallback.loaded, isTrue);
-    // 随包文件本身按（分类，番号）合并不去重：同键同链接的被合掉，
-    // 所以加载后的条数 ≤ 原始行数。
-    int mergedCount(Map<String, dynamic> doc) {
-      final keys = <String>{};
-      for (final row in (doc['list'] as List).cast<Map<String, dynamic>>()) {
-        final code = normalizeAvCode(row['vod_code'] as String);
-        keys.add(
-          '${row['type_name']}|${code.isNotEmpty ? code : row['vod_id']}',
-        );
-      }
-      return keys.length;
-    }
+    expect(fallback.counts['mjv'], 3);
+    expect(fallback.counts['whos'], 1);
 
-    expect(fallback.counts['mjv'], mergedCount(mjvDoc));
-    expect(fallback.counts['whos'], mergedCount(whosDoc));
-
-    // 取 mjv 文件里第一条既有番号又有女优名的真条目作样例。
-    final sample =
-        (mjvDoc['list'] as List).cast<Map<String, dynamic>>().firstWhere(
-          (row) =>
-              (row['vod_code'] as String).isNotEmpty &&
-              (row['vod_actor'] as String).isNotEmpty,
-        );
-    final sampleCode = normalizeAvCode(sample['vod_code'] as String);
-    final sampleActor = sample['vod_actor'] as String;
-    final byCode = fallback.entriesForCode(sampleCode);
-    expect(byCode.isNotEmpty, isTrue);
-    expect(byCode.every((e) => e.codeKey == sampleCode), isTrue);
-    final byName = fallback.entriesForActress(sampleActor);
-    expect(byName.isNotEmpty, isTrue);
-    expect(byName.every((e) => e.vodActor == sampleActor), isTrue);
+    final byCode = fallback.entriesForCode('SSIS1');
+    expect(byCode, hasLength(1));
+    expect(byCode.single.codeKey, 'SSIS1');
+    final byName = fallback.entriesForActress('波多野結衣');
+    // mjv 两行（a1、a3）+ whos 合演行（b1 也挂她的名），共三条。
+    expect(byName, hasLength(3));
+    expect(byName.every((e) => e.vodActor.contains('波多野結衣')), isTrue);
+    // 同番号两站各留一条。
+    expect(fallback.entriesForCode('SSIS3'), hasLength(2));
     // 站点限定：只取 mjv 的。
     expect(
-      fallback.entriesForCode(sampleCode, site: 'mjv').isNotEmpty,
+      fallback.entriesForCode('SSIS1', site: 'mjv').isNotEmpty,
       isTrue,
     );
-    expect(
-      fallback.entriesForCode(sampleCode, site: 'whos'),
-      isEmpty,
-    );
+    expect(fallback.entriesForCode('SSIS1', site: 'whos'), isEmpty);
     // 没番号没名字查不到。
     expect(fallback.entriesForCode(''), isEmpty);
     expect(fallback.entriesForActress('不存在的名字'), isEmpty);
   });
 
-  test('本地现爬文件叠加：同番号同链接跳过，任一字段不同就替换', () async {
+  test('不读随包 asset：本地目录为空即零条目（回归）', () async {
+    final temp = Directory.systemTemp.createTempSync();
+    addTearDown(() => temp.deleteSync(recursive: true));
+    // 树里随包文件若还在，加载器也不许碰；这里只断言空目录即空池。
+    final fallback = ActressJsonFallback(documentsDir: temp);
+    await fallback.load();
+    expect(fallback.loaded, isTrue);
+    expect(fallback.entries, isEmpty);
+    expect(fallback.counts, isEmpty);
+  });
+
+  test('同文件内同键同链接跳过、不同链接后写替换', () async {
     final temp = Directory.systemTemp.createTempSync();
     addTearDown(() => temp.deleteSync(recursive: true));
     final localDir = Directory('${temp.path}/actress_json')
       ..createSync(recursive: true);
-    // 本地放一条：与随包第一条同（分类，番号）同链接（应跳过），
-    // 再放一条同番号不同链接（应替换）。
-    final first =
-        (mjvDoc['list'] as List).cast<Map<String, dynamic>>().firstWhere(
-          (row) => (row['vod_code'] as String).isNotEmpty,
-        );
-    final same = Map<String, dynamic>.from(first);
-    final replaced = Map<String, dynamic>.from(first)
-      ..['vod_play_url'] = '正片\$https://example.test/new.m3u8';
-    final localDoc = {
-      'list': [same, replaced],
-      'parse': 0,
-      'jx': 0,
-      'last_update': '2026-11-19T18:00:00',
-    };
-    File('${localDir.path}/mjv.json').writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(localDoc),
-    );
-    final fallback = ActressJsonFallback(
-      assetReader: _readRealAsset,
-      documentsDir: temp,
-    );
+    File('${localDir.path}/mjv.json').writeAsStringSync(_doc([
+      _row(
+        id: 'a1',
+        name: '作品一',
+        actor: '测试演员',
+        playFrom: 'mjv011',
+        playUrl: '正片\$https://x/1.m3u8',
+        code: 'SSIS-123',
+      ),
+      _row(
+        id: 'a1',
+        name: '作品一',
+        actor: '测试演员',
+        playFrom: 'mjv011',
+        playUrl: '正片\$https://x/1.m3u8',
+        code: 'SSIS-123',
+      ),
+      _row(
+        id: 'a1',
+        name: '作品一新版',
+        actor: '测试演员',
+        playFrom: 'mjv011',
+        playUrl: '正片\$https://x/new.m3u8',
+        code: 'SSIS-123',
+      ),
+    ]));
+    final fallback = ActressJsonFallback(documentsDir: temp);
     await fallback.load();
-    final codeKey = normalizeAvCode(first['vod_code'] as String);
-    final rows = fallback.entriesForCode(codeKey, site: 'mjv');
-    // 同键只剩一条，且是替换后的新链接。
-    expect(rows.length, 1);
-    expect(rows.single.playUrl, 'https://example.test/new.m3u8');
+    final rows = fallback.entriesForCode('SSIS123');
+    expect(rows, hasLength(1));
+    expect(rows.single.playUrl, 'https://x/new.m3u8');
   });
 
   test('兜底卡点播用的合成详情：单集正片、集 id 就是直链、走潮流蜘蛛', () async {
-    final fallback = ActressJsonFallback(assetReader: _readRealAsset);
+    final temp = Directory.systemTemp.createTempSync();
+    addTearDown(() => temp.deleteSync(recursive: true));
+    final localDir = Directory('${temp.path}/actress_json')
+      ..createSync(recursive: true);
+    File('${localDir.path}/mjv.json').writeAsStringSync(_doc(
+      (_mjvDoc()['list'] as List).cast<Map<String, dynamic>>(),
+    ));
+    final fallback = ActressJsonFallback(documentsDir: temp);
     await fallback.load();
-    final entry = fallback.entries
-        .firstWhere((e) => e.playable && e.codeKey.isNotEmpty);
+    final entry = fallback.entries.firstWhere(
+      (e) => e.playable && e.codeKey.isNotEmpty,
+    );
     expect(entry.playUrl, startsWith('https://'));
     final detail = entry.toDramaDetail();
     expect(detail.drama.source, ActressJsonFallback.playSource);

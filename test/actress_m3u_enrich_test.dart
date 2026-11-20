@@ -1,6 +1,7 @@
 // m3u 补全女优库（2026-11-20）：合演归属 + 合并规则 + 简介续补入口。
-// 只用注入的假 asset 文本，不读树里的大 json、不碰磁盘。
+// 夹具写本地现爬文件，不读随包 asset、不碰树里的大 json。
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
@@ -102,10 +103,13 @@ void main() {
   ]);
 
   Future<ActressJsonFallback> _load() async {
-    final fallback = ActressJsonFallback(
-      assetReader: (asset) async =>
-          asset == ActressJsonFallback.mjvAsset ? mjvJson : whosJson,
-    );
+    final temp = Directory.systemTemp.createTempSync();
+    addTearDown(() => temp.deleteSync(recursive: true));
+    final localDir = Directory('${temp.path}/actress_json')
+      ..createSync(recursive: true);
+    File('${localDir.path}/mjv.json').writeAsStringSync(mjvJson);
+    File('${localDir.path}/whos.json').writeAsStringSync(whosJson);
+    final fallback = ActressJsonFallback(documentsDir: temp);
     await fallback.load();
     return fallback;
   }

@@ -134,8 +134,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// 兜底：按女优名 + 已加载作品番号对条目，只补本地没有的；
   /// 列表页选了站时只取该站的。本地作品翻页外的番号可能对不上，
   /// 同部多占一位卡不影响播（点哪张都是同一部）。
-  /// 两阶段上屏：JSON 行是同步的，先画出来；m3u 行要解 manifest
-  /// 与分片，随后补上，不让 JSON 行等 m3u。
+  /// 两阶段上屏：本地现爬行是同步的，先画出来；m3u 行要解 manifest
+  /// 与分片，随后补上，不让本地行等 m3u。随包快照已删（2026-11-21
+  /// 用户令），兜底只剩 db 作品 + 本地现爬行 + m3u 行。
   Future<void> _loadFallback() async {
     final person = _person;
     if (person == null) return;
