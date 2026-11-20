@@ -131,7 +131,7 @@
         </activity>
         <!-- 备选应用图标：默认关闭，设置里换图标时由 IconSwitchBridge 启用其中一个、
              同时停用主 Activity 的启动入口；切回默认则反向操作。别名类名与
-             lib/app_icon_switcher.dart 的 aliasSuffix 一一对应，改一处必须改另一处。 -->
+             lib/app_icon_switcher.dart 的 aliasNames 一一对应，改一处必须改另一处。 -->
         <activity-alias
             android:name=".IconAntFlame"
             android:enabled="false"
@@ -218,5 +218,12 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- 区插件 APK：Android 11+ 包可见性，五个官方包名逐个声明， -->
+        <!-- 探测桥不依赖 QUERY_ALL_PACKAGES 也能看见第一方插件包。 -->
+        <package android:name="moyi.zone.audio.plugin"/>
+        <package android:name="moyi.zone.novel.plugin"/>
+        <package android:name="moyi.zone.library.plugin"/>
+        <package android:name="moyi.zone.live.plugin"/>
+        <package android:name="moyi.zone.miniapp.plugin"/>
     </queries>
 </manifest>

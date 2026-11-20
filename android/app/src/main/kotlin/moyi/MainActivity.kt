@@ -324,6 +324,7 @@ class MainActivity : FlutterActivity() {
         AudioCapsulePlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         FrameExtractorBridge.register(flutterEngine.dartExecutor.binaryMessenger)
+        ZonePluginProbeBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         IconSwitchBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         val bridge = PyBridge(this)
         pyBridge = bridge
