@@ -90,6 +90,42 @@ bool _sameOrder(List<String> a, List<String> b) {
 String normalizeActressJsonName(String name) =>
     name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
 
+/// whos 简介续补入口（纯函数，不读网不写盘）：把 whos 女优页上取到
+/// 的简介段落追加进一行的 vod_content，原有简介不动、只追加。
+/// 简介现在取不到（whos.tv 全站 Cloudflare 403 且出口断网，
+/// 2026-11-20 实测），所以本批不写任何简介、不编假简介；等 whos
+/// 通了，工作台工具 fetch_whos_bio.py 取回简介后调本函数续补。
+/// 空简介原样返回，不改内容；简介里的 < > & 做转义，不破坏原有 HTML。
+ActressJsonEntry mergeWhosBioIntoRow(
+  ActressJsonEntry entry,
+  String bio,
+) {
+  final text = bio.trim();
+  if (text.isEmpty) return entry;
+  final escaped = text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+  return ActressJsonEntry(
+    site: entry.site,
+    vodId: entry.vodId,
+    vodName: entry.vodName,
+    vodPic: entry.vodPic,
+    vodActor: entry.vodActor,
+    vodDirector: entry.vodDirector,
+    vodRemarks: entry.vodRemarks,
+    vodPubdate: entry.vodPubdate,
+    vodArea: entry.vodArea,
+    vodYear: entry.vodYear,
+    vodContent: '${entry.vodContent}<p>$escaped</p>',
+    vodPlayFrom: entry.vodPlayFrom,
+    vodPlayUrl: entry.vodPlayUrl,
+    typeName: entry.typeName,
+    vodCode: entry.vodCode,
+    vodActressPic: entry.vodActressPic,
+  );
+}
+
 /// JSON 里的一条视频：一个站的一条，不跨站合并。
 class ActressJsonEntry {
   ActressJsonEntry({
@@ -306,9 +342,13 @@ class ActressJsonFallback {
       if (entry.codeKey.isNotEmpty) {
         (_byCode[entry.codeKey] ??= []).add(entry);
       }
-      final actorKey = normalizeActressJsonName(entry.vodActor);
-      if (actorKey.isNotEmpty) {
-        (_byActor[actorKey] ??= []).add(entry);
+      // vod_actor 可含逗号分隔的多名（m3u 合演归属，2026-11-20）：
+      // 每名各建一条索引，否则合演行按单名查不到。
+      for (final name in actressNameVariants(entry.vodActor)) {
+        final actorKey = normalizeActressJsonName(name);
+        if (actorKey.isNotEmpty) {
+          (_byActor[actorKey] ??= []).add(entry);
+        }
       }
     }
     _loaded = true;
