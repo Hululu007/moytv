@@ -193,7 +193,7 @@ class ActressJsonEntry {
   DramaDetail toDramaDetail() {
     final drama = Drama(
       id: 'json:$site:$vodId',
-      source: ActressJsonFallback.playSource,
+      source: ActressJsonFallback.spiderIdForSite(site),
       title: vodName,
       description: vodContent,
       cover: vodPic,
@@ -219,9 +219,11 @@ Future<String> _defaultAssetReader(String assetPath) =>
 class ActressJsonFallback {
   ActressJsonFallback({
     ActressJsonAssetReader? assetReader,
-    this._documentsDir,
-    this._m3uIndex,
-  }) : _assetReader = assetReader ?? _defaultAssetReader;
+    Directory? documentsDir,
+    WhosM3uIndex? m3uIndex,
+  }) : _assetReader = assetReader ?? _defaultAssetReader,
+       _documentsDir = documentsDir,
+       _m3uIndex = m3uIndex;
 
   /// whos m3u 索引：懒建，第一次查 m3u 时才解 manifest。
   WhosM3uIndex get m3uIndex => _m3uIndex ??= WhosM3uIndex();
@@ -231,10 +233,15 @@ class ActressJsonFallback {
   static const mjvAsset = 'assets/actress_json/mjv011.json';
   static const whosAsset = 'assets/actress_json/whos.json';
 
-  /// 兜底线路的解析通道：潮流蜘蛛（mjv 全站蜘蛛）。whos 条目暂无
-  /// 自己的蜘蛛，也走这条原始分支（地址原样回 parse=0）；手机上
-  /// whos 直链若因头不对播不了，再立 whos 专用通道。
+  /// 兜底线路的解析通道：mjv/whos 走潮流蜘蛛（mjv 全站蜘蛛）；
+  /// 片库站走本站蜘蛛自己的站 id。whos 条目暂无自己的蜘蛛，也走
+  /// 这条原始分支（地址原样回 parse=0）；手机上 whos 直链若因头
+  /// 不对播不了，再立 whos 专用通道。
   static const playSource = 'chaoliu';
+
+  /// 兜底卡点播走哪个蜘蛛取流：mjv/whos 走潮流蜘蛛，其余站走本站。
+  static String spiderIdForSite(String site) =>
+      (site == 'mjv' || site == 'whos') ? playSource : site;
 
   /// 本地现爬文件目录名（documents 下）。
   static const localDirName = 'actress_json';
@@ -253,21 +260,28 @@ class ActressJsonFallback {
 
   List<ActressJsonEntry> get entries => List.unmodifiable(_entries);
 
-  /// 每站条数（mjv/whos）。
+  /// 每站条数（mjv/whos + 本地现爬过的片库站）。
   Map<String, int> get counts => Map.unmodifiable(_counts);
 
   /// 每站 last_update（随包版与本地版取较新的那份）。
   Map<String, String> get lastUpdate => Map.unmodifiable(_lastUpdate);
 
-  /// 读随包两份 + 本地两份（有才读），按更新规则合并不去重。
+  /// 读随包两份 + 本地各站文件（有才读），按更新规则合并不去重。
+  /// 本地目录里除 mjv/whos 外的 *.json（片库站现爬写的文件）同样
+  /// 读进来：同 mergeKey 且同 vodPlayUrl 跳过、任一字段不同替换。
   Future<void> load() async {
     final merged = <String, Map<String, ActressJsonEntry>>{};
-    for (final site in const ['mjv', 'whos']) {
-      final asset = site == 'mjv' ? mjvAsset : whosAsset;
-      final bundled = await _readAsset(asset, site);
+    final sites = <String>{'mjv', 'whos', ...await _localSiteIds()};
+    for (final site in sites) {
       final byKey = <String, ActressJsonEntry>{};
-      for (final entry in bundled.entries) {
-        byKey[entry.mergeKey] = entry;
+      var bundledLastUpdate = '';
+      if (site == 'mjv' || site == 'whos') {
+        final asset = site == 'mjv' ? mjvAsset : whosAsset;
+        final bundled = await _readAsset(asset, site);
+        for (final entry in bundled.entries) {
+          byKey[entry.mergeKey] = entry;
+        }
+        bundledLastUpdate = bundled.lastUpdate;
       }
       final local = await _readLocal(site);
       for (final entry in local.entries) {
@@ -281,10 +295,10 @@ class ActressJsonFallback {
       _counts[site] = byKey.length;
       _lastUpdate[site] = local.lastUpdate.isNotEmpty
           ? local.lastUpdate
-          : bundled.lastUpdate;
+          : bundledLastUpdate;
     }
     _entries = [
-      for (final site in const ['mjv', 'whos']) ...merged[site]!.values,
+      for (final site in sites) ...merged[site]!.values,
     ];
     _byCode.clear();
     _byActor.clear();
@@ -298,6 +312,25 @@ class ActressJsonFallback {
       }
     }
     _loaded = true;
+  }
+
+  /// 本地现爬目录里的站 id：每个 *.json 文件名（去后缀）即一站。
+  Future<List<String>> _localSiteIds() async {
+    try {
+      final dir = await _localDir();
+      if (!await dir.exists()) return const [];
+      final out = <String>[];
+      await for (final entity in dir.list()) {
+        if (entity is! File) continue;
+        final name = path.basename(entity.path);
+        if (!name.endsWith('.json')) continue;
+        final site = name.substring(0, name.length - 5);
+        if (site.isNotEmpty) out.add(site);
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<({List<ActressJsonEntry> entries, String lastUpdate})> _readAsset(
@@ -395,14 +428,15 @@ class ActressJsonFallback {
   }
 
   /// 异步版：JSON 行 + whos m3u 行合并（JSON 优先，m3u 补缺）。
-  /// m3u 只有 whos 一路；选 mjv 时不查 m3u。m3u 索引读失败时
-  /// 只回 JSON 行，不让 m3u 的问题拖垮兜底。
+  /// m3u 只有 whos 一路；只有全部/whos 才并 m3u，选片库站时只回
+  /// 本站 JSON 行。m3u 索引读失败时只回 JSON 行，不让 m3u 的问题
+  /// 拖垮兜底。
   Future<List<ActressJsonEntry>> entriesForActressAsync(
     String name, {
     String? site,
   }) async {
     final jsonRows = entriesForActress(name, site: site);
-    if (site == 'mjv') return jsonRows;
+    if (site != null && site != 'all' && site != 'whos') return jsonRows;
     final m3uRows = await m3uEntriesForActress(name);
     return _mergeJsonFirst(jsonRows, m3uRows);
   }
@@ -413,7 +447,7 @@ class ActressJsonFallback {
     String? site,
   }) async {
     final jsonRows = entriesForCode(codeKey, site: site);
-    if (site == 'mjv') return jsonRows;
+    if (site != null && site != 'all' && site != 'whos') return jsonRows;
     final m3uRows = await m3uEntriesForCode(codeKey);
     return _mergeJsonFirst(jsonRows, m3uRows);
   }

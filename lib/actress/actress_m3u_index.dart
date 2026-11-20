@@ -158,7 +158,8 @@ class WhosM3uIndex {
 
   /// 按归一化番号取 m3u 条目：只解 manifest 指出的分片，
   /// 再在分片里扫出番号相同的行（同一部片在多女优名下各留一条，
-  /// 与全站叠加“按番号为键”的口径一致，调用方按 mergeKey 去重）。
+  /// 与全站叠加“按（站，番号）去重”的口径一致，调用方按
+  /// 站|mergeKey 去重）。
   Future<List<ActressJsonEntry>> entriesForCode(String codeKey) async {
     final key = normalizeAvCode(codeKey);
     if (key.isEmpty) return const [];

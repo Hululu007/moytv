@@ -16,6 +16,10 @@ import 'fixtures.dart';
 /// enrichedAt 非空即永久跳过 → 作品同步进来后也再也不补封面。
 /// 新行为：空作品轮返回 false（不算完成）；已记 enrichedAt 但仍有
 /// 无封面作品时重新补；全部有封面时才跳过。
+/// 2026-11-20 用户令补充（没有也要爬取新增）：零作品的人也照常跑
+/// 名字路搜全站，搜到就新增进库；搜不到仍返回 false、不记 enrichedAt。
+/// 本文件首个测试按新口径改：第一轮按名搜索（有一次名字查询），
+/// 搜不到不算完成。
 
 const _coverSiteA = SourceSite(
   'test-cover-a',
@@ -100,11 +104,12 @@ void main() {
         ActressEnrichment(repository: repository, store: store, db: db);
 
     test('先 0 作品打开不算完成，作品进来后下次打开补上封面', () async {
-      // 第一轮：同步还没跑到此人，作品为空。
+      // 第一轮：同步还没跑到此人，作品为空；按新口径照常按名搜全站，
+      // 搜不到不算完成（返回 false），调用方不得记 enrichedAt。
       final empty = await seedPerson(withWorks: false);
       final first = await enrichment().enrichPerson(empty);
       expect(first, isFalse);
-      expect(repository.searchQueries, isEmpty);
+      expect(repository.searchQueries, contains('友田真希'));
       // 调用方只在 completed 时记 enrichedAt：本轮不得记。
       final stillFresh = (await db.personById(empty.localId))!;
       expect(stillFresh.enrichedAt, isNull);

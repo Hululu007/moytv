@@ -170,8 +170,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     }
     if (!mounted) return;
     setState(() => _fallbackEntries = merged);
-    // m3u 只有 whos 一路；选 mjv 时不查。
-    if (site == 'mjv') return;
+    // m3u 只有 whos 一路；只有全部/whos 才查，选片库站时不查
+    // （否则 whos 的 m3u 行会混进该站的兜底）。
+    if (site != null && site != 'whos') return;
     var changed = false;
     for (final name in [person.displayName, ...person.aliases]) {
       final before = merged.length;

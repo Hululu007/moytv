@@ -112,7 +112,6 @@ const Map<String, String> pySiteHomepages = {
   'xingbazy': 'https://xingba111.com',
   'xingyezy': 'https://xyezy.com',
   'xojav': 'https://xojav.tv',
-  'yikm': 'https://www.yikm.net',
   'yinghuazy': 'https://m3u8.apiyhzy.com',
   'yinse': 'https://9p6j22--wv.yinse1xiaoshuo2.com',
   'ylxs': 'https://ylxs.net',

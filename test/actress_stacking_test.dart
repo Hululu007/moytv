@@ -196,7 +196,7 @@ void main() {
       }
     });
 
-    test('番号去重：同一番号不同写法只留一行', () async {
+    test('番号去重按站：同一番号同站只留一行、两站各留一条', () async {
       final person = await _seedPerson(db, '演员甲');
       await db.upsertWorks(person.localId, [
         const RosterFilm(code: 'SSIS-100', title: '旧作'),
@@ -209,16 +209,25 @@ void main() {
 
       final result = await newService().run();
       expect(result.processed, 1);
-      expect(result.worksAdded, 2);
+      // SSIS-00123 与 SSIS123 归一化同一部，但来自两站，各留一条；
+      // SSIS-124 再一条，共新增 3 行。
+      expect(result.worksAdded, 3);
       final works = await db.worksForPerson(
         person.localId,
         offset: 0,
         limit: 50,
       );
-      expect(works.length, 3);
+      expect(works.length, 4);
       expect(
         works.map((work) => work.codeKey).toList()..sort(),
-        ['SSIS100', 'SSIS123', 'SSIS124'],
+        ['SSIS100', 'SSIS123', 'SSIS123', 'SSIS124'],
+      );
+      expect(
+        works
+            .where((work) => work.codeKey == 'SSIS123')
+            .map((work) => work.site)
+            .toSet(),
+        {'test-stack-a', 'test-stack-b'},
       );
     });
 
@@ -289,9 +298,11 @@ void main() {
       final result = await newService().run();
       expect(result.processed, 2);
       expect(result.finished, isTrue);
+      // 2026-11-20 新规：零作品的人也按名搜（搜不到保持为空），
+      // 不再跳过；断点照样越过此人，全轮完成。
       expect(
         repository.searchQueries.where((q) => q == '演员空'),
-        isEmpty,
+        contains('演员空'),
       );
       expect(empty.localId, isNot(0));
     });

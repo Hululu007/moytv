@@ -103,9 +103,12 @@ abstract class ActressDatabase {
 
   Future<int> countWorks(int personId);
 
-  /// 作品清单合并入库：番号键去重、无番号标题键去重；命中硬线词的
+  /// 作品清单合并入库：按（站，番号键）去重、无番号按（站，标题键）
+  /// 去重——同番号两站各留一条，各算一条可播线路；命中硬线词的
   /// 条目跳过；写完刷新人物的 works_count。
-  /// [coverSource] 是这批作品封面的来源站（见
+  /// [site] 是这批作品的站（名册源名或蜘蛛站 id，如 'chaoliu'/
+  /// 'whos'/'missav'）：去重键的一部分；不传时为空（旧调用与旧库
+  /// 行同一口径）。[coverSource] 是这批作品封面的来源站（见
   /// [actressRosterCoverSource]）：有封面的新建行按它写
   /// cover_source；不传时默认 'whos'（与旧行为一致）；传空表示
   /// 该源不带可用封面，有封面地址的条目也不认站源、不写封面。
@@ -113,11 +116,16 @@ abstract class ActressDatabase {
     int personId,
     List<RosterFilm> films, {
     String coverSource = 'whos',
+    String site = '',
   });
 
-  /// 全站搜索补封面：按番号键（无番号按标题键）命中则更新封面与
-  /// 标题，命中不到则按 [insertIfMissing] 决定是否新增一条跨站发现
-  /// 的作品行（名字搜索带番号的命中可新增，番号搜索只补已有行）。
+  /// 全站搜索补封面：按（站，番号键）命中则更新封面与标题（同站
+  /// 行优先；同站没有时退到该番号任意站的行只补封面，不挪行；
+  /// 找到的行没记站（旧库 site 为空）时认领到本次命中站名下，不
+  /// 新增第二行），命中不到则按 [insertIfMissing] 决定是否新增
+  /// 一条跨站发现的作品行（名字搜索带番号的命中可新增，番号搜索
+  /// 只补已有行；新增行的站记 [site]，同番号两站各留一条）。
+  /// [site] 是命中来源站 id；不传时为空（旧调用同一口径）。
   Future<void> attachCover({
     required int personId,
     required String codeKey,
@@ -129,6 +137,7 @@ abstract class ActressDatabase {
     required String coverDramaId,
     required String coverUrl,
     bool insertIfMissing = true,
+    String site = '',
   });
 
   /// 某源作品清单待同步的人物（有该源身份、且该源 films 未完成）。
@@ -264,6 +273,7 @@ ActressWork _workFromRow(Map<String, Object?> row) => ActressWork(
   personId: (row['person_id'] as num?)?.toInt() ?? 0,
   codeKey: (row['code_key'] as String?) ?? '',
   titleKey: (row['title_key'] as String?) ?? '',
+  site: (row['site'] as String?) ?? '',
   codeDisplay: (row['code_display'] as String?) ?? '',
   title: (row['title'] as String?) ?? '',
   date: (row['date'] as String?) ?? '',
@@ -308,7 +318,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     final filePath = path.join(documents.path, 'actress.db');
     final db = await openDatabase(
       filePath,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute(
           'CREATE TABLE persons('
@@ -350,6 +360,7 @@ class SqfliteActressDatabase implements ActressDatabase {
           'person_id INTEGER NOT NULL, '
           'code_key TEXT NOT NULL DEFAULT \'\', '
           'title_key TEXT NOT NULL DEFAULT \'\', '
+          'site TEXT NOT NULL DEFAULT \'\', '
           'code_display TEXT NOT NULL DEFAULT \'\', '
           'title TEXT NOT NULL DEFAULT \'\', '
           'date TEXT NOT NULL DEFAULT \'\', '
@@ -358,14 +369,15 @@ class SqfliteActressDatabase implements ActressDatabase {
           'cover_url TEXT NOT NULL DEFAULT \'\', '
           'from_cross_site INTEGER NOT NULL DEFAULT 0)',
         );
-        // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突。
+        // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突；
+        // 去重键是（人，站，番号/标题）：同番号两站各留一条。
         await db.execute(
           'CREATE UNIQUE INDEX idx_works_code '
-          'ON works(person_id, code_key) WHERE code_key <> \'\'',
+          'ON works(person_id, site, code_key) WHERE code_key <> \'\'',
         );
         await db.execute(
           'CREATE UNIQUE INDEX idx_works_title '
-          'ON works(person_id, title_key) '
+          'ON works(person_id, site, title_key) '
           'WHERE code_key = \'\' AND title_key <> \'\'',
         );
         await db.execute(
@@ -401,6 +413,24 @@ class SqfliteActressDatabase implements ActressDatabase {
           );
           await db.execute(
             'ALTER TABLE persons ADD COLUMN about TEXT NOT NULL DEFAULT \'{}\'',
+          );
+        }
+        // v2 → v3：作品行加站列，去重键改成（人，站，番号/标题）；
+        // 旧行站为空，与新口径一致（旧库本就按番号去重，站空即一站）。
+        if (oldVersion < 3) {
+          await db.execute(
+            'ALTER TABLE works ADD COLUMN site TEXT NOT NULL DEFAULT \'\'',
+          );
+          await db.execute('DROP INDEX IF EXISTS idx_works_code');
+          await db.execute('DROP INDEX IF EXISTS idx_works_title');
+          await db.execute(
+            'CREATE UNIQUE INDEX idx_works_code '
+            'ON works(person_id, site, code_key) WHERE code_key <> \'\'',
+          );
+          await db.execute(
+            'CREATE UNIQUE INDEX idx_works_title '
+            'ON works(person_id, site, title_key) '
+            'WHERE code_key = \'\' AND title_key <> \'\'',
           );
         }
       },
@@ -695,6 +725,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     int personId,
     List<RosterFilm> films, {
     String coverSource = 'whos',
+    String site = '',
   }) async {
     final db = await _open();
     await db.transaction((txn) async {
@@ -717,11 +748,14 @@ class SqfliteActressDatabase implements ActressDatabase {
                 'cover_drama_id': film.detailUrl,
                 'cover_url': film.coverUrl,
               };
+        // 去重键是（人，站，番号/标题）：同站同番号冲突即丢弃，
+        // 换站同番号不冲突，各留一条。
         if (codeKey.isNotEmpty) {
           await txn.insert('works', {
             'person_id': personId,
             'code_key': codeKey,
             'title_key': titleKey,
+            'site': site,
             'code_display': codeDisplay,
             'title': title == codeDisplay ? '' : title,
             'date': film.date.trim(),
@@ -732,6 +766,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'person_id': personId,
             'code_key': '',
             'title_key': titleKey,
+            'site': site,
             'code_display': '',
             'title': title,
             'date': film.date.trim(),
@@ -755,40 +790,29 @@ class SqfliteActressDatabase implements ActressDatabase {
     required String coverDramaId,
     required String coverUrl,
     bool insertIfMissing = true,
+    String site = '',
   }) async {
     if (actressTextBlocked(title) || actressTextBlocked(codeDisplay)) return;
     if (codeKey.isEmpty && titleKey.isEmpty) return;
     final db = await _open();
     await db.transaction((txn) async {
+      // 1）同站行优先：按（人，站，番号/标题）查。
       final where = codeKey.isNotEmpty
-          ? 'person_id = ? AND code_key = ?'
-          : 'person_id = ? AND code_key = \'\' AND title_key = ?';
+          ? 'person_id = ? AND site = ? AND code_key = ?'
+          : 'person_id = ? AND site = ? AND code_key = \'\' AND title_key = ?';
       final whereArgs = <Object?>[
         personId,
+        site,
         codeKey.isNotEmpty ? codeKey : titleKey,
       ];
-      final existing = await txn.query(
+      final sameSite = await txn.query(
         'works',
         where: where,
         whereArgs: whereArgs,
         limit: 1,
       );
-      if (existing.isEmpty) {
-        if (!insertIfMissing) return;
-        await txn.insert('works', {
-          'person_id': personId,
-          'code_key': codeKey,
-          'title_key': titleKey,
-          'code_display': codeDisplay,
-          'title': title,
-          'date': date,
-          'cover_source': coverSource,
-          'cover_drama_id': coverDramaId,
-          'cover_url': coverUrl,
-          'from_cross_site': 1,
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      } else {
-        final row = _workFromRow(existing.first);
+      if (sameSite.isNotEmpty) {
+        final row = _workFromRow(sameSite.first);
         final updates = <String, Object?>{
           if (row.coverUrl.isEmpty) 'cover_source': coverSource,
           if (row.coverUrl.isEmpty) 'cover_drama_id': coverDramaId,
@@ -805,7 +829,92 @@ class SqfliteActressDatabase implements ActressDatabase {
             whereArgs: [row.id],
           );
         }
+        await _refreshWorksCount(txn, personId);
+        return;
       }
+      // 2）同站没有：退到该番号任意站的行，只补封面，不挪行、
+      // 不改标题与日期（那是别站行的字段）。
+      final anyWhere = codeKey.isNotEmpty
+          ? 'person_id = ? AND code_key = ?'
+          : 'person_id = ? AND code_key = \'\' AND title_key = ?';
+      final anyArgs = <Object?>[
+        personId,
+        codeKey.isNotEmpty ? codeKey : titleKey,
+      ];
+      final anySite = await txn.query(
+        'works',
+        where: anyWhere,
+        whereArgs: anyArgs,
+        limit: 1,
+      );
+      if (anySite.isNotEmpty) {
+        final row = _workFromRow(anySite.first);
+        if (row.site.isEmpty) {
+          // 旧库行没记站（站未知）：认领到本次命中站名下，封面/
+          // 标题/日期只补空位，不新增第二行（名字路只附已有行）。
+          final updates = <String, Object?>{
+            'site': site,
+            if (row.coverUrl.isEmpty) 'cover_source': coverSource,
+            if (row.coverUrl.isEmpty) 'cover_drama_id': coverDramaId,
+            if (row.coverUrl.isEmpty) 'cover_url': coverUrl,
+            if (row.title.isEmpty && title.isNotEmpty) 'title': title,
+            if (row.date.isEmpty && date.isNotEmpty) 'date': date,
+          };
+          await txn.update(
+            'works',
+            updates,
+            where: 'id = ?',
+            whereArgs: [row.id],
+          );
+        } else {
+          if (row.coverUrl.isEmpty) {
+            await txn.update(
+              'works',
+              {
+                'cover_source': coverSource,
+                'cover_drama_id': coverDramaId,
+                'cover_url': coverUrl,
+              },
+              where: 'id = ?',
+              whereArgs: [row.id],
+            );
+          }
+          // 找到的行站 ≠ 传入站且允许新增时，按传入站新增一行：
+          // 同番号两站各留一条，各算一条可播线路。
+          if (insertIfMissing && site.isNotEmpty && row.site != site) {
+            await txn.insert('works', {
+              'person_id': personId,
+              'code_key': codeKey,
+              'title_key': titleKey,
+              'site': site,
+              'code_display': codeDisplay,
+              'title': title,
+              'date': date,
+              'cover_source': coverSource,
+              'cover_drama_id': coverDramaId,
+              'cover_url': coverUrl,
+              'from_cross_site': 1,
+            }, conflictAlgorithm: ConflictAlgorithm.ignore);
+          }
+        }
+        await _refreshWorksCount(txn, personId);
+        return;
+      }
+      // 3）无行：按 insertIfMissing 决定是否按传入站新增一行。
+      if (!insertIfMissing) return;
+      await txn.insert('works', {
+        'person_id': personId,
+        'code_key': codeKey,
+        'title_key': titleKey,
+        'site': site,
+        'code_display': codeDisplay,
+        'title': title,
+        'date': date,
+        'cover_source': coverSource,
+        'cover_drama_id': coverDramaId,
+        'cover_url': coverUrl,
+        'from_cross_site': 1,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await _refreshWorksCount(txn, personId);
     });
   }
@@ -1242,6 +1351,7 @@ class MemoryActressDatabase implements ActressDatabase {
     int personId,
     List<RosterFilm> films, {
     String coverSource = 'whos',
+    String site = '',
   }) async {
     for (final film in films) {
       if (actressTextBlocked(film.code) || actressTextBlocked(film.title)) {
@@ -1250,8 +1360,11 @@ class MemoryActressDatabase implements ActressDatabase {
       final codeKey = film.codeKey;
       final titleKey = film.titleKey;
       if (codeKey.isEmpty && titleKey.isEmpty) continue;
+      // 去重键是（人，站，番号/标题）：同站同番号冲突即丢弃，
+      // 换站同番号不冲突，各留一条。
       final exists = _works.values.any((work) {
         if (work.personId != personId) return false;
+        if (work.site != site) return false;
         if (codeKey.isNotEmpty) return work.codeKey == codeKey;
         return work.codeKey.isEmpty && work.titleKey == titleKey;
       });
@@ -1263,6 +1376,7 @@ class MemoryActressDatabase implements ActressDatabase {
         personId: personId,
         codeKey: codeKey,
         titleKey: titleKey,
+        site: site,
         codeDisplay: codeDisplay,
         title: title == codeDisplay ? '' : title,
         date: film.date.trim(),
@@ -1294,49 +1408,113 @@ class MemoryActressDatabase implements ActressDatabase {
     required String coverDramaId,
     required String coverUrl,
     bool insertIfMissing = true,
+    String site = '',
   }) async {
     if (actressTextBlocked(title) || actressTextBlocked(codeDisplay)) return;
     if (codeKey.isEmpty && titleKey.isEmpty) return;
-    ActressWork? existing;
+    bool matches(ActressWork work) {
+      if (work.personId != personId) return false;
+      if (codeKey.isNotEmpty) return work.codeKey == codeKey;
+      return work.codeKey.isEmpty && work.titleKey == titleKey;
+    }
+
+    ActressWork? sameSite;
+    ActressWork? anySite;
     for (final work in _works.values) {
-      if (work.personId != personId) continue;
-      if (codeKey.isNotEmpty
-          ? work.codeKey == codeKey
-          : work.codeKey.isEmpty && work.titleKey == titleKey) {
-        existing = work;
+      if (!matches(work)) continue;
+      anySite ??= work;
+      if (work.site == site) {
+        sameSite = work;
         break;
       }
     }
-    if (existing == null) {
-      if (!insertIfMissing) return;
-      _works[_nextWorkId] = ActressWork(
-        id: _nextWorkId++,
-        personId: personId,
-        codeKey: codeKey,
-        titleKey: titleKey,
-        codeDisplay: codeDisplay,
-        title: title,
-        date: date,
-        coverSource: coverSource,
-        coverDramaId: coverDramaId,
-        coverUrl: coverUrl,
-        fromCrossSite: true,
-      );
-    } else {
-      _works[existing.id] = existing.copyWith(
-        coverSource: existing.coverUrl.isEmpty
+    // 1）同站行优先：封面/标题/日期只补空位。
+    if (sameSite != null) {
+      _works[sameSite.id] = sameSite.copyWith(
+        coverSource: sameSite.coverUrl.isEmpty
             ? coverSource
-            : existing.coverSource,
-        coverDramaId: existing.coverUrl.isEmpty
+            : sameSite.coverSource,
+        coverDramaId: sameSite.coverUrl.isEmpty
             ? coverDramaId
-            : existing.coverDramaId,
-        coverUrl: existing.coverUrl.isEmpty ? coverUrl : existing.coverUrl,
-        title: existing.title.isEmpty && title.isNotEmpty
+            : sameSite.coverDramaId,
+        coverUrl: sameSite.coverUrl.isEmpty ? coverUrl : sameSite.coverUrl,
+        title: sameSite.title.isEmpty && title.isNotEmpty
             ? title
-            : existing.title,
-        date: existing.date.isEmpty && date.isNotEmpty ? date : existing.date,
+            : sameSite.title,
+        date: sameSite.date.isEmpty && date.isNotEmpty
+            ? date
+            : sameSite.date,
       );
+      _refreshWorksCount(personId);
+      return;
     }
+    // 2）同站没有：退到该番号任意站的行，只补封面，不挪行。
+    if (anySite != null) {
+      if (anySite.site.isEmpty) {
+        // 旧库行没记站（站未知）：认领到本次命中站名下，封面/
+        // 标题/日期只补空位，不新增第二行（名字路只附已有行）。
+        _works[anySite.id] = anySite.copyWith(
+          site: site,
+          coverSource: anySite.coverUrl.isEmpty
+              ? coverSource
+              : anySite.coverSource,
+          coverDramaId: anySite.coverUrl.isEmpty
+              ? coverDramaId
+              : anySite.coverDramaId,
+          coverUrl: anySite.coverUrl.isEmpty ? coverUrl : anySite.coverUrl,
+          title: anySite.title.isEmpty && title.isNotEmpty
+              ? title
+              : anySite.title,
+          date: anySite.date.isEmpty && date.isNotEmpty
+              ? date
+              : anySite.date,
+        );
+      } else {
+        if (anySite.coverUrl.isEmpty) {
+          _works[anySite.id] = anySite.copyWith(
+            coverSource: coverSource,
+            coverDramaId: coverDramaId,
+            coverUrl: coverUrl,
+          );
+        }
+        // 找到的行站 ≠ 传入站且允许新增时，按传入站新增一行：
+        // 同番号两站各留一条，各算一条可播线路。
+        if (insertIfMissing && site.isNotEmpty && anySite.site != site) {
+          _works[_nextWorkId] = ActressWork(
+            id: _nextWorkId++,
+            personId: personId,
+            codeKey: codeKey,
+            titleKey: titleKey,
+            site: site,
+            codeDisplay: codeDisplay,
+            title: title,
+            date: date,
+            coverSource: coverSource,
+            coverDramaId: coverDramaId,
+            coverUrl: coverUrl,
+            fromCrossSite: true,
+          );
+        }
+      }
+      _refreshWorksCount(personId);
+      return;
+    }
+    // 3）无行：按 insertIfMissing 决定是否按传入站新增一行。
+    if (!insertIfMissing) return;
+    _works[_nextWorkId] = ActressWork(
+      id: _nextWorkId++,
+      personId: personId,
+      codeKey: codeKey,
+      titleKey: titleKey,
+      site: site,
+      codeDisplay: codeDisplay,
+      title: title,
+      date: date,
+      coverSource: coverSource,
+      coverDramaId: coverDramaId,
+      coverUrl: coverUrl,
+      fromCrossSite: true,
+    );
     _refreshWorksCount(personId);
   }
 

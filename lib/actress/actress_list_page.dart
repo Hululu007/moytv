@@ -23,6 +23,28 @@ import '../local_store.dart';
 /// 断点续跑），之后只手动刷新、不自动重拉。排行榜入口在顶栏奖杯钮。
 /// 全站叠加入口在同步横幅下方：手动开始/继续，按番号把各站作品
 /// 叠加进库，断点续跑，不自动跑、不与名册同步抢着跑。
+/// 站点筛选下拉选项（纯函数，供测试直接验）：全部 + mjv + whos +
+/// 片库全部可见视频站（与叠加搜索 actressSearchSiteIds 同一口径：
+/// store.visibleSources 里 isVideoSection、非 cloud:、siteVisible
+/// 的站；跳过 mjv/whos/chaoliu——chaoliu 即 mjv，已有 mjv 项代表
+/// 它；yikm 这类游戏站不在视频区登记里，进不了选项）。
+List<ActressSiteFilter> actressSiteFilterOptions(LocalStore store) {
+  final options = <ActressSiteFilter>[
+    ActressSiteFilter.all,
+    ActressSiteFilter.mjv,
+    ActressSiteFilter.whos,
+  ];
+  final seen = <String>{'all', 'mjv', 'whos', 'chaoliu'};
+  for (final site in store.visibleSources) {
+    if (!site.isVideoSection) continue;
+    if (site.id.startsWith('cloud:')) continue;
+    if (!store.siteVisible(site.id)) continue;
+    if (!seen.add(site.id)) continue;
+    options.add(ActressSiteFilter(site.id, site.name));
+  }
+  return options;
+}
+
 class ActressListPage extends StatefulWidget {
   const ActressListPage({
     super.key,
@@ -284,7 +306,16 @@ class _ActressListPageState extends State<ActressListPage> {
     }
   }
 
-  /// 选站后触发该站分类现爬（mjv 现爬、whos 报缺口走兜底）。
+  /// 站点筛选下拉选项：全部 + mjv + whos + 片库全部可见视频站
+  /// （与叠加搜索 actressSearchSiteIds 同一口径：store.visibleSources
+  /// 里 isVideoSection、非 cloud:、siteVisible 的站；跳过 mjv/whos/
+  /// chaoliu——chaoliu 即 mjv，已有 mjv 项代表它；yikm 这类游戏站
+  /// 不在视频区登记里，进不了选项）。
+  List<ActressSiteFilter> _siteFilterOptions() =>
+      actressSiteFilterOptions(widget.store);
+
+  /// 选站后触发该站分类现爬（mjv 现爬、whos 报缺口走兜底、
+  /// 片库站走本站蜘蛛分类现爬）。
   Future<void> _runSiteCrawl() async {
     if (_crawl.running) return;
     await _crawl.start(site: _source.siteId);
@@ -436,7 +467,7 @@ class _ActressListPageState extends State<ActressListPage> {
             initialValue: _source,
             onSelected: _setSiteFilter,
             itemBuilder: (_) => [
-              for (final filter in ActressSiteFilter.values)
+              for (final filter in _siteFilterOptions())
                 PopupMenuItem(
                   value: filter,
                   child: Text(filter.label),

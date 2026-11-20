@@ -18,7 +18,9 @@ import 'fixtures.dart';
 /// 拳皇97 桌面图标 + 小霸王游戏源动作协议：kof 窗口种类定义、
 // 桌面图标表与旧顺序合并、导航放行判定、动作 JSON 解析、
 // PyContract 动作映射、通用游戏窗加载/失败/重试与无网址界面、
-// 动作导航开游戏屏、桌面图标点按开拳皇97 窗口、yikm 内置注册。
+// 动作导航开游戏屏、桌面图标点按开拳皇97 窗口、yikm 已摘登记
+// （2026-11-20 用户令：游戏不进站点，小霸王游戏从片库登记摘掉，
+// 游戏区仍走 yikm.net 网页直达）。
 ///
 /// WebView 用假平台实现（与 ra2_game_test 同一套做法），只覆盖
 /// 页面自身的逻辑；真机触控手感与模拟器运行不在这里验。
@@ -333,19 +335,17 @@ void main() {
     });
   });
 
-  group('yikm 内置注册', () {
-    test('登记表含 yikm：显示名“小霸王游戏”、不带成人前缀', () {
-      final entry = BuiltinPySites.entries.singleWhere(
-        (e) => e.siteId == BuiltinPySites.yikmSiteId,
+  group('yikm 已摘登记', () {
+    test('登记表不含 yikm：游戏站不进片库站点', () {
+      expect(BuiltinPySites.entryFor('yikm'), isNull);
+      expect(
+        BuiltinPySites.entries.any((e) => e.siteId == 'yikm'),
+        isFalse,
       );
-      expect(entry.site.name, '小霸王游戏');
-      expect(entry.site.name, isNot(contains('🔞')));
-      expect(entry.assetPath, 'assets/py_spiders/yikm.py');
-      expect(entry.fileId, 'builtin_yikm');
     });
 
-    test('主页映射含 yikm', () {
-      expect(pySiteHomepages['yikm'], 'https://www.yikm.net');
+    test('主页映射不含 yikm', () {
+      expect(pySiteHomepages.containsKey('yikm'), isFalse);
     });
   });
 

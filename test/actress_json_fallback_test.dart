@@ -42,9 +42,11 @@ void main() {
         expect(row['vod_remarks'], '高清');
       }
     }
-    // 本次快照条数（爬取还在涨，只断言下限，不钉死具体数）。
-    expect((mjvDoc['list'] as List).length, greaterThanOrEqualTo(300));
-    expect((whosDoc['list'] as List).length, greaterThanOrEqualTo(100));
+    // 本次快照条数（爬取还在涨，只断言下限，不钉死具体数；下限按
+    // 2026-11-20 内置的 5337/201 行快照取，旧 321/171 行文件
+    // 若被误恢复，下限即拦住）。
+    expect((mjvDoc['list'] as List).length, greaterThanOrEqualTo(5000));
+    expect((whosDoc['list'] as List).length, greaterThanOrEqualTo(200));
   });
 
   test('格式不对就报错：缺顶层键、字段顺序错、播放地址不是正片\$地址', () {
@@ -79,8 +81,8 @@ void main() {
     final fallback = ActressJsonFallback(assetReader: _readRealAsset);
     await fallback.load();
     expect(fallback.loaded, isTrue);
-    // 随包文件本身按（分类，番号）合并不去重：同键不同链接的只留最新一条，
-    // 所以加载后的条数 ≤ 原始行数（321 行里有 10 条同键重复被合掉）。
+    // 随包文件本身按（分类，番号）合并不去重：同键同链接的被合掉，
+    // 所以加载后的条数 ≤ 原始行数。
     int mergedCount(Map<String, dynamic> doc) {
       final keys = <String>{};
       for (final row in (doc['list'] as List).cast<Map<String, dynamic>>()) {

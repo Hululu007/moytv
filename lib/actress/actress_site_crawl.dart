@@ -63,14 +63,25 @@ class ActressSiteCrawlProgress {
 
 /// 女优库手机现爬：选站后按分类逐页爬，存 hsck 同格式 JSON 到本地。
 ///
-/// - 只接 mjv：走潮流蜘蛛（chaoliu.py，MJV 全站蜘蛛）分类目录，
+/// - mjv：走潮流蜘蛛（chaoliu.py，MJV 全站蜘蛛）分类目录，
 ///   repository.catalog('chaoliu', category, page) 现取；
 /// - whos 暂无手机现爬：没有 whos 分类蜘蛛（名册源只有按人名查
 ///   roster/films/search，没有分类列表），直连又常被 CF 挡；
 ///   选 whos 时直接报缺口，不编假蜘蛛，whos 仍走已同步 JSON 兜底；
-/// - 有界：每分类默认只取前 3 页（每页 24 条，10 分类最多 720 条），
-///   补流每分类只做前 5 条（详情 + 取流各一次），全站条目上限 1000；
-///   MJV 全站约 51 万条目，手机上全量现爬不现实，不承诺全量；
+/// - 片库站：走本站蜘蛛自己的分类（repository.categories(站 id)
+///   现取，空 id 的“全部”伪分类跳过；取回为空回落到单个“全部”）
+///   与本站蜘蛛的 catalog 现取；条目 site 记本站 id，取流走本站
+///   蜘蛛；文件夹分类直接按 drillId 取目录，空页即停，不另下钻；
+/// - 有界：每分类默认取前 50 页（每页 24 条），补流每分类做前 50
+///   条（详情 + 取流各一次）；全站条目不设死上限（2026-11-20
+///   用户令：内置 json 的本地存储随爬取增长，库的容量与文件体积
+///   不设条数与体积死上限）；MJV 全站约 51 万条目，手机上全量现爬
+///   不现实，不承诺全量；
+/// - 存储：App 资源包里的 assets 文件只读，长在可写的那份本地副本
+///   里——documents/actress_json/$site.json（普通文件，不是
+///   SharedPreferences 单键，不重蹈 m3u 单键超 16MB 的覆辙）；
+///   每爬完一页立刻写盘；一轮内合并表常驻内存（只读一次文件），
+///   每页只写不重读；读时兜底加载器把本地新增与内置快照合并着算；
 /// - 断点续跑：检查点存在 sync_state（source=site_crawl，phase=站，
 ///   cursor=分类下标/页码），每爬完一页即存点，失败停在当前页；
 /// - 每爬完一页立刻写盘（同格式，indent=2、顶层四键、13 字段 +
@@ -82,14 +93,13 @@ class ActressSiteCrawlService {
     this._documentsDir,
   });
 
-  /// 每分类默认页数（保守值：流量与耗时都可控）。
-  static const defaultMaxPagesPerCategory = 3;
+  /// 每分类默认页数（2026-11-20 用户令：最少 50 页）。
+  static const defaultMaxPagesPerCategory = 50;
 
-  /// 每分类补流条数（详情 + 取流，补上女优名/番号/直链）。
-  static const defaultEnrichPerCategory = 5;
-
-  /// 全站条目上限（防失控）。
-  static const maxTotalItems = 1000;
+  /// 每分类补流条数（详情 + 取流，补上女优名/番号/直链；与页数
+  /// 同比例放宽：旧 5 条/3 页约 1.7 条/页，取 1 条/页即 50 条/
+  /// 分类、全站 500 次详情+取流；严格按比例是 83 条/分类太重）。
+  static const defaultEnrichPerCategory = 50;
 
   /// 断点存在 sync_state：source 借潮流名册源（现爬走潮流蜘蛛），
   /// phase 用 site_crawl_站名，与名册 roster/films/ranking 各记各的。
@@ -127,14 +137,14 @@ class ActressSiteCrawlService {
     _progressController.close();
   }
 
-  /// 开始现爬。site 只认 mjv；whos 直接报缺口（见类注释）。
+  /// 开始现爬。whos 直接报缺口（见类注释）；mjv 与片库站都跑。
   Future<void> start({
     String site = 'mjv',
     int maxPagesPerCategory = defaultMaxPagesPerCategory,
     int enrichPerCategory = defaultEnrichPerCategory,
   }) async {
     if (_running) return;
-    if (site != 'mjv') {
+    if (site == 'whos') {
       _emit(
         const ActressSiteCrawlProgress(
           error: 'whos 暂无手机现爬：没有 whos 分类蜘蛛，仍走已同步 JSON 兜底',
@@ -144,7 +154,34 @@ class ActressSiteCrawlService {
     }
     _running = true;
     _cancelled = false;
-    final categories = actressMjvVideoCategories;
+    // 蜘蛛 id：mjv 走潮流蜘蛛，其余站走本站蜘蛛。
+    final spiderId = site == 'mjv' ? 'chaoliu' : site;
+    final playFrom = site == 'mjv' ? 'mjv011' : spiderId;
+    // 分类：mjv 用硬编码表；其余站取本站自己的分类（空 id 的“全部”
+    // 伪分类跳过；取回为空或取分类失败，回落到单个“全部”）。
+    final List<({String id, String name})> categories;
+    if (site == 'mjv') {
+      categories = actressMjvVideoCategories;
+    } else {
+      final usable = <({String id, String name})>[];
+      try {
+        for (final c in await repository.categories(site)) {
+          if (c.drillId.isNotEmpty) {
+            usable.add((id: c.drillId, name: c.name));
+          }
+        }
+      } catch (_) {
+        // 取分类失败：回落到“全部”单分类，不让一次取分类失败
+        // 卡住整轮现爬。
+      }
+      categories = usable.isEmpty
+          ? const [(id: '', name: '全部')]
+          : usable;
+    }
+    // 一轮内合并表常驻内存：只读一次本地文件，每页只写不重读；
+    // 取消/跑完后丢弃，下轮重读（文件是唯一真相）。
+    _localByKey = await _loadLocalEntries(site);
+    _localSite = site;
     var items = 0;
     var enriched = 0;
     try {
@@ -161,12 +198,12 @@ class ActressSiteCrawlService {
         items = saved.total;
       }
       for (var ci = startCat; ci < categories.length; ci++) {
-        if (_cancelled || items >= maxTotalItems) break;
+        if (_cancelled) break;
         final category = categories[ci];
         final fromPage = ci == startCat ? startPage : 1;
         var enrichLeft = enrichPerCategory;
         for (var page = fromPage; page <= maxPagesPerCategory; page++) {
-          if (_cancelled || items >= maxTotalItems) break;
+          if (_cancelled) break;
           _emit(
             ActressSiteCrawlProgress(
               running: true,
@@ -180,17 +217,16 @@ class ActressSiteCrawlService {
             ),
           );
           final pageResult = await repository.catalog(
-            'chaoliu',
+            spiderId,
             category: category.id,
             page: page,
           );
           final rows = pageResult.items;
           if (rows.isEmpty) break;
-          final entries = <ActressJsonEntry>[];
-          for (final drama in rows) {
-            if (items + entries.length >= maxTotalItems) break;
-            entries.add(_entryFromCatalog(drama, category));
-          }
+          final entries = <ActressJsonEntry>[
+            for (final drama in rows)
+              _entryFromCatalog(drama, category, site, playFrom),
+          ];
           items += entries.length;
           await _appendEntries(site, entries);
           await db.saveCheckpoint(
@@ -203,16 +239,20 @@ class ActressSiteCrawlService {
             ),
           );
           // 补流：本分类前 K 条没直链的，详情 + 取流补齐（K 按分类计，
-          // 跨页累计，不按页重置）。
+          // 跨页累计，不按页重置）；补好的攒一页一次写盘。
+          final filledEntries = <ActressJsonEntry>[];
           for (final entry in entries) {
             if (enrichLeft <= 0 || _cancelled) break;
             if (entry.playable) continue;
-            final filled = await _enrichEntry(entry);
+            final filled = await _enrichEntry(entry, spiderId);
             if (filled != null) {
-              await _appendEntries(site, [filled]);
+              filledEntries.add(filled);
               enriched++;
               enrichLeft--;
             }
+          }
+          if (filledEntries.isNotEmpty) {
+            await _appendEntries(site, filledEntries);
           }
           if (rows.length < 24) break;
         }
@@ -248,19 +288,53 @@ class ActressSiteCrawlService {
         ),
       );
     } finally {
+      _localByKey = null;
+      _localSite = null;
       _running = false;
     }
+  }
+
+  /// 一轮内常驻内存的本地合并表（站 + 按 mergeKey 索引的条目）：
+  /// 只读一次文件，写盘只写不重读；取消/跑完后丢弃。
+  Map<String, ActressJsonEntry>? _localByKey;
+  String? _localSite;
+
+  /// 读本地文件进合并表：文件不存在或坏了即空表（坏文件不卡整轮，
+  /// 下次写盘重建）。
+  Future<Map<String, ActressJsonEntry>> _loadLocalEntries(
+    String site,
+  ) async {
+    final byKey = <String, ActressJsonEntry>{};
+    try {
+      final dir = await _localDir();
+      final file = File(path.join(dir.path, '$site.json'));
+      if (!await file.exists()) return byKey;
+      final doc = jsonDecode(await file.readAsString());
+      if (doc is! Map<String, dynamic>) return byKey;
+      validateActressJsonDocument(doc, file.path);
+      for (final row in (doc['list'] as List)) {
+        if (row is Map<String, dynamic>) {
+          final entry = ActressJsonEntry.fromRow(row, site);
+          byKey[entry.mergeKey] = entry;
+        }
+      }
+    } catch (_) {
+      // 本地文件坏了就按空表重建，不让一次坏文件卡住整轮现爬。
+    }
+    return byKey;
   }
 
   ActressJsonEntry _entryFromCatalog(
     Drama drama,
     ({String id, String name}) category,
+    String site,
+    String playFrom,
   ) {
     // 潮流分类行只有 id/标题/封面/日期：番号从 id 的 slug 段或标题里
     // 抠（抠不到就空着，等详情补）；女优名与直链一律空着，等补流。
     final code = _extractCode(drama.id) ?? _extractCode(drama.title) ?? '';
     return ActressJsonEntry(
-      site: 'mjv',
+      site: site,
       vodId: drama.id,
       vodName: drama.title,
       vodPic: drama.cover,
@@ -271,7 +345,7 @@ class ActressSiteCrawlService {
       vodArea: '',
       vodYear: '',
       vodContent: '<p>${drama.title}</p>',
-      vodPlayFrom: 'mjv011',
+      vodPlayFrom: playFrom,
       vodPlayUrl: '',
       typeName: category.name,
       vodCode: code,
@@ -288,13 +362,17 @@ class ActressSiteCrawlService {
   }
 
   /// 详情 + 取流补一条：女优名从详情描述的“演员：”行取，
-  /// 番号从标题/集 id 抠，直链取 resolve 回的地址。
-  Future<ActressJsonEntry?> _enrichEntry(ActressJsonEntry entry) async {
+  /// 番号从标题/集 id 抠，直链取 resolve 回的地址；详情与取流都走
+  /// 本站蜘蛛（mjv 走潮流蜘蛛）。
+  Future<ActressJsonEntry?> _enrichEntry(
+    ActressJsonEntry entry,
+    String spiderId,
+  ) async {
     try {
       final detail = await repository.detail(
         Drama(
           id: entry.vodId,
-          source: 'chaoliu',
+          source: spiderId,
           title: entry.vodName,
           cover: entry.vodPic,
         ),
@@ -346,6 +424,8 @@ class ActressSiteCrawlService {
 
   /// 按更新规则合并写盘：同（分类，番号）且播放链接相同跳过，
   /// 任一字段不同就替换；全新即追加。顶层四键、indent=2。
+  /// 不设条数上限：本地文件随爬取增长（2026-11-20 用户令）。
+  /// 合并表是一轮内常驻内存的那份（_localByKey），写盘只写不重读。
   Future<void> _appendEntries(
     String site,
     List<ActressJsonEntry> fresh,
@@ -354,22 +434,11 @@ class ActressSiteCrawlService {
     final dir = await _localDir();
     await dir.create(recursive: true);
     final file = File(path.join(dir.path, '$site.json'));
-    final byKey = <String, ActressJsonEntry>{};
-    if (await file.exists()) {
-      try {
-        final doc = jsonDecode(await file.readAsString());
-        if (doc is Map<String, dynamic>) {
-          validateActressJsonDocument(doc, file.path);
-          for (final row in (doc['list'] as List)) {
-            if (row is Map<String, dynamic>) {
-              final entry = ActressJsonEntry.fromRow(row, site);
-              byKey[entry.mergeKey] = entry;
-            }
-          }
-        }
-      } catch (_) {
-        // 本地文件坏了就重建，不让一次坏文件卡住整轮现爬。
-      }
+    var byKey = _localByKey;
+    if (_localSite != site || byKey == null) {
+      byKey = await _loadLocalEntries(site);
+      _localByKey = byKey;
+      _localSite = site;
     }
     for (final entry in fresh) {
       final key = entry.mergeKey;

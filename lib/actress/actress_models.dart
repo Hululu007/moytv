@@ -1,8 +1,10 @@
 // 女优模块：模型与纯逻辑（归一化、去重合并、名气分、硬线过滤）。
 //
-// 数据口径（2026-11-17 用户令 + 三家名册补令）：
+// 数据口径（2026-11-17 用户令 + 三家名册补令 + 2026-11-20 合并新规）：
 // - 人物三家合并：潮流名册 + whos.tv + MissAV，按归一化名字去重；
-// - 作品按归一化番号去重，无番号的按归一化标题去重；
+// - 作品按（站，归一化番号）去重：同番号两站各留一条，各算一条可播
+//   线路；无番号的按（站，归一化标题）去重；番号与播放链接完全一样
+//   才算重复（那是爬取文件递增更新的精确重复口径，见兜底加载器）；
 // - 站点来源信息只在内部流转（封面解析、探活），界面任何地方不显示。
 
 /// 硬线词表：与潮流 jar 版分类过滤（ZakaChaoliu.BLOCKED_CAT_WORDS）
@@ -121,14 +123,27 @@ enum ActressSort { worksDesc, nameAsc }
 
 /// 女优库左上角站点筛选：默认全部；选站后兜底数据与现爬都只走该站。
 /// mjv = mjv011.com（潮流蜘蛛），whos = whos.tv（暂无手机现爬蜘蛛）。
-enum ActressSiteFilter {
-  all('全部', 'all'),
-  mjv('mjv', 'mjv'),
-  whos('whos', 'whos');
+/// 片库站是动态项：站 id 即片库里的站 id、显示名即站名（见
+/// [actressSiteFilterOptions]），与 mjv/whos 同一筛选语义。
+class ActressSiteFilter {
+  const ActressSiteFilter(this.siteId, this.label);
 
-  const ActressSiteFilter(this.label, this.siteId);
-  final String label;
+  static const all = ActressSiteFilter('all', '全部');
+  static const mjv = ActressSiteFilter('mjv', 'mjv');
+  static const whos = ActressSiteFilter('whos', 'whos');
+
+  /// 站 id：'all' / 'mjv' / 'whos' / 片库站 id。
   final String siteId;
+
+  /// 下拉里显示的名字：mjv/whos 用站 id 本身，片库站用站名。
+  final String label;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ActressSiteFilter && other.siteId == siteId;
+
+  @override
+  int get hashCode => siteId.hashCode;
 }
 
 /// 第二排册别筛选：按名册自带的标签字段筛（潮流名册 c 字段）。
@@ -507,7 +522,8 @@ int compareActressRank(ActressPerson a, ActressPerson b) {
   return a.displayName.compareTo(b.displayName);
 }
 
-/// 本地库里的一部作品：归一化番号去重，无番号按标题去重。
+/// 本地库里的一部作品：按（站，归一化番号）去重，无番号按
+/// （站，标题）去重——同番号两站各留一条，各算一条可播线路。
 /// [coverSource]/[coverDramaId]/[coverUrl] 只供封面解析内部用，
 /// 界面绝不显示其中任何一项。
 class ActressWork {
@@ -516,6 +532,7 @@ class ActressWork {
     required this.personId,
     required this.codeKey,
     required this.titleKey,
+    this.site = '',
     this.codeDisplay = '',
     this.title = '',
     this.date = '',
@@ -529,6 +546,12 @@ class ActressWork {
   final int personId;
   final String codeKey;
   final String titleKey;
+
+  /// 该行来自哪站（名册源名或蜘蛛站 id，如 'chaoliu'/'whos'/
+  /// 'missav' 或跨站发现的命中站 id）：去重键的一部分。
+  /// 旧库行（建表 v2 及以前）没有该列，读出来为空。
+  final String site;
+
   final String codeDisplay;
   final String title;
   final String date;
@@ -559,6 +582,7 @@ class ActressWork {
     int? personId,
     String? codeKey,
     String? titleKey,
+    String? site,
     String? codeDisplay,
     String? title,
     String? date,
@@ -571,6 +595,7 @@ class ActressWork {
     personId: personId ?? this.personId,
     codeKey: codeKey ?? this.codeKey,
     titleKey: titleKey ?? this.titleKey,
+    site: site ?? this.site,
     codeDisplay: codeDisplay ?? this.codeDisplay,
     title: title ?? this.title,
     date: date ?? this.date,

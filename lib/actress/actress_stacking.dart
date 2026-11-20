@@ -19,7 +19,7 @@ class ActressStackingProgress {
   /// 库内总人数；为 0 表示总量未知。
   final int total;
 
-  /// 本轮新增的作品行数（跨站发现的新番号行）。
+  /// 本轮新增的作品行数（跨站发现的新作品行，同番号两站各计一条）。
   final int worksAdded;
   final bool running;
   final bool finished;
@@ -51,9 +51,10 @@ class ActressStackingResult {
   final bool finished;
 }
 
-/// 全站叠加服务：把全库人物逐个跑一遍 [ActressEnrichment]，按番号
-/// 把各站作品叠加进本地库（某站有某站没有的，以归一化番号键去重
-/// 并进库），后台断点续跑。
+/// 全站叠加服务：把全库人物逐个跑一遍 [ActressEnrichment]，按（站，
+/// 番号）把各站作品叠加进本地库（某站有某站没有的进库；同番号两站
+/// 各留一条，各算一条可播线路），后台断点续跑。零作品的人也照常跑
+/// 名字路搜全站，搜到就新增进库（见 [ActressEnrichment]）。
 ///
 /// - 复用详情页同一套补全（名字路 + 番号路 + whos 路默认关闭），
 ///   不另写去重逻辑；失败的站静默跳过，不弹错、不挡列表；

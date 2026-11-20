@@ -30,7 +30,11 @@ List<String> actressSearchSiteIds(LocalStore store) => [
 /// - 番号路：对仍无封面的作品按番号逐个搜（每轮上限 120 个、并发 6，
 ///   每轮墙钟上限 60 秒：超时不再起跑新作品，已贴上的保留、下一轮
 ///   续跑），只补已有行，不新增；
-/// - 两路结果都按归一化番号去重（无番号按标题键），同一部只留一张卡；
+/// - 补全写库按（站，归一化番号）去重（无番号按站+标题键），同番号
+///   两站各留一条；搜索结果展示仍一部一卡（显示层去重，不动）；
+/// - 零作品的人也照常跑名字路：按名搜全站，带番号的命中新增进库，
+///   搜不到保持为空、不造假数据；该轮开始时作品为空且结束时仍为空
+///   的返回 false（不算完成，调用方不记 enrichedAt）；
 /// - 搜过的结果写进库；已记 enrichedAt 且全部作品已有封面时下次
 ///   打开不再跑（[ActressPerson.enrichedAt] 非空且无无封面作品才跳
 ///   过——只看 enrichedAt 会把同步窗口期打开过的人永久锁死在无封
@@ -60,9 +64,11 @@ class ActressEnrichment {
 
   /// 跑一轮补全。返回 true 表示本轮已把能查的都查完（调用方记
   /// enrichedAt，下次打开符合跳过条件时不再跑）；返回 false 表示
-  /// 本轮没查完（作品还没同步进来、番号路触到上限或中途取消），
-  /// 下次打开继续。作品为空时必须返回 false：返回 true 会让调用
-  /// 方记 enrichedAt，作品随后进来也再也不补（中毒标记）。
+  /// 本轮没查完（番号路触到上限或中途取消），下次打开继续。
+  /// 零作品的人也照常跑名字路（2026-11-20 用户令：没有也要爬取
+  /// 新增），搜到就新增进库；开始时零作品、结束时仍零作品的返回
+  /// false：返回 true 会让调用方记 enrichedAt，作品随后进来也再
+  /// 也不补（中毒标记，见 actress_cover_fix_test）。
   ///
   /// whos 追加输入默认关闭：[whosDetailEnabled] 为 false（默认）或
   /// 未传 [whosSource]/[whosFetch] 时，行为与此前一字不差。
@@ -75,13 +81,13 @@ class ActressEnrichment {
     bool whosDetailEnabled = false,
   }) async {
     final works = await _allWorks(person.localId);
-    // 作品还没同步进来：什么都没查到，不算完成，调用方不得记
-    // enrichedAt，否则作品进来后也再也不补。
-    if (works.isEmpty) return false;
+    final startedEmpty = works.isEmpty;
     // 已补过且全部作品已有封面：跳过。跳过条件不能只看
     // enrichedAt：同步窗口期打开过的人会被记上 enrichedAt，作品
-    // 进来后仍有无封面作品时必须重新补。
-    if (person.enrichedAt != null &&
+    // 进来后仍有无封面作品时必须重新补。零作品时“全部已有封面”
+    // 在空集上恒真，不能凭它跳过——零作品的人必须跑名字路搜。
+    if (!startedEmpty &&
+        person.enrichedAt != null &&
         !works.any((work) => !work.hasCover)) {
       return true;
     }
@@ -114,6 +120,9 @@ class ActressEnrichment {
     }
 
     final refreshed = await _allWorks(person.localId);
+    // 开始时零作品、名字路也没新增：本轮不算完成，调用方不得记
+    // enrichedAt；下次打开/下轮叠加继续搜。
+    if (startedEmpty && refreshed.isEmpty) return false;
     final uncovered = refreshed
         .where((work) => !work.hasCover && work.codeKey.isNotEmpty)
         .toList();
@@ -219,6 +228,7 @@ class ActressEnrichment {
         coverSource: hit.source,
         coverDramaId: hit.id,
         coverUrl: hit.cover,
+        site: hit.source,
         // 无番号的命中只附已有行，不新增（防名字搜索的杂标题淹没列表）。
         insertIfMissing: codeKey.isNotEmpty,
       );
@@ -283,6 +293,7 @@ class ActressEnrichment {
         person.localId,
         films,
         coverSource: actressRosterCoverSource(ActressRosterSourceId.whos),
+        site: 'whos',
       );
       for (final film in films) {
         if (film.coverUrl.isEmpty) continue;
@@ -293,6 +304,7 @@ class ActressEnrichment {
           coverSource: 'whos',
           coverDramaId: film.detailUrl,
           coverUrl: film.coverUrl,
+          site: 'whos',
           insertIfMissing: false,
         );
       }
@@ -338,6 +350,7 @@ class ActressEnrichment {
           coverSource: hit.source,
           coverDramaId: hit.id,
           coverUrl: hit.cover,
+          site: hit.source,
           insertIfMissing: false,
         );
         attached++;

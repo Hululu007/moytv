@@ -173,4 +173,134 @@ void main() {
       isFalse,
     );
   });
+
+  test('默认每分类 50 页、补流 50 条、不设总上限', () {
+    expect(ActressSiteCrawlService.defaultMaxPagesPerCategory, 50);
+    expect(ActressSiteCrawlService.defaultEnrichPerCategory, 50);
+  });
+
+  test('通用站现爬：分类取本站、蜘蛛走本站、条目记本站', () async {
+    final repo = _GenericCrawlRepository();
+    final service = makeService(repo);
+    addTearDown(service.dispose);
+    await service.start(site: 'test-site', maxPagesPerCategory: 1, enrichPerCategory: 1);
+
+    expect(repo.categorySources, ['test-site']);
+    expect(repo.catalogSources.toSet(), {'test-site'});
+    expect(repo.calls.map((c) => c.category).toSet(), {'cat-a', 'cat-b'});
+    expect(service.current.items, 2 * 24);
+    expect(service.current.enriched, 2);
+
+    final file = File('${temp.path}/actress_json/test-site.json');
+    expect(file.existsSync(), isTrue);
+    expect(File('${temp.path}/actress_json/mjv.json').existsSync(), isFalse);
+    final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final rows = doc['list'] as List;
+    expect(rows.length, 2 * 24);
+    final first = rows.first as Map<String, dynamic>;
+    expect(first['vod_play_from'], 'test-site');
+    expect(
+      rows
+          .cast<Map<String, dynamic>>()
+          .every((r) => (r['vod_play_url'] as String).isEmpty),
+      isFalse,
+    );
+    final checkpoint = await db.checkpoint(
+      ActressRosterSourceId.chaoliu,
+      'site_crawl_test-site',
+    );
+    expect(checkpoint, isNotNull);
+    expect(checkpoint!.finished, isTrue);
+  });
+
+  test('默认 50 页跑满：2 分类 × 50 页 × 24 条，超 1000 不截断', () async {
+    final repo = _GenericCrawlRepository()..maxPage = 50;
+    final service = makeService(repo);
+    addTearDown(service.dispose);
+    await service.start(site: 'test-site', enrichPerCategory: 0);
+
+    expect(repo.calls.map((c) => c.page).toSet(), {
+      for (var p = 1; p <= 50; p++) p,
+    });
+    expect(repo.calls.length, 2 * 50);
+    expect(service.current.items, 2 * 50 * 24);
+    final file = File('${temp.path}/actress_json/test-site.json');
+    final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    expect((doc['list'] as List).length, 2 * 50 * 24);
+  });
+
+  test('多轮追加：本地文件持续增长、旧行不丢', () async {
+    final repo = _GenericCrawlRepository()..maxPage = 1;
+    final service = makeService(repo);
+    addTearDown(service.dispose);
+    final file = File('${temp.path}/actress_json/test-site.json');
+
+    await service.start(site: 'test-site', maxPagesPerCategory: 1, enrichPerCategory: 0);
+    final firstDoc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final firstRows = firstDoc['list'] as List;
+    expect(firstRows.length, 2 * 24);
+    final firstBytes = file.lengthSync();
+    final firstCode =
+        (firstRows.first as Map<String, dynamic>)['vod_code'] as String;
+    expect(firstCode, startsWith('AAA-'));
+
+    // 第二轮：新番号（BBB-），旧行应保留、文件变大。
+    repo.round = 2;
+    await service.start(site: 'test-site', maxPagesPerCategory: 1, enrichPerCategory: 0);
+    final secondDoc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final secondRows = secondDoc['list'] as List;
+    expect(secondRows.length, 2 * 2 * 24);
+    expect(file.lengthSync(), greaterThan(firstBytes));
+    final codes = secondRows
+        .cast<Map<String, dynamic>>()
+        .map((r) => r['vod_code'] as String)
+        .toSet();
+    expect(codes, contains(firstCode));
+    expect(codes.any((c) => c.startsWith('BBB-')), isTrue);
+  });
+}
+
+/// 通用站假仓：分类取本站现取（2 分类），目录按轮次出不同番号。
+class _GenericCrawlRepository extends _CrawlRepository {
+  final categorySources = <String>[];
+  final catalogSources = <String>[];
+  var round = 1;
+  var maxPage = 1;
+
+  @override
+  Future<List<CatalogCategory>> categories(
+    String source, {
+    bool force = false,
+  }) async {
+    categorySources.add(source);
+    return const [
+      CatalogCategory('cat-a', '分类A'),
+      CatalogCategory('cat-b', '分类B'),
+    ];
+  }
+
+  @override
+  Future<CatalogPage> catalog(
+    String source, {
+    int page = 1,
+    String query = '',
+    String category = '',
+    bool force = false,
+    Map<String, String> filters = const {},
+  }) async {
+    catalogSources.add(source);
+    calls.add((category: category, page: page));
+    if (page > maxPage) return CatalogPage([]);
+    return CatalogPage([
+      for (var i = 0; i < 24; i++)
+        Drama(
+          id:
+              '$category#${1000 + page * 100 + i}#${round == 1 ? 'AAA' : 'BBB'}-$page${i.toString().padLeft(2, '0')}',
+          source: source,
+          title: '测试标题 ${round == 1 ? 'AAA' : 'BBB'}-$page${i.toString().padLeft(2, '0')}',
+          cover: 'https://x/${page}_$i.jpg',
+          onlineDate: '2026-01-02',
+        ),
+    ]);
+  }
 }

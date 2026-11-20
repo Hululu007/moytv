@@ -746,8 +746,9 @@ void main() {
       final result = await sync.run();
       expect(result.hasFailures, isFalse);
       expect(result.persons, 2);
-      // SSIS-00123 与 SSIS-123 归一化后同一部，只留一行。
-      expect(result.works, 2);
+      // SSIS-00123 与 SSIS-123 归一化后同一部，但来自潮流与 MissAV
+      // 两家名册，按（站，番号）各留一条；加演员乙的 HMN-927 共 3 行。
+      expect(result.works, 3);
       final persons = await db.listPersons(
         sex: ActressSexFilter.all,
         sort: ActressSort.nameAsc,
@@ -759,7 +760,7 @@ void main() {
       expect(a.fromChaoliu, isTrue);
       expect(a.fromMissav, isTrue);
       expect(a.missavRank, 1);
-      expect(a.worksCount, 1);
+      expect(a.worksCount, 2);
       final b = persons.firstWhere((p) => p.displayName == '演员乙');
       expect(b.missavRank, 2);
       final checkpoint = await db.checkpoint(
@@ -1088,7 +1089,7 @@ void main() {
       expect(works.any((w) => w.codeKey == 'ABW111'), isFalse);
     });
 
-    test('无作品不算完成且不搜索（不中毒）', () async {
+    test('无作品不算完成但照常按名搜索（不中毒）', () async {
       final person = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
@@ -1102,8 +1103,10 @@ void main() {
         db: db,
       );
       // 返回 false：调用方不得记 enrichedAt，作品同步进来后下次打开再补。
+      // 2026-11-20 新规：零作品的人也按名搜全站（没有也要爬取新增），
+      // 搜不到保持为空、不造假数据。
       expect(await enrichment.enrichPerson(person), isFalse);
-      expect(repository.searchQueries, isEmpty);
+      expect(repository.searchQueries, contains('空演员'));
     });
   });
 
@@ -1354,7 +1357,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('女演员甲'), findsNothing);
       expect(find.text('男演员乙'), findsOneWidget);
-      await tester.tap(find.text('全部'));
+      // 性别“全部” chip：不用 find.text('全部')，顶栏站点筛选当前
+      // 项也是“全部”文本，会歧义。
+      await tester.tap(find.widgetWithText(ChoiceChip, '全部'));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('actress-search')),

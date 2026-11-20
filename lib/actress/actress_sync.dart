@@ -398,6 +398,7 @@ class ActressSyncService {
         person.localId,
         films,
         coverSource: actressRosterCoverSource(source.id),
+        site: source.id.name,
       );
       await db.markFilmsState(person.localId, source.id, ok: true);
       return true;
