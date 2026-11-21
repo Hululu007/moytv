@@ -115,6 +115,39 @@ Future<void> mirrorActressJsonEntriesToDb(
   ActressDatabase db,
   Iterable<ActressJsonEntry> entries,
 ) async {
+  if (db.isVideoLibrary) {
+    // 视频库模式：条目按合并规则写进 videos / video_category
+    //（不写 persons/works，那两张表这个库里没有）。
+    // vod_id 用小写番号（entry.vodCode 归一化）；vodCode 为空
+    // 时退回 entry.vodId（md5/slug，仍可用作键）；都没有就跳过。
+    // 女优名（vodActor）有就按名字精确匹配 actresses 链
+    // video_actress，没有就不链（whos 条目本来就没女优名，
+    // 只进 videos/video_category）。
+    final videoEntries = <VideoLibraryEntry>[];
+    for (final entry in entries) {
+      final vodId = entry.vodCode.trim().isNotEmpty
+          ? videoLibraryVodId(entry.vodCode)
+          : entry.vodId.trim();
+      if (vodId.isEmpty) continue;
+      videoEntries.add((
+        vodId: vodId,
+        title: entry.vodName,
+        picUrl: entry.vodPic,
+        playUrl: entry.playUrl,
+        remarks: entry.vodRemarks,
+        pubdate: entry.vodPubdate,
+        area: entry.vodArea,
+        year: entry.vodYear,
+        content: entry.vodContent,
+        playFrom: entry.vodPlayFrom,
+        typeName: entry.typeName,
+        category: entry.typeName,
+        actressName: entry.vodActor.trim(),
+      ));
+    }
+    await db.upsertVideoEntries(videoEntries);
+    return;
+  }
   for (final entry in entries) {
     final actor = entry.vodActor.trim();
     if (actor.isEmpty) continue;

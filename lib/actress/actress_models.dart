@@ -629,3 +629,75 @@ class ActressWork {
     category: category ?? this.category,
   );
 }
+
+/// 视频库（MYTV/db/女优库.db）的一条视频：videos / video_category
+/// 行的合并输入。vodId 是 videos 主键；playUrl 是去掉了 `正片$`
+/// 前缀的直链地址（m3u8_url 与 vod_play_url 两列同值）；category
+/// 是 video_category.main_category（条目的分类，空就留空）；
+/// actressName 为空时不写 video_actress（whos 条目本来就没女优名）。
+typedef VideoLibraryEntry = ({
+  String vodId,
+  String title,
+  String picUrl,
+  String playUrl,
+  String remarks,
+  String pubdate,
+  String area,
+  String year,
+  String content,
+  String playFrom,
+  String typeName,
+  String category,
+  String actressName,
+});
+
+/// 视频库合并规则的判定结果（纯函数，供测试与实现共用）：
+/// skip = 同 vod_id 且播放地址相同，不动；update = 同 vod_id 但
+/// 播放地址不同，只换播放地址（标题/封面只在新值非空时才换，
+/// 分类不动）；insert = 新 vod_id，插 videos + video_category。
+enum VideoLibraryMergeAction { skip, update, insert }
+
+/// 视频库 vod_id 归一化：小写番号（库里 vod_id 是小写、带横杠）。
+/// 只做小写 + 横杠还原 + FC2 归一：whos 卡片的 'fc2ppv-1234567'
+/// 归成库里 的 'fc2-ppv-1234567'；归一化后无横杠的 'ssis123'
+/// 还原成 'ssis-123'（字母段 + 数字段之间补横杠）；已带横杠的
+/// 原样。不去前导零——库里 'mmym-032' 这类就是带零的，去零反而
+/// 对不上已有行。
+String videoLibraryVodId(String code) {
+  final raw = code.trim().toLowerCase();
+  if (raw.isEmpty) return '';
+  // FC2：fc2ppv-1234567 / fc2ppv1234567 → fc2-ppv-1234567。
+  final fc2 = RegExp(r'^fc2[-_]?ppv[-_]?(\d{5,7})$').firstMatch(raw);
+  if (fc2 != null) return 'fc2-ppv-${fc2.group(1)}';
+  // 已带横杠（ssis-123）：原样。
+  if (raw.contains('-')) return raw;
+  // 归一化后无横杠（ssis123）：字母段 + 数字段之间补横杠。
+  final m = RegExp(r'^([a-z]+)(\d+)$').firstMatch(raw);
+  if (m != null) return '${m.group(1)}-${m.group(2)}';
+  return raw;
+}
+
+/// 名册补新人时 actresses.cate_id 的拼法：来源前缀 + 来源 id。
+/// whos 用 'whos:' + slug、mjv（潮流）用 'mjv:' + chaoliuId、
+/// MissAV 用 'missav:' + 人物相对路径。原库 29237 行的 cate_id
+/// 就是名字本身（无前缀），新补的行用前缀区分来源。
+String rosterVideoLibraryCateId(
+  ActressRosterSourceId source,
+  String sourceId,
+) {
+  final prefix = switch (source) {
+    ActressRosterSourceId.whos => 'whos:',
+    ActressRosterSourceId.chaoliu => 'mjv:',
+    ActressRosterSourceId.missav => 'missav:',
+  };
+  return '$prefix$sourceId';
+}
+VideoLibraryMergeAction videoLibraryMergeAction(
+  String? existingPlayUrl,
+  String newPlayUrl,
+) {
+  if (existingPlayUrl == null) return VideoLibraryMergeAction.insert;
+  if (newPlayUrl.isEmpty) return VideoLibraryMergeAction.skip;
+  if (existingPlayUrl == newPlayUrl) return VideoLibraryMergeAction.skip;
+  return VideoLibraryMergeAction.update;
+}

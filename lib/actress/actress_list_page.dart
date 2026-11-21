@@ -230,6 +230,13 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 改走通用作品模式（作品列表 + 点按直播），不走女优库的总览/
   /// 同步/自动生成。[_genericReader] 为空时不是通用模式。
   var _genericMode = false;
+
+  /// 视频库模式：当前库是用户视频库（MYTV/db/女优库.db，
+  /// actresses/videos/video_actress/video_category 四张表）时为
+  /// true。主名册就是 actresses 表（本地库是主库，不是兜底）；
+  /// 名册同步与选站现爬照常跑（往本地库补新人/补视频），自动生成/
+  /// 全站叠加/数据库镜像/新 json 同步禁掉（它们写 persons/works）。
+  var _videoLibraryMode = false;
   GenericDbReader? _genericReader;
   var _genericWorks = <GenericDbWork>[];
   var _genericTotal = 0;
@@ -345,6 +352,7 @@ class _ActressListPageState extends State<ActressListPage> {
       setState(() {
         _genericReader = generic;
         _genericMode = true;
+        _videoLibraryMode = false;
       });
       await _loadPage(reset: true);
       return;
@@ -352,6 +360,8 @@ class _ActressListPageState extends State<ActressListPage> {
     setState(() {
       _genericReader = null;
       _genericMode = false;
+      // genericReader() 已开过库，isVideoLibrary 的标志已算好。
+      _videoLibraryMode = _db.isVideoLibrary;
     });
     // 兜底后台读、不堵首屏：列表站点过滤与新版 json 检测都要用它，
     // 但不能在首屏等它——widget 测试里 rootBundle 异步读在
@@ -412,6 +422,9 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 灌完库就不再是空库，下次打开不再重复跑；同步失败只记横幅，
   /// 不抛错、不影响列表打开。
   Future<void> _autoGenerateLibrary() async {
+    // 视频库模式不自动生成（种子灌的是 persons/works，视频库没有
+    // 那两张表；用户库本身已有 32 万条视频，不需种子）。
+    if (_videoLibraryMode) return;
     if (_mytvGenerating) return;
     _mytvGenerating = true;
     if (mounted) setState(() {});
@@ -503,6 +516,8 @@ class _ActressListPageState extends State<ActressListPage> {
       setState(() {
         _genericReader = generic;
         _genericMode = generic != null;
+        // genericReader() 已开过库，isVideoLibrary 的标志已算好。
+        _videoLibraryMode = generic == null && _db.isVideoLibrary;
       });
       if (_genericMode) {
         await _loadPage(reset: true);
@@ -534,6 +549,9 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 追加失败记错不崩，已有数据不受影响。
   Future<void> _maybeStartDbMirror() async {
     if (_genericMode) return;
+    // 视频库模式不跑数据库镜像（镜像写 persons/works，那两张表
+    // 这个库里没有；视频靠现爬/名册同步补）。
+    if (_videoLibraryMode) return;
     if (_mirrorRunning) return;
     if (_mytvGenerating || _sync.isRunning) return;
     final bind = _mytvBind;
@@ -618,6 +636,9 @@ class _ActressListPageState extends State<ActressListPage> {
   Future<void> _maybeSyncOnNewJson() async {
     // 2026-11-20 通用读库：外来库不走女优库同步。
     if (_genericMode) return;
+    // 视频库模式不走新 json 同步（它写 persons/works；视频靠
+    // 现爬/名册同步补）。
+    if (_videoLibraryMode) return;
     // 2026-11-20 MYTV 绑定：本页已自动生成过（空库种子 + 同步）
     // 就不再重复触发——种子刚读的就是这份随包 json，自动生成的
     // 同步已覆盖“新版到了跑一次”。
@@ -745,6 +766,9 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 手动开始/继续叠加：名册同步跑着时不启动（两路同时写库抢带宽，
   /// 等同步停了再点）；叠加服务内部断点续跑，本处只管触发一次。
   Future<void> _runStacking() async {
+    // 视频库模式不跑全站叠加（叠加写 persons/works，那两张表
+    // 这个库里没有；跨站叠加由现爬/名册同步的合并规则覆盖）。
+    if (_videoLibraryMode) return;
     if (_stacking.isRunning || _progress.running) return;
     await _stacking.run();
   }
@@ -765,6 +789,10 @@ class _ActressListPageState extends State<ActressListPage> {
   Future<void> _runSync() async {
     // 2026-11-20 通用读库：外来库不走女优库同步。
     if (_genericMode) return;
+    // 视频库模式不禁名册同步（2026-11-21 用户令）：它现在是往
+    // 本地 actresses 表补新人（upsertRosterPerson 走视频库分支），
+    // 再由作品阶段把她的作品写进 videos；检查点不记，同步每次按
+    // 名册全量比对、只补没有的。
     if (_sync.isRunning) return;
     _worksAtRunStart = _overview?.works ?? 0;
     setState(() => _lastSyncFailed = false);
