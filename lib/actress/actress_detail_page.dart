@@ -13,6 +13,7 @@ import '../app_page_route.dart';
 import '../core_bridge.dart';
 import '../detail_screen.dart';
 import '../feed_playability.dart';
+import '../global_search_page.dart';
 import '../local_store.dart';
 import '../models.dart';
 import '../widgets.dart';
@@ -505,9 +506,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       await _loadFallback(forceReload: true);
       if (!mounted) return;
     }
-    // 2026-11-21 用户令：全部改成数据库播放链接——点按不再先走
-    // 封面站快路径（封面来源站直接取详情），一律先走下面三档：
-    // 第一档本地 db 存的地址，上一档全死才往下一档走。
+    // 2026-11-21 用户令（数据库兜底定版）：库里有这个番号的地址就直接
+    // 播本地库那条（第一档 db 行），不再往下探内置 json/m3u、也不再跨站
+    // 静默探活；库里没有这个番号、或库里那条地址已经播不了，就提示
+    // “去站点列表搜索影片”，并给一键跳转——不硬播、不空转。
     final playGeneration = ++_playGeneration;
     final cancel = Completer<void>();
     setState(() {
@@ -515,91 +517,61 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       _playCancel = cancel;
     });
     final avId = actressPlayAvId(currentWork);
+    final queryKey = avId.isNotEmpty ? avId : currentWork.displayTitle;
     final chain =
-        widget.playChainFactory?.call(
-          avId: avId,
-          titleQuery: avId.isEmpty ? currentWork.displayTitle : '',
-        ) ??
+        widget.playChainFactory?.call(avId: avId, titleQuery: queryKey) ??
         ActressPlayChain(
           repository: widget.repository,
           store: widget.store,
           avId: avId,
-          titleQuery: avId.isEmpty ? currentWork.displayTitle : '',
+          titleQuery: queryKey,
           // 作品自己记的站先探（见 actress_play.dart）。
           preferSiteId: currentWork.site.isNotEmpty ? currentWork.site : null,
           verifyFetch: _verifyFetch,
         );
-    // 实际试过的站：存的条目站 + 链试过的站，链耗尽时如实报数。
-    final triedSites = <String>{};
+    // 库里这个人名下、番号相同的地址行（第一档边界 _dbFallbackCount）。
+    final dbRows = currentWork.codeKey.isEmpty
+        ? const <ActressJsonEntry>[]
+        : _fallbackEntries
+              .take(_dbFallbackCount)
+              .where(
+                (entry) =>
+                    entry.playable && entry.codeKey == currentWork.codeKey,
+              )
+              .toList();
     DramaDetail? storedDetail;
-    ActressPlayCandidate? candidate;
     try {
-      // 三档取流（2026-11-20 19:01 用户令，顺序写死）：第一档本地 db
-      // （_fallbackEntries 里打头的 _dbFallbackCount 条），第二档内置
-      // json/m3u（其余），第三档跨站探活；每档逐条 resolve + 验活，
-      // 首条活的直接进详情页播——来源就是条目自己的站（mjv/whos 走
-      // 潮流蜘蛛原始分支，parse=0 直链 + 该站的头），不标没提供这条
-      // 地址的站；上一档全死才往下一档走，不许跳档。每档最多试 3 条，
+      // 只认本地库这一档：逐条 resolve + 验活，首条活的直接进详情页播
+      //（来源就是条目自己的站，parse=0 直链 + 该站的头）；最多试 3 条，
       // 点取消立即停。
-      Future<DramaDetail?> tryTier(Iterable<ActressJsonEntry> entries) async {
-        var tried = 0;
-        for (final entry in entries) {
-          if (tried >= 3 ||
-              cancel.isCompleted ||
-              playGeneration != _playGeneration) {
-            return null;
-          }
-          if (!entry.playable || entry.codeKey != currentWork.codeKey) {
+      for (final entry in dbRows.take(3)) {
+        if (cancel.isCompleted || playGeneration != _playGeneration) break;
+        final detail = entry.toDramaDetail();
+        try {
+          final plan = await widget.repository
+              .resolve(detail.drama, detail.episodes.first)
+              .timeout(const Duration(seconds: 8));
+          if (cancel.isCompleted || playGeneration != _playGeneration) break;
+          // 解析型计划验不了活：不冒进，算这条库里地址不可直播。
+          if (plan.needsParse) continue;
+          final uri = Uri.tryParse(plan.url.trim());
+          if (uri == null ||
+              !(uri.scheme == 'http' || uri.scheme == 'https') ||
+              uri.host.isEmpty) {
             continue;
           }
-          tried++;
-          triedSites.add(entry.site);
-          final detail = entry.toDramaDetail();
-          try {
-            final plan = await widget.repository
-                .resolve(detail.drama, detail.episodes.first)
-                .timeout(const Duration(seconds: 8));
-            if (cancel.isCompleted || playGeneration != _playGeneration) {
-              return null;
-            }
-            // 解析型计划验不了活：不冒进，交给下一档/探活链（链里同样
-            // 放行，播失败时播放器再换线）。
-            if (plan.needsParse) continue;
-            final uri = Uri.tryParse(plan.url.trim());
-            if (uri == null ||
-                !(uri.scheme == 'http' || uri.scheme == 'https') ||
-                uri.host.isEmpty) {
-              continue;
-            }
-            final response = await _verifyFetch(
-              plan.url,
-              plan.headers,
-              const Duration(seconds: 5),
-            );
-            if (!feedProbePlayable(uri, response)) continue;
-            return detail;
-          } catch (_) {
-            // 这条死了：换下一条存的地址，不弹错。
-            continue;
-          }
+          final response = await _verifyFetch(
+            plan.url,
+            plan.headers,
+            const Duration(seconds: 5),
+          );
+          if (!feedProbePlayable(uri, response)) continue;
+          storedDetail = detail;
+          break;
+        } catch (_) {
+          // 这条死了：换库里下一条地址。
+          continue;
         }
-        return null;
-      }
-
-      if (currentWork.codeKey.isNotEmpty) {
-        storedDetail ??= await tryTier(_fallbackEntries.take(_dbFallbackCount));
-        storedDetail ??= await tryTier(_fallbackEntries.skip(_dbFallbackCount));
-      }
-      if (storedDetail == null) {
-        // 取消竞速：点取消立即收遮罩，在途探活结果由代次守卫丢弃。
-        candidate = await Future.any([
-          chain.nextPlayable(
-            profileEpoch: widget.store.profileEpoch,
-            shouldStop: () =>
-                cancel.isCompleted || playGeneration != _playGeneration,
-          ),
-          cancel.future.then<ActressPlayCandidate?>((_) => null),
-        ]);
       }
     } finally {
       if (mounted && playGeneration == _playGeneration) {
@@ -612,30 +584,48 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (!mounted || cancel.isCompleted || playGeneration != _playGeneration) {
       return;
     }
-    if (storedDetail != null) {
-      // 存的地址活的：走详情页 + 同一条链——播耗尽时链里继续
-      // 换线，重试按钮重探（见 _openDetailWithChain）。
-      await _openDetailWithChain(
-        chain,
-        ActressPlayCandidate(detail: storedDetail, episodeIndex: 0),
-      );
+    if (storedDetail == null) {
+      // 库里没有该番号 / 库里的地址播不了：提示走站点列表搜索影片。
+      _showDbMissHint(hasDbRow: dbRows.isNotEmpty, query: queryKey);
       return;
     }
-    if (candidate == null) {
-      // 后台兜底播放（2026-11-20 用户定：兜底一直不显示，只后台
-      // 兜底播放）：存的地址与探活链全死时，如实报试过的站数，
-      // 一个没试过才报“暂无可播片源”。
-      triedSites.addAll(chain.triedSources);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            triedSites.isEmpty ? '暂无可播片源' : '这条播不了，已试过 ${triedSites.length} 个站',
-          ),
+    await _openDetailWithChain(
+      chain,
+      ActressPlayCandidate(detail: storedDetail, episodeIndex: 0),
+    );
+  }
+
+  /// 库里没有这个番号（或库里那条地址播不了）时的提示（2026-11-21
+  /// 用户令）：明说去站点列表搜索影片，给一键跳到全局搜索，不静默
+  /// 跨站探活、不硬播。
+  void _showDbMissHint({required bool hasDbRow, required String query}) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          hasDbRow ? '本地库里这条地址播不了，去站点列表搜索影片吧' : '数据库里没有这个番号，去站点列表搜索影片',
         ),
-      );
-      return;
-    }
-    await _openDetailWithChain(chain, candidate);
+        action: SnackBarAction(
+          label: '去搜索',
+          onPressed: () => _openSiteSearch(query),
+        ),
+      ),
+    );
+  }
+
+  /// 带番号/标题跳全局搜索（片库站点列表的搜索）。
+  Future<void> _openSiteSearch(String query) async {
+    await Navigator.of(context).push(
+      appPageRoute<void>(
+        settings: const RouteSettings(name: 'search'),
+        builder: (_) => GlobalSearchPage(
+          repository: widget.repository,
+          store: widget.store,
+          initialQuery: query,
+        ),
+      ),
+    );
   }
 
   /// 兜底命中直进详情页：首选线路进页即播；详情页跨站线路区继续

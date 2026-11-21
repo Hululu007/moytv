@@ -571,12 +571,9 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'com.github.catvod.spider.ZakaDsdAmns',
     '',
   ),
-  ZakatvBuiltinSite(
-    'ZakaWhos',
-    '🔞🔍whos识图┃原生',
-    'com.github.catvod.spider.ZakaWhosAmns',
-    '',
-  ),
+  // 2026-11-21 用户令：whos 原来这条 jar 站被 Cloudflare 挡住打不开，
+  // 已换成内置 py 源（见 builtin_py_sites.dart 的 whosSite），这里不再
+  // 注册 jar 版，免得内置区出现两个 whos（一个能开一个打不开）。
   ZakatvBuiltinSite(
     'ZakaLissav',
     '🔞麻豆视频┃LissAV',

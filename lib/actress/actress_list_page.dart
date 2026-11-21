@@ -9,6 +9,7 @@ import 'package:path/path.dart' as path;
 
 import 'actress_database.dart';
 import 'actress_db_fields_page.dart';
+import 'actress_db_file_page.dart';
 import 'actress_db_mirror.dart';
 import 'actress_detail_page.dart';
 import 'actress_film_library.dart';
@@ -229,6 +230,10 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 2026-11-20 通用读库：当前库不是女优库结构时为 true，列表
   /// 改走通用作品模式（作品列表 + 点按直播），不走女优库的总览/
   /// 同步/自动生成。[_genericReader] 为空时不是通用模式。
+  /// 2026-11-21 用户令（顶部其它数据库瓦片）：MYTV/db 与补充目录里除
+  /// 当前库之外的 .db 文件，按数据库名摆成一级分类瓦片；点瓦片按库浏览。
+  var _dbTiles = <({String name, String path})>[];
+
   var _genericMode = false;
 
   /// 视频库模式：当前库是用户视频库（MYTV/db/女优库.db，
@@ -329,6 +334,8 @@ class _ActressListPageState extends State<ActressListPage> {
     final bind = await ActressMytvBind.instance.ensureBound();
     if (!mounted || generation != _generation) return;
     setState(() => _mytvBind = bind);
+    // 2026-11-21 用户令：顶部其它数据库瓦片跟着绑定结果读一次。
+    unawaited(_loadDbTiles());
     if (_ownsFallback) {
       _fallback.bindLocalDirs(
         jsonDir: bind.jsonDir,
@@ -411,6 +418,135 @@ class _ActressListPageState extends State<ActressListPage> {
     // 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件有作品就
     // 递增追加进库（后台跑，列表数边涨边看）。
     unawaited(_maybeStartDbMirror());
+  }
+
+  /// 顶部其它数据库瓦片（2026-11-21 用户令）：扫描 MYTV/db（只扫一层）
+  /// 与 py 涩库引擎同款补充目录（递归），把除当前库以外的 .db 按数据库
+  /// 名收集成瓦片。瓦片名就是库文件名（去 .db 后缀），点一个按那个库
+  /// 浏览——库文件只读打开、一个字都不改。
+  Future<void> _loadDbTiles() async {
+    final bind = _mytvBind;
+    if (bind == null || !bind.bound) {
+      if (mounted && _dbTiles.isNotEmpty) setState(() => _dbTiles = []);
+      return;
+    }
+    final externalRoot = bind.externalRoot;
+    final extraDirs = externalRoot == null
+        ? const <Directory>[]
+        : [
+            for (final rel in sikuDbScanDirs)
+              Directory(path.join(externalRoot.path, rel)),
+          ];
+    List<File> targets;
+    try {
+      targets = collectDbMirrorTargets(
+        dbDir: bind.dbDir,
+        libraryPath: bind.dbPath,
+        extraDirs: extraDirs,
+      );
+    } catch (_) {
+      targets = const [];
+    }
+    final tiles = [
+      for (final file in targets)
+        (name: path.basenameWithoutExtension(file.path), path: file.path),
+    ];
+    if (!mounted) return;
+    if (tiles.length == _dbTiles.length &&
+        tiles.every((tile) => _dbTiles.contains(tile))) {
+      return;
+    }
+    setState(() => _dbTiles = tiles);
+  }
+
+  /// 打开某个其它数据库：按库浏览作品（网格卡片，点卡直通播）。
+  Future<void> _openDbTile(({String name, String path}) tile) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ActressDbFilePage(
+          filePath: tile.path,
+          title: tile.name,
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
+    if (mounted) unawaited(_loadDbTiles());
+  }
+
+  /// 顶部瓦片行：一级分类式的方块（名字 + 库图标），横向可滑。
+  Widget _buildDbTiles(ColorScheme colors) {
+    if (_dbTiles.isEmpty) return const SizedBox.shrink();
+    return Container(
+      key: const ValueKey('actress-db-tiles'),
+      width: double.infinity,
+      color: colors.surfaceContainerLow,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '其它数据库（按库浏览 ${_dbTiles.length} 个）',
+            style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            height: 62,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _dbTiles.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final tile = _dbTiles[index];
+                return InkWell(
+                  key: ValueKey('actress-db-tile-${tile.name}'),
+                  onTap: () => _openDbTile(tile),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    width: 108,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: colors.outlineVariant.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.storage_rounded,
+                          size: 16,
+                          color: colors.primary,
+                        ),
+                        const SizedBox(height: 2),
+                        Expanded(
+                          child: Text(
+                            tile.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 空库自动生成（2026-11-20 MYTV 绑定）：库不存在或 0 人
@@ -1134,17 +1270,26 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 影视库入口（2026-11-20）：按影片浏览绑定库里的全部作品。
-  void _openFilmLibrary() {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FilmLibraryPage(
-          database: _db,
-          repository: widget.repository,
-          store: widget.store,
-        ),
-      ),
+
+  /// 有任一路在跑（名册同步、全站叠加、选站现爬、数据库镜像、
+  /// 空库自动生成）：齿轮图标换成小转圈，顶栏不占位也能看出在动。
+  bool get _anyRunning =>
+      _progress.running ||
+      _stackingProgress.running ||
+      _crawlProgress.running ||
+      _mirrorRunning ||
+      _mytvGenerating;
+
+  /// 设置弹窗（2026-11-21 用户令）：把原来排在顶栏的同步横幅、全站
+  /// 叠加横幅、选站现爬横幅、数据库镜像横幅全收进这一个 ⚙️ 弹窗；
+  /// 弹窗里的“同步爬取”小窗点标题即可收起（收回），只留一行摘要。
+  Future<void> _openSettingsSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      builder: (_) => _ActressSettingsSheet(host: this),
     );
   }
 
@@ -1213,24 +1358,32 @@ class _ActressListPageState extends State<ActressListPage> {
                     ? null
                     : () => _runSync(),
           ),
-          // 2026-11-20 影视库：女优库模块新增的影片浏览入口（两模式都有）。
+          // 2026-11-21 用户令：右上角“影视库”按钮没用，删掉。
+          // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬/镜像全部
+          // 收进这个弹窗，顶栏不再排一列横幅。
           IconButton(
-            key: const ValueKey('open-film-library'),
-            tooltip: '影视库',
+            key: const ValueKey('open-actress-settings'),
+            tooltip: '设置',
             visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.movie_outlined),
-            onPressed: _openFilmLibrary,
+            icon: _anyRunning
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.settings_outlined),
+            onPressed: _openSettingsSheet,
           ),
         ],
       ),
       body: Column(
         children: [
-          _buildSyncBanner(colors),
-          _buildStackingBanner(colors),
-          _buildCrawlBanner(colors),
+          // 2026-11-21 用户令：同步/叠加/现爬/数据库镜像不再在顶栏排
+          // 一排横幅，全部收进右上角 ⚙️ 设置弹窗（弹窗里的“同步爬取”
+          // 小窗可随手收回，见 _openSettingsSheet）。数据库绑定行与
+          // 外来库行属于库信息，继续留在页面顶部。
           _buildMytvBindRow(colors),
+          _buildDbTiles(colors),
           _buildGenericModeRow(colors),
-          _buildMirrorBanner(colors),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
             child: TextField(
@@ -1393,111 +1546,6 @@ class _ActressListPageState extends State<ActressListPage> {
     unawaited(_loadPage(reset: true));
   }
 
-  /// 手机现爬横幅：跑着时显示分类/页码与取消；失败/缺口时显示原因；
-  /// 跑完显示条数与已补流数。无现爬时不显示。
-  Widget _buildCrawlBanner(ColorScheme colors) {
-    final crawl = _crawlProgress;
-    if (!crawl.running && crawl.error.isEmpty && !crawl.done) {
-      return const SizedBox.shrink();
-    }
-    const bannerPadding = EdgeInsetsDirectional.only(
-      start: 16,
-      top: 2,
-      end: 4,
-      bottom: 2,
-    );
-    if (crawl.running) {
-      return MaterialBanner(
-        key: const ValueKey('actress-crawl-banner'),
-        backgroundColor: colors.surfaceContainerHigh,
-        padding: bannerPadding,
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(crawl.label)),
-              ],
-            ),
-            // 入库增长看得见（2026-11-20 用户令）：只显示“第几页 ·
-            // 多少条”不知道进没进库，库里作品总数与本轮新增摆出来。
-            Text(
-              _worksGrowthText(),
-              style: TextStyle(
-                color: colors.onSurfaceVariant,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            key: const ValueKey('cancel-actress-crawl'),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: _crawl.cancel,
-            child: const Text('取消'),
-          ),
-        ],
-      );
-    }
-    return MaterialBanner(
-      key: const ValueKey('actress-crawl-banner'),
-      backgroundColor: colors.surfaceContainerHigh,
-      padding: bannerPadding,
-      content: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(crawl.label),
-          Text(
-            _worksGrowthText(),
-            style: TextStyle(
-              color: colors.onSurfaceVariant,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        // 跑完才能导出合并 JSON：随包 + 本地全部行合并后的全文，
-        // 拷进树里内置文件，下次打包带走。
-        if (crawl.done)
-          TextButton(
-            key: const ValueKey('export-actress-merged-json'),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: _exportingJson ? null : _exportMergedJson,
-            child: const Text('导出合并 JSON'),
-          ),
-        TextButton(
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            minimumSize: const Size(0, 28),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          onPressed: () {
-            setState(
-              () => _crawlProgress = const ActressSiteCrawlProgress(),
-            );
-          },
-          child: const Text('知道了'),
-        ),
-      ],
-    );
-  }
 
   /// 2026-11-20 MYTV 绑定：绑定路径行（用户一眼看到库落在哪）。
   /// 已绑定：显示 `数据库：MYTV/db/女优库应用.db`，迁移成功时第二行
@@ -1617,42 +1665,6 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 2026-11-20 通用读库：外来数据库模式行（表名 + 条数 + 字段入口）。
-  /// 数据库镜像横幅（2026-11-20 用户令）：追加进行中显示
-  /// “正在追加数据库…已处理 N / 共 M 条（新增 X 部）”，失败显示原因
-  /// （已有数据不受影响）；跑完/没文件时不显示。已处理数每批都涨，
-  /// 新增数在源库内容已入库时可以是 0，两数分开才看得出在跑。
-  Widget _buildMirrorBanner(ColorScheme colors) {
-    if (!_mirrorRunning && _mirrorError == null) {
-      return const SizedBox.shrink();
-    }
-    final text = _mirrorRunning
-        ? '正在追加数据库 $_mirrorFile…已处理 $_mirrorProcessed'
-            ' / 共 ${_mirrorTotal > 0 ? _mirrorTotal : '…'} 条'
-            '（新增 $_mirrorAppended 部）'
-        : '追加数据库失败：$_mirrorError（已有数据不受影响）';
-    return Container(
-      width: double.infinity,
-      color: colors.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          if (_mirrorRunning)
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else
-            const Icon(Icons.warning_amber_rounded, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(text, style: const TextStyle(fontSize: 12)),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildGenericModeRow(ColorScheme colors) {
     if (!_genericMode) return const SizedBox.shrink();
@@ -1686,230 +1698,7 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  Widget _buildSyncBanner(ColorScheme colors) {
-    final overview = _overview;
-    // 2026-11-20 MYTV 绑定：空库自动生成进行中（种子灌入或同步
-    // 中）：种子灌入时显示已灌入条数，同步跑起来后走下面的
-    // _progress.running 分支（同一时间只会有一个在跑）。
-    if (_mytvGenerating) {
-      // 生成中横幅不用 MaterialBanner：它要求 actions 非空，
-      // 这里没有可点的操作，用普通容器（2026-11-20 修：空 actions
-      // 会在 build 时断言报错）。
-      return Container(
-        width: double.infinity,
-        color: colors.surfaceContainerHigh,
-        padding: const EdgeInsetsDirectional.only(
-          start: 16,
-          top: 2,
-          end: 4,
-          bottom: 2,
-        ),
-        child: Row(
-          children: [
-            const SizedBox.square(
-              dimension: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                _seededCount > 0
-                    ? '正在生成女优库…已灌入 $_seededCount 条'
-                    : '正在生成女优库…',
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    if (_progress.running) {
-      // 爬虫腿的真实进度（detail）优先显示；没有时回落到
-      // done/total 或页数。失败数摆出来（旧版只显示 done/total，
-      // 失败在涨也看不见，看起来像卡住——12:45 截图 4612/5403
-      // 冻住的另一半原因）；入库增长第二行显示。
-      final detail = _progress.detail.isNotEmpty
-          ? _progress.detail
-          : _progress.total > 0
-              ? '${_progress.done}/${_progress.total}'
-              : '第 ${_progress.done} 页';
-      final failed = _progress.failed > 0
-          ? ' · 失败 ${_progress.failed}'
-          : '';
-      return MaterialBanner(
-        backgroundColor: colors.surfaceContainerHigh,
-        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '${_progress.phaseLabel}（${_progress.sourceIndex}/${_progress.sourceCount}）· $detail$failed',
-                  ),
-                ),
-              ],
-            ),
-            Text(
-              _worksGrowthText(),
-              style: TextStyle(
-                color: colors.onSurfaceVariant,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: _sync.cancel,
-            child: const Text('取消'),
-          ),
-        ],
-      );
-    }
-    if (overview == null) return const SizedBox.shrink();
-    if (overview.persons == 0) {
-      return MaterialBanner(
-        backgroundColor: colors.surfaceContainerHigh,
-        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
-        content: const Text('还没有数据，点刷新开始同步演员库。'),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: () => _runSync(),
-            child: const Text('开始同步'),
-          ),
-        ],
-      );
-    }
-    final unfinished = !overview.allDone;
-    if (_lastSyncFailed || unfinished) {
-      return MaterialBanner(
-        backgroundColor: colors.surfaceContainerHigh,
-        padding: const EdgeInsetsDirectional.only(start: 16, top: 2, end: 4, bottom: 2),
-        content: Text(
-          '已同步 ${overview.persons} 人 · ${overview.works} 部作品，'
-          '部分内容还没同步完，点刷新继续补。',
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: () => _runSync(),
-            child: const Text('继续同步'),
-          ),
-        ],
-      );
-    }
-    return Container(
-      width: double.infinity,
-      color: colors.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Text('已同步 ${overview.persons} 人 · ${overview.works} 部作品。'),
-    );
-  }
 
-  /// 全站叠加横幅：与同步横幅同一样式，只显示人数与进度，不显示
-  /// 任何来源信息。库空时不显示（无可叠加）；叠加跑着时显示进度
-  /// 与取消；跑完一轮显示断点进度与继续按钮；全库跑完显示完成态。
-  Widget _buildStackingBanner(ColorScheme colors) {
-    final overview = _overview;
-    if (overview == null || overview.persons == 0) {
-      return const SizedBox.shrink();
-    }
-    final stacking = _stackingProgress;
-    const bannerPadding = EdgeInsetsDirectional.only(
-      start: 16,
-      top: 2,
-      end: 4,
-      bottom: 2,
-    );
-    ButtonStyle compactButton() => TextButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      minimumSize: const Size(0, 28),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    if (stacking.running) {
-      return MaterialBanner(
-        key: const ValueKey('actress-stacking-banner'),
-        backgroundColor: colors.surfaceContainerHigh,
-        padding: bannerPadding,
-        content: Row(
-          children: [
-            const SizedBox.square(
-              dimension: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                '全站叠加中 · 已叠加 ${stacking.done}/${stacking.total} 人'
-                ' · 本轮新增 ${stacking.worksAdded} 部作品',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            key: const ValueKey('cancel-actress-stacking'),
-            style: compactButton(),
-            onPressed: _stacking.cancel,
-            child: const Text('取消'),
-          ),
-        ],
-      );
-    }
-    if (stacking.finished) {
-      return Container(
-        key: const ValueKey('actress-stacking-banner'),
-        width: double.infinity,
-        color: colors.surfaceContainerLow,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Text(
-          '全站叠加已完成：${stacking.done} 人作品已按番号叠加。',
-        ),
-      );
-    }
-    final started = stacking.done > 0;
-    return MaterialBanner(
-      key: const ValueKey('actress-stacking-banner'),
-      backgroundColor: colors.surfaceContainerHigh,
-      padding: bannerPadding,
-      content: Text(
-        started
-            ? '全站叠加：已叠加 ${stacking.done}/${stacking.total} 人，'
-                  '继续按番号补全各站作品。'
-            : '全站叠加：按番号把各站作品叠加到每个人名下，断点续跑，'
-                  '不用一次跑完。',
-      ),
-      actions: [
-        TextButton(
-          key: const ValueKey('start-actress-stacking'),
-          style: compactButton(),
-          onPressed: _progress.running ? null : () => _runStacking(),
-          child: Text(started ? '继续叠加' : '开始叠加'),
-        ),
-      ],
-    );
-  }
 
   /// 人物宫格布局：普通列表与姓名分组共用同一套格子尺寸。
   static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
@@ -1962,8 +1751,9 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 通用模式作品列表：封面 + 标题 + 副标题（日期/番号/分类），
-  /// 点卡直接播（parse=0），没有详情页。
+  /// 通用模式作品列表（2026-11-21 用户令：作品一律网格卡片，不再用
+  /// 一行一条的列表）：封面 + 标题 + 番号/女优/日期，点卡直接播
+  ///（parse=0），没有详情页。
   Widget _buildGenericList(ColorScheme colors) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
@@ -1978,17 +1768,23 @@ class _ActressListPageState extends State<ActressListPage> {
         ),
       );
     }
-    return ListView.builder(
-      key: const ValueKey('actress-generic-list'),
+    return GridView.builder(
+      key: const ValueKey('actress-generic-grid'),
       controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 160,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 0.58,
+      ),
       itemCount: _genericWorks.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= _genericWorks.length) {
           return const Center(child: CircularProgressIndicator());
         }
         final work = _genericWorks[index];
-        return _GenericWorkRow(
+        return _GenericWorkCard(
           key: ValueKey('generic-work-${work.id ?? work.title}'),
           work: work,
           onTap: () => _playGenericWork(work),
@@ -2100,8 +1896,10 @@ class _ActressGridCard extends StatelessWidget {
 
 /// 通用模式作品行：封面缩略图 + 标题 + 副标题（日期/番号/分类），
 /// 点按直接播；没有可播地址的行不显示播放钮。
-class _GenericWorkRow extends StatelessWidget {
-  const _GenericWorkRow({super.key, required this.work, required this.onTap});
+/// 外来库作品卡（2026-11-21 用户令：作品一律网格卡片）：封面 + 标题
+/// + 副标题（番号/日期 · 女优），点卡直播。
+class _GenericWorkCard extends StatelessWidget {
+  const _GenericWorkCard({super.key, required this.work, required this.onTap});
 
   final GenericDbWork work;
   final VoidCallback onTap;
@@ -2113,64 +1911,371 @@ class _GenericWorkRow extends StatelessWidget {
       if (work.displaySubtitle.isNotEmpty) work.displaySubtitle,
       if (work.actress.isNotEmpty) work.actress,
     ].join(' · ');
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Row(
-          children: [
-            SizedBox(
-              width: 72,
-              height: 96,
-              child:
-                  work.coverUrl.isEmpty
-                      ? Container(
-                        color: colors.surfaceContainerHighest,
-                        child: const Icon(Icons.movie_outlined),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: ColoredBox(
+                color: colors.surfaceContainerHighest,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (work.coverUrl.isEmpty)
+                      Center(
+                        child: Icon(
+                          Icons.movie_outlined,
+                          color: colors.onSurfaceVariant,
+                        ),
                       )
-                      : Image.network(
+                    else
+                      Image.network(
                         work.coverUrl,
                         fit: BoxFit.cover,
-                        errorBuilder:
-                            (_, _, _) => Container(
-                              color: colors.surfaceContainerHighest,
-                              child: const Icon(Icons.movie_outlined),
-                            ),
+                        errorBuilder: (_, _, _) => Center(
+                          child: Icon(
+                            Icons.movie_outlined,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
                       ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      work.displayTitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    if (subtitle.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall
-                            ?.copyWith(color: colors.onSurfaceVariant),
+                    if (work.playable)
+                      const Positioned(
+                        right: 4,
+                        bottom: 4,
+                        child: Icon(
+                          Icons.play_circle_fill,
+                          size: 18,
+                          color: Colors.white70,
+                        ),
                       ),
-                    ],
                   ],
                 ),
               ),
             ),
-            if (work.playable)
-              const Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: Icon(Icons.play_circle_outline),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            work.displayTitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, height: 1.25),
+          ),
+          if (subtitle.isNotEmpty)
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, color: colors.onSurfaceVariant),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 女优库设置弹窗（2026-11-21 用户令）：原来排在顶栏的同步、全站叠加、
+/// 选站现爬、数据库镜像四块状态与操作全收进这里；弹窗内的“同步爬取”
+/// 小窗点标题即可收起（收回），只留一行摘要，随时再展开。
+class _ActressSettingsSheet extends StatefulWidget {
+  const _ActressSettingsSheet({required this.host});
+
+  final _ActressListPageState host;
+
+  @override
+  State<_ActressSettingsSheet> createState() => _ActressSettingsSheetState();
+}
+
+class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
+  /// 同步爬取小窗是否展开（收起后只剩一行摘要）。
+  var _expanded = true;
+
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    // 进度都在页面 State 里：弹窗每 600ms 取一次最新值，跑起来时
+    // 数字会走；不额外订阅进度流，关掉弹窗就停，不留监听。
+    _ticker = Timer.periodic(const Duration(milliseconds: 600), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  _ActressListPageState get _host => widget.host;
+
+  /// 同步一行文案：跑着报阶段 + 进度 + 失败数，停下报总数，空库报
+  /// 还没数据。与原来横幅同一口径，只是搬了位置。
+  String _syncText() {
+    final host = _host;
+    if (host._mytvGenerating) {
+      return host._seededCount > 0
+          ? '正在生成女优库…已灌入 ${host._seededCount} 条'
+          : '正在生成女优库…';
+    }
+    final progress = host._progress;
+    if (progress.running) {
+      final detail = progress.detail.isNotEmpty
+          ? progress.detail
+          : progress.total > 0
+              ? '${progress.done}/${progress.total}'
+              : '第 ${progress.done} 页';
+      final failed = progress.failed > 0 ? ' · 失败 ${progress.failed}' : '';
+      return '${progress.phaseLabel}（${progress.sourceIndex}/${progress.sourceCount}）· $detail$failed';
+    }
+    final overview = host._overview;
+    if (overview == null) return '还没读到库';
+    if (overview.persons == 0) return '还没有数据，点下面开始同步演员库';
+    if (host._lastSyncFailed || !overview.allDone) {
+      return '已同步 ${overview.persons} 人 · ${overview.works} 部作品，部分还没同步完';
+    }
+    return '已同步 ${overview.persons} 人 · ${overview.works} 部作品';
+  }
+
+  String _stackingText() {
+    final stacking = _host._stackingProgress;
+    if (stacking.running) {
+      return '全站叠加中 · 已叠加 ${stacking.done}/${stacking.total} 人'
+          ' · 本轮新增 ${stacking.worksAdded} 部作品';
+    }
+    if (stacking.finished) {
+      return '全站叠加已完成：${stacking.done} 人作品已按番号叠加';
+    }
+    if (stacking.done > 0) {
+      return '已叠加 ${stacking.done}/${stacking.total} 人，继续按番号补全各站作品';
+    }
+    return '按番号把各站作品叠加到每个人名下，断点续跑，不用一次跑完';
+  }
+
+  String _mirrorText() {
+    final host = _host;
+    if (host._mirrorRunning) {
+      return '正在追加数据库 ${host._mirrorFile}…已处理 ${host._mirrorProcessed}'
+          ' / 共 ${host._mirrorTotal > 0 ? host._mirrorTotal : '…'} 条'
+          '（新增 ${host._mirrorAppended} 部）';
+    }
+    if (host._mirrorError != null) {
+      return '追加数据库失败：${host._mirrorError}（已有数据不受影响）';
+    }
+    return 'MYTV/db 与补充目录里其它 .db 会自动按番号补进来';
+  }
+
+  /// 收起时的一行摘要：跑着的路数 + 关键数字。
+  String _summary() {
+    final host = _host;
+    final running = <String>[];
+    if (host._progress.running) running.add('同步');
+    if (host._stackingProgress.running) running.add('叠加');
+    if (host._crawlProgress.running) running.add('现爬');
+    if (host._mirrorRunning) running.add('追加库');
+    if (host._mytvGenerating) running.add('生成库');
+    final overview = host._overview;
+    final tail = overview == null
+        ? ''
+        : ' · ${overview.persons} 人 / ${overview.works} 部';
+    if (running.isEmpty) return '空闲$tail';
+    return '正在${running.join('、')}$tail';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final host = _host;
+    final busy = host._anyRunning;
+    final textStyle = Theme.of(context).textTheme;
+
+    Widget button(String label, VoidCallback? onPressed, {Key? key}) =>
+        TextButton(
+          key: key,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            minimumSize: const Size(0, 30),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          onPressed: onPressed,
+          child: Text(label),
+        );
+
+    Widget section({
+      required String title,
+      required String body,
+      required List<Widget> actions,
+      bool spinning = false,
+    }) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: spinning
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.circle, size: 8),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, style: textStyle.titleSmall),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: textStyle.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (actions.isNotEmpty)
+            Wrap(alignment: WrapAlignment.end, children: actions),
+        ],
+      ),
+    );
+
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 标题行：点右侧箭头收起/展开整个“同步爬取”小窗。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.sync_rounded, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _expanded ? '同步爬取' : '同步爬取（已收起）',
+                      style: textStyle.titleMedium,
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('toggle-actress-settings-body'),
+                    tooltip: _expanded ? '收起' : '展开',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      _expanded
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
+                    ),
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                  ),
+                ],
               ),
+            ),
+            if (!_expanded)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  _summary(),
+                  key: const ValueKey('actress-settings-summary'),
+                  style: textStyle.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              )
+            else ...[
+              section(
+                title: '名册 / 作品同步',
+                body: [host._worksGrowthText(), _syncText()]
+                    .where((t) => t.isNotEmpty)
+                    .join('\n'),
+                spinning: host._progress.running || host._mytvGenerating,
+                actions: [
+                  if (host._progress.running)
+                    button('取消', host._sync.cancel)
+                  else
+                    button(
+                      host._overview == null || host._overview!.persons == 0
+                          ? '开始同步'
+                          : (host._lastSyncFailed ||
+                                    !host._overview!.allDone
+                                ? '继续同步'
+                                : '再同步一次'),
+                      host._mytvGenerating || host._progress.running
+                          ? null
+                          : () => host._runSync(),
+                    ),
+                ],
+              ),
+              section(
+                title: '全站叠加',
+                body: _stackingText(),
+                spinning: host._stackingProgress.running,
+                actions: [
+                  if (host._stackingProgress.running)
+                    button('取消', host._stacking.cancel)
+                  else
+                    button(
+                      host._stackingProgress.done > 0 ? '继续叠加' : '开始叠加',
+                      host._progress.running ||
+                              host._overview == null ||
+                              host._overview!.persons == 0
+                          ? null
+                          : () => host._runStacking(),
+                    ),
+                ],
+              ),
+              section(
+                title: '选站现爬',
+                body: host._crawlProgress.label,
+                spinning: host._crawlProgress.running,
+                actions: [
+                  if (host._crawlProgress.running)
+                    button('取消', host._crawl.cancel)
+                  else if (host._crawlProgress.done)
+                    button(
+                      '导出合并 JSON',
+                      host._exportingJson ? null : host._exportMergedJson,
+                    ),
+                ],
+              ),
+              section(
+                title: '数据库镜像（其它 .db 追加）',
+                body: _mirrorText(),
+                spinning: host._mirrorRunning,
+                actions: const [],
+              ),
+              if (host._mytvBind != null)
+                section(
+                  title: '数据库',
+                  body: '${host._mytvBind!.displayPath}\n'
+                      '${host._mytvDbError != null ? '重读失败：${host._mytvDbError}（仍用旧库）\n' : ''}'
+                      '${host._mytvOpenNote ?? ''}',
+                  actions: [
+                    button('重新加载数据库', host._reloadingDb ? null : host._manualReloadDb),
+                  ],
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text(
+                  busy ? '有任务在跑，关掉这个窗也会继续跑；随时点齿轮看进度。' : '全部任务都没在跑。',
+                  style: textStyle.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

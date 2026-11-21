@@ -104,41 +104,94 @@ List<WhosListCard> parseWhosListCards(String html) {
 /// 取回 JSON 里 source.code 就是列表页原始 HTML。90 秒超时，失败
 /// 重试 3 次（退避 2/5 秒），502 也重试；3 次都失败返回 ''。
 Future<String> fetchWhosListPageViaValidator(int page) async {
-  const userAgent =
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) '
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 '
-      'Mobile/15E148 Safari/604.1';
   final target = page <= 1
       ? 'https://whos.tv/videos'
       : 'https://whos.tv/videos/page-$page';
-  final url =
-      'https://validator.nu/?doc=${Uri.encodeComponent(target)}&showsource=yes&out=json';
-  const timeout = Duration(seconds: 90);
+  return fetchWhosPage(target);
+}
+
+/// whos 单页取数（2026-11-21 用户令“现爬也要过盾”）：whos.tv 直连被
+/// Cloudflare 挑战挡住，这里按多通道依次试，任一取回带卡片的真页面即
+/// 返回：
+/// 1. validator.nu（W3C 校验器代取，第一页稳）；
+/// 2. validator.w3.org（同服务另一入口，nu 504 时兜一把）；
+/// 3. 直连 whos.tv（手机 UA；CF 偶尔放行，能过就直接用）。
+/// 每通道两次（退避 2/5 秒），全部失败返回 ''（现爬停在上一个好页，
+/// 下轮续跑，不死循环翻页）。
+Future<String> fetchWhosPage(String target) async {
+  const userAgents = [
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) '
+        'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 '
+        'Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 14; PGT-AN10) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+  ];
+  final encoded = Uri.encodeComponent(target);
+  final channels = <({String url, bool json})>[
+    (
+      url: 'https://validator.nu/?doc=$encoded&showsource=yes&out=json',
+      json: true,
+    ),
+    (
+      url:
+          'https://validator.w3.org/nu/?doc=$encoded&showsource=yes&out=json',
+      json: true,
+    ),
+    (url: target, json: false),
+  ];
+  const timeout = Duration(seconds: 45);
   const backoffs = [Duration(seconds: 2), Duration(seconds: 5)];
-  for (var attempt = 0; attempt < 3; attempt++) {
-    final client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final request = await client.getUrl(Uri.parse(url)).timeout(timeout);
-      request.headers.set(HttpHeaders.userAgentHeader, userAgent);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(timeout);
-      final body = await response.transform(utf8.decoder).join().timeout(timeout);
-      if (response.statusCode == 200) {
-        final doc = jsonDecode(body);
-        if (doc is Map<String, dynamic>) {
-          final source = doc['source'];
-          if (source is Map<String, dynamic>) {
-            final code = source['code'];
-            if (code is String && code.length > 10000) return code;
+  for (final channel in channels) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final client = HttpClient()..connectionTimeout = timeout;
+      try {
+        final request = await client
+            .getUrl(Uri.parse(channel.url))
+            .timeout(timeout);
+        request.headers.set(
+          HttpHeaders.userAgentHeader,
+          userAgents[attempt % userAgents.length],
+        );
+        request.headers.set(
+          HttpHeaders.acceptHeader,
+          channel.json ? 'application/json' : 'text/html',
+        );
+        final response = await request.close().timeout(
+          const Duration(seconds: 60),
+        );
+        final body = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(const Duration(seconds: 60));
+        if (response.statusCode == 200) {
+          var html = body;
+          if (channel.json) {
+            final doc = jsonDecode(body);
+            if (doc is Map<String, dynamic>) {
+              final source = doc['source'];
+              html = source is Map<String, dynamic>
+                  ? (source['code'] as String? ?? '')
+                  : '';
+            } else {
+              html = '';
+            }
+          }
+          // 认真页面：至少带卡片标记，且不是 CF 挑战页。
+          if (html.length > 10000 &&
+              html.contains('data-cover-src') &&
+              !html.contains('Just a moment')) {
+            return html;
           }
         }
+      } catch (_) {
+        // 这条通道这次没成：重试或换下一条通道。
+      } finally {
+        client.close(force: true);
       }
-    } catch (_) {
-      // 取数失败即重试（502/超时/断网都一样），3 次都失败返回 ''。
-    } finally {
-      client.close(force: true);
+      if (attempt < backoffs.length - 1) {
+        await Future.delayed(backoffs[attempt]);
+      }
     }
-    if (attempt < backoffs.length) await Future.delayed(backoffs[attempt]);
   }
   return '';
 }

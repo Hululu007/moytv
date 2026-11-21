@@ -1610,6 +1610,23 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  /// whos 内置源（2026-11-21 用户令）：内置区的 whos 原来走 jar 里的
+  /// 蜘蛛，whos.tv 被 Cloudflare 挑战挡住后打不开；改用内置 py 源，
+  /// 取页走 validator.nu / w3.org / 直连多通道兜底，播放取 hash 直拼
+  /// m3u8，不再依赖 jar spider。
+  static const whosSiteId = 'whos';
+  static const whosAssetPath = 'assets/py_spiders/whos.py';
+  static const whosFileId = 'builtin_whos';
+
+  static const whosSite = SourceSite(
+    whosSiteId,
+    '🔞🔍whos识图',
+    '内置 py · whos',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
     BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
@@ -1698,6 +1715,7 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: feikuaiSiteId, site: feikuaiSite, assetPath: feikuaiAssetPath, fileId: feikuaiFileId),
     BuiltinPyEntry(siteId: hanjudsSiteId, site: hanjudsSite, assetPath: hanjudsAssetPath, fileId: hanjudsFileId),
     BuiltinPyEntry(siteId: nbsjyySiteId, site: nbsjyySite, assetPath: nbsjyyAssetPath, fileId: nbsjyyFileId),
+    BuiltinPyEntry(siteId: whosSiteId, site: whosSite, assetPath: whosAssetPath, fileId: whosFileId),
     BuiltinPyEntry(siteId: odseliftSiteId, site: odseliftSite, assetPath: odseliftAssetPath, fileId: odseliftFileId),
     BuiltinPyEntry(siteId: qikantoukanSiteId, site: qikantoukanSite, assetPath: qikantoukanAssetPath, fileId: qikantoukanFileId),
     BuiltinPyEntry(siteId: qilinyingshiSiteId, site: qilinyingshiSite, assetPath: qilinyingshiAssetPath, fileId: qilinyingshiFileId),
