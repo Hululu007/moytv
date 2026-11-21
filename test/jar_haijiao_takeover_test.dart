@@ -42,8 +42,10 @@ void main() {
         JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHjw'), 'v_hjw');
     expect(JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaHjApp'),
         'v_haijiao_fanguo');
+    // 2026-11-22：missav30 jar 的三个蜘蛛改由 Go 核 MissAV 接管
+    // （jar 内写死 missav.ws，被 CF 挡后整站空；Go 核带镜像降级）。
     expect(JarHaijiaoTakeover.goSourceForJarSite('jar:missav30:ZakaMissav'),
-        isNull);
+        'v_missav');
   });
 
   test('详情用的剧集编号改成站源加编号的形式', () {

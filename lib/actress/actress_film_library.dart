@@ -152,6 +152,9 @@ class FilmLibraryEntry {
     typeName: typeName.isNotEmpty ? typeName : category,
     vodCode: code,
     vodActressPic: '',
+    // 库里存的就是 m3u8 直链：标记 direct，播放时内核直接用它开播，
+    // 不再绕站源解析（站源挂了/没这个番号也照播）。
+    directPlay: playable,
   );
 
   DramaDetail toDramaDetail() => toJsonEntry().toDramaDetail();

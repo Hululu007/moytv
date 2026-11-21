@@ -44,6 +44,13 @@ func nativeDramaAvailable(drama nativeDrama) bool {
 		(drama.Source == "" || canonicalProviderSource(drama.Source) == source)
 }
 
+// nativeDramaCoverUsable：剧集自带绝对封面地址（本地库 pic_url）就算
+// 可用，与站源是否内置无关。
+func nativeDramaCoverUsable(drama nativeDrama) bool {
+	cover := strings.TrimSpace(drama.Cover)
+	return strings.HasPrefix(cover, "http://") || strings.HasPrefix(cover, "https://")
+}
+
 func nativeChapterAvailable(drama nativeDrama, chapter Chapter) bool {
 	if !nativeDramaAvailable(drama) {
 		return false
@@ -90,11 +97,27 @@ func nativeAuthorizeInput(input nativeInput) error {
 				return errNativeBuildSource
 			}
 		}
-	case "cover", "prepareCover", "detail", "metadata", "resolve", "preload", "enqueueDownloads", "localPlayback":
+	case "cover", "prepareCover":
+		// 封面只要自带绝对地址就放行：女优库/影视库的行来自本地 db
+		// （source 是 vod_play_from 或 'db'），不是内置站源，但图是真的，
+		// 不该因为「站源未内置」整页留灰块。
+		if !nativeDramaAvailable(input.Drama) && !nativeDramaCoverUsable(input.Drama) {
+			return errNativeBuildSource
+		}
+	case "resolve", "preload":
+		// 集地址自带直链（direct + http(s)）的照样放行：本地库的
+		// m3u8_url 直接播，不依赖内置站源。
+		if directMediaURL(input.Chapter) != "" {
+			return nil
+		}
 		if !nativeDramaAvailable(input.Drama) {
 			return errNativeBuildSource
 		}
-		if (input.Action == "resolve" || input.Action == "preload") && !nativeChapterAvailable(input.Drama, input.Chapter) {
+		if !nativeChapterAvailable(input.Drama, input.Chapter) {
+			return errNativeBuildSource
+		}
+	case "detail", "metadata", "enqueueDownloads", "localPlayback":
+		if !nativeDramaAvailable(input.Drama) {
 			return errNativeBuildSource
 		}
 	}

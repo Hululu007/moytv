@@ -83,6 +83,9 @@ type Chapter struct {
 	Routes []string `json:"routes,omitempty"`
 	// Vertical 红果 App 接口标记该集为竖屏内容。
 	Vertical *bool `json:"vertical,omitempty"`
+	// Direct 集地址本身就是可播直链（本地库/女优库的 m3u8_url 行）：
+	// 不再按站源解析，直接当播放地址用，站源挂了也不影响播放。
+	Direct bool `json:"direct,omitempty"`
 }
 
 func (c Chapter) EpisodeString(fallback int) string {

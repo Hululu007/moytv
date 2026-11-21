@@ -29,6 +29,7 @@ package seku
 //     slugOf rule) and detail/resolve delegate to that video.
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/url"
@@ -43,6 +44,7 @@ const whosSite = "https://whos.tv"
 const whosImgCDN = "https://f.hersav.me"
 
 const whosUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+const whosUAMobile = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
 func whosHeaders() map[string]string {
 	return map[string]string{
@@ -86,9 +88,49 @@ func whosAnchorsOK(path, text string) bool {
 	return true // detail & search pages: no list-anchor contract
 }
 
+// whosProxyFetch 用公共 HTML 校验器代取页面：whos.tv 对数据中心出口
+// 一律 403，手机端直连正常，但机房/部分线路拿不到真页，列表就整片空白。
+// 校验器是第三方取页，拿回来的是站点原始 HTML（showsource），解析逻辑不变。
+func whosProxyFetch(target string) (string, error) {
+	enc := url.QueryEscape(target)
+	// 校验器会偶发 502/429（同 IP 连打就限流），所以按「nu → w3 → nu(等一会)」
+	// 三趟走，命中即返回；全挂才报错。
+	channels := []string{
+		"https://validator.nu/?doc=" + enc + "&showsource=yes&out=json",
+		"https://validator.w3.org/nu/?doc=" + enc + "&showsource=yes&out=json",
+		"https://validator.nu/?doc=" + enc + "&showsource=yes&out=json",
+	}
+	hdr := map[string]string{
+		"User-Agent":      whosUAMobile,
+		"Accept":          "application/json",
+		"Accept-Language": "zh-CN,zh;q=0.9",
+	}
+	for i, ch := range channels {
+		if i > 0 {
+			time.Sleep(time.Duration(i) * 700 * time.Millisecond)
+		}
+		body, code, _, err := httpGet(ch, hdr)
+		if err != nil || code != 200 {
+			continue
+		}
+		var doc struct {
+			Source struct {
+				Code string `json:"code"`
+			} `json:"source"`
+		}
+		if err := json.Unmarshal(body, &doc); err != nil {
+			continue
+		}
+		if strings.TrimSpace(doc.Source.Code) != "" {
+			return doc.Source.Code, nil
+		}
+	}
+	return "", fmt.Errorf("whos proxy fetch failed for %s", target)
+}
+
 func whosFetch(path string) (string, error) {
 	whosPageCache.mu.Lock()
-	if e, ok := whosPageCache.m[path]; ok && time.Since(e.at) < 120*time.Second {
+	if e, ok := whosPageCache.m[path]; ok && time.Since(e.at) < 300*time.Second {
 		t := e.text
 		whosPageCache.mu.Unlock()
 		return t, nil
@@ -100,6 +142,15 @@ func whosFetch(path string) (string, error) {
 		b2, c2, _, e2 := tlsGet(u, whosHeaders())
 		if e2 == nil && c2 == 200 && !isChallengePage(string(b2)) && whosAnchorsOK(path, string(b2)) {
 			body, code, err = b2, c2, nil
+		}
+	}
+	directOK := err == nil && code == 200 && !isChallengePage(string(body)) && whosAnchorsOK(path, string(body))
+	if !directOK {
+		// 直连/tls 都被挡：走代取通道再试一次（机房出口 403 的常态）。
+		if proxied, perr := whosProxyFetch(whosSite + path); perr == nil {
+			body, code, err = []byte(proxied), 200, nil
+		} else if err == nil {
+			err = perr
 		}
 	}
 	if err != nil {
@@ -160,13 +211,14 @@ func whosXorURL(hexStr string) string {
 // ---- video cards ----
 
 var (
-	whosVideoAnchorRe = regexp.MustCompile(`<a[^>]+href="/videos/`)
-	whosVideoSlugRe   = regexp.MustCompile(`<a[^>]+href="/videos/([A-Za-z0-9\-_]+)"`)
-	whosCoverHexRe    = regexp.MustCompile(`data-cover-src="([0-9a-fA-F]{20,})"`)
-	whosImgSrcRe      = regexp.MustCompile(`<img[^>]+src="(https?://[^"]+)"`)
-	whosH3Re          = regexp.MustCompile(`(?s)<h3[^>]*>(.{0,300}?)</h3>`)
-	whosAltRe         = regexp.MustCompile(`alt="([^"]{2,200})"`)
-	whosPRe           = regexp.MustCompile(`(?s)<p[^>]*>(.{0,200}?)</p>`)
+	whosVideoAnchorRe  = regexp.MustCompile(`<a[^>]+href="/videos/`)
+	whosVideoSlugRe    = regexp.MustCompile(`<a[^>]+href="/videos/([A-Za-z0-9\-_]+)"`)
+	whosCoverHexRe     = regexp.MustCompile(`data-cover-src="([0-9a-fA-F]{20,})"`)
+	whosImgSrcRe       = regexp.MustCompile(`<img[^>]+src="(https?://[^"]+)"`)
+	whosActTitleAttrRe = regexp.MustCompile(`<h3[^>]*title="([^"]{1,60})"`)
+	whosH3Re           = regexp.MustCompile(`(?s)<h3[^>]*>(.{0,300}?)</h3>`)
+	whosAltRe          = regexp.MustCompile(`alt="([^"]{2,200})"`)
+	whosPRe            = regexp.MustCompile(`(?s)<p[^>]*>(.{0,200}?)</p>`)
 )
 
 // whosVideos parses a /videos-style list page. rawID "v:<slug>".
@@ -252,7 +304,10 @@ func whosActresses(page string) []g2Work {
 		if m == nil {
 			continue
 		}
-		slug := strings.TrimSuffix(m[1], "/")
+		// 站上演员卡是 /actresses/<名字>/frames，作品页是 /actresses/<名字>；
+		// 不剥掉 /frames 就会拼出 /frames/page-1 这种空页（点了演员没作品）。
+		slug := strings.TrimSuffix(strings.TrimSuffix(m[1], "/"), "/frames")
+		slug = strings.TrimSuffix(slug, "/")
 		if slug == "" || strings.HasPrefix(slug, "page-") || seen[slug] {
 			continue
 		}
@@ -260,6 +315,16 @@ func whosActresses(page string) []g2Work {
 		name := ""
 		if am := whosActAltRe.FindStringSubmatch(chunk); am != nil {
 			name = whosClean(am[1])
+		}
+		if name == "" {
+			if hm := whosH3Re.FindStringSubmatch(chunk); hm != nil {
+				name = whosClean(hm[1])
+			}
+		}
+		if name == "" {
+			if tm := whosActTitleAttrRe.FindStringSubmatch(chunk); tm != nil {
+				name = whosClean(tm[1])
+			}
 		}
 		if name == "" {
 			name = slug
@@ -392,11 +457,13 @@ var whosChips = []struct{ id, name string }{
 // ---- categories / catalog ----
 
 func whosCategories(slot string) []interface{} {
+	// 分类与站上导航逐字对齐（用户令 2026-11-21）：站头就是
+	// 影片库 / 演员库 / 帧探索 / 排行榜，别自造名字。
 	out := []interface{}{
 		categoryObj("vid", "影片库"),
-		categoryObj("act", "演员"),
+		categoryObj("act", "演员库"),
+		categoryObj("frames", "帧探索"),
 		categoryObj("ranking", "排行榜"),
-		categoryObj("frames", "精彩帧图"),
 	}
 	for _, c := range whosChips {
 		out = append(out, categoryObj("fl:"+c.id, "帧·"+c.name))

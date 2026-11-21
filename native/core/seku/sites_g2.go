@@ -176,7 +176,17 @@ func g2Reverse(s string) string {
 const missavUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 const missavBase = "https://missav.ws"
 
-var missavDomains = []string{"https://missav.ws", "https://missav123.com", "https://missav.ai"}
+// 2026-11-22：missav.ws 自家域全部 CF 拦机房出口，实测只有镜像站能拿到真页
+// （missav.fans / thisav.my → missav06.net，同一套 MissAV 目录与封面 CDN）。
+// 顺序按「官方 → 实测可用镜像」，missavFetch 逐个降级。
+var missavDomains = []string{
+	"https://missav.ws",
+	"https://missav.fans",
+	"https://www.thisav.my",
+	"https://missav06.net",
+	"https://missav123.com",
+	"https://missav.ai",
+}
 
 func missavHeaders() map[string]string {
 	return map[string]string{
@@ -563,13 +573,16 @@ var (
 // missavParseIndex ports py parse_index(): folder entries for
 // actresses/genres/makers lists, RawID = site path (caller adds "idx:").
 func missavParseIndex(page, prefix string) []g2Work {
-	pat := regexp.MustCompile(`(?is)<a[^>]+href=["']?(https?://[^"'\s>]+/(?:dm\d+/)?cn/` + prefix + `/([^"'\s>/]+))["']?[^>]*>(.*?)</a>`)
+	// 2026-11-22：镜像站（missav.fans 等）的索引列表用相对 href
+	// （"/cn/actresses/xxx"），老正则只认带域名绝对地址，导致女优一览
+	// 在镜像上一张卡都出不来。这里让 scheme+host 变成可选。
+	pat := regexp.MustCompile(`(?is)<a[^>]+href=["']?(?:(?:https?:)?//[^"'\s>]+)?/(?:dm\d+/)?cn/` + prefix + `/([^"'\s>/]+)["']?[^>]*>(.*?)</a>`)
 	out := []g2Work{}
 	seen := map[string]bool{}
 	used := map[string]bool{}
 	for _, m := range pat.FindAllStringSubmatchIndex(page, -1) {
-		slug := page[m[4]:m[5]]
-		body := page[m[6]:m[7]]
+		slug := page[m[2]:m[3]]
+		body := page[m[4]:m[5]]
 		name, _ := url.PathUnescape(slug)
 		if name == "" || name == "ranking" || seen[slug] {
 			continue

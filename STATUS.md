@@ -72,3 +72,22 @@ v33（未发布），基线 v32。
 
 ### 下一步
 - 云构建出包 v36，真机点验 17rip/91pron/ikun 与字幕翻译。
+
+## v37（2026-11-22）三个 MissAV 站源 + 女优库播放入口
+### 这轮改了什么
+1. `jar_haijiao_takeover.dart`：MissAV官方|过盾、MissAV官方|原生、MissAVtv|原生
+   三个 jar 全部接管到 Go 核 `hongguo`（镜像站），不再走各自旧实现。
+2. `seku/sites_g2.go`：镜像站女优一览与下钻——头像/封面补全，作品卡带
+   `title / vod_pic / vod_remarks`；`app_build.go` + `models.go` +
+   `provider_media.go`：封面取图不再因 `cover_source` 不是注册站名而丢图
+   （绝对 URL 直接放行）。实测：女优一览 24 人全部有头像，下钻 12 部全部有封面。
+3. `actress_detail_page.dart`：库里这个番号有地址、但本机探活没过（不少流媒体站
+   只认播放器请求头，探活 403/405）时，直接带库里地址进播放页，不再卡在列表只弹
+   「播不了」；只有连库内地址都没有才去跨站现爬。
+4. `actress_nvku_page.dart`：嵌在片库顶栏时（showTitle=false）不再重复输出
+   「女优库 + 本地库 + 刷新」那一行，只留搜索框，顶栏合成一条。
+
+### 已排除的原因（别重复排查）
+- 镜像站列表/封面都有：`/cn/actresses` 24 人 24 图、`/actresses/<name>` 12 部 12 图，
+  探针输出见 `seku` 测试记录；缺图是 App 侧封面源白名单问题，不是站点没图。
+- 探针临时测试（zz_*.go、app_direct_media_test.go）已删，勿再加回。

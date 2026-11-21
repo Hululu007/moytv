@@ -462,13 +462,19 @@ func mirrorSearch(slot, kw string) ([]interface{}, error) {
 }
 
 func init() {
+	// 2026-11-22：hongguo 槽位改由 g2 的 MissAV 实现接管。
+	// 旧的 mirror* 一套只能解 thisav 老版式的列表，碰到 missav.fans
+	// 这种前端渲染页一张卡都解析不出来（列表 0 条、女优头像没图），
+	// 而 g2 那套本来就能解 fourhoi 封面 + 女优索引，还带整体镜像降级。
+	// 唯一缺的是兜底顺序，所以先在 missavDomains 里补了实测可用的镜像。
 	registerSite("hongguo", &siteImpl{
-		Key: "mirror", Name: "🔞MissAV镜像", DefaultCat: "release", HomeURL: mirrorSeedHost + "/",
-		Categories: mirrorCategories,
-		Catalog:    mirrorCatalog,
-		Detail:     mirrorDetail,
-		Resolve:    mirrorResolve,
-		Search:     mirrorSearch,
-		Headers:    mirrorHeaders,
+		Key: "missav", Name: "🔞MissAV", DefaultCat: "release", HomeURL: missavBase + "/",
+		Categories: missavCategories,
+		Catalog:    missavCatalog,
+		Detail:     missavDetail,
+		Resolve:    missavResolve,
+		Search:     missavSearch,
+		Headers:    missavHeaders,
+		CoverFetch: missavCoverFetch,
 	}, "mirror", "thisav")
 }

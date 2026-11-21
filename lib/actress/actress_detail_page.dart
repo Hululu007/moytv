@@ -624,9 +624,52 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (!mounted || cancel.isCompleted || playGeneration != _playGeneration) {
       return;
     }
+    // 2026-11-22 用户令（点播放要能进播放页）：库里明明有这个番号的地址，
+    // 只是我们这台机器探活没过（不少流媒体站只认播放器的头，探活一律 403/405），
+    // 就不能卡在列表上只弹一句“播不了”。直接带库里的地址进播放页，
+    // 让播放器自己去取；真的取不到，播放页里有换线/重试。
+    if (storedDetail == null && dbRows.isNotEmpty) {
+      storedDetail = dbRows.first.toDramaDetail();
+    }
     if (storedDetail == null) {
-      // 库里没有该番号 / 库里的地址播不了：提示走站点列表搜索影片。
-      _showDbMissHint(hasDbRow: dbRows.isNotEmpty, query: queryKey);
+      // 库里没有该番号 / 库里连地址都没有：按番号现爬补齐（2026-11-22
+      // 用户令「没有的作品自动爬取补齐」）——跨站按番号搜一轮，首个能
+      // 解的线路直接进详情页开播；全站都没爬到时才提示去搜索。
+      if (queryKey.isEmpty) {
+        _showDbMissHint(hasDbRow: dbRows.isNotEmpty, query: queryKey);
+        return;
+      }
+      ActressPlayCandidate? crawled;
+      if (mounted) {
+        setState(() {
+          _findingSource = true;
+          _playCancel = cancel;
+        });
+      }
+      try {
+        crawled = await chain.nextPlayable(
+          profileEpoch: widget.store.profileEpoch,
+        );
+      } catch (_) {
+        crawled = null;
+      } finally {
+        if (mounted && playGeneration == _playGeneration) {
+          setState(() {
+            _findingSource = false;
+            _playCancel = null;
+          });
+        }
+      }
+      if (!mounted ||
+          cancel.isCompleted ||
+          playGeneration != _playGeneration) {
+        return;
+      }
+      if (crawled == null) {
+        _showDbMissHint(hasDbRow: dbRows.isNotEmpty, query: queryKey);
+        return;
+      }
+      await _openDetailWithChain(chain, crawled);
       return;
     }
     await _openDetailWithChain(

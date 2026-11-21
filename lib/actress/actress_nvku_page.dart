@@ -326,7 +326,11 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       ),
       child: Column(
         children: [
-          Row(
+          // 2026-11-22 用户令（顶栏合并全部在顶部）：这一页嵌在片库顶栏
+          // 里时（showTitle=false），外层已经有品牌条了，这里不能再出
+          // 一条“女优库 + 本地库 + 刷新”，只留搜索框，避免两条顶栏。
+          if (widget.showTitle) ...[
+            Row(
             children: [
               Text(
                 widget.showTitle ? '女优库' : '女优库',
@@ -362,7 +366,8 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+            const SizedBox(height: 8),
+          ],
           TextField(
             key: const ValueKey('nvku-search'),
             controller: _search,

@@ -9,6 +9,12 @@ class JarHaijiaoTakeover {
     'com.github.catvod.spider.ZakaHj1Amns': 'v_haijiao_fanguo',
     'com.github.catvod.spider.ZakaHjwAmns': 'v_hjw',
     'com.github.catvod.spider.ZakaHjAppAmns': 'v_haijiao_fanguo',
+    // 2026-11-22：三个 MissAV jar 蜘蛛统一交给 Go 核的 MissAV 实现。
+    // jar 里的解析写死在 missav.ws 自家域上，CF 一挡就整站空；Go 核
+    // 带镜像降级（missav.fans / thisav.my），封面、女优一览、播放都能出。
+    'com.github.catvod.spider.ZakaMissavAmns': 'v_missav',
+    'com.github.catvod.spider.ZakaMissavOffAmns': 'v_missav',
+    'com.github.catvod.spider.ZakaMissavtAmns': 'v_missav',
   };
 
   static const Map<String, String> _byKey = {
@@ -16,6 +22,9 @@ class JarHaijiaoTakeover {
     'ZakaHj1': 'v_haijiao_fanguo',
     'ZakaHjw': 'v_hjw',
     'ZakaHjApp': 'v_haijiao_fanguo',
+    'ZakaMissav': 'v_missav',
+    'ZakaMissavOff': 'v_missav',
+    'missavt': 'v_missav',
   };
 
   static String? goSourceForJarSite(String source) {

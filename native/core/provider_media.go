@@ -129,8 +129,33 @@ func (d *Downloader) providerURLCandidates(raw string) []string {
 	return candidates
 }
 
+// directMediaURL 取「集里自带的可播直链」：direct 标记 + videoUrl / id
+// / pageUrl 任一为 http(s) 地址。女优库、影视库的 m3u8_url 行走这条，
+// 不进站源解析、不受站源是否内置限制。
+func directMediaURL(chapter Chapter) string {
+	if !chapter.Direct {
+		return ""
+	}
+	for _, candidate := range []string{chapter.VideoURL, chapter.ID, chapter.PageURL} {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (providerMedia, error) {
 	chapter := task.Chapter
+	if address := directMediaURL(chapter); address != "" {
+		media := providerMedia{URL: address, Referer: strings.TrimSpace(chapter.Referer)}
+		if media.Referer == "" {
+			if parsed, err := url.Parse(address); err == nil {
+				media.Referer = parsed.Scheme + "://" + parsed.Host + "/"
+			}
+		}
+		return media, nil
+	}
 	chapter.Source = canonicalProviderSource(chapter.Source)
 	if chapter.Source == "" {
 		chapter.Source = sourceFromDramaID(task.DramaID)
