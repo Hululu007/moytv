@@ -91,3 +91,14 @@ v33（未发布），基线 v32。
 - 镜像站列表/封面都有：`/cn/actresses` 24 人 24 图、`/actresses/<name>` 12 部 12 图，
   探针输出见 `seku` 测试记录；缺图是 App 侧封面源白名单问题，不是站点没图。
 - 探针临时测试（zz_*.go、app_direct_media_test.go）已删，勿再加回。
+
+## v37 实测核验（2026-11-22 01:2x，真网络探针）
+- 三个 MissAV 入口（官方|过盾、官方|原生、tv|原生）已全量接管 `v_missav`，不再走各自写死 missav.ws 的旧解析。
+- 镜像站列表链路实测通过：
+  - `/cn/actresses` → 24 人，24 张头像（fourhoi.mrstcdn.store/actress/xxxxx-t.jpg）
+  - 下钻 `/cn/actresses/波多野結衣` → 12 部，12 张封面，带时长备注
+  - 详情/播放 → 解出 `b.surrit.mrstcdn.store/.../playlist.m3u8`，带 Referer/UA 头
+- 官方域状态（别再重复排查）：missav.ws / missav.ai / missav.live 均 403（CF 拦机房）；
+  missav.fans 200 正常；missav123.com 302；missav06.net 500。
+- v37 包已核验：versionCode 11，证书 MD5 与 v36 同一把（可直接覆盖装），
+  SHA256 与 Release 上的 SHA256SUMS 一致。
