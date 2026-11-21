@@ -465,6 +465,17 @@ ActressPerson videoLibraryPersonFromRow(Map<String, Object?> row) {
   );
 }
 
+/// 名册汇总累加器（见 [_ensureVideoRollup]）：同一个人被拆成多行时，
+/// 作品数相加、头像取第一条非空、最新作品日期取最大。
+class _RollupAcc {
+  _RollupAcc(this.firstRowid);
+
+  final int firstRowid;
+  String avatar = '';
+  int works = 0;
+  String lastDate = '';
+}
+
 /// 视频库（女优库.db）行 → 作品：id 用 videos.rowid；vod_id 作
 /// codeKey/titleKey/codeDisplay/coverDramaId（播放链路按番号经
 /// filmDb 兜底查女优库.db 取直链，不直接用这里的地址）；
@@ -626,22 +637,40 @@ class SqfliteActressDatabase implements ActressDatabase {
     return db;
   }
 
-  /// 视频库里一个人的关联键（2026-11-21 注意字段）：这个库的
+  /// 视频库里一个人的全部关联键（2026-11-21 注意字段）：这个库的
   /// `actresses.cate_id` 存的是**名字**（如「今村由美」），
-  /// `video_actress` 用它关联，不是数字 ID；rowid 才是列表里用的
-  /// 那个 id。所以取作品要先把 rowid 换成 cate_id。
-  Future<String?> _videoCateIdOf(Database db, int personRowId) async {
-    final rows = await db.query(
-      'actresses',
-      columns: ['cate_id'],
-      where: 'rowid = ?',
-      whereArgs: [personRowId],
-      limit: 1,
+  /// `video_actress` 用它关联，不是数字 ID；rowid 才是列表里用的 id。
+  ///
+  /// 而且同一个人常有两行：`木下ひまり（花沢ひまり）` 与 `木下ひまり`，
+  /// 作品劈成两半。所以按 rowid 找到这个人 → 取同名 → 返回**所有**
+  /// 同名 cate_id，作品按这批 cate_id 一起取，才不漏。
+  Future<List<String>> _videoCateIdsOf(Database db, int personRowId) async {
+    final rows = await db.rawQuery(
+      'SELECT cate_id FROM actresses WHERE name = '
+      '(SELECT name FROM actresses WHERE rowid = ?)',
+      [personRowId],
     );
-    if (rows.isEmpty) return null;
-    final value = rows.first['cate_id']?.toString() ?? '';
-    return value.isEmpty ? null : value;
+    return [
+      for (final row in rows)
+        if ((row['cate_id']?.toString() ?? '').isNotEmpty)
+          row['cate_id'].toString(),
+    ];
   }
+
+  /// 汇总表是否可用（建过且行数正常）。
+  Future<bool> _hasVideoRollup(Database db) async {
+    try {
+      final rows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM actress_rollup',
+      );
+      return ((rows.first['c'] as num?)?.toInt() ?? 0) > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _placeholders(int n) =>
+      List.filled(n, '?').join(', ');
 
   /// 视频库索引（best-effort）：只 CREATE INDEX，不改数据。
   /// - video_actress(cate_id)：点开一个人时按人名取自己的作品；
@@ -651,12 +680,120 @@ class SqfliteActressDatabase implements ActressDatabase {
     for (final sql in const [
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
+      'CREATE INDEX IF NOT EXISTS idx_moyi_act_name ON actresses(name)',
     ]) {
       try {
         await db.execute(sql);
       } catch (_) {
         // 单个索引建不了不影响另一个，也不影响读。
       }
+    }
+    await _ensureVideoRollup(db);
+  }
+
+  /// 名册汇总表（2026-11-21 用户令「名册要与 who's 女优数据库合并」）。
+  ///
+  /// 这个库里同一个人常被拆成两行：`木下ひまり（花沢ひまり）` 和
+  /// `木下ひまり`，作品也劈成两份（217 + 739）。列表如果按行显示，
+  /// 用户看到的是两个人、每个人作品都不全。这里按**名字**归并成一人，
+  /// 作品数相加，头像取一条，并记下最新作品日期供「最近更新」排序。
+  ///
+  /// 现算一次要 0.8 秒（47 万条关联 join 排序），手机上点一下就是
+  /// 转圈半天；所以落一张 `actress_rollup` 汇总表，源表行数变了才
+  /// 重建（一次 1~2 秒），之后每次查询几毫秒。库设成只读、写不进去
+  /// 时就不落表，读取侧回退到现算 SQL，功能不丢。
+  Future<void> _ensureVideoRollup(Database db) async {
+    try {
+      final sourceCounts = await db.rawQuery(
+        'SELECT (SELECT COUNT(*) FROM actresses) AS a, '
+        '(SELECT COUNT(*) FROM video_actress) AS v',
+      );
+      final aCount = (sourceCounts.first['a'] as num?)?.toInt() ?? 0;
+      final vCount = (sourceCounts.first['v'] as num?)?.toInt() ?? 0;
+      final signature = '$aCount/$vCount';
+
+      await db.execute(
+        'CREATE TABLE IF NOT EXISTS actress_rollup ('
+        'name TEXT PRIMARY KEY, '
+        'first_rowid INTEGER NOT NULL, '
+        'avatar TEXT NOT NULL DEFAULT \'\', '
+        'works INTEGER NOT NULL DEFAULT 0, '
+        'last_date TEXT NOT NULL DEFAULT \'\')',
+      );
+      await db.execute(
+        'CREATE TABLE IF NOT EXISTS actress_rollup_meta ('
+        'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+      );
+      final meta = await db.query(
+        'actress_rollup_meta',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['signature'],
+        limit: 1,
+      );
+      final current = meta.isEmpty ? '' : meta.first['value'].toString();
+      final rollupRows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM actress_rollup',
+      );
+      final rollupCount = (rollupRows.first['c'] as num?)?.toInt() ?? 0;
+      if (current == signature && rollupCount > 0) return;
+
+      // 重建（几十万行 insert-select，只在源数据变化时跑一次）。
+      final perCate = await db.rawQuery(
+        'SELECT va.cate_id AS cate_id, COUNT(*) AS n, '
+        'MAX(v.vod_pubdate) AS d '
+        'FROM video_actress va '
+        'LEFT JOIN videos v ON v.vod_id = va.vod_id '
+        'GROUP BY va.cate_id',
+      );
+      final works = <String, int>{};
+      final dates = <String, String>{};
+      for (final row in perCate) {
+        final cateId = row['cate_id'].toString();
+        works[cateId] = (row['n'] as num?)?.toInt() ?? 0;
+        final d = row['d']?.toString() ?? '';
+        if (d.isNotEmpty) dates[cateId] = d;
+      }
+      final people = await db.rawQuery(
+        'SELECT rowid AS rid, name AS name, cate_id AS cate_id, '
+        "COALESCE(NULLIF(avatar,''),'') AS avatar "
+        'FROM actresses',
+      );
+      final byName = <String, _RollupAcc>{};
+      for (final row in people) {
+        final name = row['name']?.toString() ?? '';
+        final cateId = row['cate_id']?.toString() ?? '';
+        if (name.isEmpty || cateId.isEmpty) continue;
+        final acc = byName.putIfAbsent(
+          name,
+          () => _RollupAcc((row['rid'] as num).toInt()),
+        );
+        final avatar = row['avatar']?.toString() ?? '';
+        if (acc.avatar.isEmpty && avatar.isNotEmpty) acc.avatar = avatar;
+        acc.works += works[cateId] ?? 0;
+        final d = dates[cateId];
+        if (d != null && d.compareTo(acc.lastDate) > 0) acc.lastDate = d;
+      }
+      await db.transaction((txn) async {
+        await txn.delete('actress_rollup');
+        final batch = txn.batch();
+        byName.forEach((name, acc) {
+          batch.insert('actress_rollup', {
+            'name': name,
+            'first_rowid': acc.firstRowid,
+            'avatar': acc.avatar,
+            'works': acc.works,
+            'last_date': acc.lastDate,
+          });
+        });
+        batch.insert('actress_rollup_meta', {
+          'key': 'signature',
+          'value': signature,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await batch.commit(noResult: true);
+      });
+    } catch (_) {
+      // 只读库 / 空间不足：不落表，读取侧回退现算。
     }
   }
 
@@ -1356,9 +1493,49 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 视频库里人一律是女优：male 匹配不到，female/all 不筛；
       // tag 没有对应列，忽略（分类筛走 main_category，见下）。
       if (sex == ActressSexFilter.male) return const [];
+      final trimmedQuery = query.trim();
       final args = <Object?>[];
       final conditions = <String>[];
-      final trimmedQuery = query.trim();
+
+      // 首选汇总表（按名字归并，2026-11-21）：同一个人被拆成
+      // 「木下ひまり（花沢ひまり）」+「木下ひまり」两行时，在这里
+      // 合回一个人，作品数相加（217+739 → 755）。
+      if (await _hasVideoRollup(db)) {
+        if (trimmedQuery.isNotEmpty) {
+          args.add('%$trimmedQuery%');
+          conditions.add('r.name LIKE ?');
+        }
+        if (category.isNotEmpty) {
+          args.add(category);
+          conditions.add(
+            'EXISTS (SELECT 1 FROM actresses a2 '
+            'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
+            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+            'WHERE a2.name = r.name '
+            "AND COALESCE(vc2.main_category, v2.type_name, '') = ?)",
+          );
+        }
+        final where = conditions.isEmpty
+            ? ''
+            : 'WHERE ${conditions.join(' AND ')}';
+        final order = switch (sort) {
+          ActressSort.worksDesc => 'r.works DESC, r.name ASC',
+          ActressSort.nameAsc => 'r.name ASC',
+          ActressSort.recentDesc => 'r.last_date DESC, r.name ASC',
+        };
+        final rows = await db.rawQuery(
+          'SELECT r.first_rowid AS id, r.name AS display_name, '
+          'r.name AS cate_id, r.avatar AS avatar_url, '
+          'r.works AS works_count '
+          'FROM actress_rollup r $where '
+          'ORDER BY $order LIMIT ? OFFSET ?',
+          [...args, limit, offset],
+        );
+        return rows.map(videoLibraryPersonFromRow).toList();
+      }
+
+      // 回退（库只读、汇总表没落下）：现算同一套归并。
       if (trimmedQuery.isNotEmpty) {
         args.add('%$trimmedQuery%');
         conditions.add('a.name LIKE ?');
@@ -1372,7 +1549,8 @@ class SqfliteActressDatabase implements ActressDatabase {
           'EXISTS (SELECT 1 FROM video_actress va2 '
           'JOIN videos v2 ON v2.vod_id = va2.vod_id '
           'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-          'WHERE va2.cate_id = a.cate_id '
+          'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
+          'WHERE a3.name = a.name '
           "AND COALESCE(vc2.main_category, v2.type_name, '') = ?)",
         );
       }
@@ -1382,22 +1560,20 @@ class SqfliteActressDatabase implements ActressDatabase {
       final order = switch (sort) {
         ActressSort.worksDesc => 'works_count DESC, a.name ASC',
         ActressSort.nameAsc => 'a.name ASC',
-        // 最近更新：每人视频里最新 vod_pubdate 倒序；COALESCE 把
-        // 无视频的人的空值当 ''，倒序时沉底；同日按名字。
-        ActressSort.recentDesc =>
-          "COALESCE((SELECT MAX(v3.vod_pubdate) FROM video_actress va3 "
-          "JOIN videos v3 ON v3.vod_id = va3.vod_id "
-          "WHERE va3.cate_id = a.cate_id), '') DESC, a.name ASC",
+        ActressSort.recentDesc => 'last_date DESC, a.name ASC',
       };
       final rows = await db.rawQuery(
-        'SELECT a.rowid AS id, a.name AS display_name, '
-        'a.cate_id AS cate_id, a.avatar AS avatar_url, '
-        'COUNT(va.vod_id) AS works_count '
-        'FROM actresses a '
-        'LEFT JOIN video_actress va ON va.cate_id = a.cate_id '
-        '$where '
-        'GROUP BY a.rowid, a.name, a.avatar '
-        'ORDER BY $order LIMIT ? OFFSET ?',
+        'WITH per_cate AS ('
+        'SELECT cate_id AS cate_id, COUNT(*) AS n, '
+        'MAX(v.vod_pubdate) AS d FROM video_actress va '
+        'LEFT JOIN videos v ON v.vod_id = va.vod_id GROUP BY cate_id) '
+        'SELECT MIN(a.rowid) AS id, a.name AS display_name, '
+        'a.name AS cate_id, '
+        "COALESCE(MAX(NULLIF(a.avatar,'')),'') AS avatar_url, "
+        'SUM(COALESCE(pc.n,0)) AS works_count, '
+        "COALESCE(MAX(COALESCE(pc.d,'')),'') AS last_date "
+        'FROM actresses a LEFT JOIN per_cate pc ON pc.cate_id = a.cate_id '
+        '$where GROUP BY a.name ORDER BY $order LIMIT ? OFFSET ?',
         [...args, limit, offset],
       );
       return rows.map(videoLibraryPersonFromRow).toList();
@@ -1436,8 +1612,10 @@ class SqfliteActressDatabase implements ActressDatabase {
       final where = conditions.isEmpty
           ? ''
           : 'WHERE ${conditions.join(' AND ')}';
+      // 按名字去重计数（同一个人被拆成两行时只算一个）。
       final rows = await db.rawQuery(
-        'SELECT COUNT(*) AS c FROM actresses $where',
+        'SELECT COUNT(*) AS c FROM '
+        '(SELECT name FROM actresses $where GROUP BY name)',
         args,
       );
       return (rows.first['c'] as num?)?.toInt() ?? 0;
@@ -1554,8 +1732,9 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 反查作品。原来一条大 JOIN（videos × video_actress × actresses）
       // 再 ORDER BY 排序，32 万视频的库在手机上点一下要转半天，
       // 看着就是「点了头像没作品」。
-      final cateId = await _videoCateIdOf(db, personId);
-      if (cateId == null) return const [];
+      final cateIds = await _videoCateIdsOf(db, personId);
+      if (cateIds.isEmpty) return const [];
+      final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
         'SELECT v.rowid AS id, v.vod_id AS code_key, '
         'v.title AS title, v.vod_pubdate AS date, '
@@ -1564,13 +1743,14 @@ class SqfliteActressDatabase implements ActressDatabase {
         "COALESCE(vc.main_category, v.type_name, '') AS category "
         'FROM videos v '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
-        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress WHERE cate_id = ?) '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
+        'WHERE cate_id IN ($inList)) '
         "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ? " : ''}"
         'ORDER BY v.vod_pubdate DESC, v.vod_id ASC '
         'LIMIT ? OFFSET ?',
         useCategory
-            ? [cateId, category, limit, offset]
-            : [cateId, limit, offset],
+            ? [...cateIds, category, limit, offset]
+            : [...cateIds, limit, offset],
       );
       return [
         for (final row in rows) videoLibraryWorkFromRow(row, personId),
@@ -1593,14 +1773,16 @@ class SqfliteActressDatabase implements ActressDatabase {
     final db = await _open();
     if (_videoLibraryMode) {
       final useCategory = category != null && category.isNotEmpty;
-      final cateId = await _videoCateIdOf(db, personId);
-      if (cateId == null) return 0;
+      final cateIds = await _videoCateIdsOf(db, personId);
+      if (cateIds.isEmpty) return 0;
+      final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS c FROM videos v '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
-        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress WHERE cate_id = ?) '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
+        'WHERE cate_id IN ($inList)) '
         "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ?" : ''}",
-        useCategory ? [cateId, category] : [cateId],
+        useCategory ? [...cateIds, category] : cateIds,
       );
       return (rows.first['c'] as num?)?.toInt() ?? 0;
     }
