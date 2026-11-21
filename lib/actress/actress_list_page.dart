@@ -44,14 +44,16 @@ import '../player_picker.dart';
 /// 片库全部可见视频站（与叠加搜索 actressSearchSiteIds 同一口径：
 /// store.visibleSources 里 isVideoSection、非 cloud:、siteVisible
 /// 的站；跳过 mjv/whos/chaoliu——chaoliu 即 mjv，已有 mjv 项代表
-/// 它；yikm 这类游戏站不在视频区登记里，进不了选项）。
+/// 它；跳过 ZakaJavrate（鉴黄师，用户 2026-11-21 令：女优库里
+/// 播不了，站点列表里不留它）；yikm 这类游戏站不在视频区登记里，
+/// 进不了选项）。
 List<ActressSiteFilter> actressSiteFilterOptions(LocalStore store) {
   final options = <ActressSiteFilter>[
     ActressSiteFilter.all,
     ActressSiteFilter.mjv,
     ActressSiteFilter.whos,
   ];
-  final seen = <String>{'all', 'mjv', 'whos', 'chaoliu'};
+  final seen = <String>{'all', 'mjv', 'whos', 'chaoliu', 'ZakaJavrate'};
   for (final site in store.visibleSources) {
     if (!site.isVideoSection) continue;
     if (site.id.startsWith('cloud:')) continue;

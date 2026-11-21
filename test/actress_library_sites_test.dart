@@ -62,6 +62,13 @@ const _chaoliuSite = SourceSite(
   section: SourceSite.sectionVideo,
   origin: SourceSite.originImport,
 );
+const _javrateSite = SourceSite(
+  'ZakaJavrate',
+  '🔞🛡️鉴黄师┃原生',
+  '鉴黄师',
+  section: SourceSite.sectionVideo,
+  origin: SourceSite.originBuiltin,
+);
 
 void _registerLibrarySites() {
   for (final site in [
@@ -71,6 +78,7 @@ void _registerLibrarySites() {
     _hiddenSite,
     _mjvSite,
     _chaoliuSite,
+    _javrateSite,
   ]) {
     SourceSite.importedSites[site.id] = site;
   }
@@ -84,6 +92,7 @@ void _unregisterLibrarySites() {
     'hidden-video',
     'mjv',
     'chaoliu',
+    'ZakaJavrate',
   ]) {
     SourceSite.importedSites.remove(id);
   }
@@ -176,6 +185,9 @@ void main() {
       expect(ids, isNot(contains('cloud:pan')));
       expect(ids, isNot(contains('hidden-video')));
       expect(ids, isNot(contains('chaoliu')));
+      // 2026-11-21 用户令：鉴黄师（ZakaJavrate）女优库里播不了，
+      // 站点列表里不留它。
+      expect(ids, isNot(contains('ZakaJavrate')));
       expect(ids.where((id) => id == 'mjv'), hasLength(1));
       expect(ids.where((id) => id == 'whos'), hasLength(1));
     });
