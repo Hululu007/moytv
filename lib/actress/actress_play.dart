@@ -23,6 +23,7 @@ class ActressPlayCandidate {
 ///
 /// - 兜底波次先探：[actressFallbackSiteIds] 里的站（MJV 系 + 18AV
 ///   双生站）按表序先探一波，命中即成链、不等其余站；无果才探
+///   MissAV 波次（[actressMissavFirstSiteId]，只探主站），再探
 ///   eager 波次与懒查波次；
 /// - 候选顺序 = 跨站探活计划顺序（优先序表 → 🔞站 → 其余站），确定性
 ///   优先，不按延迟排；懒查计划（慢站/盾站/超名额）只在 eager 波次
@@ -82,12 +83,17 @@ class ActressPlayChain {
         actressFallbackSiteIds[i]: i,
     };
     final fallbackPlans = <CrossSiteRowPlan>[];
+    final missavPlans = <CrossSiteRowPlan>[];
     final eagerPlans = <CrossSiteRowPlan>[];
     final lazyPlans = <CrossSiteRowPlan>[];
     for (final plan in plans) {
       final siteId = plan.siteId;
       if (siteId == null) continue;
-      if (fallbackOrder.containsKey(siteId)) {
+      // MissAV 先判（仍在懒查表里，跨站行显示口径不变）：进
+      // MissAV 波，不进懒查波。
+      if (siteId == actressMissavFirstSiteId) {
+        missavPlans.add(plan);
+      } else if (fallbackOrder.containsKey(siteId)) {
         fallbackPlans.add(plan);
       } else if (!plan.provider.lazy) {
         eagerPlans.add(plan);
@@ -99,13 +105,19 @@ class ActressPlayChain {
       (a, b) => fallbackOrder[a.siteId]! - fallbackOrder[b.siteId]!,
     );
     _pendingFallback = fallbackPlans;
+    _pendingMissav = missavPlans;
     _pendingEager = eagerPlans;
     _pendingLazy = lazyPlans;
     // 作品自己记的站排到它所属波次最前（不跨波次、不动 MJV 优先
     // 的波次顺序）：存的地址死了，先探它自己的站。
     final preferred = preferSiteId;
     if (preferred != null) {
-      for (final pending in [_pendingFallback, _pendingEager, _pendingLazy]) {
+      for (final pending in [
+        _pendingFallback,
+        _pendingMissav,
+        _pendingEager,
+        _pendingLazy,
+      ]) {
         final index = pending.indexWhere((plan) => plan.siteId == preferred);
         if (index > 0) {
           pending.insert(0, pending.removeAt(index));
@@ -113,6 +125,7 @@ class ActressPlayChain {
       }
     }
     _initialFallback = List.of(_pendingFallback);
+    _initialMissav = List.of(_pendingMissav);
     _initialEager = List.of(_pendingEager);
     _initialLazy = List.of(_pendingLazy);
   }
@@ -147,9 +160,11 @@ class ActressPlayChain {
   final _candidates = <ActressPlayCandidate>[];
   var _next = 0;
   late List<CrossSiteRowPlan> _pendingFallback;
+  late List<CrossSiteRowPlan> _pendingMissav;
   late List<CrossSiteRowPlan> _pendingEager;
   late List<CrossSiteRowPlan> _pendingLazy;
   late List<CrossSiteRowPlan> _initialFallback;
+  late List<CrossSiteRowPlan> _initialMissav;
   late List<CrossSiteRowPlan> _initialEager;
   late List<CrossSiteRowPlan> _initialLazy;
   var _titleWaveDone = false;
@@ -165,6 +180,7 @@ class ActressPlayChain {
   /// 的死地址，也不复用上次已判死的候选）。
   void resetForRetry() {
     _pendingFallback = List.of(_initialFallback);
+    _pendingMissav = List.of(_initialMissav);
     _pendingEager = List.of(_initialEager);
     _pendingLazy = List.of(_initialLazy);
     _candidates.clear();
@@ -176,6 +192,7 @@ class ActressPlayChain {
   bool get hasMore =>
       _next < _candidates.length ||
       _pendingFallback.isNotEmpty ||
+      _pendingMissav.isNotEmpty ||
       _pendingEager.isNotEmpty ||
       _pendingLazy.isNotEmpty ||
       (!_titleWaveDone && avId.isEmpty && titleQuery.isNotEmpty);
@@ -204,6 +221,15 @@ class ActressPlayChain {
       if (avId.isNotEmpty) {
         if (_pendingFallback.isNotEmpty) {
           final found = await _probeWave(_pendingFallback, stopRequested);
+          _candidates.addAll(found);
+          if (found.isNotEmpty) continue;
+        }
+        if (overBudget()) return null;
+        // MissAV 波：兜底波无果后、eager 波之前。UMSO-660 这类
+        // 兜底站没有的番号只有 MissAV 有，eager 波 24 站会吃
+        // 光预算，不提前就永远探不到。
+        if (_pendingMissav.isNotEmpty) {
+          final found = await _probeWave(_pendingMissav, stopRequested);
           _candidates.addAll(found);
           if (found.isNotEmpty) continue;
         }

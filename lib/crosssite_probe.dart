@@ -193,6 +193,14 @@ const actressFallbackSiteIds = <String>[
   'jar:zakatv:av18av',
 ];
 
+/// 女优库点播先探 MissAV 主站（2026-11-21，修 UMSO-660 点播不到）：
+/// MissAV 是最全的 JAV 库；兜底 MJV/18AV 没有的番号（如 PRESTIGE
+/// 的 UMSO-660）多半只有它有，只探主站，不探 Off/missavt 镜像。
+/// 仍留在 [crossSiteLazySiteIds] 里（跨站行显示口径不变），只在
+/// 女优库点播链里提前一波探——不能直接塞进兜底波（兜底波内并行
+/// 等全部在途跑完，MissAV 有盾、慢，会拖慢 MJV 命中的常见情况）。
+const actressMissavFirstSiteId = 'jar:missav30:ZakaMissav';
+
 /// 慢站/盾站：永远懒查，不占自动探活名额（旧模型同口径）。
 const crossSiteLazySiteIds = <String>{
   'jar:missav30:ZakaMissav',

@@ -67,7 +67,10 @@ const _testSiteC = SourceSite(
   origin: SourceSite.originImport,
 );
 const _lazySite = SourceSite(
-  'jar:missav30:ZakaMissav',
+  // 2026-11-21：MissAV 主站已从懒查波提到单独的 MissAV 波（修
+  // UMSO-660），不再是懒查代表；这里改用仍在懒查波的 Jable，
+  // 本测试继续验“eager 无果才探懒查”这一条不变的口径。
+  'jar:zakatv:ZakaJable',
   '🔞懒查站',
   '测试站',
   section: SourceSite.sectionVideo,
@@ -1203,14 +1206,14 @@ void main() {
       final probe = _ScriptedProbeService(
         repository: repository,
         results: {
-          'jar:missav30:ZakaMissav': _foundResult(
+          'jar:zakatv:ZakaJable': _foundResult(
             const CrossSiteProvider(
-              id: 'jar:missav30:ZakaMissav',
+              id: 'jar:zakatv:ZakaJable',
               name: 'lazy',
-              siteIds: ['jar:missav30:ZakaMissav'],
+              siteIds: ['jar:zakatv:ZakaJable'],
               lazy: true,
             ),
-            'jar:missav30:ZakaMissav',
+            'jar:zakatv:ZakaJable',
             'drama-lazy',
           ),
         },
@@ -1227,7 +1230,7 @@ void main() {
         profileEpoch: store.profileEpoch,
       );
       expect(candidate!.detail.drama.id, 'drama-lazy');
-      expect(probe.probed, ['test-site-b', 'jar:missav30:ZakaMissav']);
+      expect(probe.probed, ['test-site-b', 'jar:zakatv:ZakaJable']);
     });
 
     test('全部失败返回空', () async {
