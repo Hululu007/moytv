@@ -131,7 +131,7 @@ extension ActressSortLabel on ActressSort {
 }
 
 /// 女优库左上角站点筛选：默认全部；选站后兜底数据与现爬都只走该站。
-/// mjv = mjv011.com（潮流蜘蛛），whos = whos.tv（暂无手机现爬蜘蛛）。
+/// mjv = mjv011.com（潮流蜘蛛），whos = whos.tv（validator.nu 列表通道现爬）。
 /// 片库站是动态项：站 id 即片库里的站 id、显示名即站名（见
 /// [actressSiteFilterOptions]），与 mjv/whos 同一筛选语义。
 class ActressSiteFilter {

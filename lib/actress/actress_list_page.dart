@@ -893,7 +893,7 @@ class _ActressListPageState extends State<ActressListPage> {
   List<ActressSiteFilter> _siteFilterOptions() =>
       actressSiteFilterOptions(widget.store);
 
-  /// 选站后触发该站分类现爬（mjv 现爬、whos 报缺口走兜底、
+  /// 选站后触发该站分类现爬（mjv 现爬、whos 走 validator.nu 列表通道、
   /// 片库站走本站蜘蛛分类现爬）。
   Future<void> _runSiteCrawl() async {
     if (_crawl.running) return;

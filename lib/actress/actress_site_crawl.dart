@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
@@ -28,6 +29,119 @@ const actressMjvVideoCategories = <({String id, String name})>[
   (id: 'tdAnimation', name: 'H_3D动画'),
   (id: 'dt', name: '国产自拍'),
 ];
+
+/// whos 列表页一张卡：番号代码、标题、解出的封面与 hash、拼出的直链。
+typedef WhosListCard = ({
+  String code,
+  String title,
+  String pic,
+  String hash,
+  String m3u8,
+});
+
+/// whos 列表页取数：输入页码，返回 validator.nu 吐回的列表页原始 HTML，
+/// 取不到返回 ''。默认走 validator.nu 通道；测试注入假取数，不走网。
+typedef WhosListFetcher = Future<String> Function(int page);
+
+/// whos 条目 vod_id：与外面 Python 爬虫同一口径——md5 前 8 位十六进制，
+/// md5 输入是 'https://whos.tv/videos/' + 番号代码。
+String whosVodId(String code) =>
+    md5
+        .convert(utf8.encode('https://whos.tv/videos/$code'))
+        .toString()
+        .substring(0, 8);
+
+/// whos 封面密文解码（纯函数）：16 进制解码成字节，末字节就是 XOR
+/// 密钥，其余字节逐字节 XOR 该密钥，得到封面地址
+/// https://v.hersav.me/images/av/ 下的 32 位 hash 封面图（.jpg）。
+/// 解不出合法封面地址返回 null（该卡跳过，不编假地址）。
+({String pic, String hash})? decodeWhosCover(String cipherHex) {
+  if (cipherHex.length < 4 || cipherHex.length.isOdd) return null;
+  if (!RegExp(r'^[0-9a-f]+$').hasMatch(cipherHex)) return null;
+  final bytes = <int>[];
+  for (var i = 0; i < cipherHex.length; i += 2) {
+    bytes.add(int.parse(cipherHex.substring(i, i + 2), radix: 16));
+  }
+  final key = bytes.last;
+  final plain = String.fromCharCodes(
+    bytes.sublist(0, bytes.length - 1).map((b) => b ^ key),
+  );
+  final match = RegExp(r'/images/av/([0-9a-f]{32})\.jpg').firstMatch(plain);
+  if (match == null) return null;
+  return (pic: plain, hash: match.group(1)!);
+}
+
+/// whos 播放地址：hash 直接拼，不用取详情。
+String whosM3u8Url(String hash) =>
+    'https://v.hersav.me/$hash/$hash.m3u8';
+
+/// whos 列表页卡片解析（纯函数，与 whos2.py 的 CARD_RE 同义）：
+/// href="/videos/番号代码" 后跟 data-cover-src 密文与 alt 标题；
+/// 密文解不出合法 hash 的卡跳过。
+List<WhosListCard> parseWhosListCards(String html) {
+  final pattern = RegExp(
+    r'href="/videos/([a-z0-9-]+)"[^>]*>.*?data-cover-src="([0-9a-f]+)"[^>]*alt="([^"]*)"',
+    dotAll: true,
+  );
+  final cards = <WhosListCard>[];
+  for (final match in pattern.allMatches(html)) {
+    final code = match.group(1)!;
+    final decoded = decodeWhosCover(match.group(2)!);
+    if (decoded == null) continue;
+    cards.add((
+      code: code,
+      title: (match.group(3) ?? '').trim(),
+      pic: decoded.pic,
+      hash: decoded.hash,
+      m3u8: whosM3u8Url(decoded.hash),
+    ));
+  }
+  return cards;
+}
+
+/// whos 列表页实取：validator.nu 通道（W3C 校验服务代取，CF 挡不住它）。
+/// GET https://validator.nu/?doc=目标页地址（已 URL 编码）&showsource=yes&out=json，
+/// 取回 JSON 里 source.code 就是列表页原始 HTML。90 秒超时，失败
+/// 重试 3 次（退避 2/5 秒），502 也重试；3 次都失败返回 ''。
+Future<String> fetchWhosListPageViaValidator(int page) async {
+  const userAgent =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) '
+      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 '
+      'Mobile/15E148 Safari/604.1';
+  final target = page <= 1
+      ? 'https://whos.tv/videos'
+      : 'https://whos.tv/videos/page-$page';
+  final url =
+      'https://validator.nu/?doc=${Uri.encodeComponent(target)}&showsource=yes&out=json';
+  const timeout = Duration(seconds: 90);
+  const backoffs = [Duration(seconds: 2), Duration(seconds: 5)];
+  for (var attempt = 0; attempt < 3; attempt++) {
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      final request = await client.getUrl(Uri.parse(url)).timeout(timeout);
+      request.headers.set(HttpHeaders.userAgentHeader, userAgent);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final response = await request.close().timeout(timeout);
+      final body = await response.transform(utf8.decoder).join().timeout(timeout);
+      if (response.statusCode == 200) {
+        final doc = jsonDecode(body);
+        if (doc is Map<String, dynamic>) {
+          final source = doc['source'];
+          if (source is Map<String, dynamic>) {
+            final code = source['code'];
+            if (code is String && code.length > 10000) return code;
+          }
+        }
+      }
+    } catch (_) {
+      // 取数失败即重试（502/超时/断网都一样），3 次都失败返回 ''。
+    } finally {
+      client.close(force: true);
+    }
+    if (attempt < backoffs.length) await Future.delayed(backoffs[attempt]);
+  }
+  return '';
+}
 
 /// 手机现爬进度（列表页横幅显示、可取消）。
 class ActressSiteCrawlProgress {
@@ -67,9 +181,14 @@ class ActressSiteCrawlProgress {
 ///
 /// - mjv：走潮流蜘蛛（chaoliu.py，MJV 全站蜘蛛）分类目录，
 ///   repository.catalog('chaoliu', category, page) 现取；
-/// - whos 暂无手机现爬：没有 whos 分类蜘蛛（名册源只有按人名查
-///   roster/films/search，没有分类列表），直连又常被 CF 挡；
-///   选 whos 时直接报缺口，不编假蜘蛛，whos 仍走已同步 JSON 兜底；
+/// - whos：没有分类蜘蛛，影片库是一条平铺列表（341,844 部、28,487 页、
+///   每页 12 条），当成一个分类“全部”来爬。列表页是服务端渲染 HTML，
+///   直连被 CF 挡，走 validator.nu 通道代取（GET validator.nu/?doc=目标页
+///   地址（已 URL 编码）&showsource=yes&out=json，取 JSON 里 source.code）；
+///   卡片 data-cover-src 是 16 进制密文，末字节即 XOR 密钥，解出封面
+///   https://v.hersav.me/images/av/ 下的 32 位 hash 封面图，直链直接拼
+///   https://v.hersav.me/ 下 hash 直拼的 m3u8，不取详情、不走补流；
+///   一页取不到卡或取回为空即停；
 /// - 片库站：走本站蜘蛛自己的分类（repository.categories(站 id)
 ///   现取，空 id 的“全部”伪分类跳过；取回为空回落到单个“全部”）
 ///   与本站蜘蛛的 catalog 现取；条目 site 记本站 id，取流走本站
@@ -102,7 +221,10 @@ class ActressSiteCrawlService {
     required this.db,
     this._documentsDir,
     Directory? localJsonDir,
-  }) : _localJsonDir = localJsonDir;
+    WhosListFetcher? whosListFetcher,
+  }) : _localJsonDir = localJsonDir,
+       _whosListFetcher =
+           whosListFetcher ?? fetchWhosListPageViaValidator;
 
   /// 2026-11-20 MYTV 绑定：绑定解析出来后调，本地 json 影子
   /// 目录改走 MYTV/db。只在列表页自己建的实例上调，测试注入
@@ -148,6 +270,9 @@ class ActressSiteCrawlService {
   /// （MYTV/db）；不设时走原来的 documents/actress_json。
   Directory? _localJsonDir;
 
+  /// whos 列表页取数（默认 validator.nu 通道；测试注入假取数）。
+  final WhosListFetcher _whosListFetcher;
+
   final _progressController =
       StreamController<ActressSiteCrawlProgress>.broadcast();
 
@@ -175,7 +300,7 @@ class ActressSiteCrawlService {
     _progressController.close();
   }
 
-  /// 开始现爬。whos 直接报缺口（见类注释）；mjv 与片库站都跑。
+  /// 开始现爬：whos 走 validator.nu 列表通道（见类注释），其余站走蜘蛛。
   /// 分类由 [categoryConcurrency] 个工人并行爬（默认 3 个）。
   Future<void> start({
     String site = 'mjv',
@@ -185,11 +310,22 @@ class ActressSiteCrawlService {
   }) async {
     if (_running) return;
     if (site == 'whos') {
-      _emit(
-        const ActressSiteCrawlProgress(
-          error: 'whos 暂无手机现爬：没有 whos 分类蜘蛛，仍走已同步 JSON 兜底',
-        ),
-      );
+      _running = true;
+      _cancelled = false;
+      try {
+        await _runWhos(maxPagesPerCategory);
+      } catch (error) {
+        _emit(
+          ActressSiteCrawlProgress(
+            site: site,
+            error: '现爬失败：$error',
+          ),
+        );
+      } finally {
+        _localByKey = null;
+        _localSite = null;
+        _running = false;
+      }
       return;
     }
     _running = true;
@@ -393,6 +529,107 @@ class ActressSiteCrawlService {
       _localSite = null;
       _running = false;
     }
+  }
+
+  /// whos 现爬：影片库当成一个分类“全部”，按页码逐页取 validator.nu
+  /// 列表页源码、解析卡片、直链条目每页即写盘。条目已有直链，不补流。
+  /// 一页取回为空或无卡即停（不死循环翻页）；取数失败（3 次重试都
+  /// 不过）抛给 start() 报“现爬失败”，断点停在上一个好页，下轮续跑。
+  /// 断点与蜘蛛站同一机制：phase site_crawl_whos，cursor '0/页码'。
+  /// 写盘走主树单文件口径（mjv011.json，行按 vod_play_from 认站）；
+  /// 条目没女优名，镜像只留 json、不进库（人/作品行等同步补）。
+  Future<void> _runWhos(int maxPagesPerCategory) async {
+    const category = (id: '', name: '全部');
+    _localByKey = await _loadLocalEntries('whos');
+    _localSite = 'whos';
+    var items = 0;
+    final saved = await db.checkpoint(
+      _checkpointSource,
+      _checkpointPhase('whos'),
+    );
+    var startPage = 1;
+    if (saved != null && !saved.finished && saved.cursor.isNotEmpty) {
+      final parts = saved.cursor.split('/');
+      startPage = int.tryParse(parts.length > 1 ? parts[1] : '') ?? 1;
+      items = saved.total;
+    }
+    for (var page = startPage; page <= maxPagesPerCategory; page++) {
+      if (_cancelled) break;
+      _emit(
+        ActressSiteCrawlProgress(
+          running: true,
+          site: 'whos',
+          categoryIndex: 1,
+          categoryCount: 1,
+          categoryName: category.name,
+          page: page,
+          items: items,
+          enriched: 0,
+        ),
+      );
+      final html = await _whosListFetcher(page);
+      if (html.isEmpty) break;
+      final cards = parseWhosListCards(html);
+      if (cards.isEmpty) break;
+      final entries = [for (final card in cards) _whosEntryFromCard(card)];
+      items += entries.length;
+      await _appendEntries('whos', entries);
+      await db.saveCheckpoint(
+        ActressSyncCheckpoint(
+          source: _checkpointSource.name,
+          phase: _checkpointPhase('whos'),
+          cursor: '0/$page',
+          total: items,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+    }
+    await db.saveCheckpoint(
+      ActressSyncCheckpoint(
+        source: _checkpointSource.name,
+        phase: _checkpointPhase('whos'),
+        cursor: '',
+        total: items,
+        finished: !_cancelled,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    _emit(
+      ActressSiteCrawlProgress(
+        site: 'whos',
+        categoryIndex: 1,
+        categoryCount: 1,
+        categoryName: category.name,
+        items: items,
+        enriched: 0,
+        done: !_cancelled,
+        error: _cancelled ? '已取消' : '',
+      ),
+    );
+  }
+
+  /// whos 卡片转 JSON 条目：直链已拼好（vodPlayUrl 带正片$直链），
+  /// 女优/日期/年份列表页没有，留空不编假值，等以后映射或详情补。
+  ActressJsonEntry _whosEntryFromCard(WhosListCard card) {
+    return ActressJsonEntry(
+      site: 'whos',
+      vodId: whosVodId(card.code),
+      vodName: card.title,
+      vodPic: card.pic,
+      vodActor: '',
+      vodDirector: '',
+      vodRemarks: '高清',
+      vodPubdate: '',
+      vodArea: '日本',
+      vodYear: '',
+      vodContent:
+          '<p>这是一部来自 <strong>日本AV</strong> 分类的作品，番号：<strong>${card.code}</strong>，标题为：<br><strong>${card.title}</strong></p>',
+      vodPlayFrom: 'whos',
+      vodPlayUrl: '正片\$${card.m3u8}',
+      typeName: '日本AV',
+      vodCode: card.code,
+      vodActressPic: '',
+    );
   }
 
   /// 一轮内常驻内存的本地合并表（站 + 按 mergeKey 索引的条目）：
