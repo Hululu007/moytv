@@ -52,10 +52,35 @@ CARD_RE = re.compile(
 )
 HASH_RE = re.compile(r"/images/av/([0-9a-f]{32})\.jpg")
 
+# 厂牌分类：站上没有分类页，但 /videos?q=<番号前缀> 是服务端搜索，
+# 拿它当厂牌维度（实测 q=sdam 出 12 张卡、可分页）。名单按常用厂牌排。
+BRANDS = [
+    ("fc2ppv", "FC2"),
+    ("sdam", "SDAM"),
+    ("ssis", "SSIS"),
+    ("ipzz", "IPZZ"),
+    ("ipz", "IPZ"),
+    ("ipx", "IPX"),
+    ("midv", "MIDV"),
+    ("mide", "MIDE"),
+    ("miaa", "MIAA"),
+    ("sone", "SONE"),
+    ("soe", "SOE"),
+    ("sir", "SIRO"),
+    ("cnt", "CNT"),
+    ("sta", "STARS"),
+    ("prtd", "PRTD"),
+    ("hntd", "HNTD"),
+    ("cjvr", "CJVR"),
+    ("dsvr", "DSVR"),
+    ("vvvd", "VVVD"),
+    ("juq", "JUQ"),
+]
+
 CATS = [
     {"type_id": "new", "type_name": "最新作品"},
     {"type_id": "rank", "type_name": "排行榜"},
-]
+] + [{"type_id": "brand:" + key, "type_name": "厂牌 · " + name} for key, name in BRANDS]
 
 # 分类/首页取过的卡片缓存：详情页直接用它，不再为每条取一次详情
 #（validator 取详情页很慢，缓存住就不用等）。
@@ -164,15 +189,23 @@ def _cards(html):
     return items
 
 
-def _page_url(tid, pg):
+def _videos_url(keyword, pg):
+    """影片列表 URL：/videos（第一页）、/videos/page-N（分页），带 q 即搜索。"""
     pg = int(pg or 1)
     if pg < 1:
         pg = 1
+    query = ("?q=" + urllib.parse.quote(keyword, safe="")) if keyword else ""
+    if pg <= 1:
+        return BASE + "/videos" + query
+    return BASE + "/videos/page-" + str(pg) + query
+
+
+def _page_url(tid, pg):
+    tid = str(tid or "").strip()
     if tid == "rank":
         return BASE + "/ranking/video"
-    if pg <= 1:
-        return BASE + "/videos"
-    return BASE + "/videos/page-" + str(pg)
+    keyword = tid[len("brand:"):].strip() if tid.startswith("brand:") else ""
+    return _videos_url(keyword, pg)
 
 
 class Spider(BaseSpider):
@@ -205,10 +238,11 @@ class Spider(BaseSpider):
         url = _page_url(tid, pg)
         html = _fetch(url)
         items = _cards(html)
+        single_page = str(tid or "").strip() == "rank"
         return {
             "list": items,
             "page": pg,
-            "pagecount": 9999 if items else pg,
+            "pagecount": pg if single_page or not items else 9999,
             "total": len(items),
         }
 
@@ -251,13 +285,24 @@ class Spider(BaseSpider):
         }
 
     def searchContent(self, key, quick=False, pg=1):
-        keyword = urllib.parse.quote((key or "").strip(), safe="")
-        html = _fetch(BASE + "/result?q=" + keyword)
-        items = _cards(html)
-        if not items:
-            html = _fetch(BASE + "/result?keyword=" + keyword)
-            items = _cards(html)
-        return {"list": items, "page": 1, "pagecount": 1, "total": len(items)}
+        keyword = (key or "").strip()
+        if not keyword:
+            return {"list": [], "page": 1, "pagecount": 1, "total": 0}
+        try:
+            pg = int(pg or 1)
+        except Exception:
+            pg = 1
+        # /result 是以图搜片页（卡片由前端渲染，服务端不给数据），搜索走
+        # 影片目录的服务端查询 /videos?q=，并支持 /videos/page-N?q= 翻页。
+        items = _cards(_fetch(_videos_url(keyword, pg)))
+        if not items and pg <= 1:
+            items = _cards(_fetch(BASE + "/result?q=" + urllib.parse.quote(keyword, safe="")))
+        return {
+            "list": items,
+            "page": pg,
+            "pagecount": 9999 if items else pg,
+            "total": len(items),
+        }
 
     def playerContent(self, flag, id, vipFlags=None):
         raw = str(id or "").strip()

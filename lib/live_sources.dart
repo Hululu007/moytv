@@ -1,3 +1,5 @@
+import 'whos_live_bridge.dart';
+
 enum LiveProtocol { pingtai, list, api }
 
 class LiveSource {
@@ -47,6 +49,18 @@ class LiveSource {
   final bool greenCategoryFilter;
 
   static const values = <LiveSource>[
+    // 内置片库：包里自带的 whos 条目（5 万+，全是 m3u8 直链），
+    // 走 whoslib:// 由本地库出频道，不联网、不用订阅。
+    LiveSource(
+      id: whosLibSourceId,
+      name: '🔞内置片库',
+      description: '装机自带片库 · 按厂牌分类 · 点开就播',
+      protocol: LiveProtocol.list,
+      endpoints: ['whoslib://all'],
+      group: '内置片库',
+      adult: true,
+      paginated: true,
+    ),
     LiveSource(
       id: 'xiuguo',
       name: '🔞秀果',

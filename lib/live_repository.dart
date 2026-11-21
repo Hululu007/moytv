@@ -6,6 +6,8 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'core_bridge.dart';
 import 'live_api.dart';
 import 'live_http.dart';
+import 'whos_live_bridge.dart';
+import 'whos_local_library.dart';
 import 'live_models.dart';
 import 'live_parser.dart';
 import 'live_sources.dart';
@@ -122,7 +124,9 @@ class LiveRepository {
   ) async {
     final result = switch (source.protocol) {
       LiveProtocol.pingtai => await _pingtaiPlatforms(source),
-      LiveProtocol.list => const [LivePlatform(id: 'all', name: '全部频道')],
+      LiveProtocol.list => source.endpoint.startsWith(whosLibScheme)
+          ? await _whosLibPlatforms()
+          : const [LivePlatform(id: 'all', name: '全部频道')],
       LiveProtocol.api => await _apiPlatforms(source),
     };
     if (result.isEmpty) throw AppFailure('该直播源没有可用分类');
@@ -185,7 +189,7 @@ class LiveRepository {
   ) async {
     final result = switch (source.protocol) {
       LiveProtocol.pingtai => await _pingtaiChannels(source, platform),
-      LiveProtocol.list => await _listChannels(source),
+      LiveProtocol.list => await _listChannels(source, platform, page),
       LiveProtocol.api => await _apiChannels(source, platform, page: page),
     };
     if (result.isEmpty) throw AppFailure('该分类暂时没有频道');
@@ -402,8 +406,15 @@ class LiveRepository {
     return [...reliable, ...fallback];
   }
 
-  Future<List<LiveChannel>> _listChannels(LiveSource source) async {
+  Future<List<LiveChannel>> _listChannels(
+    LiveSource source,
+    LivePlatform platform,
+    int page,
+  ) async {
     final endpoint = source.endpoint;
+    if (endpoint.startsWith(whosLibScheme)) {
+      return _whosLibChannels(source, platform, page);
+    }
     final text = endpoint.startsWith('asset://')
         ? await rootBundle.loadString(endpoint.substring('asset://'.length))
         : await _http.get(endpoint, headers: source.headers);
@@ -413,5 +424,36 @@ class LiveRepository {
       defaultGroup: source.group.isEmpty ? liveUnsortedGroup : source.group,
     );
     return [for (final group in parsed.groups) ...group.channels];
+  }
+
+  Future<WhosLocalLibrary> _whosLib() async {
+    final library = WhosLocalLibrary.shared;
+    if (!await library.ensureLoaded()) {
+      throw AppFailure('内置片库没读出来，退出直播重进一次看看');
+    }
+    return library;
+  }
+
+  Future<List<LivePlatform>> _whosLibPlatforms() async {
+    final library = await _whosLib();
+    final platforms = whosLibPlatforms(library);
+    if (platforms.isEmpty) throw AppFailure('内置片库暂时没有分类');
+    return platforms;
+  }
+
+  Future<List<LiveChannel>> _whosLibChannels(
+    LiveSource source,
+    LivePlatform platform,
+    int page,
+  ) async {
+    final library = await _whosLib();
+    final channels = whosLibChannels(
+      library,
+      category: platform.id,
+      page: page,
+      source: source.id,
+    );
+    if (channels.isEmpty) throw AppFailure('这个分类暂时没有频道');
+    return channels;
   }
 }

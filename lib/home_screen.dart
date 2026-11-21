@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'actress/actress_list_page.dart';
+import 'actress/actress_nvku_page.dart';
 import 'game_zone_page.dart';
 import 'app_layout.dart';
 import 'auto_refresh_gate.dart';
@@ -2866,7 +2867,7 @@ class _HomeScreenState extends State<HomeScreen>
       case Win7WindowKind.actress:
         // 与片库顶栏女优库钮同一页、同一构造（见 _openActressLibrary），
         // 只加窗口 key；详情/排行页的跳转行为与现有入口一致（各自 push）。
-        return ActressListPage(
+        return ActressNvkuPage(
           key: const ValueKey('win7-actress'),
           repository: widget.repository,
           store: widget.store,
@@ -3539,7 +3540,7 @@ class _HomeScreenState extends State<HomeScreen>
     // 女优库：与短剧首页内层页签是同一个列表页；合并名册不依赖
     // 片库站源，同样放空态判断之前。
     if (_actressRequested) {
-      return ActressListPage(
+      return ActressNvkuPage(
         repository: widget.repository,
         store: widget.store,
         showTitle: false,

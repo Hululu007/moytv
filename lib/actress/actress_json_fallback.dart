@@ -203,6 +203,7 @@ class ActressJsonEntry {
     required this.typeName,
     required this.vodCode,
     required this.vodActressPic,
+    this.directPlay = false,
   });
 
   factory ActressJsonEntry.fromRow(Map<String, dynamic> row, String site) {
@@ -244,6 +245,10 @@ class ActressJsonEntry {
   final String typeName;
   final String vodCode;
   final String vodActressPic;
+
+  /// 集 id 本身就是可播直链（本地库条目）：播放器直接播这个地址，
+  /// 不再绕蜘蛛取一次流（蜘蛛站挂了/没这个番号也不会播不出来）。
+  final bool directPlay;
 
   /// 归一化番号（与库内 works.codeKey 同一口径）。
   String get codeKey => normalizeAvCode(vodCode);
@@ -296,7 +301,11 @@ class ActressJsonEntry {
       onlineDate: vodPubdate,
     );
     return DramaDetail(drama, [
-      Episode({'id': playUrl, 'title': '正片'}, 1),
+      Episode({
+        'id': playUrl,
+        'title': '正片',
+        if (directPlay) 'direct': true,
+      }, 1),
     ]);
   }
 }

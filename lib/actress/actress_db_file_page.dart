@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,16 +8,18 @@ import 'package:sqflite/sqflite.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../player_picker.dart';
+import 'actress_db_fields_page.dart';
 import 'actress_generic_db.dart';
 
-/// 外来数据库浏览页（2026-11-21 用户令）：女优库顶部把 MYTV/db 与补充
-/// 目录里的其它 .db 按**数据库名**摆成一级分类瓦片，点一个瓦片就进这
-/// 一页——只读打开那个库，按通用读库层（[probeGenericDbSchema] +
-/// [GenericDbReader]）探结构，作品按网格卡片列出来，点卡直接播
-///（toJsonEntry 的 parse=0 直通地址）。
+/// 外来数据库浏览页（2026-11-21 用户令，第二轮修复）：
+/// 顶部一级分类瓦片点进来后，这里就是**这个库自己的视频列表**——
+/// 先把第一页卡片立刻铺出来（不再等全表 COUNT），再后台补总数；
+/// 库内部的多级分类（分类/类型/标签/系列/地区…）按列分组做筛选
+/// chips，组内多选取并、跨组取交；点卡片直接播（本地库地址是直链，
+/// 不再绕蜘蛛取流）。
 ///
-/// 源库只读打开、只读不写：用户放的库文件一个字都不动。认不出作品表
-/// 时如实报原因，不显示空白。
+/// 库文件只读打开、只读不写。认不出作品表时不空白：列出探到的表，
+/// 给“数据库字段”手动指定入口。
 class ActressDbFilePage extends StatefulWidget {
   const ActressDbFilePage({
     super.key,
@@ -44,13 +47,18 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
 
   Database? _db;
   GenericDbReader? _reader;
+  GenericDbSchema? _schema;
+
   final _works = <GenericDbWork>[];
+  final _facets = <GenericDbFacet>[];
+  final _selected = <String, Set<String>>{};
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
 
-  var _total = 0;
-  var _loading = true;
+  var _total = -1; // -1 = 还在后台数
+  var _loadingFirst = true;
   var _loadingMore = false;
+  var _loadingFacets = false;
   var _hasMore = false;
   var _error = '';
   var _query = '';
@@ -62,7 +70,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     super.initState();
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
-    _open();
+    unawaited(_open());
   }
 
   @override
@@ -74,41 +82,48 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     _db = null;
     if (db != null) {
       // 关掉只读连接：页面退出不占文件句柄（用户可能同时在换库）。
-      unawaitedClose(db);
+      db.close().catchError((_) {});
     }
     super.dispose();
   }
 
-  static void unawaitedClose(Database db) {
-    db.close().catchError((_) {});
-  }
+  Map<String, List<String>> get _filters => {
+    for (final entry in _selected.entries)
+      if (entry.value.isNotEmpty) entry.key: entry.value.toList(),
+  };
+
+  int get _selectedCount =>
+      _selected.values.fold(0, (sum, values) => sum + values.length);
 
   Future<void> _open() async {
     final generation = ++_generation;
+    setState(() {
+      _loadingFirst = true;
+      _error = '';
+    });
     try {
       if (!File(widget.filePath).existsSync()) {
         setState(() {
-          _loading = false;
+          _loadingFirst = false;
           _error = '库文件不在了：${path.basename(widget.filePath)}';
         });
         return;
       }
-      final db = await openDatabase(widget.filePath, readOnly: true);
+      final db = await openDatabase(
+        widget.filePath,
+        readOnly: true,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw TimeoutException('打开库超时'),
+      );
       if (!mounted || generation != _generation) {
         await db.close();
         return;
       }
-      final schema = await probeGenericDbSchema(db);
-      final worksTable = schema.worksTable;
-      if (worksTable == null) {
-        await db.close();
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _loading = false;
-          _error = '这个库认不出作品表（没有同时含标题与播放地址的表）';
-        });
-        return;
-      }
+      final schema = await probeGenericDbSchema(db).timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException('读库结构超时'),
+      );
       final reader = GenericDbReader(
         db: db,
         schema: schema,
@@ -120,18 +135,104 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         await db.close();
         return;
       }
+      _db = db;
+      _reader = reader;
+      _schema = schema;
+      _table = schema.worksTable?.table ?? '';
+      if (schema.worksTable == null) {
+        // 认不出作品表：不空白，进诊断态（列已探到的表 + 手动指定入口）。
+        setState(() => _loadingFirst = false);
+        return;
+      }
+      await _loadFirst(generation);
+      unawaited(_loadTotalAndFacets(generation));
+    } on TimeoutException {
+      if (!mounted || generation != _generation) return;
       setState(() {
-        _db = db;
-        _reader = reader;
-        _table = worksTable.table;
+        _loadingFirst = false;
+        _error = '这个库打开/读结构太慢，先退回去了。它可能太大或正被别的程序占用，\n'
+            '过一会儿再点一次，或者把库文件名告诉我换个读法。';
       });
-      await _loadPage(reset: true);
     } catch (error) {
       if (!mounted || generation != _generation) return;
       setState(() {
-        _loading = false;
+        _loadingFirst = false;
         _error = '打不开这个库：$error';
       });
+    }
+  }
+
+  /// 第一页：只查作品，不等 COUNT（大库 COUNT 很慢，等它就白屏）。
+  Future<void> _loadFirst(int generation) async {
+    final reader = _reader;
+    if (reader == null) return;
+    setState(() {
+      _loadingFirst = true;
+      _error = '';
+      _works.clear();
+      _hasMore = true;
+      _total = -1;
+    });
+    try {
+      final works = await reader.works(
+        offset: 0,
+        limit: _pageSize,
+        query: _query,
+        filters: _filters,
+      ).timeout(const Duration(seconds: 25));
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _works
+          ..clear()
+          ..addAll(works);
+        _hasMore = works.length >= _pageSize;
+        _loadingFirst = false;
+      });
+    } on TimeoutException {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _loadingFirst = false;
+        _error = '读这个库太慢（可能是大库没索引），换个筛选或稍后再试。';
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _loadingFirst = false;
+        _error = '读库失败：$error';
+      });
+    }
+  }
+
+  /// 后台补总数与分类维度（不阻塞首屏）。
+  Future<void> _loadTotalAndFacets(int generation) async {
+    final reader = _reader;
+    if (reader == null) return;
+    setState(() => _loadingFacets = true);
+    try {
+      final total = await reader.countWorks(
+        query: _query,
+        filters: _filters,
+      ).timeout(const Duration(seconds: 60));
+      if (!mounted || generation != _generation) return;
+      setState(() => _total = total);
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _total = _works.length);
+    }
+    try {
+      final facets = await reader
+          .facets()
+          .timeout(const Duration(seconds: 45));
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _facets
+          ..clear()
+          ..addAll(facets);
+        _loadingFacets = false;
+      });
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _loadingFacets = false);
     }
   }
 
@@ -139,7 +240,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     if (position.pixels >= position.maxScrollExtent - 400) {
-      _loadPage();
+      unawaited(_loadMore());
     }
   }
 
@@ -147,46 +248,18 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     final query = _searchController.text.trim();
     if (query == _query) return;
     _query = query;
-    _loadPage(reset: true);
+    _reload();
   }
 
-  Future<void> _loadPage({bool reset = false}) async {
+  void _reload() {
+    final generation = ++_generation;
+    unawaited(_loadFirst(generation));
+    unawaited(_loadTotalAndFacets(generation));
+  }
+
+  Future<void> _loadMore() async {
     final reader = _reader;
-    if (reader == null) return;
-    if (reset) {
-      final generation = ++_generation;
-      setState(() {
-        _loading = true;
-        _error = '';
-        _works.clear();
-        _hasMore = true;
-      });
-      try {
-        final total = await reader.countWorks(query: _query);
-        final works = await reader.works(
-          offset: 0,
-          limit: _pageSize,
-          query: _query,
-        );
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _total = total;
-          _works
-            ..clear()
-            ..addAll(works);
-          _hasMore = works.length >= _pageSize;
-          _loading = false;
-        });
-      } catch (error) {
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _loading = false;
-          _error = '读库失败：$error';
-        });
-      }
-      return;
-    }
-    if (_loadingMore || !_hasMore) return;
+    if (reader == null || _loadingMore || !_hasMore || _loadingFirst) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
     try {
@@ -194,6 +267,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         offset: _works.length,
         limit: _pageSize,
         query: _query,
+        filters: _filters,
       );
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -208,13 +282,19 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   }
 
   Future<void> _play(GenericDbWork work) async {
-    final entry = work.toJsonEntry();
-    if (!entry.playable) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('这条没有可播地址')));
+    if (!work.playable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            work.playUrl.isEmpty
+                ? '这条在库里没有播放地址（可能地址在另一张表，点“数据库字段”指定一下）'
+                : '这条地址不是可播的 http 地址：${work.playUrl}',
+          ),
+        ),
+      );
       return;
     }
+    final entry = work.toJsonEntry();
     await pushPlayer<void>(
       context,
       detail: entry.toDramaDetail(),
@@ -222,7 +302,44 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       repository: widget.repository,
       store: widget.store,
     );
-    if (mounted) setState(() {});
+  }
+
+  Future<void> _openFieldPage() async {
+    final reader = _reader;
+    if (reader == null) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => ActressDbFieldsPage(reader: reader)),
+    );
+    if (changed == true && mounted) {
+      setState(() {
+        _schema = reader.schema;
+        _table = reader.schema.worksTable?.table ?? '';
+        _selected.clear();
+      });
+      _reload();
+    }
+  }
+
+  Future<void> _pickFacet(GenericDbFacet facet) async {
+    final selected = {...?_selected[facet.column]};
+    final applied = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => _FacetSheet(
+        facet: facet,
+        selected: selected,
+      ),
+    );
+    if (applied == null || !mounted) return;
+    setState(() {
+      if (applied.isEmpty) {
+        _selected.remove(facet.column);
+      } else {
+        _selected[facet.column] = applied;
+      }
+    });
+    _reload();
   }
 
   @override
@@ -236,11 +353,21 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
           children: [
             Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             Text(
-              _table.isEmpty ? '外来数据库' : '外来数据库 · 表 $_table · $_total 条',
+              _subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
             ),
           ],
         ),
+        actions: [
+          if (_reader != null && _schema?.worksTable != null)
+            IconButton(
+              tooltip: '数据库字段',
+              icon: const Icon(Icons.tune_rounded),
+              onPressed: _openFieldPage,
+            ),
+        ],
       ),
       body: Column(
         children: [
@@ -264,44 +391,129 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
               ),
             ),
           ),
+          if (_facets.isNotEmpty || _selectedCount > 0) _buildFacetBar(colors),
           Expanded(child: _body(colors)),
         ],
       ),
     );
   }
 
-  Widget _body(ColorScheme colors) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error.isNotEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () {
-                  setState(() {
-                    _loading = true;
-                    _error = '';
-                  });
-                  _open();
-                },
-                child: const Text('重试'),
+  String get _subtitle {
+    if (_schema == null) return '外来数据库';
+    if (_schema!.worksTable == null) return '外来数据库 · 认不出作品表';
+    final parts = <String>[
+      '表 $_table',
+      _total >= 0 ? '$_total 条' : '读取中…',
+      if (_selectedCount > 0) '筛选 $_selectedCount 项',
+    ];
+    return parts.join(' · ');
+  }
+
+  /// 分类筛选条：每个维度一个 chip（列名 + 已选数），点开多选。
+  Widget _buildFacetBar(ColorScheme colors) {
+    return SizedBox(
+      height: 42,
+      child: ListView(
+        key: const ValueKey('actress-db-file-facets'),
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final facet in _facets)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: FilterChip(
+                key: ValueKey('db-facet-${facet.column}'),
+                label: Text(
+                  _selected[facet.column]?.isNotEmpty == true
+                      ? '${_facetLabel(facet.column)} '
+                          '${_selected[facet.column]!.length}'
+                      : _facetLabel(facet.column),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                selected: _selected[facet.column]?.isNotEmpty == true,
+                onSelected: (_) => _pickFacet(facet),
               ),
-            ],
+            ),
+          if (_loadingFacets)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              child: SizedBox.square(
+                dimension: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          if (_selectedCount > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ActionChip(
+                key: const ValueKey('db-facet-clear'),
+                avatar: const Icon(Icons.clear_rounded, size: 14),
+                label: const Text('清除筛选', style: TextStyle(fontSize: 12)),
+                onPressed: () {
+                  setState(() => _selected.clear());
+                  _reload();
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 列名转人话（库里字段名多是英文）。
+  String _facetLabel(String column) {
+    final lower = column.toLowerCase();
+    const map = {
+      'category': '分类',
+      'type': '类型',
+      'class': '分类',
+      'genre': '题材',
+      'tag': '标签',
+      'tags': '标签',
+      'series': '系列',
+      'area': '地区',
+      'kind': '种类',
+      'group': '分组',
+      'theme': '主题',
+      'studio': '片商',
+    };
+    for (final entry in map.entries) {
+      if (lower.contains(entry.key)) return entry.value;
+    }
+    return column;
+  }
+
+  Widget _body(ColorScheme colors) {
+    if (_loadingFirst) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error.isNotEmpty) {
+      return _message(
+        colors,
+        _error,
+        actions: [
+          FilledButton(
+            onPressed: () => unawaited(_open()),
+            child: const Text('重试'),
           ),
-        ),
+          if (_reader != null)
+            OutlinedButton(
+              onPressed: _openFieldPage,
+              child: const Text('数据库字段'),
+            ),
+        ],
       );
     }
+    final schema = _schema;
+    if (schema != null && schema.worksTable == null) {
+      return _buildSchemaHelp(colors, schema);
+    }
     if (_works.isEmpty) {
-      return Center(
-        child: Text(
-          _query.isNotEmpty ? '没有找到“$_query”' : '这个库里没有作品',
-          style: TextStyle(color: colors.onSurfaceVariant),
-        ),
+      return _message(
+        colors,
+        _query.isNotEmpty || _selectedCount > 0
+            ? '当前条件下没有作品'
+            : '这个库里没有作品',
       );
     }
     return GridView.builder(
@@ -328,9 +540,171 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         return _DbWorkCard(
           key: ValueKey('db-work-${work.id ?? work.title}'),
           work: work,
-          onTap: () => _play(work),
+          onTap: () => unawaited(_play(work)),
         );
       },
+    );
+  }
+
+  Widget _message(
+    ColorScheme colors,
+    String text, {
+    List<Widget> actions = const [],
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
+            ),
+            if (actions.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Wrap(spacing: 10, children: actions),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 认不出作品表时的诊断：把探到的表和字段摆出来，让用户能手动
+  /// 指定（不然只报一句“认不出”，用户无从下手）。
+  Widget _buildSchemaHelp(ColorScheme colors, GenericDbSchema schema) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text(
+          '这个库的表结构没自动认出来。下面是库里探到的表，'
+          '点“数据库字段”手动指定哪个是标题、哪个是播放地址。',
+          style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
+        ),
+        const SizedBox(height: 12),
+        for (final table in schema.tables)
+          Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ListTile(
+              dense: true,
+              title: Text(table.table),
+              subtitle: Text(
+                table.allColumns.take(12).join('、') +
+                    (table.allColumns.length > 12 ? ' …' : ''),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Text('${table.allColumns.length} 列'),
+            ),
+          ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: _openFieldPage,
+          icon: const Icon(Icons.tune_rounded),
+          label: const Text('数据库字段'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 一个分类维度的多选面板：组内多选取并（勾几个都算）。
+class _FacetSheet extends StatefulWidget {
+  const _FacetSheet({required this.facet, required this.selected});
+
+  final GenericDbFacet facet;
+  final Set<String> selected;
+
+  @override
+  State<_FacetSheet> createState() => _FacetSheetState();
+}
+
+class _FacetSheetState extends State<_FacetSheet> {
+  late final _picked = {...widget.selected};
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.facet.column,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (_picked.isNotEmpty)
+                    TextButton(
+                      onPressed: () => setState(_picked.clear),
+                      child: const Text('清空'),
+                    ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: widget.facet.values.length,
+                itemBuilder: (context, index) {
+                  final value = widget.facet.values[index];
+                  final checked = _picked.contains(value.value);
+                  return CheckboxListTile(
+                    dense: true,
+                    value: checked,
+                    title: Text(
+                      value.value,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    secondary: Text(
+                      '${value.count}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    onChanged: (next) => setState(() {
+                      if (next == true) {
+                        _picked.add(value.value);
+                      } else {
+                        _picked.remove(value.value);
+                      }
+                    }),
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(_picked),
+                  child: Text(
+                    _picked.isEmpty ? '不筛选' : '应用（${_picked.length} 项）',
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -361,30 +735,59 @@ class _DbWorkCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               child: ColoredBox(
                 color: colors.surfaceContainerHighest,
-                child: work.coverUrl.isEmpty
-                    ? Center(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (work.coverUrl.isEmpty)
+                      Center(
                         child: Icon(
                           Icons.movie_outlined,
                           color: colors.onSurfaceVariant,
                         ),
                       )
-                    : Image.network(
+                    else
+                      Image.network(
                         work.coverUrl,
                         fit: BoxFit.cover,
-                        width: double.infinity,
                         errorBuilder: (_, _, _) => Center(
                           child: Icon(
-                            Icons.movie_outlined,
+                            Icons.broken_image_outlined,
                             color: colors.onSurfaceVariant,
                           ),
                         ),
                       ),
+                    if (!work.playable)
+                      Positioned(
+                        left: 4,
+                        bottom: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '无地址',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            work.title.isEmpty ? (work.code.isEmpty ? '未命名' : work.code) : work.title,
+            work.title.isEmpty
+                ? (work.code.isEmpty ? '未命名' : work.code)
+                : work.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 12, height: 1.25),

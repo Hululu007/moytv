@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'actress/actress_list_page.dart';
+import 'actress/actress_nvku_page.dart';
 import 'app_page_route.dart';
 import 'app_theme_config.dart';
 import 'content_tier_filter.dart';
@@ -1895,7 +1896,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome>
   /// 女优库页：共享的 [ActressListPage]（通用分支点“女优库”进的是
   /// 同一页）；页顶不显示内部导航芯片行（见 build）。
   Widget _actress(BuildContext context) {
-    return ActressListPage(
+    return ActressNvkuPage(
       repository: widget.repository,
       store: widget.store,
       showTitle: false,

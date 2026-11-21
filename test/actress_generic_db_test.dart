@@ -280,4 +280,145 @@ void main() {
       expect(entry.vodCode, 'ABC-1');
     });
   });
+
+  group('多级分类与跨表关系（v28）', () {
+    GenericDbTableMapping mappingOf(List<String> columns) {
+      final mapped = <GenericDbRole, String>{};
+      for (final column in columns) {
+        final role = roleForColumn(column);
+        if (role == null) continue;
+        mapped.putIfAbsent(role.$1, () => column);
+      }
+      return GenericDbTableMapping(
+        table: 'videos',
+        columns: mapped,
+        allColumns: columns,
+        idColumn: 'id',
+      );
+    }
+
+    test('分类维度列：category 排第一，标签/系列/地区也认，地址与封面列不算', () {
+      final columns = categoryFacetColumns(
+        mappingOf([
+          'id',
+          'title',
+          'play_url',
+          'cover_url',
+          'type_name',
+          'tags',
+          'series',
+          'area',
+          'duration',
+        ]),
+      );
+      expect(columns.first, 'type_name');
+      expect(columns, contains('tags'));
+      expect(columns, contains('series'));
+      expect(columns, contains('area'));
+      expect(columns, isNot(contains('play_url')));
+      expect(columns, isNot(contains('cover_url')));
+      expect(columns, isNot(contains('duration')));
+    });
+
+    test('分类维度：只有一个 category 列时不重复', () {
+      final columns = categoryFacetColumns(
+        mappingOf(['id', 'title', 'play_url', 'category']),
+      );
+      expect(columns, ['category']);
+    });
+
+    test('外键归一化：主表名 + id、常见 key 都认，裸 id 跳过', () {
+      expect(
+        relationsFor(
+          worksTable: 'movies',
+          worksIdColumn: 'id',
+          worksColumns: const ['id', 'title'],
+          tables: const [
+            GenericDbTableMapping(
+              table: 'links',
+              columns: {GenericDbRole.playUrl: 'url'},
+              allColumns: ['id', 'movieId', 'url'],
+              idColumn: 'id',
+            ),
+          ],
+        ).length,
+        1,
+      );
+      expect(
+        relationsFor(
+          worksTable: 'movies',
+          worksIdColumn: 'id',
+          worksColumns: const ['id', 'title'],
+          tables: const [
+            GenericDbTableMapping(
+              table: 'stills',
+              columns: {GenericDbRole.cover: 'pic'},
+              allColumns: ['id', 'name', 'pic'],
+              idColumn: 'id',
+            ),
+          ],
+        ),
+        isEmpty,
+      );
+    });
+
+    test('GenericDbWork.copyWith 只换地址与封面', () {
+      const work = GenericDbWork(
+        id: 7,
+        title: '标题',
+        actress: '某人',
+        code: 'ABC-123',
+      );
+      final next = work.copyWith(
+        playUrl: 'https://cdn.example.com/a.m3u8',
+        coverUrl: 'https://cdn.example.com/a.jpg',
+      );
+      expect(next.id, 7);
+      expect(next.title, '标题');
+      expect(next.actress, '某人');
+      expect(next.code, 'ABC-123');
+      expect(next.playable, isTrue);
+      expect(next.coverUrl, 'https://cdn.example.com/a.jpg');
+      expect(work.playUrl, isEmpty);
+    });
+
+    test('按人名查（测试注入）：归一化名字匹配、多女优行也能命中', () async {
+      final reader = GenericDbReader.test(
+        works: const [
+          GenericDbWork(id: 1, title: 'A', actress: 'Boda Ye Yi'),
+          GenericDbWork(id: 2, title: 'B', actress: '别人'),
+        ],
+      );
+      final rows = await reader.worksForActress('bodayeyi');
+      expect(rows.map((w) => w.id), [1]);
+    });
+
+    test('按番号查（测试注入）：分隔符差异不影响', () async {
+      final reader = GenericDbReader.test(
+        works: const [
+          GenericDbWork(id: 1, title: 'A', code: 'JUL-893'),
+          GenericDbWork(id: 2, title: 'B', code: 'SSIS-001'),
+        ],
+      );
+      final rows = await reader.worksForCode('jul893');
+      expect(rows.map((w) => w.id), [1]);
+    });
+
+    test('筛选参数进 WHERE：同列 OR、跨列 AND（测试注入按值过滤）', () async {
+      final reader = GenericDbReader.test(
+        works: const [
+          GenericDbWork(id: 1, title: 'A', category: '剧情'),
+          GenericDbWork(id: 2, title: 'B', category: '素人'),
+        ],
+      );
+      final rows = await reader.works(
+        offset: 0,
+        limit: 10,
+        query: '素人',
+      );
+      expect(rows.map((w) => w.id), [2]);
+    });
+  });
 }
+
+// 2026-11-28 v28 追加：多级分类筛选、跨表关系、按人名/番号查。

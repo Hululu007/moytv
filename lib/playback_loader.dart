@@ -26,6 +26,15 @@ class PlaybackLoader {
         adBlock: adBlock,
       );
     }
+    // 本地库条目的集 id 本身就是可播直链：直接交给播放器。
+    // 绕蜘蛛取流时，蜘蛛站换域名/没这个番号就播不出来——本地库
+    // 里存着地址却播不了，用户要的就是别绕。
+    final direct = episode.raw['direct'] == true
+        ? episode.raw['id']?.toString() ?? episode.id
+        : '';
+    if (_looksLikeMediaUrl(direct)) {
+      return PlaybackPlan(url: direct, originalUrl: direct);
+    }
     if (localOnly) {
       final plan = await repository.localPlayback(drama, episode);
       if (plan == null || !plan.local) {
@@ -80,4 +89,27 @@ class PlaybackLoader {
     _generation++;
     await repository.cancelPlayback();
   }
+}
+
+/// 是不是能直接交给播放器的媒体地址（m3u8/mp4 等）：只有这类才
+/// 跳过蜘蛛取流，网页地址照旧走原来的解析流程。
+bool _looksLikeMediaUrl(String url) {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return false;
+  }
+  final lower = url.toLowerCase();
+  const suffixes = [
+    '.m3u8',
+    '.mp4',
+    '.m4v',
+    '.flv',
+    '.mkv',
+    '.ts',
+    '.mov',
+    '.webm',
+  ];
+  for (final suffix in suffixes) {
+    if (lower.contains(suffix)) return true;
+  }
+  return false;
 }

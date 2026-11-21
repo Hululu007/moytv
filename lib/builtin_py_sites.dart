@@ -1627,131 +1627,769 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  /// nvku 内置源（2026-11-21 用户令：把 nvku-8m2c.web.zaka.live 内置到
+  /// 站点列表）：32.2 万条、四大分类（有码/无码/4K/其它），封面与
+  /// 播放都是 hash 直拼 hersav，和内置 whos 库同一套编码。番号搜索走
+  /// 全量索引秒回，不再靠扫分片。
+  static const nvkuSiteId = 'nvku';
+  static const nvkuAssetPath = 'assets/py_spiders/nvku.py';
+  static const nvkuFileId = 'builtin_nvku';
+
+  static const nvkuSite = SourceSite(
+    nvkuSiteId,
+    '🔞女优库在线',
+    '内置 py · nvku · 32万条',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
-    BuiltinPyEntry(siteId: hmavSiteId, site: hmavSite, assetPath: hmavAssetPath, fileId: hmavFileId),
-    BuiltinPyEntry(siteId: abjavSiteId, site: abjavSite, assetPath: abjavAssetPath, fileId: abjavFileId),
-    BuiltinPyEntry(siteId: ai2026SiteId, site: ai2026Site, assetPath: ai2026AssetPath, fileId: ai2026FileId),
-    BuiltinPyEntry(siteId: ai4kSiteId, site: ai4kSite, assetPath: ai4kAssetPath, fileId: ai4kFileId),
-    BuiltinPyEntry(siteId: aidjSiteId, site: aidjSite, assetPath: aidjAssetPath, fileId: aidjFileId),
-    BuiltinPyEntry(siteId: aiduanjuSiteId, site: aiduanjuSite, assetPath: aiduanjuAssetPath, fileId: aiduanjuFileId),
-    BuiltinPyEntry(siteId: aimoveSiteId, site: aimoveSite, assetPath: aimoveAssetPath, fileId: aimoveFileId),
-    BuiltinPyEntry(siteId: aisxpcSiteId, site: aisxpcSite, assetPath: aisxpcAssetPath, fileId: aisxpcFileId),
-    BuiltinPyEntry(siteId: asextvSiteId, site: asextvSite, assetPath: asextvAssetPath, fileId: asextvFileId),
-    BuiltinPyEntry(siteId: avhwaSiteId, site: avhwaSite, assetPath: avhwaAssetPath, fileId: avhwaFileId),
-    BuiltinPyEntry(siteId: avtodaySiteId, site: avtodaySite, assetPath: avtodayAssetPath, fileId: avtodayFileId),
-    BuiltinPyEntry(siteId: avyanjiuyuanSiteId, site: avyanjiuyuanSite, assetPath: avyanjiuyuanAssetPath, fileId: avyanjiuyuanFileId),
-    BuiltinPyEntry(siteId: badyiSiteId, site: badyiSite, assetPath: badyiAssetPath, fileId: badyiFileId),
-    BuiltinPyEntry(siteId: caoliuSiteId, site: caoliuSite, assetPath: caoliuAssetPath, fileId: caoliuFileId),
-    BuiltinPyEntry(siteId: chinaxSiteId, site: chinaxSite, assetPath: chinaxAssetPath, fileId: chinaxFileId),
-    BuiltinPyEntry(siteId: chinaxselecla08SiteId, site: chinaxselecla08Site, assetPath: chinaxselecla08AssetPath, fileId: chinaxselecla08FileId),
-    BuiltinPyEntry(siteId: danaiSiteId, site: danaiSite, assetPath: danaiAssetPath, fileId: danaiFileId),
-    BuiltinPyEntry(siteId: dingjiasekuSiteId, site: dingjiasekuSite, assetPath: dingjiasekuAssetPath, fileId: dingjiasekuFileId),
-    BuiltinPyEntry(siteId: dj69SiteId, site: dj69Site, assetPath: dj69AssetPath, fileId: dj69FileId),
-    BuiltinPyEntry(siteId: dj91SiteId, site: dj91Site, assetPath: dj91AssetPath, fileId: dj91FileId),
-    BuiltinPyEntry(siteId: djwoSiteId, site: djwoSite, assetPath: djwoAssetPath, fileId: djwoFileId),
-    BuiltinPyEntry(siteId: duanjuoneSiteId, site: duanjuoneSite, assetPath: duanjuoneAssetPath, fileId: duanjuoneFileId),
-    BuiltinPyEntry(siteId: aihiSiteId, site: aihiSite, assetPath: aihiAssetPath, fileId: aihiFileId),
-    BuiltinPyEntry(siteId: ficeforandSiteId, site: ficeforandSite, assetPath: ficeforandAssetPath, fileId: ficeforandFileId),
-    BuiltinPyEntry(siteId: aipornxSiteId, site: aipornxSite, assetPath: aipornxAssetPath, fileId: aipornxFileId),
-    BuiltinPyEntry(siteId: aiyinhangSiteId, site: aiyinhangSite, assetPath: aiyinhangAssetPath, fileId: aiyinhangFileId),
-    BuiltinPyEntry(siteId: aiwuSiteId, site: aiwuSite, assetPath: aiwuAssetPath, fileId: aiwuFileId),
-    BuiltinPyEntry(siteId: xojavSiteId, site: xojavSite, assetPath: xojavAssetPath, fileId: xojavFileId),
-    BuiltinPyEntry(siteId: porncgwSiteId, site: porncgwSite, assetPath: porncgwAssetPath, fileId: porncgwFileId),
-    BuiltinPyEntry(siteId: xhongyanSiteId, site: xhongyanSite, assetPath: xhongyanAssetPath, fileId: xhongyanFileId),
-    BuiltinPyEntry(siteId: kankuxSiteId, site: kankuxSite, assetPath: kankuxAssetPath, fileId: kankuxFileId),
-    BuiltinPyEntry(siteId: guohnsqjSiteId, site: guohnsqjSite, assetPath: guohnsqjAssetPath, fileId: guohnsqjFileId),
-    BuiltinPyEntry(siteId: xz51SiteId, site: xz51Site, assetPath: xz51AssetPath, fileId: xz51FileId),
-    BuiltinPyEntry(siteId: sexaixSiteId, site: sexaixSite, assetPath: sexaixAssetPath, fileId: sexaixFileId),
-    BuiltinPyEntry(siteId: qipaospSiteId, site: qipaospSite, assetPath: qipaospAssetPath, fileId: qipaospFileId),
-    BuiltinPyEntry(siteId: youzidjSiteId, site: youzidjSite, assetPath: youzidjAssetPath, fileId: youzidjFileId),
-    BuiltinPyEntry(siteId: tanhuavip14SiteId, site: tanhuavip14Site, assetPath: tanhuavip14AssetPath, fileId: tanhuavip14FileId),
-    BuiltinPyEntry(siteId: fuchouSiteId, site: fuchouSite, assetPath: fuchouAssetPath, fileId: fuchouFileId),
-    BuiltinPyEntry(siteId: heitaoSiteId, site: heitaoSite, assetPath: heitaoAssetPath, fileId: heitaoFileId),
-    BuiltinPyEntry(siteId: jinguoSiteId, site: jinguoSite, assetPath: jinguoAssetPath, fileId: jinguoFileId),
-    BuiltinPyEntry(siteId: jinguoJgSiteId, site: jinguoJgSite, assetPath: jinguoAssetPath, fileId: jinguoJgFileId),
-    BuiltinPyEntry(siteId: duoduoSiteId, site: duoduoSite, assetPath: duoduoAssetPath, fileId: duoduoFileId),
-    BuiltinPyEntry(siteId: javmenuSiteId, site: javmenuSite, assetPath: javmenuAssetPath, fileId: javmenuFileId),
-    BuiltinPyEntry(siteId: avdbSiteId, site: avdbSite, assetPath: avdbAssetPath, fileId: avdbFileId),
-    BuiltinPyEntry(siteId: memojavSiteId, site: memojavSite, assetPath: memojavAssetPath, fileId: memojavFileId),
-    BuiltinPyEntry(siteId: chaoliuSiteId, site: chaoliuSite, assetPath: chaoliuAssetPath, fileId: chaoliuFileId),
-    BuiltinPyEntry(siteId: aijavSiteId, site: aijavSite, assetPath: aijavAssetPath, fileId: aijavFileId),
-    BuiltinPyEntry(siteId: insavSiteId, site: insavSite, assetPath: insavAssetPath, fileId: insavFileId),
-    BuiltinPyEntry(siteId: sp91SiteId, site: sp91Site, assetPath: sp91AssetPath, fileId: sp91FileId),
-    BuiltinPyEntry(siteId: mmsqSiteId, site: mmsqSite, assetPath: mmsqAssetPath, fileId: mmsqFileId),
-    BuiltinPyEntry(siteId: ysw6789SiteId, site: ysw6789Site, assetPath: ysw6789AssetPath, fileId: ysw6789FileId),
-    BuiltinPyEntry(siteId: zz6789SiteId, site: zz6789Site, assetPath: zz6789AssetPath, fileId: zz6789FileId),
-    BuiltinPyEntry(siteId: anet88SiteId, site: anet88Site, assetPath: anet88AssetPath, fileId: anet88FileId),
-    BuiltinPyEntry(siteId: ffv1SiteId, site: ffv1Site, assetPath: ffv1AssetPath, fileId: ffv1FileId),
-    BuiltinPyEntry(siteId: qqys01SiteId, site: qqys01Site, assetPath: qqys01AssetPath, fileId: qqys01FileId),
-    BuiltinPyEntry(siteId: rr520SiteId, site: rr520Site, assetPath: rr520AssetPath, fileId: rr520FileId),
-    BuiltinPyEntry(siteId: sc123jfSiteId, site: sc123jfSite, assetPath: sc123jfAssetPath, fileId: sc123jfFileId),
-    BuiltinPyEntry(siteId: zmwSiteId, site: zmwSite, assetPath: zmwAssetPath, fileId: zmwFileId),
-    BuiltinPyEntry(siteId: mtavSiteId, site: mtavSite, assetPath: mtavAssetPath, fileId: mtavFileId),
-    BuiltinPyEntry(siteId: qinavSiteId, site: qinavSite, assetPath: qinavAssetPath, fileId: qinavFileId),
-    BuiltinPyEntry(siteId: tasexySiteId, site: tasexySite, assetPath: tasexyAssetPath, fileId: tasexyFileId),
-    BuiltinPyEntry(siteId: aosikazySiteId, site: aosikazySite, assetPath: aosikazyAssetPath, fileId: aosikazyFileId),
-    BuiltinPyEntry(siteId: ckzySiteId, site: ckzySite, assetPath: ckzyAssetPath, fileId: ckzyFileId),
-    BuiltinPyEntry(siteId: dadizySiteId, site: dadizySite, assetPath: dadizyAssetPath, fileId: dadizyFileId),
-    BuiltinPyEntry(siteId: danaizizySiteId, site: danaizizySite, assetPath: danaizizyAssetPath, fileId: danaizizyFileId),
-    BuiltinPyEntry(siteId: fanhaozySiteId, site: fanhaozySite, assetPath: fanhaozyAssetPath, fileId: fanhaozyFileId),
-    BuiltinPyEntry(siteId: honglouzySiteId, site: honglouzySite, assetPath: honglouzyAssetPath, fileId: honglouzyFileId),
-    BuiltinPyEntry(siteId: ikunzySiteId, site: ikunzySite, assetPath: ikunzyAssetPath, fileId: ikunzyFileId),
-    BuiltinPyEntry(siteId: jipinzySiteId, site: jipinzySite, assetPath: jipinzyAssetPath, fileId: jipinzyFileId),
-    BuiltinPyEntry(siteId: jp98zySiteId, site: jp98zySite, assetPath: jp98zyAssetPath, fileId: jp98zyFileId),
-    BuiltinPyEntry(siteId: laosepzySiteId, site: laosepzySite, assetPath: laosepzyAssetPath, fileId: laosepzyFileId),
-    BuiltinPyEntry(siteId: lebozySiteId, site: lebozySite, assetPath: lebozyAssetPath, fileId: lebozyFileId),
-    BuiltinPyEntry(siteId: mangguozySiteId, site: mangguozySite, assetPath: mangguozyAssetPath, fileId: mangguozyFileId),
-    BuiltinPyEntry(siteId: moduzySiteId, site: moduzySite, assetPath: moduzyAssetPath, fileId: moduzyFileId),
-    BuiltinPyEntry(siteId: naixxzySiteId, site: naixxzySite, assetPath: naixxzyAssetPath, fileId: naixxzyFileId),
-    BuiltinPyEntry(siteId: taohuazySiteId, site: taohuazySite, assetPath: taohuazyAssetPath, fileId: taohuazyFileId),
-    BuiltinPyEntry(siteId: wsyzySiteId, site: wsyzySite, assetPath: wsyzyAssetPath, fileId: wsyzyFileId),
-    BuiltinPyEntry(siteId: xingbazySiteId, site: xingbazySite, assetPath: xingbazyAssetPath, fileId: xingbazyFileId),
-    BuiltinPyEntry(siteId: xingyezySiteId, site: xingyezySite, assetPath: xingyezyAssetPath, fileId: xingyezyFileId),
-    BuiltinPyEntry(siteId: yinghuazySiteId, site: yinghuazySite, assetPath: yinghuazyAssetPath, fileId: yinghuazyFileId),
-    BuiltinPyEntry(siteId: yutuzySiteId, site: yutuzySite, assetPath: yutuzyAssetPath, fileId: yutuzyFileId),
-    BuiltinPyEntry(siteId: zy360SiteId, site: zy360Site, assetPath: zy360AssetPath, fileId: zy360FileId),
-    BuiltinPyEntry(siteId: bufoleSiteId, site: bufoleSite, assetPath: bufoleAssetPath, fileId: bufoleFileId),
-    BuiltinPyEntry(siteId: feikuaiSiteId, site: feikuaiSite, assetPath: feikuaiAssetPath, fileId: feikuaiFileId),
-    BuiltinPyEntry(siteId: hanjudsSiteId, site: hanjudsSite, assetPath: hanjudsAssetPath, fileId: hanjudsFileId),
-    BuiltinPyEntry(siteId: nbsjyySiteId, site: nbsjyySite, assetPath: nbsjyyAssetPath, fileId: nbsjyyFileId),
-    BuiltinPyEntry(siteId: whosSiteId, site: whosSite, assetPath: whosAssetPath, fileId: whosFileId),
-    BuiltinPyEntry(siteId: odseliftSiteId, site: odseliftSite, assetPath: odseliftAssetPath, fileId: odseliftFileId),
-    BuiltinPyEntry(siteId: qikantoukanSiteId, site: qikantoukanSite, assetPath: qikantoukanAssetPath, fileId: qikantoukanFileId),
-    BuiltinPyEntry(siteId: qilinyingshiSiteId, site: qilinyingshiSite, assetPath: qilinyingshiAssetPath, fileId: qilinyingshiFileId),
-    BuiltinPyEntry(siteId: t8090kaifucomSiteId, site: t8090kaifucomSite, assetPath: t8090kaifucomAssetPath, fileId: t8090kaifucomFileId),
-    BuiltinPyEntry(siteId: zjldSiteId, site: zjldSite, assetPath: zjldAssetPath, fileId: zjldFileId),
-    BuiltinPyEntry(siteId: baofengzySiteId, site: baofengzySite, assetPath: baofengzyAssetPath, fileId: baofengzyFileId),
-    BuiltinPyEntry(siteId: changzhangzySiteId, site: changzhangzySite, assetPath: changzhangzyAssetPath, fileId: changzhangzyFileId),
-    BuiltinPyEntry(siteId: doudouzySiteId, site: doudouzySite, assetPath: doudouzyAssetPath, fileId: doudouzyFileId),
-    BuiltinPyEntry(siteId: dyttzySiteId, site: dyttzySite, assetPath: dyttzyAssetPath, fileId: dyttzyFileId),
-    BuiltinPyEntry(siteId: feifanzySiteId, site: feifanzySite, assetPath: feifanzyAssetPath, fileId: feifanzyFileId),
-    BuiltinPyEntry(siteId: guangsuzySiteId, site: guangsuzySite, assetPath: guangsuzyAssetPath, fileId: guangsuzyFileId),
-    BuiltinPyEntry(siteId: haohuazySiteId, site: haohuazySite, assetPath: haohuazyAssetPath, fileId: haohuazyFileId),
-    BuiltinPyEntry(siteId: heiheizySiteId, site: heiheizySite, assetPath: heiheizyAssetPath, fileId: heiheizyFileId),
-    BuiltinPyEntry(siteId: heiliaozySiteId, site: heiliaozySite, assetPath: heiliaozyAssetPath, fileId: heiliaozyFileId),
-    BuiltinPyEntry(siteId: hongniuzySiteId, site: hongniuzySite, assetPath: hongniuzyAssetPath, fileId: hongniuzyFileId),
-    BuiltinPyEntry(siteId: hsckzySiteId, site: hsckzySite, assetPath: hsckzyAssetPath, fileId: hsckzyFileId),
-    BuiltinPyEntry(siteId: huosuzySiteId, site: huosuzySite, assetPath: huosuzyAssetPath, fileId: huosuzyFileId),
-    BuiltinPyEntry(siteId: huyazySiteId, site: huyazySite, assetPath: huyazyAssetPath, fileId: huyazyFileId),
-    BuiltinPyEntry(siteId: iqiyizySiteId, site: iqiyizySite, assetPath: iqiyizyAssetPath, fileId: iqiyizyFileId),
-    BuiltinPyEntry(siteId: jisuzySiteId, site: jisuzySite, assetPath: jisuzyAssetPath, fileId: jisuzyFileId),
-    BuiltinPyEntry(siteId: jjzySiteId, site: jjzySite, assetPath: jjzyAssetPath, fileId: jjzyFileId),
-    BuiltinPyEntry(siteId: jkunzySiteId, site: jkunzySite, assetPath: jkunzyAssetPath, fileId: jkunzyFileId),
-    BuiltinPyEntry(siteId: juliangzySiteId, site: juliangzySite, assetPath: juliangzyAssetPath, fileId: juliangzyFileId),
-    BuiltinPyEntry(siteId: kuaichezySiteId, site: kuaichezySite, assetPath: kuaichezyAssetPath, fileId: kuaichezyFileId),
-    BuiltinPyEntry(siteId: maoyanzySiteId, site: maoyanzySite, assetPath: maoyanzyAssetPath, fileId: maoyanzyFileId),
-    BuiltinPyEntry(siteId: niuniuzySiteId, site: niuniuzySite, assetPath: niuniuzyAssetPath, fileId: niuniuzyFileId),
-    BuiltinPyEntry(siteId: okzySiteId, site: okzySite, assetPath: okzyAssetPath, fileId: okzyFileId),
-    BuiltinPyEntry(siteId: souavzySiteId, site: souavzySite, assetPath: souavzyAssetPath, fileId: souavzyFileId),
-    BuiltinPyEntry(siteId: subozySiteId, site: subozySite, assetPath: subozyAssetPath, fileId: subozyFileId),
-    BuiltinPyEntry(siteId: suonizySiteId, site: suonizySite, assetPath: suonizyAssetPath, fileId: suonizyFileId),
-    BuiltinPyEntry(siteId: tianyazySiteId, site: tianyazySite, assetPath: tianyazyAssetPath, fileId: tianyazyFileId),
-    BuiltinPyEntry(siteId: wujinzySiteId, site: wujinzySite, assetPath: wujinzyAssetPath, fileId: wujinzyFileId),
-    BuiltinPyEntry(siteId: xiguazySiteId, site: xiguazySite, assetPath: xiguazyAssetPath, fileId: xiguazyFileId),
-    BuiltinPyEntry(siteId: yayazySiteId, site: yayazySite, assetPath: yayazyAssetPath, fileId: yayazyFileId),
-    BuiltinPyEntry(siteId: yuanlibzySiteId, site: yuanlibzySite, assetPath: yuanlibzyAssetPath, fileId: yuanlibzyFileId),
-    BuiltinPyEntry(siteId: zuidazySiteId, site: zuidazySite, assetPath: zuidazyAssetPath, fileId: zuidazyFileId),
+    BuiltinPyEntry(
+      siteId: hmavSiteId,
+      site: hmavSite,
+      assetPath: hmavAssetPath,
+      fileId: hmavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: abjavSiteId,
+      site: abjavSite,
+      assetPath: abjavAssetPath,
+      fileId: abjavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ai2026SiteId,
+      site: ai2026Site,
+      assetPath: ai2026AssetPath,
+      fileId: ai2026FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ai4kSiteId,
+      site: ai4kSite,
+      assetPath: ai4kAssetPath,
+      fileId: ai4kFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aidjSiteId,
+      site: aidjSite,
+      assetPath: aidjAssetPath,
+      fileId: aidjFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aiduanjuSiteId,
+      site: aiduanjuSite,
+      assetPath: aiduanjuAssetPath,
+      fileId: aiduanjuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aimoveSiteId,
+      site: aimoveSite,
+      assetPath: aimoveAssetPath,
+      fileId: aimoveFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aisxpcSiteId,
+      site: aisxpcSite,
+      assetPath: aisxpcAssetPath,
+      fileId: aisxpcFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: asextvSiteId,
+      site: asextvSite,
+      assetPath: asextvAssetPath,
+      fileId: asextvFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: avhwaSiteId,
+      site: avhwaSite,
+      assetPath: avhwaAssetPath,
+      fileId: avhwaFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: avtodaySiteId,
+      site: avtodaySite,
+      assetPath: avtodayAssetPath,
+      fileId: avtodayFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: avyanjiuyuanSiteId,
+      site: avyanjiuyuanSite,
+      assetPath: avyanjiuyuanAssetPath,
+      fileId: avyanjiuyuanFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: badyiSiteId,
+      site: badyiSite,
+      assetPath: badyiAssetPath,
+      fileId: badyiFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: caoliuSiteId,
+      site: caoliuSite,
+      assetPath: caoliuAssetPath,
+      fileId: caoliuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: chinaxSiteId,
+      site: chinaxSite,
+      assetPath: chinaxAssetPath,
+      fileId: chinaxFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: chinaxselecla08SiteId,
+      site: chinaxselecla08Site,
+      assetPath: chinaxselecla08AssetPath,
+      fileId: chinaxselecla08FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: danaiSiteId,
+      site: danaiSite,
+      assetPath: danaiAssetPath,
+      fileId: danaiFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: dingjiasekuSiteId,
+      site: dingjiasekuSite,
+      assetPath: dingjiasekuAssetPath,
+      fileId: dingjiasekuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: dj69SiteId,
+      site: dj69Site,
+      assetPath: dj69AssetPath,
+      fileId: dj69FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: dj91SiteId,
+      site: dj91Site,
+      assetPath: dj91AssetPath,
+      fileId: dj91FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: djwoSiteId,
+      site: djwoSite,
+      assetPath: djwoAssetPath,
+      fileId: djwoFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: duanjuoneSiteId,
+      site: duanjuoneSite,
+      assetPath: duanjuoneAssetPath,
+      fileId: duanjuoneFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aihiSiteId,
+      site: aihiSite,
+      assetPath: aihiAssetPath,
+      fileId: aihiFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ficeforandSiteId,
+      site: ficeforandSite,
+      assetPath: ficeforandAssetPath,
+      fileId: ficeforandFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aipornxSiteId,
+      site: aipornxSite,
+      assetPath: aipornxAssetPath,
+      fileId: aipornxFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aiyinhangSiteId,
+      site: aiyinhangSite,
+      assetPath: aiyinhangAssetPath,
+      fileId: aiyinhangFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aiwuSiteId,
+      site: aiwuSite,
+      assetPath: aiwuAssetPath,
+      fileId: aiwuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xojavSiteId,
+      site: xojavSite,
+      assetPath: xojavAssetPath,
+      fileId: xojavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: porncgwSiteId,
+      site: porncgwSite,
+      assetPath: porncgwAssetPath,
+      fileId: porncgwFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xhongyanSiteId,
+      site: xhongyanSite,
+      assetPath: xhongyanAssetPath,
+      fileId: xhongyanFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: kankuxSiteId,
+      site: kankuxSite,
+      assetPath: kankuxAssetPath,
+      fileId: kankuxFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: guohnsqjSiteId,
+      site: guohnsqjSite,
+      assetPath: guohnsqjAssetPath,
+      fileId: guohnsqjFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xz51SiteId,
+      site: xz51Site,
+      assetPath: xz51AssetPath,
+      fileId: xz51FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: sexaixSiteId,
+      site: sexaixSite,
+      assetPath: sexaixAssetPath,
+      fileId: sexaixFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: qipaospSiteId,
+      site: qipaospSite,
+      assetPath: qipaospAssetPath,
+      fileId: qipaospFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: youzidjSiteId,
+      site: youzidjSite,
+      assetPath: youzidjAssetPath,
+      fileId: youzidjFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: tanhuavip14SiteId,
+      site: tanhuavip14Site,
+      assetPath: tanhuavip14AssetPath,
+      fileId: tanhuavip14FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: fuchouSiteId,
+      site: fuchouSite,
+      assetPath: fuchouAssetPath,
+      fileId: fuchouFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: heitaoSiteId,
+      site: heitaoSite,
+      assetPath: heitaoAssetPath,
+      fileId: heitaoFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jinguoSiteId,
+      site: jinguoSite,
+      assetPath: jinguoAssetPath,
+      fileId: jinguoFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jinguoJgSiteId,
+      site: jinguoJgSite,
+      assetPath: jinguoAssetPath,
+      fileId: jinguoJgFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: duoduoSiteId,
+      site: duoduoSite,
+      assetPath: duoduoAssetPath,
+      fileId: duoduoFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: javmenuSiteId,
+      site: javmenuSite,
+      assetPath: javmenuAssetPath,
+      fileId: javmenuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: avdbSiteId,
+      site: avdbSite,
+      assetPath: avdbAssetPath,
+      fileId: avdbFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: memojavSiteId,
+      site: memojavSite,
+      assetPath: memojavAssetPath,
+      fileId: memojavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: chaoliuSiteId,
+      site: chaoliuSite,
+      assetPath: chaoliuAssetPath,
+      fileId: chaoliuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aijavSiteId,
+      site: aijavSite,
+      assetPath: aijavAssetPath,
+      fileId: aijavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: insavSiteId,
+      site: insavSite,
+      assetPath: insavAssetPath,
+      fileId: insavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: sp91SiteId,
+      site: sp91Site,
+      assetPath: sp91AssetPath,
+      fileId: sp91FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: mmsqSiteId,
+      site: mmsqSite,
+      assetPath: mmsqAssetPath,
+      fileId: mmsqFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ysw6789SiteId,
+      site: ysw6789Site,
+      assetPath: ysw6789AssetPath,
+      fileId: ysw6789FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zz6789SiteId,
+      site: zz6789Site,
+      assetPath: zz6789AssetPath,
+      fileId: zz6789FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: anet88SiteId,
+      site: anet88Site,
+      assetPath: anet88AssetPath,
+      fileId: anet88FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ffv1SiteId,
+      site: ffv1Site,
+      assetPath: ffv1AssetPath,
+      fileId: ffv1FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: qqys01SiteId,
+      site: qqys01Site,
+      assetPath: qqys01AssetPath,
+      fileId: qqys01FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: rr520SiteId,
+      site: rr520Site,
+      assetPath: rr520AssetPath,
+      fileId: rr520FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: sc123jfSiteId,
+      site: sc123jfSite,
+      assetPath: sc123jfAssetPath,
+      fileId: sc123jfFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zmwSiteId,
+      site: zmwSite,
+      assetPath: zmwAssetPath,
+      fileId: zmwFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: mtavSiteId,
+      site: mtavSite,
+      assetPath: mtavAssetPath,
+      fileId: mtavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: qinavSiteId,
+      site: qinavSite,
+      assetPath: qinavAssetPath,
+      fileId: qinavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: tasexySiteId,
+      site: tasexySite,
+      assetPath: tasexyAssetPath,
+      fileId: tasexyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: aosikazySiteId,
+      site: aosikazySite,
+      assetPath: aosikazyAssetPath,
+      fileId: aosikazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ckzySiteId,
+      site: ckzySite,
+      assetPath: ckzyAssetPath,
+      fileId: ckzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: dadizySiteId,
+      site: dadizySite,
+      assetPath: dadizyAssetPath,
+      fileId: dadizyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: danaizizySiteId,
+      site: danaizizySite,
+      assetPath: danaizizyAssetPath,
+      fileId: danaizizyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: fanhaozySiteId,
+      site: fanhaozySite,
+      assetPath: fanhaozyAssetPath,
+      fileId: fanhaozyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: honglouzySiteId,
+      site: honglouzySite,
+      assetPath: honglouzyAssetPath,
+      fileId: honglouzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: ikunzySiteId,
+      site: ikunzySite,
+      assetPath: ikunzyAssetPath,
+      fileId: ikunzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jipinzySiteId,
+      site: jipinzySite,
+      assetPath: jipinzyAssetPath,
+      fileId: jipinzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jp98zySiteId,
+      site: jp98zySite,
+      assetPath: jp98zyAssetPath,
+      fileId: jp98zyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: laosepzySiteId,
+      site: laosepzySite,
+      assetPath: laosepzyAssetPath,
+      fileId: laosepzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: lebozySiteId,
+      site: lebozySite,
+      assetPath: lebozyAssetPath,
+      fileId: lebozyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: mangguozySiteId,
+      site: mangguozySite,
+      assetPath: mangguozyAssetPath,
+      fileId: mangguozyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: moduzySiteId,
+      site: moduzySite,
+      assetPath: moduzyAssetPath,
+      fileId: moduzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: naixxzySiteId,
+      site: naixxzySite,
+      assetPath: naixxzyAssetPath,
+      fileId: naixxzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: taohuazySiteId,
+      site: taohuazySite,
+      assetPath: taohuazyAssetPath,
+      fileId: taohuazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: wsyzySiteId,
+      site: wsyzySite,
+      assetPath: wsyzyAssetPath,
+      fileId: wsyzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xingbazySiteId,
+      site: xingbazySite,
+      assetPath: xingbazyAssetPath,
+      fileId: xingbazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xingyezySiteId,
+      site: xingyezySite,
+      assetPath: xingyezyAssetPath,
+      fileId: xingyezyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: yinghuazySiteId,
+      site: yinghuazySite,
+      assetPath: yinghuazyAssetPath,
+      fileId: yinghuazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: yutuzySiteId,
+      site: yutuzySite,
+      assetPath: yutuzyAssetPath,
+      fileId: yutuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zy360SiteId,
+      site: zy360Site,
+      assetPath: zy360AssetPath,
+      fileId: zy360FileId,
+    ),
+    BuiltinPyEntry(
+      siteId: bufoleSiteId,
+      site: bufoleSite,
+      assetPath: bufoleAssetPath,
+      fileId: bufoleFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: feikuaiSiteId,
+      site: feikuaiSite,
+      assetPath: feikuaiAssetPath,
+      fileId: feikuaiFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: hanjudsSiteId,
+      site: hanjudsSite,
+      assetPath: hanjudsAssetPath,
+      fileId: hanjudsFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: nbsjyySiteId,
+      site: nbsjyySite,
+      assetPath: nbsjyyAssetPath,
+      fileId: nbsjyyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: whosSiteId,
+      site: whosSite,
+      assetPath: whosAssetPath,
+      fileId: whosFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: nvkuSiteId,
+      site: nvkuSite,
+      assetPath: nvkuAssetPath,
+      fileId: nvkuFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: odseliftSiteId,
+      site: odseliftSite,
+      assetPath: odseliftAssetPath,
+      fileId: odseliftFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: qikantoukanSiteId,
+      site: qikantoukanSite,
+      assetPath: qikantoukanAssetPath,
+      fileId: qikantoukanFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: qilinyingshiSiteId,
+      site: qilinyingshiSite,
+      assetPath: qilinyingshiAssetPath,
+      fileId: qilinyingshiFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: t8090kaifucomSiteId,
+      site: t8090kaifucomSite,
+      assetPath: t8090kaifucomAssetPath,
+      fileId: t8090kaifucomFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zjldSiteId,
+      site: zjldSite,
+      assetPath: zjldAssetPath,
+      fileId: zjldFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: baofengzySiteId,
+      site: baofengzySite,
+      assetPath: baofengzyAssetPath,
+      fileId: baofengzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: changzhangzySiteId,
+      site: changzhangzySite,
+      assetPath: changzhangzyAssetPath,
+      fileId: changzhangzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: doudouzySiteId,
+      site: doudouzySite,
+      assetPath: doudouzyAssetPath,
+      fileId: doudouzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: dyttzySiteId,
+      site: dyttzySite,
+      assetPath: dyttzyAssetPath,
+      fileId: dyttzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: feifanzySiteId,
+      site: feifanzySite,
+      assetPath: feifanzyAssetPath,
+      fileId: feifanzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: guangsuzySiteId,
+      site: guangsuzySite,
+      assetPath: guangsuzyAssetPath,
+      fileId: guangsuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: haohuazySiteId,
+      site: haohuazySite,
+      assetPath: haohuazyAssetPath,
+      fileId: haohuazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: heiheizySiteId,
+      site: heiheizySite,
+      assetPath: heiheizyAssetPath,
+      fileId: heiheizyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: heiliaozySiteId,
+      site: heiliaozySite,
+      assetPath: heiliaozyAssetPath,
+      fileId: heiliaozyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: hongniuzySiteId,
+      site: hongniuzySite,
+      assetPath: hongniuzyAssetPath,
+      fileId: hongniuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: hsckzySiteId,
+      site: hsckzySite,
+      assetPath: hsckzyAssetPath,
+      fileId: hsckzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: huosuzySiteId,
+      site: huosuzySite,
+      assetPath: huosuzyAssetPath,
+      fileId: huosuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: huyazySiteId,
+      site: huyazySite,
+      assetPath: huyazyAssetPath,
+      fileId: huyazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: iqiyizySiteId,
+      site: iqiyizySite,
+      assetPath: iqiyizyAssetPath,
+      fileId: iqiyizyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jisuzySiteId,
+      site: jisuzySite,
+      assetPath: jisuzyAssetPath,
+      fileId: jisuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jjzySiteId,
+      site: jjzySite,
+      assetPath: jjzyAssetPath,
+      fileId: jjzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: jkunzySiteId,
+      site: jkunzySite,
+      assetPath: jkunzyAssetPath,
+      fileId: jkunzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: juliangzySiteId,
+      site: juliangzySite,
+      assetPath: juliangzyAssetPath,
+      fileId: juliangzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: kuaichezySiteId,
+      site: kuaichezySite,
+      assetPath: kuaichezyAssetPath,
+      fileId: kuaichezyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: maoyanzySiteId,
+      site: maoyanzySite,
+      assetPath: maoyanzyAssetPath,
+      fileId: maoyanzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: niuniuzySiteId,
+      site: niuniuzySite,
+      assetPath: niuniuzyAssetPath,
+      fileId: niuniuzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: okzySiteId,
+      site: okzySite,
+      assetPath: okzyAssetPath,
+      fileId: okzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: souavzySiteId,
+      site: souavzySite,
+      assetPath: souavzyAssetPath,
+      fileId: souavzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: subozySiteId,
+      site: subozySite,
+      assetPath: subozyAssetPath,
+      fileId: subozyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: suonizySiteId,
+      site: suonizySite,
+      assetPath: suonizyAssetPath,
+      fileId: suonizyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: tianyazySiteId,
+      site: tianyazySite,
+      assetPath: tianyazyAssetPath,
+      fileId: tianyazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: wujinzySiteId,
+      site: wujinzySite,
+      assetPath: wujinzyAssetPath,
+      fileId: wujinzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: xiguazySiteId,
+      site: xiguazySite,
+      assetPath: xiguazyAssetPath,
+      fileId: xiguazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: yayazySiteId,
+      site: yayazySite,
+      assetPath: yayazyAssetPath,
+      fileId: yayazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: yuanlibzySiteId,
+      site: yuanlibzySite,
+      assetPath: yuanlibzyAssetPath,
+      fileId: yuanlibzyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zuidazySiteId,
+      site: zuidazySite,
+      assetPath: zuidazyAssetPath,
+      fileId: zuidazyFileId,
+    ),
   ];
 
   static BuiltinPyEntry? entryFor(String siteId) {
@@ -1814,48 +2452,4 @@ class BuiltinPySites {
     }
     await ImportFileStore.delete(target);
   }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

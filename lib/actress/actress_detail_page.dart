@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'actress_database.dart';
-import 'actress_film_library.dart';
+import 'actress_multi_db_fallback.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_play.dart';
@@ -121,7 +121,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _dbFallbackCount = 0;
 
   /// 第一档服务：只建一次，复用同一条 DB 连接（进详情页多次不重开）。
-  FilmLibraryService? _filmDbService;
+  /// 三库合并内置兜底（主库 + 其它 .db）：本页自己建的时候持有。
+  MultiDbFilmFallback? _multiDb;
 
   ActressEnrichment get _enrichment =>
       widget.enrichment ??
@@ -206,9 +207,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (injectedFilmDb != null) {
       fallback.filmDb = injectedFilmDb;
     } else if (widget.fallback == null) {
-      fallback.filmDb ??= _filmDbService ??= FilmLibraryService(
-        database: widget.database,
-      );
+      fallback.filmDb ??=
+          _multiDb ??= MultiDbFilmFallback(database: widget.database);
     }
     if (!fallback.loaded || forceReload) await fallback.load();
     final site = widget.siteFilter == ActressSiteFilter.all
@@ -301,6 +301,46 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (changed) setState(() => _fallbackEntries = merged);
     // m3u hash 图兜底：已加载的无封面作品，用 m3u 行的 hash 图贴封面。
     await _attachM3uCovers(fallback);
+    await _attachDbCovers(fallback);
+  }
+
+  /// 数据库封面兜底（2026-11-21）：m3u hash 图查不到番号时，再按
+  /// 番号去库里（主库 + 其它 .db）要一次封面——用户库里本来就存着
+  /// 这张剧照，没必要留灰块。只贴本页已加载的作品，来源记 'db'。
+  Future<void> _attachDbCovers(ActressJsonFallback fallback) async {
+    final person = _person;
+    final provider = fallback.filmDb;
+    if (person == null || provider == null) return;
+    var attached = false;
+    for (final work in _works) {
+      if (work.hasCover || work.codeKey.isEmpty) continue;
+      List<ActressJsonEntry> rows;
+      try {
+        rows = await provider.entriesForCode(work.codeKey);
+      } catch (_) {
+        continue;
+      }
+      String? pic;
+      for (final entry in rows) {
+        if (entry.vodPic.isNotEmpty) {
+          pic = entry.vodPic;
+          break;
+        }
+      }
+      if (pic == null) continue;
+      await widget.database.attachCover(
+        personId: person.localId,
+        codeKey: work.codeKey,
+        titleKey: work.titleKey,
+        coverSource: 'db',
+        coverDramaId: '',
+        coverUrl: pic,
+        insertIfMissing: false,
+        site: 'db',
+      );
+      attached = true;
+    }
+    if (attached && mounted) await _reloadWorks();
   }
 
   /// m3u hash 图兜底：条目自己没图时，用 whos m3u 的 hash 图

@@ -38,12 +38,7 @@ const String missav30JarId = 'missav30';
 /// 新蜘蛛无 Auth、无 SelfCheck、无 META-INF/SIG，旧 jar 的拉闸与签
 /// 名机制已随旧实现一并退役。
 const List<ZakatvBuiltinSite> oneBuiltinSites = [
-  ZakatvBuiltinSite(
-    'One',
-    '🔞一点播',
-    'com.github.catvod.spider.One',
-    '',
-  ),
+  ZakatvBuiltinSite('One', '🔞一点播', 'com.github.catvod.spider.One', ''),
 ];
 
 /// MissAV v30 独立 jar 的内置站点：2026-11-19 从 zakatv.jar 挪过来，
@@ -882,24 +877,8 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     'com.github.catvod.spider.ZakaChaoliu',
     '{}',
   ),
-  ZakatvBuiltinSite(
-    'YzAikan',
-    '柚子爱看',
-    'com.github.catvod.spider.YzAikan',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'EroShort',
-    '🔞EroShort',
-    'com.github.catvod.spider.EroShort',
-    '',
-  ),
-  ZakatvBuiltinSite(
-    'Xhs',
-    'Xhs',
-    'com.github.catvod.spider.Xhs',
-    '',
-  ),
+  ZakatvBuiltinSite('YzAikan', '柚子爱看', 'com.github.catvod.spider.YzAikan', ''),
+  ZakatvBuiltinSite('Xhs', 'Xhs', 'com.github.catvod.spider.Xhs', ''),
   ZakatvBuiltinSite(
     'go_tingshu',
     '飞卢听书',

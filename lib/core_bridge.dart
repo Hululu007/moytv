@@ -25,6 +25,8 @@ import 'js_lazy_fetch.dart';
 import 'py_bridge.dart';
 import 'py_lazy_fetch.dart';
 import 'py_contract.dart';
+import 'whos_fallback.dart';
+import 'whos_local_library.dart';
 import 'background_downloads.dart';
 import 'local_store.dart';
 import 'playback_parse.dart';
@@ -1006,6 +1008,115 @@ class NativeRepository extends AppRepository {
     };
     _pyFilledCache[source] = filled;
     return filled;
+  }
+
+  // ── whos 站：在线优先，本地库兜底 ────────────────────────────────
+  //
+  // whos.tv 前面是 Cloudflare，代取通道一断整站就空。在线拿不到内容时
+  // 用包里/本地已落库的条目顶上，分类、搜索、详情、直链播放都不断档；
+  // 拿得到内容时一律走在线，本地只做补充分类。
+
+  Future<List<CatalogCategory>> _whosCategories([
+    String source = whosSourceId,
+  ]) async {
+    var online = const <CatalogCategory>[];
+    try {
+      final home = await _pyCall(source, {'action': 'categories'});
+      online = PyContract.categoriesFromHome(home);
+    } catch (_) {}
+    final library = WhosLocalLibrary.shared;
+    final loaded = await library.ensureLoaded();
+    final local = loaded
+        ? whosLocalCategories(library)
+        : const <CatalogCategory>[];
+    final localById = {for (final row in local) row.id: row};
+    final seen = <String>{};
+    return [
+      for (final row in online)
+        if (seen.add(row.id))
+          // 厂牌分类在线也有：名字后面补上本地库里的条数。
+          row.id.startsWith(whosLocalBrandPrefix) && localById[row.id] != null
+              ? CatalogCategory(row.id, localById[row.id]!.name)
+              : row,
+      for (final row in local)
+        if (seen.add(row.id)) row,
+    ];
+  }
+
+  Future<CatalogPage> _whosCatalog({
+    required int page,
+    required String query,
+    required String category,
+    String source = whosSourceId,
+  }) async {
+    CatalogPage? online;
+    try {
+      final result = await _pyCall(source, {
+        'action': 'catalog',
+        'page': page,
+        'query': query,
+        'category': category,
+        'filter': false,
+        'extend': const <String, String>{},
+      });
+      online = PyContract.pageFromResult(source, result, page: page);
+    } catch (_) {}
+    // 在线有内容、或在线已翻到末页（第二页起返回空）：照在线走。
+    if (online != null && (online.items.isNotEmpty || page > 1)) {
+      return online;
+    }
+    final library = WhosLocalLibrary.shared;
+    if (await library.ensureLoaded()) {
+      final local = whosLocalPage(
+        library: library,
+        category: category,
+        query: query,
+        page: page,
+        source: source,
+      );
+      if (local.items.isNotEmpty || online == null) return local;
+    }
+    if (online != null) return online;
+    throw AppFailure('$source 在线取不到内容，本地库里也没有可用的条目');
+  }
+
+  /// 找本地条目：先按本地 id，再按番号，最后按标题回捞。
+  Future<WhosLocalWork?> _whosLocalWork(Drama drama) async {
+    final library = WhosLocalLibrary.shared;
+    if (!await library.ensureLoaded()) return null;
+    final id = whosLocalWorkIdOf(drama);
+    if (id.isNotEmpty) {
+      final work = library.byId(id);
+      if (work != null) return work;
+    }
+    final code = drama.tags.firstWhere(
+      (tag) => RegExp(r'[A-Za-z]{2,6}[-_ ]?\d{2,6}').hasMatch(tag),
+      orElse: () => '',
+    );
+    for (final key in [code, drama.title]) {
+      if (key.trim().isEmpty) continue;
+      final hit = library.page(query: key, page: 1, pageSize: 1);
+      if (hit.isNotEmpty) return hit.first;
+    }
+    return null;
+  }
+
+  /// 本地直链播放计划：地址已经是 m3u8，不需要再解析。
+  Future<PlaybackPlan?> _whosLocalPlan(Drama drama, Episode episode) async {
+    final work = await _whosLocalWork(drama);
+    final raw = episode.raw['id'] as String? ?? episode.id;
+    final url = (work?.playUrl.isNotEmpty ?? false) ? work!.playUrl : raw;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return null;
+    return PlaybackPlan(
+      url: url,
+      headers: const {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/131.0.0.0 Safari/537.36',
+        'Referer': 'https://whos.tv/',
+      },
+    );
   }
 
   Future<List<CatalogFilterGroup>> _pyCategoryFilterGroups(
@@ -2213,6 +2324,7 @@ class NativeRepository extends AppRepository {
       );
     }
     if (isPySource(source)) {
+      if (isWhosLikeSource(source)) return _whosCategories(source);
       final home = await _pyCall(source, {'action': 'categories'});
       return PyContract.categoriesFromHome(home);
     }
@@ -2325,6 +2437,14 @@ class NativeRepository extends AppRepository {
       return PyContract.pageFromResult(source, result, page: page);
     }
     if (isPySource(source)) {
+      if (isWhosLikeSource(source)) {
+        return _whosCatalog(
+          page: page,
+          query: query,
+          category: category,
+          source: source,
+        );
+      }
       final result = await _pyCall(source, {
         'action': 'catalog',
         'page': page,
@@ -2539,19 +2659,22 @@ class NativeRepository extends AppRepository {
         (source: target, run: () => catalog(target, query: query)),
     ];
     final restFuture = restLeg();
-    await fanoutEach(legs, (leg) async {
-      try {
-        final page = await leg.run().timeout(_searchPerSiteTimeout);
-        return page.items;
-      } catch (_) {
-        return const <Drama>[];
-      }
-    },
-        onResult: (leg, items) {
-          if (items.isNotEmpty) onSite(leg.source, items);
-        },
-        concurrency: 6,
-        shouldStop: shouldStop);
+    await fanoutEach(
+      legs,
+      (leg) async {
+        try {
+          final page = await leg.run().timeout(_searchPerSiteTimeout);
+          return page.items;
+        } catch (_) {
+          return const <Drama>[];
+        }
+      },
+      onResult: (leg, items) {
+        if (items.isNotEmpty) onSite(leg.source, items);
+      },
+      concurrency: 6,
+      shouldStop: shouldStop,
+    );
     // 取消后不再等 Go 腿：restLeg 内部已吞错，悬空的 Future 只会
     // 正常完成，不留未处理错误；结果不写回。
     if (shouldStop != null && shouldStop()) return;
@@ -2687,16 +2810,36 @@ class NativeRepository extends AppRepository {
       return _jarCall(drama.source, (spec) => JarBridge.detail(spec, drama));
     }
     if (isPySource(drama.source)) {
-      final vodId = drama.sourceId.isNotEmpty
+      if (isWhosLocalDrama(drama)) {
+        final work = await _whosLocalWork(drama);
+        if (work != null) return whosLocalDetail(drama, work);
+      }
+      final vodId = isWhosLocalDrama(drama)
+          ? whosLocalWorkIdOf(drama)
+          : drama.sourceId.isNotEmpty
           ? drama.sourceId
           : drama.id.startsWith('${drama.source}:')
           ? drama.id.substring(drama.source.length + 1)
           : drama.id;
-      final result = await _pyCall(drama.source, {
-        'action': 'detail',
-        'vodId': vodId,
-      });
-      return PyContract.detailFromResult(drama.source, drama, result);
+      try {
+        final result = await _pyCall(drama.source, {
+          'action': 'detail',
+          'vodId': vodId,
+        });
+        final detail = PyContract.detailFromResult(drama.source, drama, result);
+        if (detail.episodes.isNotEmpty || !isWhosLikeSource(drama.source)) {
+          return detail;
+        }
+        final work = await _whosLocalWork(drama);
+        if (work != null) return whosLocalDetail(drama, work);
+        return detail;
+      } catch (error) {
+        final work = isWhosLikeSource(drama.source)
+            ? await _whosLocalWork(drama)
+            : null;
+        if (work != null) return whosLocalDetail(drama, work);
+        rethrow;
+      }
     }
     if (isJsSource(drama.source)) {
       final vodId = drama.sourceId.isNotEmpty
@@ -2846,11 +2989,22 @@ class NativeRepository extends AppRepository {
         adBlock: adBlock,
       );
       if (goPlan != null) return goPlan;
-      return _pyResolvePlan(
-        drama.source,
-        episode.raw['flag'] as String? ?? '',
-        episode.raw['id'] as String? ?? episode.id,
-      );
+      if (isWhosLocalDrama(drama)) {
+        final direct = await _whosLocalPlan(drama, episode);
+        if (direct != null) return direct;
+      }
+      try {
+        return await _pyResolvePlan(
+          drama.source,
+          episode.raw['flag'] as String? ?? '',
+          episode.raw['id'] as String? ?? episode.id,
+        );
+      } catch (error) {
+        if (!isWhosLikeSource(drama.source)) rethrow;
+        final direct = await _whosLocalPlan(drama, episode);
+        if (direct != null) return direct;
+        rethrow;
+      }
     }
     if (isJsSource(drama.source)) {
       final result = await _jsCall(

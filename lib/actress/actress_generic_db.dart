@@ -32,15 +32,7 @@ import 'actress_json_fallback.dart';
 /// 映射按库文件结构指纹存下来，下次换同结构的库直接用）。
 
 /// 通用映射的字段角色。
-enum GenericDbRole {
-  title,
-  cover,
-  playUrl,
-  actress,
-  code,
-  category,
-  date,
-}
+enum GenericDbRole { title, cover, playUrl, actress, code, category, date }
 
 GenericDbRole? _roleByName(String name) {
   for (final role in GenericDbRole.values) {
@@ -243,6 +235,98 @@ const _roleTieBreakOrder = [
   return (best, bestScore);
 }
 
+/// 分类类列的候选词（归一化后含该词即算）：多级筛选要把作品表里
+/// 所有像分类/分类名/标签/系列/地区的列都当成可筛选维度，不能只
+/// 用自动映射出来的那一个 category 列——库里常常同时有 type/class/
+/// tags/series 好几级。
+const _facetKeywords = <String>[
+  'category',
+  'class',
+  'type',
+  'genre',
+  'tag',
+  'series',
+  'area',
+  'kind',
+  'group',
+  'theme',
+  '分类',
+  '类别',
+  '类型',
+  '标签',
+  '系列',
+  '地区',
+  '题材',
+];
+
+/// 归一化后含这些词的列不当分类维度（地址/图片/路径类，名字里
+/// 带 type 也不算分类）。
+const _facetExcludeKeywords = <String>[
+  'url',
+  'link',
+  'pic',
+  'img',
+  'cover',
+  'path',
+  'file',
+  'address',
+  'mime',
+];
+
+/// 一张表里哪些列能当分类筛选维度（保持表内字段顺序，自动识别的
+/// category 列排第一）。
+List<String> categoryFacetColumns(GenericDbTableMapping mapping) {
+  final out = <String>[];
+  final category = mapping.columnFor(GenericDbRole.category);
+  if (category != null) out.add(category);
+  for (final column in mapping.allColumns) {
+    if (out.contains(column)) continue;
+    final normalized = normalizeDbFieldName(column);
+    if (normalized.isEmpty) continue;
+    if (_facetExcludeKeywords.any(normalized.contains)) continue;
+    if (_facetKeywords.any(normalized.contains)) out.add(column);
+  }
+  return out;
+}
+
+/// 一个分类维度里的一个取值：值 + 该值下的作品数。
+class GenericDbFacetValue {
+  const GenericDbFacetValue({required this.value, required this.count});
+
+  final String value;
+  final int count;
+}
+
+/// 一个分类维度（库里的某个人工列，如 type/class/tags/series）：
+/// 列名 + 该列的实际取值（按作品数从多到少）。
+class GenericDbFacet {
+  const GenericDbFacet({required this.column, required this.values});
+
+  final String column;
+  final List<GenericDbFacetValue> values;
+
+  bool get isEmpty => values.isEmpty;
+}
+
+/// 跨表关联：作品表本身没存播放地址/封面时，地址常常在另一张表
+/// （movie_id → url）。这里记下副表、指回作品表的外键、作品表的
+/// 被指向列，以及副表里能提供哪些角色（播放地址/封面）。
+class GenericDbRelation {
+  const GenericDbRelation({
+    required this.table,
+    required this.foreignKey,
+    required this.primaryKey,
+    required this.columns,
+  });
+
+  final String table;
+  final String foreignKey;
+  final String primaryKey;
+  final Map<GenericDbRole, String> columns;
+
+  String? columnFor(GenericDbRole role) => columns[role];
+}
+
 /// 一张表的字段映射：角色 → 实际字段名（+ 行 id 列）。
 class GenericDbTableMapping {
   const GenericDbTableMapping({
@@ -280,6 +364,7 @@ class GenericDbSchema {
     this.personsTable,
     this.manualTable,
     this.manualColumns,
+    this.relations = const [],
   });
 
   /// 全部表（每张表的字段角色映射）。
@@ -300,6 +385,16 @@ class GenericDbSchema {
 
   /// 手动指定的字段映射（角色 → 字段名）。
   final Map<GenericDbRole, String>? manualColumns;
+
+  /// 跨表关联：作品表本身没有播放地址/封面时，从副表按外键补。
+  final List<GenericDbRelation> relations;
+
+  GenericDbRelation? relationFor(GenericDbRole role) {
+    for (final relation in relations) {
+      if (relation.columnFor(role) != null) return relation;
+    }
+    return null;
+  }
 
   bool get hasWorks => worksTable != null;
 
@@ -341,6 +436,7 @@ class GenericDbSchema {
       personsTable: personsTable == known ? null : personsTable,
       manualTable: table,
       manualColumns: Map.of(columns),
+      relations: relations,
     );
   }
 }
@@ -379,24 +475,56 @@ GenericDbSchema classifyGenericTables(
     mappings.add(
       GenericDbTableMapping(
         table: table,
-        columns: {
-          for (final kv in byRole.entries) kv.key: kv.value.$1,
-        },
+        columns: {for (final kv in byRole.entries) kv.key: kv.value.$1},
         allColumns: List.of(columns),
         idColumn: idColumn,
       ),
     );
   }
-  // 作品表：同时有标题与播放地址；多张时按认出的角色数排，
-  // 再按表名排（稳定，不随机）。
-  final worksCandidates =
-      mappings.where((m) => m.hasTitleAndPlayUrl).toList()
-        ..sort((a, b) {
-          final byRoles = b.columns.length.compareTo(a.columns.length);
-          if (byRoles != 0) return byRoles;
-          return a.table.compareTo(b.table);
-        });
-  final worksTable = worksCandidates.isEmpty ? null : worksCandidates.first;
+  // 作品表：优先挑同时有标题与播放地址的表；没有这样的表时退一步，
+  // 挑有标题、且能找到“地址在副表”关联的表（很多库是 movies 元数据
+  // 表 + files 地址表分开的，不能因为主表没有 url 列就报认不出）。
+  GenericDbTableMapping? worksTable;
+  var relations = const <GenericDbRelation>[];
+  final strictCandidates = mappings.where((m) => m.hasTitleAndPlayUrl).toList()
+    ..sort((a, b) {
+      final byRoles = b.columns.length.compareTo(a.columns.length);
+      if (byRoles != 0) return byRoles;
+      return a.table.compareTo(b.table);
+    });
+  if (strictCandidates.isNotEmpty) {
+    worksTable = strictCandidates.first;
+  } else {
+    final loose =
+        mappings
+            .where((m) => m.columns.containsKey(GenericDbRole.title))
+            .toList()
+          ..sort((a, b) {
+            final byRoles = b.columns.length.compareTo(a.columns.length);
+            if (byRoles != 0) return byRoles;
+            return a.table.compareTo(b.table);
+          });
+    for (final candidate in loose) {
+      final found = _relationsFor(
+        primary: candidate,
+        mappings: mappings,
+        roles: const [GenericDbRole.playUrl, GenericDbRole.cover],
+      );
+      if (found.any((r) => r.columnFor(GenericDbRole.playUrl) != null)) {
+        worksTable = candidate;
+        relations = found;
+        break;
+      }
+    }
+  }
+  // 主表自己有地址时，封面仍可能在副表（封面表单独一张），补上关系。
+  if (worksTable != null && relations.isEmpty) {
+    relations = _relationsFor(
+      primary: worksTable,
+      mappings: mappings,
+      roles: const [GenericDbRole.cover],
+    );
+  }
   // 人物表：有人名（标题角色）但没有播放地址；多张时同上排序。
   final personsCandidates =
       mappings
@@ -412,18 +540,101 @@ GenericDbSchema classifyGenericTables(
           if (byRoles != 0) return byRoles;
           return a.table.compareTo(b.table);
         });
-  final personsTable =
-      personsCandidates.isEmpty ? null : personsCandidates.first;
-  final fingerprint = tableColumns.entries
-      .map((e) => '${e.key}(${e.value.join(',')})')
-      .toList()
-    ..sort();
+  final personsTable = personsCandidates.isEmpty
+      ? null
+      : personsCandidates.first;
+  final fingerprint =
+      tableColumns.entries.map((e) => '${e.key}(${e.value.join(',')})').toList()
+        ..sort();
   return GenericDbSchema(
     tables: mappings,
     fingerprint: fingerprint.join(';'),
     worksTable: worksTable,
     personsTable: personsTable,
+    relations: relations,
   );
+}
+
+/// 找主表的跨表关联：副表里要有目标角色列（播放地址/封面），还要
+/// 有一个能指回主表的外键列。外键判定不认死名字：
+/// - `movie_id`/`videoid` 这类「主表名 + id」；
+/// - 与主表主键同名的列（`movie_id` 对 `movie_id`）；
+/// - `vid/mid/pid/workid/itemid/filmid/vodid/subjectid/parentid` 这类
+///   通用短外键。
+/// 单列 `id` 不算外键（那是副表自己的主键，会自连接拿错行）。
+/// 结果按表名稳定排序，同一角色只认一张副表。
+/// 外键关系（公开版，给「数据库字段」页与纯函数测试用）：按主表 +
+/// 全部表的字段清单推每张副表补哪个角色。参数与库内探结构用法保持
+/// 一致，内部走 [_relationsFor]。
+List<GenericDbRelation> relationsFor({
+  required String worksTable,
+  required String? worksIdColumn,
+  required List<String> worksColumns,
+  required List<GenericDbTableMapping> tables,
+  List<GenericDbRole> roles = GenericDbRole.values,
+}) {
+  final primary = GenericDbTableMapping(
+    table: worksTable,
+    columns: const {},
+    allColumns: worksColumns,
+    idColumn: worksIdColumn,
+  );
+  return _relationsFor(primary: primary, mappings: tables, roles: roles);
+}
+
+List<GenericDbRelation> _relationsFor({
+  required GenericDbTableMapping primary,
+  required List<GenericDbTableMapping> mappings,
+  required List<GenericDbRole> roles,
+}) {
+  final pk = primary.idColumn;
+  if (pk == null) return const [];
+  final pkNormalized = normalizeDbFieldName(pk);
+  final tableNormalized = normalizeDbFieldName(primary.table);
+  const genericForeignKeys = {
+    'movieid',
+    'videoid',
+    'filmid',
+    'vodid',
+    'workid',
+    'itemid',
+    'subjectid',
+    'parentid',
+    'vid',
+    'mid',
+    'pid',
+  };
+  final out = <GenericDbRelation>[];
+  final ordered = List.of(mappings)..sort((a, b) => a.table.compareTo(b.table));
+  for (final role in roles) {
+    GenericDbRelation? found;
+    for (final sub in ordered) {
+      if (sub.table == primary.table) continue;
+      final column = sub.columnFor(role);
+      if (column == null) continue;
+      String? foreignKey;
+      for (final candidate in sub.allColumns) {
+        final normalized = normalizeDbFieldName(candidate);
+        if (normalized.isEmpty || normalized == 'id') continue;
+        if (normalized == '${tableNormalized}id' ||
+            normalized == pkNormalized ||
+            genericForeignKeys.contains(normalized)) {
+          foreignKey = candidate;
+          break;
+        }
+      }
+      if (foreignKey == null) continue;
+      found = GenericDbRelation(
+        table: sub.table,
+        foreignKey: foreignKey,
+        primaryKey: pk,
+        columns: sub.columns,
+      );
+      break;
+    }
+    if (found != null) out.add(found);
+  }
+  return out;
 }
 
 /// 给一个已打开的 [Database] 探结构：sqlite_master 列所有表，
@@ -562,6 +773,18 @@ class GenericDbWork {
   bool get playable =>
       playUrl.startsWith('http://') || playUrl.startsWith('https://');
 
+  /// 跨表补地址/封面时用：只换这两个字段，其余照原样。
+  GenericDbWork copyWith({String? coverUrl, String? playUrl}) => GenericDbWork(
+    id: id,
+    title: title,
+    coverUrl: coverUrl ?? this.coverUrl,
+    playUrl: playUrl ?? this.playUrl,
+    actress: actress,
+    code: code,
+    category: category,
+    date: date,
+  );
+
   String get displayTitle => title.isNotEmpty ? title : code;
 
   String get displaySubtitle {
@@ -592,6 +815,7 @@ class GenericDbWork {
     typeName: category,
     vodCode: code,
     vodActressPic: coverUrl,
+    directPlay: playable,
   );
 }
 
@@ -616,8 +840,9 @@ class GenericDbMappingStore {
 
   final File file;
 
-  Future<({String table, Map<GenericDbRole, String> columns})?>
-  loadMapping(String fingerprint) async {
+  Future<({String table, Map<GenericDbRole, String> columns})?> loadMapping(
+    String fingerprint,
+  ) async {
     try {
       if (!file.existsSync()) return null;
       final doc = jsonDecode(await file.readAsString());
@@ -660,15 +885,11 @@ class GenericDbMappingStore {
     }
     doc[fingerprint] = {
       'table': table,
-      'columns': {
-        for (final kv in columns.entries) kv.key.name: kv.value,
-      },
+      'columns': {for (final kv in columns.entries) kv.key.name: kv.value},
     };
     try {
       await file.parent.create(recursive: true);
-      await file.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(doc),
-      );
+      await file.writeAsString(const JsonEncoder.withIndent('  ').convert(doc));
     } catch (_) {
       // 映射存不下来不崩：本次仍用内存里的映射。
     }
@@ -686,14 +907,16 @@ class GenericDbReader {
   }) : _db = db,
        _testWorks = null;
 
-  GenericDbReader.test({required List<GenericDbWork> works, GenericDbSchema? schema})
-      : _db = null,
-        schema =
-            schema ?? const GenericDbSchema(tables: [], fingerprint: 'test'),
-        mappingStore = GenericDbMappingStore(
-          file: File('/tmp/actress_generic_db_test_mapping.json'),
-        ),
-        _testWorks = works;
+  GenericDbReader.test({
+    required List<GenericDbWork> works,
+    GenericDbSchema? schema,
+  }) : _db = null,
+       schema =
+           schema ?? const GenericDbSchema(tables: [], fingerprint: 'test'),
+       mappingStore = GenericDbMappingStore(
+         file: File('/tmp/actress_generic_db_test_mapping.json'),
+       ),
+       _testWorks = works;
 
   final Database? _db;
   GenericDbSchema schema;
@@ -741,51 +964,85 @@ class GenericDbReader {
     );
   }
 
-  (String?, List<Object?>) _worksWhere(String query) {
+  /// 统一的 WHERE 组装：关键词搜（标题/番号 LIKE）+ 分类筛选
+  /// （每列 IN 一组值，跨列 AND、同列 OR）。
+  (String?, List<Object?>) _where(
+    String query,
+    Map<String, List<String>> filters,
+  ) {
     final mapping = schema.worksTable;
+    if (mapping == null) return (null, const []);
+    final clauses = <String>[];
+    final args = <Object?>[];
     final trimmed = query.trim();
-    if (mapping == null || trimmed.isEmpty) return (null, const []);
-    final like =
-        '%${trimmed.replaceAll('%', '').replaceAll('_', '')}%';
-    final titleCol = mapping.columnFor(GenericDbRole.title);
-    final codeCol = mapping.columnFor(GenericDbRole.code);
-    if (titleCol != null && codeCol != null) {
-      return (
-        '(${_quote(titleCol)} LIKE ? OR ${_quote(codeCol)} LIKE ?)',
-        [like, like],
+    if (trimmed.isNotEmpty) {
+      final like = '%${trimmed.replaceAll('%', '').replaceAll('_', '')}%';
+      // 关键词同时搜标题/番号/女优/分类：外来库的标题常常是编号，
+      // 用户搜「素人」这类分类词、或搜女优名时也得搜得出来。
+      final searchable = <String>[
+        for (final role in const [
+          GenericDbRole.title,
+          GenericDbRole.code,
+          GenericDbRole.actress,
+          GenericDbRole.category,
+        ])
+          if (mapping.columnFor(role) != null) _quote(mapping.columnFor(role)!),
+      ];
+      if (searchable.isNotEmpty) {
+        clauses.add('(${searchable.map((c) => '$c LIKE ?').join(' OR ')})');
+        args.addAll([for (final _ in searchable) like]);
+      }
+    }
+    for (final entry in filters.entries) {
+      final values = [
+        for (final value in entry.value)
+          if (value.trim().isNotEmpty) value,
+      ];
+      if (values.isEmpty) continue;
+      if (!mapping.allColumns.contains(entry.key)) continue;
+      // CAST 成文本比较：库里的分类列可能是 INTEGER 型 id，而筛选
+      // 值是从列表里点出来的字符串，不 CAST 会一个都匹配不上。
+      clauses.add(
+        'CAST(${_quote(entry.key)} AS TEXT) IN '
+        '(${List.filled(values.length, '?').join(',')})',
       );
+      args.addAll(values);
     }
-    if (titleCol != null) {
-      return ('${_quote(titleCol)} LIKE ?', [like]);
-    }
-    return (null, const []);
+    if (clauses.isEmpty) return (null, const []);
+    return (clauses.join(' AND '), args);
   }
 
-  /// 读作品（标题/番号 LIKE 搜，rowid 顺序翻页）。
+  /// 读一页作品（关键词搜 + 分类筛选；rowid 顺序翻页）。
+  /// 主表没存播放地址/封面时，自动从关联副表补（见 [GenericDbRelation]）。
   Future<List<GenericDbWork>> works({
     required int offset,
     required int limit,
     String query = '',
+    Map<String, List<String>> filters = const {},
   }) async {
     final testWorks = _testWorks;
     if (testWorks != null) {
       final q = query.trim().toLowerCase();
-      final filtered =
-          q.isEmpty
-              ? testWorks
-              : testWorks
-                  .where(
-                    (w) =>
-                        w.title.toLowerCase().contains(q) ||
-                        w.code.toLowerCase().contains(q),
-                  )
-                  .toList();
+      var filtered = testWorks.where((w) {
+        if (q.isNotEmpty &&
+            !w.title.toLowerCase().contains(q) &&
+            !w.code.toLowerCase().contains(q) &&
+            !w.actress.toLowerCase().contains(q) &&
+            !w.category.toLowerCase().contains(q)) {
+          return false;
+        }
+        return true;
+      }).toList();
+      if (filters.isNotEmpty) {
+        filtered = filtered.where((w) => _testWorkMatches(w, filters)).toList();
+      }
       return filtered.skip(offset).take(limit).toList();
     }
     final mapping = schema.worksTable;
-    if (mapping == null || _db == null) return const [];
-    final (where, args) = _worksWhere(query);
-    final rows = await _db.query(
+    final db = _db;
+    if (mapping == null || db == null) return const [];
+    final (where, args) = _where(query, filters);
+    final rows = await db.query(
       mapping.table,
       columns: _selectColumns(mapping),
       where: where,
@@ -794,32 +1051,293 @@ class GenericDbReader {
       limit: limit,
       offset: offset,
     );
-    return [for (final row in rows) _rowToWork(mapping, row)];
+    final works = [for (final row in rows) _rowToWork(mapping, row)];
+    return _attachRelated(works);
+  }
+
+  bool _testWorkMatches(GenericDbWork work, Map<String, List<String>> filters) {
+    for (final entry in filters.entries) {
+      if (entry.value.isEmpty) continue;
+      if (!entry.value.contains(work.category)) return false;
+    }
+    return true;
   }
 
   /// 作品总数（与 [works] 同一过滤条件）。
-  Future<int> countWorks({String query = ''}) async {
+  Future<int> countWorks({
+    String query = '',
+    Map<String, List<String>> filters = const {},
+  }) async {
     final testWorks = _testWorks;
     if (testWorks != null) {
-      if (query.trim().isEmpty) return testWorks.length;
-      final q = query.trim().toLowerCase();
-      return testWorks
-          .where(
-            (w) =>
-                w.title.toLowerCase().contains(q) ||
-                w.code.toLowerCase().contains(q),
-          )
-          .length;
+      final list = await works(
+        offset: 0,
+        limit: testWorks.length + 1,
+        query: query,
+        filters: filters,
+      );
+      return list.length;
     }
     final mapping = schema.worksTable;
-    if (mapping == null || _db == null) return 0;
-    final (where, args) = _worksWhere(query);
-    final rows = await _db.rawQuery(
+    final db = _db;
+    if (mapping == null || db == null) return 0;
+    final (where, args) = _where(query, filters);
+    final rows = await db.rawQuery(
       'SELECT COUNT(*) AS c FROM ${_quote(mapping.table)}'
       '${where == null ? '' : ' WHERE $where'}',
       args.isEmpty ? null : args,
     );
     return (rows.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 按人名取作品（名册对接库索引用）：SQL 侧先粗筛（女优列/标题
+  /// 含这个名字），Dart 侧再按归一化名精确比对——库里的女优名可能
+  /// 带空格/大小写差异，只靠 SQL = 会漏。
+  Future<List<GenericDbWork>> worksForActress(
+    String name, {
+    int limit = 300,
+  }) async {
+    final normalized = name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    if (normalized.isEmpty) return const [];
+    final testWorks = _testWorks;
+    if (testWorks != null) {
+      return [
+        for (final work in testWorks)
+          if (work.actress
+              .replaceAll(RegExp(r'\s+'), '')
+              .toLowerCase()
+              .contains(normalized))
+            work,
+      ].take(limit).toList();
+    }
+    final mapping = schema.worksTable;
+    final db = _db;
+    if (mapping == null || db == null) return const [];
+    final actressCol = mapping.columnFor(GenericDbRole.actress);
+    final titleCol = mapping.columnFor(GenericDbRole.title);
+    final tokens = <String>[
+      if (actressCol != null) 'CAST(${_quote(actressCol)} AS TEXT) LIKE ?',
+      if (titleCol != null) 'CAST(${_quote(titleCol)} AS TEXT) LIKE ?',
+    ];
+    if (tokens.isEmpty) return const [];
+    final like = '%${_escapeLike(name.trim())}%';
+    final List<Map<String, Object?>> rows;
+    try {
+      rows = await db.query(
+        mapping.table,
+        columns: _selectColumns(mapping),
+        where: tokens.join(' OR '),
+        whereArgs: [for (final _ in tokens) like],
+        orderBy: 'rowid',
+        limit: limit * 3,
+      );
+    } catch (_) {
+      return const [];
+    }
+    final out = <GenericDbWork>[];
+    for (final row in rows) {
+      final work = _rowToWork(mapping, row);
+      final candidate = work.actress
+          .replaceAll(RegExp(r'\s+'), '')
+          .toLowerCase();
+      if (candidate.isEmpty) continue;
+      if (!candidate.contains(normalized) && !normalized.contains(candidate)) {
+        continue;
+      }
+      out.add(work);
+      if (out.length >= limit) break;
+    }
+    return _attachRelated(out);
+  }
+
+  /// 按番号取作品（名册/搜索对接库索引用）：SQL 侧把番号列的
+  /// 连字符、下划线、空格去掉再比（库里 "JUL-893"、查询 "jul893"
+  /// 都能对上），Dart 侧再按归一化番号精确比对。
+  Future<List<GenericDbWork>> worksForCode(
+    String codeKey, {
+    int limit = 200,
+  }) async {
+    final normalized = _normalizeCodeKey(codeKey);
+    if (normalized.isEmpty) return const [];
+    final testWorks = _testWorks;
+    if (testWorks != null) {
+      return [
+        for (final work in testWorks)
+          if (_normalizeCodeKey(work.code) == normalized) work,
+      ].take(limit).toList();
+    }
+    final mapping = schema.worksTable;
+    final db = _db;
+    if (mapping == null || db == null) return const [];
+    final codeCol = mapping.columnFor(GenericDbRole.code);
+    final titleCol = mapping.columnFor(GenericDbRole.title);
+    final columns = <String>[
+      if (codeCol != null) codeCol,
+      if (titleCol != null) titleCol,
+    ];
+    if (columns.isEmpty) return const [];
+    final tokens = [for (final column in columns) _normalizedColumn(column)];
+    final List<Map<String, Object?>> rows;
+    try {
+      rows = await db.query(
+        mapping.table,
+        columns: _selectColumns(mapping),
+        where: tokens.map((t) => "$t LIKE ?").join(' OR '),
+        whereArgs: [for (final _ in tokens) '%$normalized%'],
+        orderBy: 'rowid',
+        limit: limit * 4,
+      );
+    } catch (_) {
+      return const [];
+    }
+    final out = <GenericDbWork>[];
+    for (final row in rows) {
+      final work = _rowToWork(mapping, row);
+      final codeMatch = _normalizeCodeKey(work.code) == normalized;
+      final titleMatch = _normalizeCodeKey(work.title).contains(normalized);
+      if (!codeMatch && !titleMatch) continue;
+      out.add(work);
+      if (out.length >= limit) break;
+    }
+    return _attachRelated(out);
+  }
+
+  /// 番号列去掉分隔符后的 SQL 表达式（归一化口径与 Dart 侧一致）。
+  String _normalizedColumn(String column) {
+    var expr = 'CAST(${_quote(column)} AS TEXT)';
+    for (final sep in const ['-', '_', ' ', '.']) {
+      expr = "REPLACE($expr, '$sep', '')";
+    }
+    return 'UPPER($expr)';
+  }
+
+  static String _escapeLike(String value) =>
+      value.replaceAll('%', '').replaceAll('_', '').replaceAll("'", '');
+
+  static String _normalizeCodeKey(String raw) =>
+      raw.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+
+  /// 分类维度：作品表里像分类/分类名/标签/系列/地区的列，每列出
+  /// 现过的值 + 每个值下的作品数（按作品数从多到少，[maxValues] 封顶）。
+  /// 这就是「点进库以后按库内部的多级分类筛选」的数据来源。
+  Future<List<GenericDbFacet>> facets({int maxValues = 30}) async {
+    final mapping = schema.worksTable;
+    final db = _db;
+    if (mapping == null || db == null || _testWorks != null) return const [];
+    final columns = categoryFacetColumns(mapping).take(6);
+    final out = <GenericDbFacet>[];
+    for (final column in columns) {
+      final quoted = _quote(column);
+      final rows = await db.rawQuery(
+        'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c '
+        'FROM ${_quote(mapping.table)} '
+        'WHERE $quoted IS NOT NULL AND TRIM(CAST($quoted AS TEXT)) <> '
+        ' '
+        'GROUP BY CAST($quoted AS TEXT) '
+        'ORDER BY c DESC, v ASC LIMIT ?',
+        [maxValues],
+      );
+      final values = <GenericDbFacetValue>[];
+      for (final row in rows) {
+        final value = row['v']?.toString().trim() ?? '';
+        if (value.isEmpty) continue;
+        values.add(
+          GenericDbFacetValue(
+            value: value,
+            count: (row['c'] as num?)?.toInt() ?? 0,
+          ),
+        );
+      }
+      if (values.isEmpty) continue;
+      out.add(GenericDbFacet(column: column, values: values));
+    }
+    return out;
+  }
+
+  /// 主表行缺地址/封面时，按关联副表一次性补上（每个主表 id 取副表
+  /// 里第一条非空值）。
+  Future<List<GenericDbWork>> _attachRelated(List<GenericDbWork> works) async {
+    final db = _db;
+    if (db == null || works.isEmpty || schema.relations.isEmpty) return works;
+    var out = works;
+    for (final relation in schema.relations) {
+      final needsPlay = relation.columnFor(GenericDbRole.playUrl) != null;
+      final needsCover = relation.columnFor(GenericDbRole.cover) != null;
+      if (!needsPlay && !needsCover) continue;
+      final keys = <Object?>{};
+      for (final work in out) {
+        final missing =
+            (needsPlay && !work.playable) ||
+            (needsCover && work.coverUrl.isEmpty);
+        if (!missing) continue;
+        final id = work.id;
+        if (id != null) keys.add(id);
+      }
+      if (keys.isEmpty) continue;
+      final values = await _relatedValues(relation, keys.toList());
+      if (values.isEmpty) continue;
+      out = [
+        for (final work in out)
+          if (values[work.id?.toString() ?? ''] == null)
+            work
+          else
+            _withRelated(work, values[work.id?.toString() ?? '']!),
+      ];
+    }
+    return out;
+  }
+
+  GenericDbWork _withRelated(
+    GenericDbWork work,
+    Map<GenericDbRole, String> related,
+  ) {
+    final play = work.playable
+        ? work.playUrl
+        : (related[GenericDbRole.playUrl] ?? '');
+    final cover = work.coverUrl.isNotEmpty
+        ? work.coverUrl
+        : (related[GenericDbRole.cover] ?? '');
+    if (play == work.playUrl && cover == work.coverUrl) return work;
+    return work.copyWith(playUrl: play, coverUrl: cover);
+  }
+
+  Future<Map<String, Map<GenericDbRole, String>>> _relatedValues(
+    GenericDbRelation relation,
+    List<Object?> keys,
+  ) async {
+    final db = _db;
+    final playCol = relation.columnFor(GenericDbRole.playUrl);
+    final coverCol = relation.columnFor(GenericDbRole.cover);
+    if (db == null || (playCol == null && coverCol == null)) return const {};
+    final columns = <String>[relation.foreignKey, ?playCol, ?coverCol];
+    final placeholders = List.filled(keys.length, '?').join(',');
+    final List<Map<String, Object?>> rows;
+    try {
+      rows = await db.rawQuery(
+        'SELECT ${columns.map(_quote).join(',')} '
+        'FROM ${_quote(relation.table)} '
+        'WHERE ${_quote(relation.foreignKey)} IN ($placeholders)',
+        keys,
+      );
+    } catch (_) {
+      // 副表结构跟探测时不一致（脏库/视图）：补不上就不补，不让整页挂。
+      return const {};
+    }
+    final out = <String, Map<GenericDbRole, String>>{};
+    for (final row in rows) {
+      final key = row[relation.foreignKey]?.toString() ?? '';
+      if (key.isEmpty) continue;
+      final slot = out.putIfAbsent(key, () => <GenericDbRole, String>{});
+      if (playCol != null && (slot[GenericDbRole.playUrl] ?? '').isEmpty) {
+        final url = extractPlayUrl(row[playCol]);
+        if (url.isNotEmpty) slot[GenericDbRole.playUrl] = url;
+      }
+      if (coverCol != null && (slot[GenericDbRole.cover] ?? '').isEmpty) {
+        final cover = resolveCoverUrl(row[coverCol]);
+        if (cover.isNotEmpty) slot[GenericDbRole.cover] = cover;
+      }
+    }
+    return out;
   }
 
   /// 读人物（有人物表时才有；没有返回空列表）。
@@ -861,10 +1379,6 @@ class GenericDbReader {
     final next = schema.withManualMapping(table: table, columns: columns);
     if (identical(next, schema)) return;
     schema = next;
-    await mappingStore.saveMapping(
-      schema.fingerprint,
-      table,
-      columns,
-    );
+    await mappingStore.saveMapping(schema.fingerprint, table, columns);
   }
 }
