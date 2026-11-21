@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'actress_film_library.dart';
 import 'actress_models.dart';
 import '../models.dart';
 
@@ -85,7 +86,10 @@ Drama actressWorkDrama(ActressWork work) {
   if (work.hasCover) {
     return Drama(
       id: work.coverDramaId,
-      source: work.coverSource,
+      // 2026-11-22 修：coverSource 是库里的 vod_play_from 原样
+      //（whos.tv / mjv011），取封面只认归一化站 id（whos / mjv），
+      // 不归一化就取不到图——作品网格整片灰块就是这么来的。
+      source: filmSiteId(work.coverSource),
       title: work.displayTitle,
       cover: work.coverUrl,
     );
