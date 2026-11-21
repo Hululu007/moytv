@@ -358,6 +358,12 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       _resolvedPaths.removeWhere((_, value) => value == path);
     }
     if (_retryOnFailure) _queueRetry();
+    // 2026-11-22：本地库作品的封面本来就是直链（女优库.db 的
+    // pic_url）。取图器认不出库里的站名时别再留“重试海报”按钮，
+    // 直接拿直链上屏。
+    if (_hasDirectCoverUrl(widget.drama.cover)) {
+      return _directCover();
+    }
     return Center(
       child: IconButton(
         tooltip: '重试海报',
@@ -370,6 +376,24 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
     );
   }
 
+  static bool _hasDirectCoverUrl(String cover) {
+    final url = cover.trim();
+    return url.startsWith('http://') || url.startsWith('https://');
+  }
+
+  /// 直链封面：不等取图器、不走本地缓存文件，直接网络出图。
+  /// 拿不到就退回占位图（不弹重试按钮、不报错）。
+  Widget _directCover() {
+    return Image.network(
+      widget.drama.cover.trim(),
+      fit: BoxFit.cover,
+      cacheWidth: 440,
+      gaplessPlayback: true,
+      excludeFromSemantics: true,
+      errorBuilder: (_, _, _) => widget.placeholder,
+    );
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<String>(
     future: _file,
@@ -379,6 +403,9 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done &&
           !snapshot.hasData) {
+        // 2026-11-22：有封面直链就先把直链显示出来，不再干等取图器
+        // （本地库作品的 pic_url 就是直链，等它回来之前一片灰很难看）。
+        if (_hasDirectCoverUrl(widget.drama.cover)) return _directCover();
         return widget.placeholder;
       }
       if (snapshot.hasError || !snapshot.hasData) {
