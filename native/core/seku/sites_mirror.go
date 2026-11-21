@@ -54,7 +54,7 @@ var mirrorSeedHosts = []string{
 // (live-verified 2026-10-23: Referer https://www.missav06.net/ -> 403,
 // Referer https://missav.ws/ -> 200, same UA). Playback headers must
 // therefore use missav.ws, NOT the learned mirror host.
-const mirrorPlayReferer = "https://missav.ws/"
+const mirrorPlayReferer = "https://missav.fans/"
 
 const mirrorUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 

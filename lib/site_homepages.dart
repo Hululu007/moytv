@@ -14,6 +14,9 @@
 
 /// py 蜘蛛站（含视频 81 + 阅读 23）的主页。
 const Map<String, String> pySiteHomepages = {
+  'whos': 'https://whos.tv',
+  'nvku': 'https://nvku-8m2c.web.zaka.live',
+  'qilinyingshi': 'https://www.qlys.cc',
   '1000novel': 'https://1000novel.com',
   '51xz': 'https://51xz.vip',
   '55comics': 'https://www.55comics.com',

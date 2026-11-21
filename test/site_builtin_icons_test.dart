@@ -41,8 +41,8 @@ void main() {
       expect(w, h, reason: '${entry.value} 不是方形：$w x $h');
       expect(w, lessThanOrEqualTo(192), reason: '${entry.value} 边长 $w 超过 192');
     }
-    expect(builtinSiteIcons.length, 27);
-    expect(builtinSiteIcons.values.toSet().length, 19);
+    expect(builtinSiteIcons.length, 26);
+    expect(builtinSiteIcons.values.toSet().length, 18);
   });
 
   test('映射键全是已注册的站 id，图标不造幽灵站点', () {
@@ -61,8 +61,8 @@ void main() {
       expect(known, contains(key), reason: '图标映射 $key 不在任何注册表里');
     }
     // 注册表计数不变：图标只配站，不加站。
-    expect(BuiltinPySites.entries.length, 123);
-    expect(zakatvBuiltinSites.length, 140);
+    expect(BuiltinPySites.entries.length, 124);
+    expect(zakatvBuiltinSites.length, 138);
     expect(builtinLegadoSources.length, 52);
   });
 

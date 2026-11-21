@@ -37,6 +37,58 @@ var zkShieldMarked = map[string]time.Time{}
 var zkShieldJinaDeadUntil time.Time
 var zkShieldJinaLast time.Time
 
+// ---- App clearance bridge (2026-11-21) ----
+//
+// The App already owns a manual clearance flow: a WebView passes Cloudflare
+// once and the resulting cf_clearance cookie (plus the UA it was issued to)
+// is stored per host. Until now that store only served requests issued from
+// the Dart side, so Go-core sites hit the same shield and stayed blank.
+//
+// These two hooks close the gap without naming any site: lookup answers
+// "do we already hold a ticket for this host", report answers "this host
+// challenged us, surface it to the App". Both are nil when no host App is
+// attached (tests, CLI), and the old behaviour is unchanged.
+var zkShieldExternalTicket func(host string) (cookie, ua string, ok bool)
+var zkShieldExternalReport func(rawurl string)
+var zkShieldReported = map[string]time.Time{}
+
+const zkShieldReportGap = 5 * time.Minute
+
+// SetShieldBridge wires the App-side clearance store into this package.
+// lookup/report may be nil to detach.
+func SetShieldBridge(lookup func(host string) (string, string, bool), report func(string)) {
+	zkShieldMu.Lock()
+	zkShieldExternalTicket = lookup
+	zkShieldExternalReport = report
+	zkShieldMu.Unlock()
+}
+
+// zkShieldHasExternalTicket is true when a host App supplied a store.
+func zkShieldHasExternalTicket() bool {
+	zkShieldMu.Lock()
+	defer zkShieldMu.Unlock()
+	return zkShieldExternalTicket != nil
+}
+
+// zkShieldReportChallenge tells the host App that host needs one manual
+// clearance pass. Rate-limited so a retry loop cannot spam the UI.
+func zkShieldReportChallenge(rawurl string) {
+	host := zkShieldHostOf(rawurl)
+	if host == "" {
+		return
+	}
+	zkShieldMu.Lock()
+	report := zkShieldExternalReport
+	last, seen := zkShieldReported[host]
+	if report == nil || (seen && time.Since(last) < zkShieldReportGap) {
+		zkShieldMu.Unlock()
+		return
+	}
+	zkShieldReported[host] = time.Now()
+	zkShieldMu.Unlock()
+	report(rawurl)
+}
+
 func zkShieldSetOn(on bool) {
 	zkShieldMu.Lock()
 	zkShieldOn = on
@@ -221,7 +273,18 @@ func zkShieldTicketHeaders(host string, headers map[string]string) map[string]st
 	}
 	t, ok := zkShieldLiveTicket(host)
 	if !ok {
-		return out
+		// No in-package ticket: fall back to the App clearance store.
+		zkShieldMu.Lock()
+		lookup := zkShieldExternalTicket
+		zkShieldMu.Unlock()
+		if lookup == nil {
+			return out
+		}
+		cookie, ua, found := lookup(host)
+		if !found || cookie == "" {
+			return out
+		}
+		t = zkShieldTicket{cookie: cookie, ua: ua, saved: time.Now(), ttl: 30 * time.Minute}
 	}
 	merged := ""
 	for k, v := range out {
@@ -710,6 +773,12 @@ func zkShieldFetchWithDirect(rawurl string, headers map[string]string, referer s
 			zkShieldMark(host, false)
 			if zkShieldIsChallenge(body) {
 				zkShieldMarkShielded(host)
+				// Only a real challenge page (non-empty, carries the CF
+				// markers) is worth a clearance prompt; an empty body is a
+				// plain network failure and must not nag the user.
+				if body != "" {
+					zkShieldReportChallenge(rawurl)
+				}
 			}
 			body = ""
 		}

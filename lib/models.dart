@@ -601,13 +601,6 @@ class SourceSite {
       slotId: 'yh_maomi',
     ),
     SourceSite(
-      'v_fulao2',
-      '🔞腐老二',
-      '欲火移植 · 令牌门待解',
-      section: sectionVideo,
-      slotId: 'yh_fulao2',
-    ),
-    SourceSite(
       'v_xj',
       '🔞香蕉视频',
       '欲火移植 · 全腿实测',

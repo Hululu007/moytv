@@ -67,7 +67,6 @@ var sekuSlotPublicIDs = map[string]string{
 	"yh_lxs":         "v_lxs",
 	"yh_km2":         "v_km2",
 	"yh_maomi":       "v_maomi",
-	"yh_fulao2":      "v_fulao2",
 	"yh_xj":          "v_xj",
 	"yh_cucumber":    "v_cucumber",
 	"yh_avbobo":      "v_avbobo",

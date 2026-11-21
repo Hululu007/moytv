@@ -366,6 +366,18 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 		}}
 	engine := &nativeEngine{downloader: d, directory: directory, catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
 	d.loadShieldClearances()
+	// App 清关票据接进 Go 核站源：查票走本地清关库，撞盾回报给清关页。
+	// 不绑定任何站点，任何 Go 核站点被盾挡住都能用同一条通路。
+	seku.SetShieldBridge(
+		func(host string) (string, string, bool) {
+			entry, ok := d.shieldClearanceFor(host)
+			if !ok || entry.Cookie == "" {
+				return "", "", false
+			}
+			return entry.Cookie, entry.UA, true
+		},
+		func(rawurl string) { d.recordShieldChallenge(rawurl) },
+	)
 	engine.loadResourceSettings()
 	d.loadRankingCache()
 	engine.loadCatalogCache()

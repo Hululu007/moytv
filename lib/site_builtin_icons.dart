@@ -29,7 +29,6 @@ const Map<String, String> builtinSiteIcons = {
   'v_sihu': 'assets/site_icons/ic_app_4hu.png',
   'v_km': 'assets/site_icons/ic_app_km.png',
   'v_lxs': 'assets/site_icons/ic_app_lxs.png',
-  'v_fulao2': 'assets/site_icons/ic_app_fl2.png',
   'v_pron91': 'assets/site_icons/ic_app_91pron.png',
   'v_av91': 'assets/site_icons/ic_app_91av.png',
   'v_haijiao_fanguo': 'assets/site_icons/ic_app_hjsq.png',

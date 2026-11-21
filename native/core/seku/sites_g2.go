@@ -616,8 +616,109 @@ func missavParseIndex(page, prefix string) []g2Work {
 	return out
 }
 
+// ---- MissAV player-address deobfuscation (2026-11-21) ----
+//
+// The site swapped its media CDN (old: surrit.mrstcdn.store, CF-protected;
+// new: <node>-<tag>.b-cdn.net, Bunny CDN, no referer/UA gate at all) and now
+// ships the address inside a Dean-Edwards packed eval block instead of the
+// reversed "m3u8|...|video" fragment list. Decoding the block is the only
+// portable way to read it: the dictionary order, the alphabet and the host
+// all change per page, so nothing can be pattern-matched across requests.
+//
+// The packer is the standard six-arg form:
+//   eval(function(p,a,c,k,e,d){...}('<payload>',a,c,'k0|k1|...'.split('|'),0,{}))
+// Keys are base-`a` (not base-36) renderings of 0..c-1, mapped onto k[].
+
+var missavPackerRe = regexp.MustCompile(
+	`(?s)eval\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)` +
+		`.*?\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\s*\.split\(\s*'\|'\s*\)`)
+
+const missavBaseDigits = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+func missavBaseN(n, radix int) string {
+	if radix < 2 {
+		radix = 36
+	}
+	if n == 0 {
+		return "0"
+	}
+	buf := []byte{}
+	for n > 0 {
+		buf = append([]byte{missavBaseDigits[n%radix]}, buf...)
+		n /= radix
+	}
+	return string(buf)
+}
+
+// missavUnpackBlock expands one packed block into readable JS.
+func missavUnpackBlock(payload string, radix, count int, words []string) string {
+	dict := make(map[string]string, count)
+	for i := count - 1; i >= 0; i-- {
+		key := missavBaseN(i, radix)
+		val := key
+		if i < len(words) && words[i] != "" {
+			val = words[i]
+		}
+		dict[key] = val
+	}
+	tokenRe := regexp.MustCompile(`\w+`)
+	return tokenRe.ReplaceAllStringFunc(payload, func(tok string) string {
+		if v, ok := dict[tok]; ok {
+			return v
+		}
+		return tok
+	})
+}
+
+// missavUnpackPage returns every packed block on the page, decoded and
+// concatenated. Empty when the page carries no packed block.
+func missavUnpackPage(page string) string {
+	blocks := missavPackerRe.FindAllStringSubmatch(page, -1)
+	if len(blocks) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, m := range blocks {
+		payload := strings.ReplaceAll(m[1], `\'`, `'`)
+		radix, err := strconv.Atoi(m[2])
+		if err != nil || radix < 2 {
+			radix = 36
+		}
+		count, err := strconv.Atoi(m[3])
+		if err != nil || count <= 0 {
+			continue
+		}
+		sb.WriteString(missavUnpackBlock(payload, radix, count, strings.Split(m[4], "|")))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// missavPlaylistFromJS pulls the master playlist out of decoded JS.
+func missavPlaylistFromJS(text string) string {
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`https?://[^\s"'\` + "`" + `]+/playlist\.m3u8`),
+		regexp.MustCompile(`https?://[^\s"'\` + "`" + `]+/(?:720p|1080p|360p|480p)/video\.m3u8`),
+		regexp.MustCompile(`https?://[^\s"'\` + "`" + `]+\.m3u8`),
+	} {
+		if m := re.FindString(text); m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
 // missavExtractM3u8 ports py extract_m3u8() verbatim (three tiers).
+//
+// Tier 0 is the current site shape (2026-11-21): the address sits inside a
+// packed eval block, so unpack first and only then pattern-match. Tiers 1-3
+// stay for the older reversed-fragment page and the surrit-only layouts.
 func missavExtractM3u8(page string) string {
+	if unpacked := missavUnpackPage(page); unpacked != "" {
+		if found := missavPlaylistFromJS(unpacked); found != "" {
+			return found
+		}
+	}
 	re1 := regexp.MustCompile(`(?s)'m3u8(.*?)video`)
 	if m := re1.FindStringSubmatch(page); m != nil {
 		parts := strings.Split(m[1], "|")
