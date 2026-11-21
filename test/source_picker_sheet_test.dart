@@ -243,4 +243,49 @@ void main() {
     expect(picked, isNull);
     expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
   });
+
+  testWidgets('长按站点直接删除（不进编辑模式），不可删的站长按无反应', (tester) async {
+    final deleted = <String>[];
+    final attempted = <String>[];
+    String? picked;
+    await tester.pumpWidget(
+      _host(
+        onResult: (value) => picked = value,
+        onDelete: (entry) async {
+          attempted.add(entry.id);
+          if (entry.id == 'a') {
+            deleted.add(entry.id);
+            return true;
+          }
+          return false;
+        },
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+
+    // 非编辑模式：有长按提示，没有删除图标。
+    expect(find.text('长按站点可删除'), findsOneWidget);
+    expect(find.byKey(const ValueKey('site-picker-delete-a')), findsNothing);
+
+    // 长按可删的 A 站：调删除回调、行消失。
+    await tester.longPress(find.byKey(const ValueKey('site-picker-row-a')));
+    await tester.pumpAndSettle();
+    expect(deleted, ['a']);
+    expect(find.text('A站'), findsNothing);
+    expect(find.text('B站'), findsOneWidget);
+
+    // 长按 B 站：回调调了但返回 false，行保留、弹窗还在。
+    await tester.longPress(find.byKey(const ValueKey('site-picker-row-b')));
+    await tester.pumpAndSettle();
+    expect(attempted, ['a', 'b']);
+    expect(find.text('B站'), findsOneWidget);
+
+    // 长按不可删的「全部站源」：没有长按处理、按点选走，回调不调。
+    await tester.longPress(find.byKey(const ValueKey('site-picker-row-all')));
+    await tester.pumpAndSettle();
+    expect(attempted, ['a', 'b']);
+    expect(picked, 'all');
+    expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
+  });
 }

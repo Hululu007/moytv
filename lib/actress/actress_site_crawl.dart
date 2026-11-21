@@ -9,8 +9,10 @@ import '../core_bridge.dart';
 import '../crosssite_probe.dart';
 import '../models.dart';
 import 'actress_database.dart';
+import 'actress_film_library.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
+import 'actress_mytv_bind.dart';
 
 /// MJV 视频分类（与潮流蜘蛛 chaoliu.py 的 MJV_CATS 同表，只取视频类；
 /// 18H 漫画/同人/写真/小说四类不是视频，不爬）。
@@ -77,11 +79,19 @@ class ActressSiteCrawlProgress {
 ///   用户令：内置 json 的本地存储随爬取增长，库的容量与文件体积
 ///   不设条数与体积死上限）；MJV 全站约 51 万条目，手机上全量现爬
 ///   不现实，不承诺全量；
-/// - 存储：App 资源包里的 assets 文件只读，长在可写的那份本地副本
-///   里——documents/actress_json/$site.json（普通文件，不是
+/// - 存储（2026-11-20 用户令：所有数据全部进内置的 mjv011.json
+///   这一个文件，json 是唯一落地口径）：App 资源包里的 assets 文件
+///   只读，手机侧写入口是同名同格式的本地影子文件
+///   documents/actress_json/mjv011.json（普通文件，不是
 ///   SharedPreferences 单键，不重蹈 m3u 单键超 16MB 的覆辙）；
-///   每爬完一页立刻写盘；一轮内合并表常驻内存（只读一次文件），
-///   每页只写不重读；读时兜底加载器把本地新增与内置快照合并着算；
+///   任何站爬到的视频行都只追加进这一个文件，不分站另存；
+///   单文件里的行按 vod_play_from 认站（mjv011 → mjv，其余来源名
+///   即站 id）；每爬完一页立刻写盘；一轮内合并表常驻内存（只读
+///   一次文件），每页只写不重读；写盘后同一批条目同步进库（人表
+///   + 作品表，json-first，库是 json 的派生索引），列表进行中就
+///   能陆续出人；读时兜底加载器把本地新增与内置快照合并着算；
+///   合并后的全文可导出拷回树里 assets/actress_json/mjv011.json，
+///   下次打包带走；
 /// - 断点续跑：检查点存在 sync_state（source=site_crawl，phase=站，
 ///   cursor=分类下标/页码），每爬完一页即存点，失败停在当前页；
 /// - 每爬完一页立刻写盘（同格式，indent=2、顶层四键、13 字段 +
@@ -91,7 +101,19 @@ class ActressSiteCrawlService {
     required this.repository,
     required this.db,
     this._documentsDir,
-  });
+    Directory? localJsonDir,
+  }) : _localJsonDir = localJsonDir;
+
+  /// 2026-11-20 MYTV 绑定：绑定解析出来后调，本地 json 影子
+  /// 目录改走 MYTV/db。只在列表页自己建的实例上调，测试注入
+  /// 的实例不动。目录换了就清掉内存里的合并表，下次按新目录
+  /// 重读（别把旧目录的表写进新目录）。
+  void bindLocalDir(Directory dir) {
+    if (dir.path == _localJsonDir?.path) return;
+    _localJsonDir = dir;
+    _localByKey = null;
+    _localSite = null;
+  }
 
   /// 每分类默认页数（2026-11-20 用户令：最少 50 页）。
   static const defaultMaxPagesPerCategory = 50;
@@ -101,14 +123,30 @@ class ActressSiteCrawlService {
   /// 分类、全站 500 次详情+取流；严格按比例是 83 条/分类太重）。
   static const defaultEnrichPerCategory = 50;
 
+  /// 分类工人数（2026-11-20 用户令：爬取必须多进程/多并发）：
+  /// 10 个 mjv 分类由 3 个工人并行爬，分类之间不互相等；
+  /// 每分类内的页仍顺序取（空页即停，靠短页启发）；补流在各
+  /// 分类内顺序做。进库镜像串在一条队列上（多工人并发写库时
+  /// 不抢），取页与写盘不串。
+  static const defaultCategoryConcurrency = 3;
+
   /// 断点存在 sync_state：source 借潮流名册源（现爬走潮流蜘蛛），
   /// phase 用 site_crawl_站名，与名册 roster/films/ranking 各记各的。
   static const _checkpointSource = ActressRosterSourceId.chaoliu;
   static String _checkpointPhase(String site) => 'site_crawl_$site';
 
+  /// 每分类的断点（分类工人并行时，单游标记不住各分类进度，
+  /// 每分类各记各的页码；整轮完成只看总检查点）。
+  static String _categoryCheckpointPhase(String site, int categoryIndex) =>
+      'site_crawl_${site}_cat$categoryIndex';
+
   final AppRepository repository;
   final ActressDatabase db;
   final Directory? _documentsDir;
+
+  /// 2026-11-20 MYTV 绑定：绑定后的本地 json 目录覆盖
+  /// （MYTV/db）；不设时走原来的 documents/actress_json。
+  Directory? _localJsonDir;
 
   final _progressController =
       StreamController<ActressSiteCrawlProgress>.broadcast();
@@ -138,10 +176,12 @@ class ActressSiteCrawlService {
   }
 
   /// 开始现爬。whos 直接报缺口（见类注释）；mjv 与片库站都跑。
+  /// 分类由 [categoryConcurrency] 个工人并行爬（默认 3 个）。
   Future<void> start({
     String site = 'mjv',
     int maxPagesPerCategory = defaultMaxPagesPerCategory,
     int enrichPerCategory = defaultEnrichPerCategory,
+    int categoryConcurrency = defaultCategoryConcurrency,
   }) async {
     if (_running) return;
     if (site == 'whos') {
@@ -178,92 +218,153 @@ class ActressSiteCrawlService {
           ? const [(id: '', name: '全部')]
           : usable;
     }
-    // 一轮内合并表常驻内存：只读一次本地文件，每页只写不重读；
+    // 一轮内合并表常驻内存：只读一次本地单文件，每页只写不重读；
     // 取消/跑完后丢弃，下轮重读（文件是唯一真相）。
     _localByKey = await _loadLocalEntries(site);
     _localSite = site;
     var items = 0;
     var enriched = 0;
     try {
+      // 断点：总检查点已完成（或没有）时整轮从头爬（多轮追加靠
+      // 这个语义：第二轮重爬全部分类，新番号追加、旧行按更新规则
+      // 合并）；总检查点未完成时，每分类各按自己的分类检查点续跑
+      // （已完成的分类跳过，未完成的从断页续爬）。
       final saved = await db.checkpoint(
         _checkpointSource,
         _checkpointPhase(site),
       );
-      var startCat = 0;
-      var startPage = 1;
-      if (saved != null && !saved.finished && saved.cursor.isNotEmpty) {
-        final parts = saved.cursor.split('/');
-        startCat = int.tryParse(parts.firstOrNull ?? '') ?? 0;
-        startPage = int.tryParse(parts.length > 1 ? parts[1] : '') ?? 1;
-        items = saved.total;
+      final resume = saved != null && !saved.finished;
+      final startPages = <int>[];
+      for (var ci = 0; ci < categories.length; ci++) {
+        var fromPage = 1;
+        if (resume) {
+          final cat = await db.checkpoint(
+            _checkpointSource,
+            _categoryCheckpointPhase(site, ci),
+          );
+          if (cat != null && cat.finished) {
+            fromPage = -1;
+          } else if (cat != null && cat.cursor.isNotEmpty) {
+            fromPage = int.tryParse(cat.cursor) ?? 1;
+            if (fromPage < 1) fromPage = 1;
+          }
+          if (cat != null) items += cat.total;
+        }
+        startPages.add(fromPage);
       }
-      for (var ci = startCat; ci < categories.length; ci++) {
-        if (_cancelled) break;
-        final category = categories[ci];
-        final fromPage = ci == startCat ? startPage : 1;
-        var enrichLeft = enrichPerCategory;
-        for (var page = fromPage; page <= maxPagesPerCategory; page++) {
-          if (_cancelled) break;
-          _emit(
-            ActressSiteCrawlProgress(
-              running: true,
-              site: site,
-              categoryIndex: ci + 1,
-              categoryCount: categories.length,
-              categoryName: category.name,
+      var nextCat = 0;
+      var doneCats = 0;
+
+      Future<void> categoryWorker() async {
+        while (!_cancelled) {
+          final ci = nextCat;
+          if (ci >= categories.length) return;
+          nextCat++;
+          final fromPage = startPages[ci];
+          if (fromPage < 0) {
+            doneCats++;
+            continue;
+          }
+          final category = categories[ci];
+          var enrichLeft = enrichPerCategory;
+          var categoryDone = false;
+          var catItems = 0;
+          var pagesDone = fromPage - 1;
+          for (var page = fromPage; page <= maxPagesPerCategory; page++) {
+            if (_cancelled) break;
+            _emit(
+              ActressSiteCrawlProgress(
+                running: true,
+                site: site,
+                categoryIndex: ci + 1,
+                categoryCount: categories.length,
+                categoryName: category.name,
+                page: page,
+                items: items,
+                enriched: enriched,
+              ),
+            );
+            final pageResult = await repository.catalog(
+              spiderId,
+              category: category.id,
               page: page,
-              items: items,
-              enriched: enriched,
-            ),
-          );
-          final pageResult = await repository.catalog(
-            spiderId,
-            category: category.id,
-            page: page,
-          );
-          final rows = pageResult.items;
-          if (rows.isEmpty) break;
-          final entries = <ActressJsonEntry>[
-            for (final drama in rows)
-              _entryFromCatalog(drama, category, site, playFrom),
-          ];
-          items += entries.length;
-          await _appendEntries(site, entries);
-          await db.saveCheckpoint(
-            ActressSyncCheckpoint(
-              source: _checkpointSource.name,
-              phase: _checkpointPhase(site),
-              cursor: '$ci/$page',
-              total: items,
-              updatedAt: DateTime.now().millisecondsSinceEpoch,
-            ),
-          );
-          // 补流：本分类前 K 条没直链的，详情 + 取流补齐（K 按分类计，
-          // 跨页累计，不按页重置）；补好的攒一页一次写盘。
-          final filledEntries = <ActressJsonEntry>[];
-          for (final entry in entries) {
-            if (enrichLeft <= 0 || _cancelled) break;
-            if (entry.playable) continue;
-            final filled = await _enrichEntry(entry, spiderId);
-            if (filled != null) {
-              filledEntries.add(filled);
-              enriched++;
-              enrichLeft--;
+            );
+            final rows = pageResult.items;
+            if (rows.isEmpty) {
+              categoryDone = true;
+              break;
+            }
+            final entries = <ActressJsonEntry>[
+              for (final drama in rows)
+                _entryFromCatalog(drama, category, site, playFrom),
+            ];
+            items += entries.length;
+            catItems += entries.length;
+            pagesDone = page;
+            await _appendEntries(site, entries);
+            await db.saveCheckpoint(
+              ActressSyncCheckpoint(
+                source: _checkpointSource.name,
+                phase: _categoryCheckpointPhase(site, ci),
+                cursor: '${page + 1}',
+                total: catItems,
+                updatedAt: DateTime.now().millisecondsSinceEpoch,
+              ),
+            );
+            // 补流：本分类前 K 条没直链的，详情 + 取流补齐（K 按分类计，
+            // 跨页累计，不按页重置）；补好的攒一页一次写盘。
+            final filledEntries = <ActressJsonEntry>[];
+            for (final entry in entries) {
+              if (enrichLeft <= 0 || _cancelled) break;
+              if (entry.playable) continue;
+              final filled = await _enrichEntry(entry, spiderId);
+              if (filled != null) {
+                filledEntries.add(filled);
+                enriched++;
+                enrichLeft--;
+              }
+            }
+            if (filledEntries.isNotEmpty) {
+              await _appendEntries(site, filledEntries, mirrorRequired: false);
+            }
+            if (rows.length < 24) {
+              categoryDone = true;
+              break;
             }
           }
-          if (filledEntries.isNotEmpty) {
-            await _appendEntries(site, filledEntries);
+          // 分类完成：短页/空页到头，或跑满每分类页数上限；
+          // 取消时不记完成，下次从断页续爬。
+          final catFinished =
+              !_cancelled &&
+              (categoryDone || pagesDone >= maxPagesPerCategory);
+          if (catFinished) {
+            await db.saveCheckpoint(
+              ActressSyncCheckpoint(
+                source: _checkpointSource.name,
+                phase: _categoryCheckpointPhase(site, ci),
+                cursor: '',
+                total: catItems,
+                finished: true,
+                updatedAt: DateTime.now().millisecondsSinceEpoch,
+              ),
+            );
           }
-          if (rows.length < 24) break;
+          doneCats++;
         }
       }
+
+      final workers = List.generate(
+        categoryConcurrency < 1 ? 1 : categoryConcurrency,
+        (_) => categoryWorker(),
+      );
+      await Future.wait(workers);
       await db.saveCheckpoint(
         ActressSyncCheckpoint(
           source: _checkpointSource.name,
           phase: _checkpointPhase(site),
-          cursor: '',
+          cursor: '$doneCats/${categories.length}',
           total: items,
-          finished: !_cancelled,
+          finished: !_cancelled && doneCats >= categories.length,
           updatedAt: DateTime.now().millisecondsSinceEpoch,
         ),
       );
@@ -295,27 +396,38 @@ class ActressSiteCrawlService {
   }
 
   /// 一轮内常驻内存的本地合并表（站 + 按 mergeKey 索引的条目）：
-  /// 只读一次文件，写盘只写不重读；取消/跑完后丢弃。
+  /// 只读一次单文件 mjv011.json，写盘只写不重读；取消/跑完后丢弃，
+  /// 下轮重读（文件是唯一真相）。键带站前缀：单文件里多站同
+  /// （分类，番号）各留各的，不跨站撞键。
   Map<String, ActressJsonEntry>? _localByKey;
   String? _localSite;
 
-  /// 读本地文件进合并表：文件不存在或坏了即空表（坏文件不卡整轮，
-  /// 下次写盘重建）。
+  /// 读本地单文件 mjv011.json 进合并表：文件不存在或坏了即空表
+  /// （坏文件不卡整轮，下次写盘重建）。行按 vod_play_from 认站，
+  /// 来源名空着才回落到本次现爬的站。
   Future<Map<String, ActressJsonEntry>> _loadLocalEntries(
     String site,
   ) async {
     final byKey = <String, ActressJsonEntry>{};
     try {
       final dir = await _localDir();
-      final file = File(path.join(dir.path, '$site.json'));
-      if (!await file.exists()) return byKey;
-      final doc = jsonDecode(await file.readAsString());
+      final file = File(
+        path.join(dir.path, ActressJsonFallback.localFileName),
+      );
+      if (!file.existsSync()) return byKey;
+      final doc = jsonDecode(file.readAsStringSync());
       if (doc is! Map<String, dynamic>) return byKey;
       validateActressJsonDocument(doc, file.path);
       for (final row in (doc['list'] as List)) {
         if (row is Map<String, dynamic>) {
-          final entry = ActressJsonEntry.fromRow(row, site);
-          byKey[entry.mergeKey] = entry;
+          final rowSite = siteForPlayFrom(
+            row['vod_play_from']?.toString() ?? '',
+          );
+          final entry = ActressJsonEntry.fromRow(
+            row,
+            rowSite.isEmpty ? site : rowSite,
+          );
+          byKey['${entry.site}|${entry.mergeKey}'] = entry;
         }
       }
     } catch (_) {
@@ -422,18 +534,23 @@ class ActressSiteCrawlService {
     return match?.group(1)?.trim() ?? '';
   }
 
-  /// 按更新规则合并写盘：同（分类，番号）且播放链接相同跳过，
+  /// 按更新规则合并写盘：同（站，分类，番号）且播放链接相同跳过，
   /// 任一字段不同就替换；全新即追加。顶层四键、indent=2。
-  /// 不设条数上限：本地文件随爬取增长（2026-11-20 用户令）。
+  /// 不设条数上限：本地单文件随爬取增长（2026-11-20 用户令）。
   /// 合并表是一轮内常驻内存的那份（_localByKey），写盘只写不重读。
+  /// 写盘后同一批条目同步进库（json-first：先落 json、再进库镜像，
+  /// 库是 json 的派生索引），列表进行中就能陆续出人。
   Future<void> _appendEntries(
     String site,
-    List<ActressJsonEntry> fresh,
-  ) async {
+    List<ActressJsonEntry> fresh, {
+    bool mirrorRequired = true,
+  }) async {
     if (fresh.isEmpty) return;
     final dir = await _localDir();
     await dir.create(recursive: true);
-    final file = File(path.join(dir.path, '$site.json'));
+    final file = File(
+      path.join(dir.path, ActressJsonFallback.localFileName),
+    );
     var byKey = _localByKey;
     if (_localSite != site || byKey == null) {
       byKey = await _loadLocalEntries(site);
@@ -441,7 +558,7 @@ class ActressSiteCrawlService {
       _localSite = site;
     }
     for (final entry in fresh) {
-      final key = entry.mergeKey;
+      final key = '${entry.site}|${entry.mergeKey}';
       final old = byKey[key];
       if (old != null && old.vodPlayUrl == entry.vodPlayUrl) continue;
       byKey[key] = entry;
@@ -455,9 +572,55 @@ class ActressSiteCrawlService {
     await file.writeAsString(
       const JsonEncoder.withIndent('  ').convert(doc),
     );
+    // 同一批条目进库镜像：有女优名的行建/合人物并写作品行，
+    // 没女优名的行只留 json、不进库。json-first：文件先落盘，
+    // 镜像后做；多分类工人并行时，镜像串在一条队列上依次跑
+    // （写库不并行抢），取页与写盘不串。镜像重试一次仍失败时：
+    // 页行抛错（调用方不记本页检查点，下轮断点续跑重爬本页重做
+    // 镜像，json 里同键同链接直接跳过）；补流行吞掉不卡整轮。
+    var mirrored = false;
+    for (var attempt = 0; attempt < 2 && !mirrored; attempt++) {
+      try {
+        await _mirrorEntries(fresh);
+        mirrored = true;
+      } catch (_) {
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+        }
+      }
+    }
+    if (!mirrored && mirrorRequired) {
+      throw StateError('进库镜像失败：本页 ${fresh.length} 条已写 json，库未同步');
+    }
+    // 影视库追加（2026-11-20）：同一批条目进 MYTV/db/女优库.db
+    // （videos 结构），与 json 影子文件、app 库镜像同批；失败不卡
+    // 现爬（下次打开影视库时 domain 比对与修复流程会补记）。
+    await _appendToFilmLibrary(fresh);
+  }
+
+  /// 现爬条目追加进影视库文件（绑定的 女优库.db）：失败只吞掉，
+  /// 不抛、不卡现爬；写库口径与修复共用 [FilmLibraryWriter]。
+  Future<void> _appendToFilmLibrary(List<ActressJsonEntry> fresh) async {
+    try {
+      final bind = await ActressMytvBind.instance.ensureBound();
+      final writer = FilmLibraryWriter(dbPath: bind.dbPath);
+      await writer.appendCrawledFilms(fresh);
+    } catch (_) {
+      // 影视库追加失败不卡现爬：json 已落盘、app 库镜像已成。
+    }
+  }
+
+  /// 进库镜像串行队列：多工人并发调镜像时依次执行，不并行写库。
+  Future<void> _mirrorQueue = Future.value();
+
+  Future<void> _mirrorEntries(List<ActressJsonEntry> fresh) {
+    final run = _mirrorQueue.then((_) => mirrorActressJsonEntriesToDb(db, fresh));
+    _mirrorQueue = run.then((_) {});
+    return run;
   }
 
   Future<Directory> _localDir() async {
+    if (_localJsonDir != null) return _localJsonDir!;
     if (_documentsDir != null) {
       return Directory(
         path.join(_documentsDir.path, ActressJsonFallback.localDirName),

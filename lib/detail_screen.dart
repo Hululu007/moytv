@@ -74,6 +74,7 @@ class DetailScreen extends StatefulWidget {
     this.autoPlayOnOpen = false,
     this.autoPlayEpisodeIndex = 0,
     this.nextLineOnExhausted,
+    this.onRetryProbe,
     this.onTagTap,
     this.queue,
     this.playerFactory,
@@ -93,6 +94,13 @@ class DetailScreen extends StatefulWidget {
   /// 线路播放耗尽时调用，返回下一条可播线路；返回 null 表示链
   /// 耗尽，保留播放器原错误界面。不传时行为与此前一字不差。
   final Future<DetailNextLine?> Function()? nextLineOnExhausted;
+
+  /// 重试重探回调（演员库点卡流程注入）：播放器报错屏点“重试播放”
+  /// 时调——调用方先把链 resetForRetry 再重探，返回下一条可播
+  /// 线路；返回 null 表示重探无果，播放器再原地重播同一集。
+  /// 不传时重试行为与此前一字不差。只接推出去的播放页，内嵌
+  /// 播放器不接（内嵌没有可弹的路由，误接会把详情页本身弹掉）。
+  final Future<DetailNextLine?> Function()? onRetryProbe;
 
   /// 标签点击回调：以 sourceId + tagId 打开该标签的目录列表。
   /// TODO(shell): 目录侧标签列表入口由壳子代理提供并在构造 DetailScreen 时
@@ -460,10 +468,7 @@ class _DetailScreenState extends State<DetailScreen> {
         } else if (widget.autoPlayOnOpen) {
           unawaited(
             _play(
-              widget.autoPlayEpisodeIndex.clamp(
-                0,
-                detail.episodes.length - 1,
-              ),
+              widget.autoPlayEpisodeIndex.clamp(0, detail.episodes.length - 1),
             ),
           );
         }
@@ -641,6 +646,7 @@ class _DetailScreenState extends State<DetailScreen> {
       onPlaybackExhausted: widget.nextLineOnExhausted == null
           ? null
           : _onPushedPlayerExhausted,
+      onRetryProbe: widget.onRetryProbe == null ? null : _onPlayerRetry,
     );
     if (mounted) {
       setState(() {});
@@ -677,6 +683,25 @@ class _DetailScreenState extends State<DetailScreen> {
     Navigator.of(playerContext).pop();
     if (!mounted) return;
     await _playCrossSite(next.detail, next.episodeIndex);
+  }
+
+  /// 推出去的播放页重试：先让调用方把链 resetForRetry 重探一遍，
+  /// 有新线就弹掉当前播放页、换新线播；重探无果返回 false，
+  /// 播放器再原地重播同一集。
+  Future<bool> _onPlayerRetry(BuildContext playerContext) async {
+    if (!mounted) return false;
+    final route = ModalRoute.of(playerContext);
+    if (route == null || !route.isCurrent) return false;
+    final retryProbe = widget.onRetryProbe;
+    if (retryProbe == null) return false;
+    final next = await retryProbe();
+    if (!mounted || _profileEpoch != widget.store.profileEpoch) return false;
+    if (next == null) return false;
+    if (!route.isCurrent || !playerContext.mounted) return false;
+    Navigator.of(playerContext).pop();
+    if (!mounted) return false;
+    await _playCrossSite(next.detail, next.episodeIndex);
+    return true;
   }
 
   /// 跨站选线路区：只有带番号的片才显示，无番号返回空盒子。
@@ -1020,12 +1045,11 @@ class _DetailScreenState extends State<DetailScreen> {
                     final showEpisodes = _episodesExpanded;
                     // 文件夹网格列数与卡宽：与推荐区同一套算法
                     // （150 宽一列、2–6 列），窄屏网格与宽屏网格共用。
-                    final folderColumns =
-                        (constraints.maxWidth / 150).floor().clamp(2, 6);
+                    final folderColumns = (constraints.maxWidth / 150)
+                        .floor()
+                        .clamp(2, 6);
                     final folderTileWidth =
-                        (constraints.maxWidth -
-                            40 -
-                            (folderColumns - 1) * 10) /
+                        (constraints.maxWidth - 40 - (folderColumns - 1) * 10) /
                         folderColumns;
                     // 内嵌播放器固定在滚动视图之上：以前它是滚动视图
                     // 里的第一个 sliver，上下滑时跟着内容滑走。现在把
@@ -1101,17 +1125,15 @@ class _DetailScreenState extends State<DetailScreen> {
                                             crossAxisCount: folderColumns,
                                             crossAxisSpacing: 10,
                                             mainAxisSpacing: 10,
-                                            mainAxisExtent:
-                                                DramaTile.extentFor(
-                                                  context,
-                                                  folderTileWidth,
-                                                ),
+                                            mainAxisExtent: DramaTile.extentFor(
+                                              context,
+                                              folderTileWidth,
+                                            ),
                                           ),
-                                      delegate: SliverChildBuilderDelegate((
-                                        context,
-                                        index,
-                                      ) => _folderTile(index),
-                                      childCount: _folderItems.length),
+                                      delegate: SliverChildBuilderDelegate(
+                                        (context, index) => _folderTile(index),
+                                        childCount: _folderItems.length,
+                                      ),
                                     ),
                                   ),
                                   if (_folderHasMore || _folderMoreFailed)
@@ -1758,8 +1780,7 @@ class _DetailScreenState extends State<DetailScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
-        final tileWidth =
-            (constraints.maxWidth - (columns - 1) * 10) / columns;
+        final tileWidth = (constraints.maxWidth - (columns - 1) * 10) / columns;
         return GridView.builder(
           key: const ValueKey('folder-grid'),
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),

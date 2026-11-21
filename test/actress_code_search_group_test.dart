@@ -162,17 +162,22 @@ void main() {
         fetch: _unusedFetch,
       );
       addTearDown(sync.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ActressListPage(
-            repository: repository,
-            store: store,
-            database: db,
-            syncService: sync,
+      // 列表页 bootstrap 里 await MYTV 绑定（平台通道），FakeAsync
+      // 下等不到返回会 pumpAndSettle 超时——按树里老办法包进
+      // runAsync（真机上绑定是毫秒级，不改生产代码）。
+      await tester.runAsync(() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ActressListPage(
+              repository: repository,
+              store: store,
+              database: db,
+              syncService: sync,
+            ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpAndSettle();
+      });
     }
 
     testWidgets('按名字排序时显示姓名分组头', (tester) async {

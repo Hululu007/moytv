@@ -4,6 +4,7 @@ import 'actress_models.dart';
 import 'actress_search.dart';
 import '../core_bridge.dart';
 import '../crosssite_probe.dart';
+import '../feed_playability.dart';
 import '../local_store.dart';
 import '../models.dart';
 
@@ -28,6 +29,16 @@ class ActressPlayCandidate {
 ///   无果或候选全部预检失败后才探；
 /// - 起播前每候选都过 resolve 预检（单候选超时），首个解出的才推
 ///   播放器；预检失败的静默跳过，不弹错；
+/// - 预检不只看“解没解出来”：直链计划还要再验活（首分片/Range
+///   206，见 [feedProbePlayable]），解出死地址也算失败、换下一条，
+///   绝不把死地址推进播放器开黑屏；解析型计划（needsParse）验不
+///   了活，先放行，播失败时播放器再经 onPlaybackExhausted 换线；
+/// - [triedSources] 记下本轮实际试过的站 id（探活波次 + 预检候选），
+///   调用方链耗尽时可如实报“已试过 X 个站”；
+/// - [resetForRetry] 把链恢复到建链时的状态：重试按钮调它再
+///   [nextPlayable]，从头重探一遍，不原地重播同一个死地址；
+/// - [preferSiteId]：作品自己记的站（如潮流）在它所属波次里排
+///   到最前——存的地址死了，先探它自己的站，再探别的站。
 /// - 单次 [nextPlayable] 调用有总预算（默认 45 秒）：预算耗尽时
 ///   尚未起跑的波次不再起跑、直接判无源，在途探活跑完、结果照收；
 /// - 无番号的作品走标题模式：按标题搜全部可见站，取标题相符的命中
@@ -49,7 +60,11 @@ class ActressPlayChain {
     this.probeConcurrency = 6,
     this.titleHitsCap = 8,
     this.totalBudget = const Duration(seconds: 45),
-  }) : _probeService =
+    FeedProbeFetch? verifyFetch,
+    this.verifyTimeout = const Duration(seconds: 8),
+    this.preferSiteId,
+  }) : verifyFetch = verifyFetch ?? probeStreamHead,
+       _probeService =
            probeService ??
            CrossSiteProbeService(
              repository: repository,
@@ -86,6 +101,20 @@ class ActressPlayChain {
     _pendingFallback = fallbackPlans;
     _pendingEager = eagerPlans;
     _pendingLazy = lazyPlans;
+    // 作品自己记的站排到它所属波次最前（不跨波次、不动 MJV 优先
+    // 的波次顺序）：存的地址死了，先探它自己的站。
+    final preferred = preferSiteId;
+    if (preferred != null) {
+      for (final pending in [_pendingFallback, _pendingEager, _pendingLazy]) {
+        final index = pending.indexWhere((plan) => plan.siteId == preferred);
+        if (index > 0) {
+          pending.insert(0, pending.removeAt(index));
+        }
+      }
+    }
+    _initialFallback = List.of(_pendingFallback);
+    _initialEager = List.of(_pendingEager);
+    _initialLazy = List.of(_pendingLazy);
   }
 
   final AppRepository repository;
@@ -105,12 +134,44 @@ class ActressPlayChain {
   /// 不再起跑、直接判无源；在途探活跑到单站超时为止，结果照收。
   final Duration totalBudget;
 
+  /// 直链预检的验活探针：取流地址首段字节；默认 [probeStreamHead]，
+  /// 测试可注入假实现（见 actress_play_fallback_test.dart）。
+  final FeedProbeFetch verifyFetch;
+
+  /// 单条直链验活超时（resolve 超时之外另计）。
+  final Duration verifyTimeout;
+
+  /// 作品自己记的站 id（如 'chaoliu'）：在它所属波次里排最前。
+  final String? preferSiteId;
+
   final _candidates = <ActressPlayCandidate>[];
   var _next = 0;
   late List<CrossSiteRowPlan> _pendingFallback;
   late List<CrossSiteRowPlan> _pendingEager;
   late List<CrossSiteRowPlan> _pendingLazy;
+  late List<CrossSiteRowPlan> _initialFallback;
+  late List<CrossSiteRowPlan> _initialEager;
+  late List<CrossSiteRowPlan> _initialLazy;
   var _titleWaveDone = false;
+
+  /// 本轮实际试过的站 id（探活波次起跑过的站 + 预检过的候选站）：
+  /// 链耗尽时调用方按它报“已试过 X 个站”。
+  final _triedSources = <String>{};
+
+  Set<String> get triedSources => Set.unmodifiable(_triedSources);
+
+  /// 重试重探：把待探波次、候选队列与已试记录恢复到建链时的状态，
+  /// 下一次 [nextPlayable] 从头再探一遍（重试按钮用；不复用上次
+  /// 的死地址，也不复用上次已判死的候选）。
+  void resetForRetry() {
+    _pendingFallback = List.of(_initialFallback);
+    _pendingEager = List.of(_initialEager);
+    _pendingLazy = List.of(_initialLazy);
+    _candidates.clear();
+    _next = 0;
+    _titleWaveDone = false;
+    _triedSources.clear();
+  }
 
   bool get hasMore =>
       _next < _candidates.length ||
@@ -179,11 +240,28 @@ class ActressPlayChain {
         candidate.episodeIndex >= episodes.length) {
       return false;
     }
+    _triedSources.add(candidate.detail.drama.source);
     try {
-      await repository
+      final plan = await repository
           .resolve(candidate.detail.drama, episodes[candidate.episodeIndex])
           .timeout(resolveTimeout);
-      return store.profileEpoch == profileEpoch;
+      if (store.profileEpoch != profileEpoch) return false;
+      // 解析型计划（壳解析/嗅探）验不了活：先放行，播失败时播放器
+      // 再经 onPlaybackExhausted 换下一条，不把解析型候选判死。
+      if (plan.needsParse) return true;
+      final url = plan.url.trim();
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return false;
+      }
+      // 直链必须验活（首分片/Range 206）才进播放器：解出死地址
+      // 也算失败，静默换下一条，不开黑屏播放器。验活带取流回的
+      // 头（Referer/UA 与播放器实际用的同一份）。
+      final response = await verifyFetch(url, plan.headers, verifyTimeout);
+      if (store.profileEpoch != profileEpoch) return false;
+      return feedProbePlayable(uri, response);
     } catch (_) {
       return false;
     }
@@ -232,6 +310,7 @@ class ActressPlayChain {
           resolved.add(plan.provider.id);
           continue;
         }
+        _triedSources.add(siteId);
         final result = await _probeService.probeProvider(
           plan.provider,
           siteId,
@@ -294,6 +373,9 @@ class ActressPlayChain {
       if (!actressTitleKey(hit.title).contains(queryKey)) continue;
       if (!seenSources.add(hit.source)) continue;
       picked.add(hit);
+    }
+    for (final hit in picked) {
+      _triedSources.add(hit.source);
     }
     final out = <ActressPlayCandidate>[];
     var next = 0;

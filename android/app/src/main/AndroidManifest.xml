@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- 2026-11-20 MYTV 绑定：女优库绑定手机根目录 MYTV 文件夹，根目录读写要
+         “所有文件访问权限”（MANAGE_EXTERNAL_STORAGE）；没授权时 App 降级回
+         内部存储继续用，不硬要权限。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.hardware.faketouch" android:required="false"/>
@@ -131,7 +135,7 @@
         </activity>
         <!-- 备选应用图标：默认关闭，设置里换图标时由 IconSwitchBridge 启用其中一个、
              同时停用主 Activity 的启动入口；切回默认则反向操作。别名类名与
-             lib/app_icon_switcher.dart 的 aliasNames 一一对应，改一处必须改另一处。 -->
+             lib/app_icon_switcher.dart 的 aliasSuffix 一一对应，改一处必须改另一处。 -->
         <activity-alias
             android:name=".IconAntFlame"
             android:enabled="false"
@@ -218,12 +222,5 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- 区插件 APK：Android 11+ 包可见性，五个官方包名逐个声明， -->
-        <!-- 探测桥不依赖 QUERY_ALL_PACKAGES 也能看见第一方插件包。 -->
-        <package android:name="moyi.zone.audio.plugin"/>
-        <package android:name="moyi.zone.novel.plugin"/>
-        <package android:name="moyi.zone.library.plugin"/>
-        <package android:name="moyi.zone.live.plugin"/>
-        <package android:name="moyi.zone.miniapp.plugin"/>
     </queries>
 </manifest>

@@ -33,6 +33,7 @@ dependencies:
   enough_convert: ^1.7.1
   flutter_tts: ^4.2.5
   html: ^0.15.0
+  whisper_cpp_flutter_plus: ^0.5.0
   http: ^1.6.0
 dev_dependencies:
   flutter_test:

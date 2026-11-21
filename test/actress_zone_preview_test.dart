@@ -139,10 +139,12 @@ void main() {
     await _capture(
       tester,
       name: 'actress_zone_tab',
-      label: '预览 · 普通主题底部标签选中女优库 · 区内无真实数据库，显示加载/空态',
+      label: '预览 · 普通主题底部标签选中演员库 · 区内无真实数据库，显示加载/空态',
       mode: AppThemeMode.purpleNeon,
       action: (tester) async {
-        await tester.tap(find.text('女优库').first);
+        // 底部标签叫“演员库”（2026-11-19 起女优库为独立区，标签
+        // 不再叫“女优库”；旧名找不到元素）。
+        await tester.tap(find.text('演员库').first);
       },
     );
   });

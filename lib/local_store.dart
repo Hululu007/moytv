@@ -12,6 +12,7 @@ import 'content_registry.dart';
 import 'core_bridge.dart';
 import 'custom_headers.dart';
 import 'jar_import.dart';
+import 'json_list_import.dart';
 import 'imported_site_record.dart';
 import 'live_models.dart';
 import 'live_sources.dart';
@@ -1046,6 +1047,43 @@ class LocalStore extends ChangeNotifier {
         if (file.existsSync()) await file.delete();
       } catch (_) {}
     }
+  }
+
+  /// 导入 JSON 列表站名修复（2026-11-21）：老导入的站名可能
+  /// 是蜘蛛回落的通用名“JSON List”/“JSON列表”（以前 ping
+  /// 不带 ext，蜘蛛名取不到就回落，登记名又被它覆盖）。启动时
+  /// 读盘重算一次站名并写回登记与 ext；名字已经正常的站不动，
+  /// 不读盘；读不到文件、内容为空的站不动，下次启动再试。
+  Future<void> repairImportedJsonListNames() async {
+    if (locked) return;
+    final records = List<ImportedSiteRecord>.of(_importedSiteRecords);
+    var changed = false;
+    for (var i = 0; i < records.length; i++) {
+      final record = records[i];
+      if (record.type != ImportedSiteRecord.typeJsonList) continue;
+      final name = record.name.trim();
+      if (name.isNotEmpty && name != 'JSON List' && name != 'JSON列表') {
+        continue;
+      }
+      final path = jsonListPathFromExt(record.ext);
+      if (path.isEmpty) continue;
+      try {
+        final bytes = await File(path).readAsBytes();
+        final parsed = await parseJsonListBytesAsync(bytes);
+        if (parsed.items.isEmpty) continue;
+        final fileName = path.split('/').last;
+        final derived = jsonListDisplayName(parsed.items, fileName);
+        if (derived.isEmpty || derived == name) continue;
+        records[i] = record.copyWith(
+          name: derived,
+          ext: jsonListExtFor(path: path, name: derived),
+        );
+        changed = true;
+      } catch (_) {
+        continue;
+      }
+    }
+    if (changed) await syncImportedSites(records);
   }
 
   Future<void> setPlaybackPreferences(PlaybackPreferences value) {

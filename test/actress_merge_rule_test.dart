@@ -251,29 +251,26 @@ void main() {
       temp.deleteSync(recursive: true);
     });
 
-    Future<ActressJsonFallback> loadWithLocalFiles({
-      String? mjv,
-      String? whos,
-    }) async {
-      final dir = Directory('${temp.path}/actress_json')
-        ..createSync(recursive: true);
-      if (mjv != null) File('${dir.path}/mjv.json').writeAsStringSync(mjv);
-      if (whos != null) {
-        File('${dir.path}/whos.json').writeAsStringSync(whos);
+    Future<ActressJsonFallback> loadWithLocal(
+      String bundledMjv,
+      String? localMjv,
+    ) async {
+      if (localMjv != null) {
+        final dir = Directory('${temp.path}/actress_json')
+          ..createSync(recursive: true);
+        File('${dir.path}/mjv.json').writeAsStringSync(localMjv);
       }
-      final fallback = ActressJsonFallback(documentsDir: temp);
+      final fallback = ActressJsonFallback(
+        assetReader: (asset) async =>
+            asset.endsWith('mjv011.json') ? bundledMjv : _doc([]),
+        documentsDir: temp,
+      );
       await fallback.load();
       return fallback;
     }
 
-    test('同 mergeKey 同链接：重复行被跳过，只留一条', () async {
-      final doc = _doc([
-        _row(
-          vodId: 'id-1',
-          code: 'SSIS-123',
-          actor: '测试演员',
-          playUrl: '正片\$https://x/1.m3u8',
-        ),
+    test('同 mergeKey 同链接：本地行被跳过，只留一条', () async {
+      final bundled = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -281,19 +278,29 @@ void main() {
           playUrl: '正片\$https://x/1.m3u8',
         ),
       ]);
-      final fallback = await loadWithLocalFiles(mjv: doc);
+      final local = _doc([
+        _row(
+          vodId: 'id-1',
+          code: 'SSIS-123',
+          actor: '测试演员',
+          playUrl: '正片\$https://x/1.m3u8',
+        ),
+      ]);
+      final fallback = await loadWithLocal(bundled, local);
       expect(fallback.counts['mjv'], 1);
       expect(fallback.entriesForCode('SSIS123'), hasLength(1));
     });
 
-    test('同 mergeKey 不同链接：后写替换先写，仍一条', () async {
-      final doc = _doc([
+    test('同 mergeKey 不同链接：本地行替换随包行，仍一条', () async {
+      final bundled = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
           actor: '测试演员',
           playUrl: '正片\$https://x/old.m3u8',
         ),
+      ]);
+      final local = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -301,7 +308,7 @@ void main() {
           playUrl: '正片\$https://x/new.m3u8',
         ),
       ]);
-      final fallback = await loadWithLocalFiles(mjv: doc);
+      final fallback = await loadWithLocal(bundled, local);
       expect(fallback.counts['mjv'], 1);
       expect(
         fallback.entriesForCode('SSIS123').single.vodPlayUrl,
@@ -310,7 +317,7 @@ void main() {
     });
 
     test('两站同一番号各留一条（合并不跨站）', () async {
-      final mjv = _doc([
+      final bundled = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -318,15 +325,20 @@ void main() {
           playUrl: '正片\$https://x/1.m3u8',
         ),
       ]);
-      final whos = _doc([
-        _row(
-          vodId: 'id-2',
-          code: 'SSIS-123',
-          actor: '测试演员',
-          playUrl: '正片\$https://y/1.m3u8',
-        ),
-      ]);
-      final fallback = await loadWithLocalFiles(mjv: mjv, whos: whos);
+      final fallback = ActressJsonFallback(
+        assetReader: (asset) async => asset.endsWith('mjv011.json')
+            ? bundled
+            : _doc([
+                _row(
+                  vodId: 'id-2',
+                  code: 'SSIS-123',
+                  actor: '测试演员',
+                  playUrl: '正片\$https://y/1.m3u8',
+                ),
+              ]),
+        documentsDir: temp,
+      );
+      await fallback.load();
       final rows = fallback.entriesForCode('SSIS123');
       expect(rows, hasLength(2));
       expect(rows.map((e) => e.site).toSet(), {'mjv', 'whos'});

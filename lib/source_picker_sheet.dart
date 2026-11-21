@@ -252,6 +252,12 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     });
   }
 
+  /// 长按可删：站本身可删、且调用方给了删除回调（片库区）。
+  /// 与编辑模式删除图标是同一条件、同一 [_delete] 入口；调用方
+  /// 的 handler 自己会弹确认框（导入站删文件、内置站隐藏）。
+  bool _canDelete(SourcePickerEntry entry) =>
+      entry.deletable && widget.onDeleteSite != null;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -342,6 +348,14 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                 const SizedBox(height: 8),
                 Text(
                   '编辑模式：点删除图标可删除站点',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ] else if (widget.onDeleteSite != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '长按站点可删除',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colors.onSurfaceVariant,
                   ),
@@ -557,12 +571,12 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final colors = theme.colorScheme;
     final config = AppThemeConfig.of(context);
     final selected = entry.id == widget.currentId;
-    final showDelete =
-        _editMode && entry.deletable && widget.onDeleteSite != null;
+    final showDelete = _editMode && _canDelete(entry);
     return InkWell(
       key: ValueKey('site-picker-row-${entry.id}'),
       borderRadius: BorderRadius.circular(12),
       onTap: _editMode ? null : () => Navigator.pop(context, entry.id),
+      onLongPress: _canDelete(entry) ? () => _delete(entry) : null,
       child: Container(
         key: selected ? _currentKey : null,
         child: Column(
@@ -694,6 +708,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
           currentKey: selected ? _currentKey : null,
           repository: widget.repository!,
           onTap: () => Navigator.pop(context, entry.id),
+          onLongPress: _canDelete(entry) ? () => _delete(entry) : null,
         );
       },
     );
@@ -722,6 +737,7 @@ class _SiteCubeRow extends StatefulWidget {
     this.currentKey,
     required this.repository,
     required this.onTap,
+    this.onLongPress,
   });
 
   final SourcePickerEntry entry;
@@ -731,6 +747,9 @@ class _SiteCubeRow extends StatefulWidget {
   final Key? currentKey;
   final AppRepository repository;
   final VoidCallback onTap;
+
+  /// 长按删站（可删的站才传）：与宫格长按同一 [_delete] 入口。
+  final VoidCallback? onLongPress;
 
   @override
   State<_SiteCubeRow> createState() => _SiteCubeRowState();
@@ -783,6 +802,7 @@ class _SiteCubeRowState extends State<_SiteCubeRow> {
               covers: snapshot.data ?? const [],
               size: 132,
               onTap: widget.onTap,
+              onLongPress: widget.onLongPress,
             ),
           ),
           const SizedBox(height: 8),

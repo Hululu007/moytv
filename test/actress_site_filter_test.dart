@@ -28,55 +28,27 @@ class _NoopCrawl extends ActressSiteCrawlService {
         ActressSiteCrawlService.defaultMaxPagesPerCategory,
     int enrichPerCategory =
         ActressSiteCrawlService.defaultEnrichPerCategory,
+    int categoryConcurrency =
+        ActressSiteCrawlService.defaultCategoryConcurrency,
   }) async {
     startedSite = site;
   }
 }
-
-/// 本地现爬 mjv.json 的一行（15 字段 hsck 顺序）。
-Map<String, dynamic> _row({
-  required String id,
-  required String name,
-  required String actor,
-  required String code,
-}) => <String, dynamic>{
-  'vod_id': id,
-  'vod_name': name,
-  'vod_pic': '',
-  'vod_actor': actor,
-  'vod_director': '',
-  'vod_remarks': '高清',
-  'vod_pubdate': '',
-  'vod_area': '日本',
-  'vod_year': '',
-  'vod_content': '<p>$name</p>',
-  'vod_play_from': 'mjv011',
-  'vod_play_url': '正片\$https://x/$id.m3u8',
-  'type_name': '日本AV',
-  'vod_code': code,
-  'vod_actress_pic': '',
-};
 
 void main() {
   late MemoryActressDatabase db;
   late ActressJsonFallback fallback;
   late _NoopCrawl crawl;
   late LocalStore store;
-  late Directory temp;
 
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
     store = LocalStore(await SharedPreferences.getInstance());
   });
 
-  tearDown(() {
-    temp.deleteSync(recursive: true);
-  });
-
   setUp(() async {
-    temp = Directory.systemTemp.createTempSync();
     db = MemoryActressDatabase();
-    // A：八木奈奈，本地有一部 MIDA-619（本地现爬 mjv.json 里有这部）；
+    // A：八木奈奈，本地有一部 MIDA-619（随包 mjv JSON 里有这部）；
     // B：测试二号，JSON 里没有。
     final a = await db.upsertRosterPerson(
       const RosterPerson(
@@ -109,37 +81,9 @@ void main() {
         );
       }
     }
-    // 本地现爬 mjv.json：八木奈奈一行（供站点筛选）+ 两名兜底样例。
-    final localDir = Directory('${temp.path}/actress_json')
-      ..createSync(recursive: true);
-    File('${localDir.path}/mjv.json').writeAsStringSync(
-      jsonEncode(<String, dynamic>{
-        'list': [
-          _row(
-            id: 'mida-619',
-            name: '测试作品',
-            actor: '八木奈奈',
-            code: 'MIDA-619',
-          ),
-          _row(
-            id: 'test-001',
-            name: '样例一',
-            actor: '测试演员甲',
-            code: 'TEST-001',
-          ),
-          _row(
-            id: 'test-002',
-            name: '样例二',
-            actor: '测试演员乙',
-            code: 'TEST-002',
-          ),
-        ],
-        'parse': 0,
-        'jx': 0,
-        'last_update': '2026-11-21T00:00:00',
-      }),
+    fallback = ActressJsonFallback(
+      assetReader: (asset) async => File(asset).readAsString(),
     );
-    fallback = ActressJsonFallback(documentsDir: temp);
     await fallback.load();
     crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
   });
@@ -188,15 +132,13 @@ void main() {
     expect(crawl.startedSite, 'whos');
   });
 
-  /// 从本地现爬 mjv.json 里取第 index 个可兜底样例（有番号、有女优名、
+  /// 从随包 mjv JSON 里取第 index 个可兜底样例（有番号、有女优名、
   /// 有直链，且不是八木奈奈——setUp 里的 A 号就是她，本地已有
   /// MIDA-619，按名合并后会把唯一一条当“本地已有”跳过）。
   ({String name, String code}) pickDetailSample(int index) {
     final doc =
         jsonDecode(
-              File(
-                '${temp.path}/actress_json/mjv.json',
-              ).readAsStringSync(),
+              File('assets/actress_json/mjv011.json').readAsStringSync(),
             )
             as Map<String, dynamic>;
     final rows = (doc['list'] as List).cast<Map<String, dynamic>>().where(
@@ -240,23 +182,22 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('详情页兜底区：本地零作品时也显示（不被暂无作品挡住）', (
+  testWidgets('详情页兜底一直不显示：本地零作品时只见暂无作品', (
     tester,
   ) async {
-    // 本地零作品：以前“暂无作品”用 SliverFillRemaining，占满视口
-    // 把后面的兜底区挡得进不了树；现在两边都空才用 FillRemaining，
-    // 有兜底时“暂无作品”改普通 sliver，兜底区跟在后面。
+    // 兜底一直不显示，只后台兜底播放（用户 2026-11-20 定）：本地
+    // 零作品时只显示“暂无作品”，兜底条目不渲染成卡片（数据仍在
+    // 后台加载，供点播链路兜底用）。
     final sample = pickDetailSample(0);
     final localId = await makeDetailPersonId(sample.name, 'c1');
     await pumpDetail(tester, localId);
     expect(find.text('暂无作品'), findsOneWidget);
-    // 兜底区不显示标题：卡直接跟在后面（用户令：不显示“兜底作品”提示）。
     expect(find.textContaining('兜底作品'), findsNothing);
-    expect(find.text(sample.code), findsWidgets);
-    expect(find.text('mjv'), findsWidgets);
+    expect(find.text(sample.code), findsNothing);
+    expect(find.text('mjv'), findsNothing);
   });
 
-  testWidgets('详情页兜底区：本地有作品时兜底跟在后面，卡上显示番号与站', (
+  testWidgets('详情页兜底一直不显示：本地有作品时只见本地作品', (
     tester,
   ) async {
     final sample = pickDetailSample(1);
@@ -266,9 +207,9 @@ void main() {
     ]);
     await pumpDetail(tester, localId);
     expect(find.text('本地占位'), findsOneWidget);
-    // 兜底区不显示标题：卡直接跟在本地作品后面。
+    // 兜底条目不渲染：样本番号与站名都不应出现在页面上。
     expect(find.textContaining('兜底作品'), findsNothing);
-    expect(find.text(sample.code), findsWidgets);
-    expect(find.text('mjv'), findsWidgets);
+    expect(find.text(sample.code), findsNothing);
+    expect(find.text('mjv'), findsNothing);
   });
 }

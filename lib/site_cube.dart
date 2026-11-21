@@ -20,6 +20,7 @@ class SiteCube extends StatefulWidget {
     this.covers = const [],
     this.size = 120,
     this.onTap,
+    this.onLongPress,
   });
 
   /// 站名：显示在占位面上，六个面都没有封面时也看得到是哪个站。
@@ -33,6 +34,10 @@ class SiteCube extends StatefulWidget {
 
   /// 点按方块（非拖动）的回调。
   final VoidCallback? onTap;
+
+  /// 长按方块的回调（站点列表弹窗里删站用）：按住不动才触发，
+  /// 横向拖动转方块时不触发，与点按/拖动不冲突。
+  final VoidCallback? onLongPress;
 
   @override
   State<SiteCube> createState() => _SiteCubeState();
@@ -102,6 +107,7 @@ class _SiteCubeState extends State<SiteCube> {
         });
       },
       onHorizontalDragEnd: (_) => _dragDistance = 0,
+      onLongPress: widget.onLongPress,
       onTap: () {
         if (_dragDistance > _tapDragThreshold) return;
         widget.onTap?.call();

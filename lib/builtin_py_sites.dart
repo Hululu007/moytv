@@ -1324,19 +1324,6 @@ class BuiltinPySites {
     importType: 'py',
   );
 
-  static const heiyanSiteId = 'heiyan';
-  static const heiyanAssetPath = 'assets/py_spiders/heiyan.py';
-  static const heiyanFileId = 'builtin_heiyan';
-
-  static const heiyanSite = SourceSite(
-    heiyanSiteId,
-    '🔞黑颜禁播',
-    '内置 py · heiyan',
-    section: SourceSite.sectionVideo,
-    origin: SourceSite.originBuiltin,
-    importType: 'py',
-  );
-
   static const hongniuzySiteId = 'hongniuzy';
   static const hongniuzyAssetPath = 'assets/py_spiders/hongniuzy.py';
   static const hongniuzyFileId = 'builtin_hongniuzy';
@@ -1725,7 +1712,6 @@ class BuiltinPySites {
     BuiltinPyEntry(siteId: haohuazySiteId, site: haohuazySite, assetPath: haohuazyAssetPath, fileId: haohuazyFileId),
     BuiltinPyEntry(siteId: heiheizySiteId, site: heiheizySite, assetPath: heiheizyAssetPath, fileId: heiheizyFileId),
     BuiltinPyEntry(siteId: heiliaozySiteId, site: heiliaozySite, assetPath: heiliaozyAssetPath, fileId: heiliaozyFileId),
-    BuiltinPyEntry(siteId: heiyanSiteId, site: heiyanSite, assetPath: heiyanAssetPath, fileId: heiyanFileId),
     BuiltinPyEntry(siteId: hongniuzySiteId, site: hongniuzySite, assetPath: hongniuzyAssetPath, fileId: hongniuzyFileId),
     BuiltinPyEntry(siteId: hsckzySiteId, site: hsckzySite, assetPath: hsckzyAssetPath, fileId: hsckzyFileId),
     BuiltinPyEntry(siteId: huosuzySiteId, site: huosuzySite, assetPath: huosuzyAssetPath, fileId: huosuzyFileId),

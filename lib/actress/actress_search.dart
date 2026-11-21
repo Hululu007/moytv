@@ -72,6 +72,11 @@ class ActressEnrichment {
   ///
   /// whos 追加输入默认关闭：[whosDetailEnabled] 为 false（默认）或
   /// 未传 [whosSource]/[whosFetch] 时，行为与此前一字不差。
+  ///
+  /// [prioritizeWorkIds]：当前页正在看的作品 id——番号路先补这批，
+  /// 再补其余无封面作品（cap 120 按 id ASC 取，翻页看到的新作品
+  /// 本来永远排不到 cap 里，UMSO-660 这类新同步行就是这么一直
+  /// 没封面的）。不传时行为与此前一字不差。
   Future<bool> enrichPerson(
     ActressPerson person, {
     bool Function()? isCancelled,
@@ -79,6 +84,7 @@ class ActressEnrichment {
     WhosRosterSource? whosSource,
     ActressHttpFetch? whosFetch,
     bool whosDetailEnabled = false,
+    List<int> prioritizeWorkIds = const [],
   }) async {
     final works = await _allWorks(person.localId);
     final startedEmpty = works.isEmpty;
@@ -126,6 +132,14 @@ class ActressEnrichment {
     final uncovered = refreshed
         .where((work) => !work.hasCover && work.codeKey.isNotEmpty)
         .toList();
+    if (prioritizeWorkIds.isNotEmpty) {
+      final priority = prioritizeWorkIds.toSet();
+      uncovered.sort((a, b) {
+        final ap = priority.contains(a.id) ? 0 : 1;
+        final bp = priority.contains(b.id) ? 0 : 1;
+        return ap - bp;
+      });
+    }
     final capped = uncovered.length > codeSearchCap;
     final targets = capped ? uncovered.take(codeSearchCap).toList() : uncovered;
     final codeDone = await _enrichByCode(
@@ -280,10 +294,7 @@ class ActressEnrichment {
       }
       if (slug.isEmpty || isCancelled?.call() == true) return;
       try {
-        final about = await whosSource.fetchPersonAbout(
-          slug,
-          fetch: whosFetch,
-        );
+        final about = await whosSource.fetchPersonAbout(slug, fetch: whosFetch);
         if (about.isNotEmpty) await db.setPersonAbout(person.localId, about);
       } catch (_) {}
       if (isCancelled?.call() == true) return;

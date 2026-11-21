@@ -189,6 +189,7 @@ class _AppBootstrapState extends State<AppBootstrap>
       final created = store;
       if (created != null) {
         unawaited(created.migrateLegacyThemeSettings());
+        unawaited(created.repairImportedJsonListNames());
       }
     } catch (failure) {
       if (mounted) {

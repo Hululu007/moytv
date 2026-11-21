@@ -324,7 +324,6 @@ class MainActivity : FlutterActivity() {
         AudioCapsulePlugin.register(flutterEngine.dartExecutor.binaryMessenger, this)
         AppUpdateBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         FrameExtractorBridge.register(flutterEngine.dartExecutor.binaryMessenger)
-        ZonePluginProbeBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         IconSwitchBridge.register(flutterEngine.dartExecutor.binaryMessenger, this)
         val bridge = PyBridge(this)
         pyBridge = bridge
@@ -356,6 +355,55 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         "playbackPower" -> result.success(runCatching { playbackPower() }.getOrNull())
+                        // 2026-11-20 MYTV 绑定：女优库绑定手机根目录 MYTV 文件夹用。
+                        // targetSdk 36 下根目录读写要“所有文件访问权限”：
+                        // externalStorageRoot 拿真根目录（鸿蒙卓易通容器里
+                        // 的实际路径也由系统给，不硬编 /storage/emulated/0）；
+                        // hasAllFilesAccess 查授权；openAllFilesSettings
+                        // 打开系统授权页（用户点授权后回 App 点“重新绑定”）。
+                        // 三个调用都只在 API 30+ 有效，低版本回空/false。
+                        "externalStorageRoot" -> result.success(
+                            runCatching {
+                                @Suppress("DEPRECATION")
+                                android.os.Environment.getExternalStorageDirectory().absolutePath
+                            }.getOrNull(),
+                        )
+                        "hasAllFilesAccess" -> result.success(
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                                android.os.Environment.isExternalStorageManager(),
+                        )
+                        "openAllFilesSettings" -> {
+                            val opened = runCatching {
+                                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                                    return@runCatching false
+                                }
+                                val intent = Intent(
+                                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:$packageName"),
+                                )
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(intent)
+                                true
+                            }.getOrElse {
+                                runCatching {
+                                    val intent = Intent(
+                                        android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
+                                    )
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    startActivity(intent)
+                                    true
+                                }.getOrDefault(false)
+                            }
+                            if (opened) {
+                                result.success(null)
+                            } else {
+                                result.error(
+                                    "open_settings_failed",
+                                    "打不开系统设置",
+                                    null,
+                                )
+                            }
+                        }
                         "signatureSha256" -> result.success(signatureSha256())
                         "compatibleRendering" -> result.success(compatibleRendering())
                         "setCompatibleRendering" -> {

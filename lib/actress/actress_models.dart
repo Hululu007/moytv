@@ -118,8 +118,17 @@ String actressTitleKey(String title) => title.toLowerCase().replaceAll(
 /// 性别筛选：与浏览列表、排行榜同一口径。
 enum ActressSexFilter { all, female, male }
 
-/// 浏览排序：作品数从多到少，或名字升序。
-enum ActressSort { worksDesc, nameAsc }
+/// 浏览排序：作品数从多到少，或名字升序，或最近更新（入库作品里
+/// 最新作品日期倒序，无入库作品的人沉底）。
+enum ActressSort { worksDesc, nameAsc, recentDesc }
+
+extension ActressSortLabel on ActressSort {
+  String get label => switch (this) {
+    ActressSort.worksDesc => '按作品数',
+    ActressSort.nameAsc => '按名字',
+    ActressSort.recentDesc => '最近更新',
+  };
+}
 
 /// 女优库左上角站点筛选：默认全部；选站后兜底数据与现爬都只走该站。
 /// mjv = mjv011.com（潮流蜘蛛），whos = whos.tv（暂无手机现爬蜘蛛）。
@@ -234,12 +243,19 @@ class RosterFilm {
     this.date = '',
     this.coverUrl = '',
     this.detailUrl = '',
+    this.category = '',
   });
 
   /// 原始番号文本（可能为空，如 whos 标题里提不到番号的条目）。
   final String code;
   final String title;
   final String date;
+
+  /// 作品爬取/镜像时的列表分类（如 mjv 的“中文字幕”/“国产自拍”/
+  /// “无码破解”，由 json 的 type_name 或现爬的分类名来）；名册源
+  /// 的作品清单没有分类时为空，不编假分类。入库后供详情页分类
+  /// 筛选用；空分类的作品只在“全部”里显示，不丢数据。
+  final String category;
 
   /// 封面直链：whos 只在 XOR 开关打开时解析，MissAV 同步时直接
   /// 取人物页 `.lozad` 图地址；开关关闭/无图时恒为空。
@@ -326,10 +342,11 @@ class ActressPerson {
   /// 只由排行阶段写，名册合并永不碰它（与 missavRank 同口径）。
   final int? whosRank;
 
-  /// 界面显示的作品数：取实际行数与名册提示的最大值——同步未完成
-  /// 时不低估（名册提示是总数），同步完成后与实际行数一致；
-  /// 与 SQL 排序的 MAX(works_count, roster_works) 同一口径。
-  int get displayWorks => worksCount > rosterWorks ? worksCount : rosterWorks;
+  /// 界面显示的作品数：只算库里实际入库的作品数（2026-11-20 用户
+  /// 令：要入库才算）。名册提示（rosterWorks，站方宣称数）不再
+  /// 参与显示——同步未完成时宁可显示已入库的真实数，也不拿站方
+  /// 宣称数充数；与 SQL 排序的 works_count 同一口径。
+  int get displayWorks => worksCount;
 
   /// 该人在某源的身份 id（取作品清单用），没有返回 ''。
   String sourceIdFor(ActressRosterSourceId source) => switch (source) {
@@ -540,6 +557,7 @@ class ActressWork {
     this.coverDramaId = '',
     this.coverUrl = '',
     this.fromCrossSite = false,
+    this.category = '',
   });
 
   final int id;
@@ -559,6 +577,10 @@ class ActressWork {
   final String coverDramaId;
   final String coverUrl;
   final bool fromCrossSite;
+
+  /// 入库时记下的列表分类（json 的 type_name / 现爬的分类名）：
+  /// 空 = 入库时没有分类（名册源作品、旧库行），只在“全部”里显示。
+  final String category;
 
   /// 卡片主标题：有真实标题用标题，否则用番号。
   String get displayTitle => title.isNotEmpty ? title : codeDisplay;
@@ -590,6 +612,7 @@ class ActressWork {
     String? coverDramaId,
     String? coverUrl,
     bool? fromCrossSite,
+    String? category,
   }) => ActressWork(
     id: id ?? this.id,
     personId: personId ?? this.personId,
@@ -603,5 +626,6 @@ class ActressWork {
     coverDramaId: coverDramaId ?? this.coverDramaId,
     coverUrl: coverUrl ?? this.coverUrl,
     fromCrossSite: fromCrossSite ?? this.fromCrossSite,
+    category: category ?? this.category,
   );
 }

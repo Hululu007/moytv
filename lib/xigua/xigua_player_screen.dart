@@ -75,6 +75,7 @@ class XiguaPlayerScreen extends StatefulWidget {
     this.searchKeyword = '',
     this.startFullscreen = false,
     this.onPlaybackExhausted,
+    this.onRetryProbe,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -91,6 +92,11 @@ class XiguaPlayerScreen extends StatefulWidget {
   /// 在线播放恢复耗尽、错误界面已显示时调一次；默认 null，
   /// 现有调用行为一字不变；本地播放不调。
   final void Function(BuildContext)? onPlaybackExhausted;
+
+  /// 重试重探回调（女优模块用）：与 guo 播放器同语义，报错屏点
+  /// “重试播放”时调，返回 true 表示调用方已换新线起播（本页不
+  /// 再原地重播），false 表示重探无果、本页原地重播。默认 null。
+  final Future<bool> Function(BuildContext)? onRetryProbe;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -1130,6 +1136,16 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     }
   }
 
+  /// 耗尽通知（女优模块静默换线）：与 guo 播放器同语义，在线播放
+  /// 已到终态错误且回调非空时，下一帧通知调用方弹栈换线。
+  void _notifyPlaybackExhausted() {
+    final onExhausted = widget.onPlaybackExhausted;
+    if (onExhausted == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) onExhausted(context);
+    });
+  }
+
   void _onPaneError(String message) {
     if (_closed || _loading || _error != null) return;
     if (mounted) {
@@ -1138,6 +1154,8 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         _error = message.isEmpty ? '播放失败' : message;
       });
     }
+    // 视频窗终态错误：恢复链不接管这里，通知调用方换线。
+    if (_plan?.local != true) _notifyPlaybackExhausted();
   }
 
   Future<void> _openCoreDialog() async {
@@ -1575,6 +1593,11 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
                 }
               });
             }
+            // 取流失败（无 plan 可恢复）：终态错误，非本地且不走嗅探
+            // 兜底时通知调用方换线（女优链先试别的站）。
+            if (!_localFailure && !needsSniffFallback) {
+              _notifyPlaybackExhausted();
+            }
           }
         }
       } else if (prepared != null && !installed) {
@@ -1612,6 +1635,14 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       position: position,
       playWhenReady: quality == null || _error != null || _enginePlaying,
     );
+  }
+
+  /// 报错屏“重试播放”：与 guo 播放器同语义，先让调用方重探换线
+  /// （女优链 resetForRetry 再探），重探无果再原地重播同一集。
+  Future<void> _onErrorRetry() async {
+    final probe = widget.onRetryProbe;
+    if (probe != null && await probe(context)) return;
+    _retry();
   }
 
   Future<void> _openSniffer({bool auto = false}) async {
@@ -2428,7 +2459,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
                   child: StatusPanel(
                     title: '暂时无法播放',
                     message: _error!,
-                    onRetry: () => _retry(),
+                    onRetry: _onErrorRetry,
                     action: _localFailure ? '重试本地播放' : '重试播放',
                     secondaryAction: widget.mediaId == null
                         ? Row(

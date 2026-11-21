@@ -407,6 +407,9 @@ class ImportEngine {
         name: candidate.baseName,
         content: text,
       );
+      // 远程配置里的站同样直接写静态注册表（TvBoxImporter），
+      // 补一次通知，各处站点列表立即重算。
+      store.refreshSiteRegistry();
       return ImportOutcome(
         fileName: candidate.name,
         status: ImportOutcomeStatus.success,
@@ -501,9 +504,19 @@ class ImportEngine {
     markRecordsChanged();
     try {
       final path = await ImportFileStore.pathOf(pyFileName);
-      final ping = await PyBridge.call(path, {'action': 'ping'});
+      // 2026-11-21 修：ping 必须带上 ext，否则蜘蛛 init 拿不到
+      // 名字、getName 回落成通用名 "JSON List"，下面又会把登记名
+      // 覆盖成它——导入的 JSON 站就全叫 JSON List（用户 08:43
+      // 截图）。带上 ext 后蜘蛛名就是推导出的站名，不再覆盖。
+      final ping = await PyBridge.call(path, {
+        'action': 'ping',
+        'extend': jsonListExtFor(path: jsonPath, name: displayName),
+      });
       final spiderName = (ping['name'] as String? ?? '').trim();
-      if (spiderName.isNotEmpty && spiderName != displayName) {
+      if (spiderName.isNotEmpty &&
+          spiderName != displayName &&
+          spiderName != 'JSON List' &&
+          spiderName != 'JSON列表') {
         final index = records.indexWhere((record) => record.id == id);
         if (index >= 0) {
           records[index] = records[index].copyWith(name: spiderName);
@@ -537,6 +550,10 @@ class ImportEngine {
       name: candidate.baseName,
       bytes: bytes,
     );
+    // jar 站直接写 SourceSite.importedSites（静态注册表），
+    // 这里补一次通知：各处站点列表（含女优库顶栏切换）监听到
+    // 才重建，新站不用等下次打开才出现。
+    store.refreshSiteRegistry();
     return ImportOutcome(
       fileName: candidate.name,
       status: ImportOutcomeStatus.success,
@@ -561,6 +578,8 @@ class ImportEngine {
       name: candidate.baseName,
       bytes: bytes,
     );
+    // 同 jar：zip 里的站同样直接写静态注册表，补一次通知。
+    store.refreshSiteRegistry();
     return ImportOutcome(
       fileName: candidate.name,
       status: ImportOutcomeStatus.success,

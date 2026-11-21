@@ -87,6 +87,7 @@ class PlayerScreen extends StatefulWidget {
     this.onEmbeddedFullscreen,
     this.onEmbeddedIndexChanged,
     this.onPlaybackExhausted,
+    this.onRetryProbe,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -108,6 +109,11 @@ class PlayerScreen extends StatefulWidget {
   /// 已显示时调一次，带播放器自身的 context 供调用方弹栈换线。
   /// 默认 null，现有调用行为一字不变；本地播放不调。
   final void Function(BuildContext)? onPlaybackExhausted;
+
+  /// 重试重探回调（女优模块用）：报错屏点“重试播放”时调，返回
+  /// true 表示调用方已换新线起播（本页不再原地重播），false
+  /// 表示重探无果、本页原地重播。默认 null，现有行为一字不变。
+  final Future<bool> Function(BuildContext)? onRetryProbe;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -341,10 +347,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       (_plan?.decryptionKey.isEmpty ?? true) &&
       (_plan?.forceMpv != true) &&
       _backendManager?.current != PlaybackBackend.main;
-  PlayerCore get _effectiveCore => effectivePlayerCore(
-    stored: _core,
-    siteId: widget.detail.drama.source,
-  );
+  PlayerCore get _effectiveCore =>
+      effectivePlayerCore(stored: _core, siteId: widget.detail.drama.source);
   bool get _useExoCore =>
       !_television && Platform.isAndroid && _effectiveCore == PlayerCore.exo;
   bool get _useIjkCore => !_television && _effectiveCore == PlayerCore.ijk;
@@ -1114,6 +1118,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// 耗尽通知（女优模块静默换线）：在线播放已到终态错误且回调非空
+  /// 时，下一帧通知调用方（调用方弹栈换线；回调里不再写回本页
+  /// 状态）。本地播放不通知；恢复耗尽那条路沿用它自己的通知。
+  void _notifyPlaybackExhausted() {
+    final onExhausted = widget.onPlaybackExhausted;
+    if (onExhausted == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) onExhausted(context);
+    });
+  }
+
   void _onIjkError(String message) {
     if (_closed || _loading || _error != null) return;
     if (mounted) {
@@ -1122,6 +1137,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         _error = message.isEmpty ? '播放失败' : message;
       });
     }
+    // ijk 核终态错误：恢复链不接管这里，通知调用方换线。
+    if (_plan?.local != true) _notifyPlaybackExhausted();
   }
 
   void _onTvboxError(String message) {
@@ -1140,6 +1157,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         _error = message.isEmpty ? '播放失败' : message;
       });
     }
+    // 原生核终态错误：无下一核可切，通知调用方换线。
+    if (_plan?.local != true) _notifyPlaybackExhausted();
   }
 
   void _togglePlayback() {
@@ -1809,6 +1828,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                 if (mounted && !_closed && _deepSniffer) _openSniffer();
               });
             }
+            // 取流失败（无 plan 可恢复）：终态错误，非本地且不走嗅探
+            // 兜底时通知调用方换线（女优链先试别的站）；链耗尽时
+            // 错误屏留着，用户再点重试重探。
+            if (!_localFailure && !needsSniffFallback) {
+              _notifyPlaybackExhausted();
+            }
           }
         }
       } else if (prepared != null && !installed) {
@@ -1839,6 +1864,14 @@ class _PlayerScreenState extends State<PlayerScreen>
       position: position,
       playWhenReady: quality == null || _error != null || _enginePlaying,
     );
+  }
+
+  /// 报错屏“重试播放”：先让调用方重探换线（女优链 resetForRetry
+  /// 再探），重探无果再原地重播同一集。
+  Future<void> _onErrorRetry() async {
+    final probe = widget.onRetryProbe;
+    if (probe != null && await probe(context)) return;
+    _retry();
   }
 
   Future<void> _openCoreDialog() async {
@@ -2111,9 +2144,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       } else {
         await (_orientationController?.releasePlayback(this) ??
             SystemChrome.setPreferredOrientations(
-              AppOrientationController.orientations(
-                television: _television,
-              ),
+              AppOrientationController.orientations(television: _television),
             ));
       }
     } catch (_) {}
@@ -3620,7 +3651,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                               : '暂时无法播放 · ${errorKind.label}',
                           message: errorKind?.suggestion ?? '',
                           detail: _error!,
-                          onRetry: () => _retry(),
+                          onRetry: _onErrorRetry,
                           action: _localFailure ? '重试本地播放' : '重试播放',
                           secondaryAction:
                               _localFailure && widget.allowOnlineFallback

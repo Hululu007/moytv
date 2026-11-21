@@ -95,11 +95,11 @@ void main() {
     expect(service.current.items, 10 * 2 * 24);
     expect(service.current.enriched, 10);
 
-    final file = File('${temp.path}/actress_json/mjv.json');
+    final file = File('${temp.path}/actress_json/mjv011.json');
     expect(file.existsSync(), isTrue);
     final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
     expect(
-      () => validateActressJsonDocument(doc, '现爬 mjv.json'),
+      () => validateActressJsonDocument(doc, '现爬 mjv011.json'),
       returnsNormally,
     );
     final rows = doc['list'] as List;
@@ -148,8 +148,12 @@ void main() {
       }
     });
     await service.start(maxPagesPerCategory: 3, enrichPerCategory: 0);
-    // 只跑完第一页（24 条）就停。
-    expect(service.current.items, 24);
+    // 3 个分类工人并行：第一声进度就取消时，3 个工人手头的第 1 页
+    // 都已发出、都会跑完（每页 24 条），所以条数是 24 的倍数、
+    // 至少 48 条（单进程顺序爬只会是 24 条）；断点未完成。
+    expect(service.current.items % 24, 0);
+    expect(service.current.items, greaterThanOrEqualTo(48));
+    expect(service.current.items, lessThanOrEqualTo(72));
     expect(service.current.done, isFalse);
     final checkpoint = await db.checkpoint(
       ActressRosterSourceId.chaoliu,
@@ -172,6 +176,11 @@ void main() {
       File('${temp.path}/actress_json/whos.json').existsSync(),
       isFalse,
     );
+    // 单文件模型：whos 报缺口时什么文件都不写。
+    expect(
+      File('${temp.path}/actress_json/mjv011.json').existsSync(),
+      isFalse,
+    );
   });
 
   test('默认每分类 50 页、补流 50 条、不设总上限', () {
@@ -191,8 +200,11 @@ void main() {
     expect(service.current.items, 2 * 24);
     expect(service.current.enriched, 2);
 
-    final file = File('${temp.path}/actress_json/test-site.json');
+    // 单文件模型：任何站爬到的行都只进本地 mjv011.json 这一个文件，
+    // 不分站另存 test-site.json、也不写旧的 mjv.json。
+    final file = File('${temp.path}/actress_json/mjv011.json');
     expect(file.existsSync(), isTrue);
+    expect(File('${temp.path}/actress_json/test-site.json').existsSync(), isFalse);
     expect(File('${temp.path}/actress_json/mjv.json').existsSync(), isFalse);
     final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
     final rows = doc['list'] as List;
@@ -224,7 +236,7 @@ void main() {
     });
     expect(repo.calls.length, 2 * 50);
     expect(service.current.items, 2 * 50 * 24);
-    final file = File('${temp.path}/actress_json/test-site.json');
+    final file = File('${temp.path}/actress_json/mjv011.json');
     final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
     expect((doc['list'] as List).length, 2 * 50 * 24);
   });
@@ -233,7 +245,7 @@ void main() {
     final repo = _GenericCrawlRepository()..maxPage = 1;
     final service = makeService(repo);
     addTearDown(service.dispose);
-    final file = File('${temp.path}/actress_json/test-site.json');
+    final file = File('${temp.path}/actress_json/mjv011.json');
 
     await service.start(site: 'test-site', maxPagesPerCategory: 1, enrichPerCategory: 0);
     final firstDoc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
@@ -257,6 +269,64 @@ void main() {
         .toSet();
     expect(codes, contains(firstCode));
     expect(codes.any((c) => c.startsWith('BBB-')), isTrue);
+  });
+
+  test('写盘后进库镜像：补流出的女优名进人表、作品行进 works 表', () async {
+    final repo = _CrawlRepository();
+    final service = makeService(repo);
+    addTearDown(service.dispose);
+    await service.start(maxPagesPerCategory: 1, enrichPerCategory: 1);
+
+    // 10 分类各补流 1 条，详情都带“演员：测试女优”：目录行每分类
+    // 24 条全进 json（10×24=240 行），其中每分类 1 条被补流出
+    // 女优名与直链；作品表按（人，站，番号）去重，10 条补流行同
+    // 番号只留 1 行，库里应有“测试女优”这个人且有 1 部作品。
+    final file = File('${temp.path}/actress_json/mjv011.json');
+    expect(file.existsSync(), isTrue);
+    final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    expect((doc['list'] as List).length, 10 * 24);
+    final persons = await db.listPersons(
+      sex: ActressSexFilter.all,
+      sort: ActressSort.nameAsc,
+      query: '测试女优',
+      offset: 0,
+      limit: 10,
+    );
+    expect(persons.length, 1);
+    expect(persons.single.displayName, '测试女优');
+    expect(persons.single.sex, 'female');
+    final works = await db.worksForPerson(
+      persons.single.localId,
+      offset: 0,
+      limit: 50,
+    );
+    expect(works.length, 1);
+    // 没女优名的目录行只留 json、不进库：库里作品数就是补流的 1 条。
+    final overview = await db.overview();
+    expect(overview.works, 1);
+    expect(overview.personsWithWorks, 1);
+  });
+
+  test('单文件多站分流：通用站的行按 vod_play_from 认站进同一文件', () async {
+    final repo = _GenericCrawlRepository()..maxPage = 1;
+    final service = makeService(repo);
+    addTearDown(service.dispose);
+    await service.start(site: 'test-site', maxPagesPerCategory: 1, enrichPerCategory: 0);
+    final doc = jsonDecode(
+      File('${temp.path}/actress_json/mjv011.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    final rows = doc['list'] as List;
+    expect(rows.length, 2 * 24);
+    expect(
+      rows.cast<Map<String, dynamic>>().every(
+        (r) => r['vod_play_from'] == 'test-site',
+      ),
+      isTrue,
+    );
+    // 加载器读这个单文件时按 vod_play_from 认站，不按文件名。
+    final fallback = ActressJsonFallback(documentsDir: temp);
+    await fallback.load();
+    expect(fallback.counts['test-site'], 2 * 24);
   });
 }
 

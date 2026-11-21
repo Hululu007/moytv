@@ -19,8 +19,9 @@ import 'fixtures.dart';
 /// - 复用详情页同一套补全（ActressEnrichment），不另写去重逻辑；
 /// - 断点是独立检查点（source/phase 均为 'stacking'），与三家名册
 ///   源的检查点分键，与 enrichedAt 各记各的；
-/// - 列表数 displayWorks 取 worksCount 与 rosterWorks 的较大者，
-///   写库刷新 works_count 后自动跟涨，不另起计数路径。
+/// - 列表数 displayWorks 只算入库的 worksCount（2026-11-20 口径
+///   “要入库才算”，不再取 rosterWorks 的较大者），写库刷新
+///   works_count 后自动跟涨，不另起计数路径。
 
 const _stackSiteA = SourceSite(
   'test-stack-a',

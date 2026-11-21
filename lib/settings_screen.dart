@@ -24,6 +24,7 @@ import 'floating_window.dart';
 import 'clearance_bridge.dart';
 import 'crack_config_section.dart';
 import 'custom_headers_screen.dart';
+import 'live_subtitle_settings_screen.dart';
 import 'jar_bridge.dart';
 import 'py_bridge.dart';
 import 'import_center_screen.dart';
@@ -311,6 +312,15 @@ class _SettingsScreenState extends State<SettingsScreen>
           detail: '沉浸式详情 · TMDB 海报 · 弹幕与手势',
           onTap: () => _push(ViewingExperienceScreen(store: store)),
         ),
+        if (Platform.isAndroid || Platform.isIOS)
+          _SettingsItem(
+            keyName: 'live-subtitle-entry',
+            icon: Icons.subtitles_outlined,
+            lucide: LucideIcons.captions,
+            title: '实时翻译字幕',
+            detail: '播放时识别语音并翻译成中文字幕',
+            onTap: () => _push(const LiveSubtitleSettingsScreen()),
+          ),
         if (Platform.isAndroid)
           _SettingsItem(
             keyName: 'audio-capsule-entry',

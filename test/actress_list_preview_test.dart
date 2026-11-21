@@ -2,7 +2,6 @@
 // 一测一张：调过 toImage 的测试在收尾时会挂起（旧预览测试同样如此，
 // PNG 已落地），跑单测、超时杀掉只取 PNG；不要把三张放进同一个
 // 测试体，也不要批量跑。
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -43,6 +42,8 @@ class _NoopCrawl extends ActressSiteCrawlService {
         ActressSiteCrawlService.defaultMaxPagesPerCategory,
     int enrichPerCategory =
         ActressSiteCrawlService.defaultEnrichPerCategory,
+    int categoryConcurrency =
+        ActressSiteCrawlService.defaultCategoryConcurrency,
   }) async {
     startedSite = site;
   }
@@ -75,8 +76,8 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// 列表页种子数据：A 八木奈奈（本地有 MIDA-619，本地现爬 mjv.json
-/// 里有这部）、B 测试二号（JSON 里没有）；名册检查点全记完成，不自动跑同步。
+/// 列表页种子数据：A 八木奈奈（本地有 MIDA-619，随包 mjv JSON 里有
+/// 这部）、B 测试二号（JSON 里没有）；名册检查点全记完成，不自动跑同步。
 Future<
     ({
       LocalStore store,
@@ -117,40 +118,14 @@ Future<
       );
     }
   }
-  // 本地现爬 mjv.json（八木奈奈一行，供 mjv 筛选预览用）：种子在
-  // setUp 里跑（FakeAsync 区之外），异步文件读取不卡；load 只读
-  // 本地文件，不碰随包 asset。
-  final temp = Directory.systemTemp.createTempSync();
-  addTearDown(() => temp.deleteSync(recursive: true));
-  final localDir = Directory('${temp.path}/actress_json')
-    ..createSync(recursive: true);
-  File('${localDir.path}/mjv.json').writeAsStringSync(
-    jsonEncode(<String, dynamic>{
-      'list': [
-        <String, dynamic>{
-          'vod_id': 'mida-619',
-          'vod_name': '测试作品',
-          'vod_pic': '',
-          'vod_actor': '八木奈奈',
-          'vod_director': '',
-          'vod_remarks': '高清',
-          'vod_pubdate': '',
-          'vod_area': '日本',
-          'vod_year': '',
-          'vod_content': '<p>测试作品</p>',
-          'vod_play_from': 'mjv011',
-          'vod_play_url': '正片\$https://x/mida619.m3u8',
-          'type_name': '日本AV',
-          'vod_code': 'MIDA-619',
-          'vod_actress_pic': '',
-        },
-      ],
-      'parse': 0,
-      'jx': 0,
-      'last_update': '2026-11-21T00:00:00',
-    }),
+  // 同步读（readAsStringSync）是双保险：种子在 setUp 里跑（FakeAsync
+  // 区之外）本来就不卡；万一以后有人把 load 移回测试体内，同步读
+  // 不走事件循环，也不会卡在文件读取上（实测教训：测试体内第一个
+  // pump 之前 await 异步文件读取时，mjv011.json 的 fd 一直开着、
+  // 测试进程在 epoll 里空等）。
+  final fallback = ActressJsonFallback(
+    assetReader: (asset) async => File(asset).readAsStringSync(),
   );
-  final fallback = ActressJsonFallback(documentsDir: temp);
   await fallback.load();
   final crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
   return (store: store, db: db, fallback: fallback, crawl: crawl);

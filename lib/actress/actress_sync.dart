@@ -3,8 +3,12 @@ import 'dart:async';
 import 'actress_database.dart';
 import 'actress_models.dart';
 import 'actress_roster_sources.dart';
+import 'actress_site_crawl.dart';
 
 /// 同步进度：只含数字与阶段，不含任何来源名（界面不显示来源）。
+/// [detail] 是当前阶段的真实进度文案（如爬虫腿的“现爬 中文字幕
+/// （2/10）第 3 页 · 1234 条”），横幅优先显示它；空时横幅回落到
+/// 阶段名 + done/total。
 class ActressSyncProgress {
   const ActressSyncProgress({
     required this.phase,
@@ -14,6 +18,7 @@ class ActressSyncProgress {
     required this.total,
     required this.failed,
     required this.running,
+    this.detail = '',
   });
 
   /// 'roster' | 'films' | 'ranking' | 'done' | 'idle'。
@@ -26,6 +31,9 @@ class ActressSyncProgress {
   final int total;
   final int failed;
   final bool running;
+
+  /// 真实进度文案（爬虫腿现爬分类/页/条数）；空表示没有更细的信息。
+  final String detail;
 
   String get phaseLabel => switch (phase) {
     'roster' => '同步名册',
@@ -68,19 +76,37 @@ const _filmsRepairPhase = 'films_repair_v1';
 
 /// 一次性全量同步服务：名册 + 全部作品清单存本地，断点续跑。
 ///
-/// - 顺序：潮流 → whos → MissAV（潮流最可靠，先落库为合并打底）；
-/// - 每源三阶段：名册 → 作品 → 排行（排行主链 MissAV；whos 日榜
-///   作后备信号，开关打开时才拉，名次写入 whos_rank 列）；
+/// - 顺序：潮流 → whos（潮流最可靠，先落库为合并打底；MissAV
+///   已从同步移除，不再拉取）；
+/// - 每源三阶段：名册 → 作品 → 排行（排行主链 whos 日榜，开关
+///   已开，名次写入 whos_rank 列；MissAV 排行的旧名次仍留在
+///   missav_rank 列，显示时作回落）；
 /// - 断点：名册/排行记下一页页码，作品记已完成人物（整人取完再记点，
 ///   失败重取靠 upsert 幂等，不会重复入库）；
 /// - 空作品清单不是成功：拉回空列表记失败等刷新补，绝不记 ok；
 /// - 一次性修复：已记 ok 但作品为 0 的人（旧版空结果记 ok 的中毒
 ///   状态），修复检查点未完成时重取一次，跑完即记完成；
 /// - 单源整体失败（被盾挡、域名不通）只记失败，不拖垮其余源；
+///   MissAV 已从同步移除（2026-11-20 用户手机侧实况：MissAV
+///   爬不了，站没死、是 Cloudflare 403 被盾挡；MissAV 的内容以
+///   mjv json 兜底为主，不把同步成败押在 MissAV 直爬上）；
 /// - 手动刷新（refresh: true）重拉名册与排行拾取新人/新名次，作品
 ///   只补未完成与失败的人物，永不全量重拉；
-/// - 打开模块只读本地；列表页在库空或没同步完时自动断点续跑，跑完
-///   仍未完自动再续（有次数上限），手动点的也是断点续跑、不重拉。
+/// - 打开模块只读本地；同步只在用户点了刷新/重试、或检测到新版
+///   json 时才跑（2026-11-20 用户令：不自动爬取网站），绝不在
+///   打开演员库时自动起爬、后台自动续爬；触发的闸在列表页，不在
+///   本服务里（本服务只管跑起来以后的事）；
+/// - 并发（2026-11-20 用户令：爬取必须多进程/多并发，不许单进程
+///   顺序爬；数字写死在代码里）：两源并行跑（源与源之间不互相等，
+///   一个慢源不拖垮整轮）；名册阶段 3 个取页工人并行取页
+///   （rosterPageConcurrency）；排行阶段每 2 页一组并行取、按页
+///   顺序提交、名次不错位（rankingPageConcurrency）；作品阶段
+///   4 个工人（filmsConcurrency，潮流源走爬虫腿时由爬虫服务的
+///   3 个分类工人并行爬分类）；在途请求有界：每源每阶段不超过
+///   对应工人数，两源并行时全轮在途不超过 8 路、每站不超过 4 路；
+///   失败重试是各工人自己的事（_withRetry 最多 3 次、600ms 起
+///   指数退避），不堵住其他工人；名册按名合并是读-改-写，入库
+///   写操作串在一条互斥链上（取页仍并行），不并出重名。
 class ActressSyncService {
   ActressSyncService({
     required this.db,
@@ -88,13 +114,26 @@ class ActressSyncService {
     required this.fetch,
     this.filmsConcurrency = 4,
     this.maxAttempts = 3,
+    this.crawlService,
   });
+
+  /// 名册阶段取页工人数（页与页之间并行；页码靠 hasMore 探知，
+  /// 工人从共享计数器领页号，某页报无更多时不再领新页）。
+  static const rosterPageConcurrency = 3;
+
+  /// 排行阶段并行取页的窗口大小（每组并行取，提交时按页顺序，
+  /// 名次按提交顺序写，不错位）。
+  static const rankingPageConcurrency = 2;
 
   final ActressDatabase db;
   final List<ActressRosterSource> sources;
   final ActressHttpFetch fetch;
   final int filmsConcurrency;
   final int maxAttempts;
+
+  /// 潮流源作品阶段的爬虫腿（不传时潮流作品走旧的逐人取流；
+  /// 列表页必传——同步作品改为爬虫逻辑就靠它）。
+  final ActressSiteCrawlService? crawlService;
 
   final _progressController = StreamController<ActressSyncProgress>.broadcast();
 
@@ -105,10 +144,22 @@ class ActressSyncService {
   Future<ActressSyncResult>? _currentRun;
   DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// 名册入库互斥链：按名合并是读-改-写，多工人并行取页时，
+  /// 入库写操作串在这条链上依次跑，不并出重名；取页本身不串。
+  Future<void> _rosterWriteQueue = Future.value();
+
+  Future<T> _withRosterWriteLock<T>(Future<T> Function() action) {
+    final run = _rosterWriteQueue.then((_) => action());
+    _rosterWriteQueue = run.then((_) {});
+    return run;
+  }
+
   bool get isRunning => _running;
 
   void cancel() {
     _cancelled = true;
+    // 取消透传给爬虫腿：同步停了，现爬也要停，不留后台继续爬。
+    crawlService?.cancel();
   }
 
   void dispose() {
@@ -129,18 +180,18 @@ class ActressSyncService {
   Future<ActressSyncResult> _run({required bool refresh}) async {
     _running = true;
     _cancelled = false;
-    final failedSources = <ActressRosterSourceId>[];
     try {
-      for (var i = 0; i < sources.length; i++) {
-        if (_cancelled) break;
-        final source = sources[i];
-        final sourceFailed = await _syncSource(
-          source,
-          sourceIndex: i + 1,
-          refresh: refresh,
-        );
-        if (sourceFailed) failedSources.add(source.id);
-      }
+      // 两源并行：源与源之间不互相等，一个慢源不把整轮拖成串行；
+      // 各源的三阶段仍按名册→作品→排行顺序跑；单源失败只记进
+      // failedSources，不拖垮其余源。
+      final results = await Future.wait([
+        for (var i = 0; i < sources.length; i++)
+          _syncSourceGuarded(sources[i], sourceIndex: i + 1, refresh: refresh),
+      ]);
+      final failedSources = <ActressRosterSourceId>[
+        for (var i = 0; i < sources.length; i++)
+          if (results[i]) sources[i].id,
+      ];
       final overview = await db.overview();
       _emit(
         ActressSyncProgress(
@@ -162,6 +213,20 @@ class ActressSyncService {
       );
     } finally {
       _running = false;
+    }
+  }
+
+  /// 单源三阶段，包一层兜底：阶段里没接住的异常只记该源失败，
+  /// 不掀翻整轮（其余源继续跑完）。
+  Future<bool> _syncSourceGuarded(
+    ActressRosterSource source, {
+    required int sourceIndex,
+    required bool refresh,
+  }) async {
+    try {
+      return await _syncSource(source, sourceIndex: sourceIndex, refresh: refresh);
+    } catch (_) {
+      return true;
     }
   }
 
@@ -197,6 +262,13 @@ class ActressSyncService {
     }
   }
 
+  /// 名册阶段（3 个取页工人并行取页，rosterPageConcurrency）。
+  /// 页码靠 hasMore 探知：工人从共享计数器领页号，某页报无更多
+  /// （或空页）时不再领新页；已领到手的页取完照常入库（真实数据，
+  /// 不丢）。断点只记“最早没完成的页”（重跑时从最早缺口续爬，
+  /// 已完成的页靠 upsert 幂等不重复入库）。单人入库写操作串在
+  /// 互斥链上（取页并行、写库串行），不并出重名；单页异常只记
+  /// 该页失败，不掀翻其他工人。
   Future<bool> _syncRosterPhase(
     ActressRosterSource source,
     int sourceIndex,
@@ -204,75 +276,134 @@ class ActressSyncService {
   ) async {
     final checkpoint = await db.checkpoint(source.id, 'roster');
     if (!refresh && checkpoint != null && checkpoint.finished) return true;
-    var page = 1;
+    var startPage = 1;
     if (!refresh && checkpoint != null) {
-      page = int.tryParse(checkpoint.cursor) ?? 1;
-      if (page < 1) page = 1;
+      startPage = int.tryParse(checkpoint.cursor) ?? 1;
+      if (startPage < 1) startPage = 1;
     }
     var stored = 0;
-    try {
+    if (!refresh && checkpoint != null) stored = checkpoint.total;
+    var nextPage = startPage;
+    var stopPage = -1;
+    final completed = <int>{};
+    var pagesDone = 0;
+    var failed = 0;
+    String? phaseError;
+
+    Future<void> worker() async {
       while (!_cancelled) {
-        final result = await _withRetry(
-          () => source.fetchRosterPage(page, fetch: fetch),
-        );
-        for (final person in result.persons) {
-          await db.upsertRosterPerson(person);
+        // 领页：已有页报无更多时，不再领比它大的页。
+        final page = nextPage;
+        if (stopPage >= 0 && page > stopPage) return;
+        nextPage++;
+        ActressRosterPage result;
+        try {
+          result = await _withRetry(
+            () => source.fetchRosterPage(page, fetch: fetch),
+          );
+        } catch (error) {
+          // 单页取失败（重试 3 次仍失败）：记失败，不再领新页，
+          // 其他工人把手头的页跑完就停；本页下次断点续跑。
+          failed++;
+          phaseError ??= error.toString();
+          stopPage = page;
+          continue;
         }
-        stored += result.persons.length;
+        var pageStored = 0;
+        for (final person in result.persons) {
+          try {
+            await _withRosterWriteLock(() => db.upsertRosterPerson(person));
+            pageStored++;
+          } catch (_) {
+            // 单人入库失败只跳过这一个人，不掀翻整页。
+          }
+        }
+        stored += pageStored;
+        completed.add(page);
+        pagesDone++;
         _emit(
           ActressSyncProgress(
             phase: 'roster',
             sourceIndex: sourceIndex,
             sourceCount: sources.length,
-            done: page,
+            done: pagesDone,
             total: 0,
-            failed: 0,
+            failed: failed,
             running: true,
           ),
         );
         if (!result.hasMore || result.persons.isEmpty) {
-          await db.saveCheckpoint(
-            ActressSyncCheckpoint(
-              source: source.id.name,
-              phase: 'roster',
-              cursor: '${page + 1}',
-              total: stored,
-              finished: true,
-            ),
-          );
-          return true;
+          // 该页就是最后一页：比它大的页号都不用再取。
+          if (stopPage < 0 || page < stopPage) stopPage = page;
         }
+        // 断点写最早缺口：重跑从缺口续爬，不丢已完成的页。
+        var cursor = startPage;
+        while (completed.contains(cursor)) {
+          cursor++;
+        }
+        if (stopPage >= 0 && cursor > stopPage) cursor = stopPage + 1;
         await db.saveCheckpoint(
           ActressSyncCheckpoint(
             source: source.id.name,
             phase: 'roster',
-            cursor: '${page + 1}',
+            cursor: '$cursor',
             total: stored,
             finished: false,
           ),
         );
-        page++;
       }
-      return false;
-    } catch (error) {
+    }
+
+    final workers = List.generate(
+      rosterPageConcurrency,
+      (_) => worker(),
+    );
+    await Future.wait(workers);
+    final finished = !_cancelled && phaseError == null && stopPage >= 0;
+    if (finished) {
       await db.saveCheckpoint(
         ActressSyncCheckpoint(
           source: source.id.name,
           phase: 'roster',
-          cursor: '$page',
+          cursor: '${stopPage + 1}',
           total: stored,
-          finished: false,
-          error: error.toString(),
+          finished: true,
         ),
       );
-      return false;
+      return true;
     }
+    // 没跑完：断点留在最早缺口（worker 里每页已写过一次，
+    // 这里再写一次收口，保证取消/失败后游标是最早缺口）。
+    var cursor = startPage;
+    while (completed.contains(cursor)) {
+      cursor++;
+    }
+    await db.saveCheckpoint(
+      ActressSyncCheckpoint(
+        source: source.id.name,
+        phase: 'roster',
+        cursor: '$cursor',
+        total: stored,
+        finished: false,
+        error: phaseError ?? '',
+      ),
+    );
+    return false;
   }
 
   Future<void> _syncFilmsPhase(
     ActressRosterSource source,
     int sourceIndex,
   ) async {
+    // 潮流源作品阶段改走爬虫腿（2026-11-20 用户令：同步改为爬虫
+    // 逻辑）：不再逐人调 films 接口，调现爬服务按分类爬 mjv，
+    // 爬到的数据先落单文件 mjv011.json、再进库镜像；进度用爬虫
+    // 的真实分类/页/条数显示。没接爬虫服务时回落旧的逐人取流。
+    if (source.id == ActressRosterSourceId.chaoliu &&
+        crawlService != null) {
+      await _syncCrawlFilmsPhase(source, sourceIndex);
+      return;
+    }
     // 一次性修复（films_repair_v1）：旧版把空结果记成 ok，中毒的人
     // 作品为 0 却永不再取；修复检查点未完成时，把这类人并入本次
     // 待取清单重取一次，阶段跑完即记完成（取消时不记，下次继续修）。
@@ -321,7 +452,17 @@ class ActressSyncService {
       while (!_cancelled) {
         if (nextIndex >= pending.length) return;
         final person = pending[nextIndex++];
-        final ok = await _syncOnePersonFilms(source, person);
+        // 单人异常绝不掀翻工人：取流/写库抛错只记这一个人失败，
+        // 继续下一个人（旧版这里没兜底，catch 里再写库一旦抛错，
+        // 整个工人死掉、Future.wait 抛错、整轮同步悄悄停掉，
+        // 横幅冻在最后一次进度——12:45 截图 4612/5403 冻住的
+        // 疑似链路之一）。
+        var ok = false;
+        try {
+          ok = await _syncOnePersonFilms(source, person);
+        } catch (_) {
+          ok = false;
+        }
         if (ok) {
           done++;
           lastCompletedId = person.localId;
@@ -403,11 +544,75 @@ class ActressSyncService {
       await db.markFilmsState(person.localId, source.id, ok: true);
       return true;
     } catch (_) {
-      await db.markFilmsState(person.localId, source.id, ok: false);
+      // 失败状态写库本身也可能抛错（多工人并发写库）：再兜一层，
+      // 只记失败不抛错，不让失败路径掀翻工人。
+      try {
+        await db.markFilmsState(person.localId, source.id, ok: false);
+      } catch (_) {
+        // 写失败状态失败：下次刷新靠 films 检查点未完成继续补，
+        // 不在这里抛错。
+      }
       return false;
     }
   }
 
+  /// 潮流源作品阶段的爬虫腿：调现爬服务按分类爬 mjv（10 分类 ×
+  /// 每分类 50 页、断点续跑，爬虫服务内 3 个分类工人并行）。
+  /// 爬到的视频行先落单文件 mjv011.json、再进库镜像（json-first，
+  /// 库是派生索引）；进度直接透传爬虫的真实分类/页/条数
+  /// （detail 字段），横幅一眼能看到爬了多少；跑完按结果写
+  /// films 检查点（完成/未完成），取消时不记完成。
+  Future<void> _syncCrawlFilmsPhase(
+    ActressRosterSource source,
+    int sourceIndex,
+  ) async {
+    final crawl = crawlService;
+    if (crawl == null) return;
+    final sub = crawl.progress.listen((crawlProgress) {
+      _emit(
+        ActressSyncProgress(
+          phase: 'films',
+          sourceIndex: sourceIndex,
+          sourceCount: sources.length,
+          done: crawlProgress.items,
+          total: 0,
+          failed: 0,
+          running: true,
+          detail: crawlProgress.label,
+        ),
+      );
+      if (_cancelled) crawl.cancel();
+    });
+    try {
+      await crawl.start(site: 'mjv');
+    } catch (_) {
+      // 现爬内部已把失败写进 progress.error；这里不抛错，
+      // films 检查点按未完成记，下次刷新断点续跑。
+    } finally {
+      await sub.cancel();
+    }
+    final current = crawl.current;
+    final done = current.done && current.error.isEmpty;
+    await db.saveCheckpoint(
+      ActressSyncCheckpoint(
+        source: source.id.name,
+        phase: 'films',
+        cursor: '',
+        total: current.items,
+        finished: done && !_cancelled,
+      ),
+    );
+    if (done && !_cancelled) {
+      // 爬虫腿不产生逐人 films 状态，旧的逐人修复检查点一并
+      // 收口（不留永远未完成的修复态）。
+      await _saveRepairCheckpoint(source, 0);
+    }
+  }
+
+  /// 排行阶段（每 rankingPageConcurrency 页一组并行取、按页顺序
+  /// 提交）：名次按提交顺序写，取页并行、写名次串行，不错位。
+  /// 某页取失败（重试 3 次仍失败）时本阶段失败，断点留在该页，
+  /// 下次刷新续跑；已取到的页按顺序提交入库，不丢。
   Future<bool> _syncRankingPhase(
     ActressRosterSource source,
     int sourceIndex,
@@ -422,56 +627,105 @@ class ActressSyncService {
       if (page < 1) page = 1;
       ranked = checkpoint.total;
     }
+    var failed = false;
+    String? phaseError;
     try {
-      while (!_cancelled) {
-        final result = await _withRetry(
-          () => source.fetchRankingPage(page, fetch: fetch),
-        );
-        for (var i = 0; i < result.persons.length; i++) {
-          final stored = await db.upsertRosterPerson(result.persons[i]);
-          if (stored != null) {
-            // 名次写入各自的列：MissAV 主链与 whos 后备互不覆盖。
-            if (source.id == ActressRosterSourceId.whos) {
-              await db.setWhosRank(stored.localId, ranked + i + 1);
-            } else {
-              await db.setMissavRank(stored.localId, ranked + i + 1);
+      while (!_cancelled && !failed) {
+        // 一组并行取（窗口内页码连续），取完按页顺序提交。
+        final window = <int>[
+          for (var i = 0; i < rankingPageConcurrency; i++) page + i,
+        ];
+        final results = await Future.wait([
+          for (final p in window)
+            _withRetry(() => source.fetchRankingPage(p, fetch: fetch))
+                .then<({int page, ActressRosterPage result})>(
+                  (r) => (page: p, result: r),
+                )
+                .catchError(
+                  (Object e) => (page: -1, result: const ActressRosterPage(persons: [], hasMore: false)),
+                  test: (_) => true,
+                ),
+        ]);
+        // 按页顺序提交：窗口里某页失败时，只提交它之前的页，
+        // 失败页及之后的页下次续跑（已取到的后页结果丢弃重取，
+        // 名次不错位）。
+        var committedPages = 0;
+        var lastPage = false;
+        for (final entry in results) {
+          if (entry.page < 0) {
+            failed = true;
+            phaseError ??= 'ranking page ${page + committedPages} 取失败';
+            break;
+          }
+          final result = entry.result;
+          for (var i = 0; i < result.persons.length; i++) {
+            final stored = await _withRosterWriteLock(
+              () => db.upsertRosterPerson(result.persons[i]),
+            );
+            if (stored != null) {
+              // 名次写入各自的列：whos 写 whos_rank，其余源写
+              // missav_rank（MissAV 已从同步移除，生产环境只剩
+              // whos 写排行）。
+              if (source.id == ActressRosterSourceId.whos) {
+                await db.setWhosRank(stored.localId, ranked + i + 1);
+              } else {
+                await db.setMissavRank(stored.localId, ranked + i + 1);
+              }
             }
           }
+          ranked += result.persons.length;
+          committedPages++;
+          _emit(
+            ActressSyncProgress(
+              phase: 'ranking',
+              sourceIndex: sourceIndex,
+              sourceCount: sources.length,
+              done: entry.page,
+              total: 0,
+              failed: 0,
+              running: true,
+            ),
+          );
+          if (!result.hasMore || result.persons.isEmpty) {
+            lastPage = true;
+            break;
+          }
         }
-        ranked += result.persons.length;
-        _emit(
-          ActressSyncProgress(
+        await db.saveCheckpoint(
+          ActressSyncCheckpoint(
+            source: source.id.name,
             phase: 'ranking',
-            sourceIndex: sourceIndex,
-            sourceCount: sources.length,
-            done: page,
-            total: 0,
-            failed: 0,
-            running: true,
+            cursor: '${page + committedPages}',
+            total: ranked,
+            finished: false,
           ),
         );
-        if (!result.hasMore || result.persons.isEmpty) {
+        if (lastPage) {
           await db.saveCheckpoint(
             ActressSyncCheckpoint(
               source: source.id.name,
               phase: 'ranking',
-              cursor: '${page + 1}',
+              cursor: '${page + committedPages}',
               total: ranked,
               finished: true,
             ),
           );
           return true;
         }
+        if (failed) break;
+        page += committedPages;
+      }
+      if (failed) {
         await db.saveCheckpoint(
           ActressSyncCheckpoint(
             source: source.id.name,
             phase: 'ranking',
-            cursor: '${page + 1}',
+            cursor: '$page',
             total: ranked,
             finished: false,
+            error: phaseError ?? '',
           ),
         );
-        page++;
       }
       return false;
     } catch (error) {

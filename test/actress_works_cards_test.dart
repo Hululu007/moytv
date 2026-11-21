@@ -15,12 +15,25 @@ import 'package:moyi/actress/actress_search.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/crosssite_probe.dart';
 import 'package:moyi/detail_screen.dart';
+import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
+
+/// 验活假探针：永远可播（合成地址 example.test 在测试里没有真服务，
+/// 默认探针会判死；链测试只测链逻辑，不测真网络）。
+Future<FeedProbeResponse> _alwaysPlayable(
+  String url,
+  Map<String, String> headers,
+  Duration timeout,
+) async => const FeedProbeResponse(
+  statusCode: 200,
+  headers: {'content-type': 'video/mp4'},
+  headBytes: [1],
+);
 
 const _missavSite = SourceSite(
   'jar:missav30:ZakaMissav',
@@ -94,12 +107,7 @@ class _CardsRepository extends FixtureRepository {
   }) async {
     final handler = progressiveHandler;
     if (handler != null) {
-      return handler(
-        sources,
-        query,
-        onSite: onSite,
-        shouldStop: shouldStop,
-      );
+      return handler(sources, query, onSite: onSite, shouldStop: shouldStop);
     }
     return super.searchAcrossProgressive(
       sources,
@@ -249,9 +257,7 @@ void main() {
       store = await _makeCardsStore();
     });
 
-    Future<ActressPerson> seedPersonWithWorks(
-      List<RosterFilm> films,
-    ) async {
+    Future<ActressPerson> seedPersonWithWorks(List<RosterFilm> films) async {
       final person = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
@@ -328,9 +334,7 @@ void main() {
       // （兜底站一段 + 全站一段）；并发 6、墙钟上限 500ms：
       // 第一批 6 部跑完即停，剩下 6 部不再起跑，本轮返回未完成。
       repository.searchDelay = const Duration(seconds: 2);
-      repository.delayedQueries = {
-        for (final film in films) film.code,
-      };
+      repository.delayedQueries = {for (final film in films) film.code};
       final enrichment = ActressEnrichment(
         repository: repository,
         store: store,
@@ -364,9 +368,7 @@ void main() {
       store = await _makeCardsStore();
     });
 
-    testWidgets('有封面的作品点卡直取详情进页，不建探活链、不弹找片遮罩', (
-      tester,
-    ) async {
+    testWidgets('有封面的作品点卡直取详情进页，不建探活链、不弹找片遮罩', (tester) async {
       final person = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
@@ -466,6 +468,7 @@ void main() {
         probeService: probe,
         probeConcurrency: 6,
         totalBudget: const Duration(milliseconds: 400),
+        verifyFetch: _alwaysPlayable,
       );
       final stopwatch = Stopwatch()..start();
       final candidate = await chain.nextPlayable(
@@ -524,10 +527,7 @@ void main() {
       );
       for (var i = 0; i < 60; i++) {
         await tester.pump(const Duration(milliseconds: 100));
-        if (find
-            .byKey(const ValueKey('folder-grid'))
-            .evaluate()
-            .isNotEmpty ||
+        if (find.byKey(const ValueKey('folder-grid')).evaluate().isNotEmpty ||
             find.text('选集 · 1 集').evaluate().isNotEmpty) {
           break;
         }
@@ -545,16 +545,11 @@ void main() {
         ),
     ];
 
-    testWidgets('多部作品画卡片网格，卡片数与目录一致、不画选集', (
-      tester,
-    ) async {
+    testWidgets('多部作品画卡片网格，卡片数与目录一致、不画选集', (tester) async {
       await pumpFolderDetail(tester, items: folderItems(5));
       expect(find.byKey(const ValueKey('folder-grid')), findsOneWidget);
       for (var i = 1; i <= 5; i++) {
-        expect(
-          find.byKey(ValueKey('folder-folder-item-$i')),
-          findsOneWidget,
-        );
+        expect(find.byKey(ValueKey('folder-folder-item-$i')), findsOneWidget);
       }
       expect(find.text('选集 · 1 集'), findsNothing);
       // 目录以 folder 的 id 作 category 调用。
@@ -572,9 +567,7 @@ void main() {
       expect(find.text('加载更多'), findsNothing);
     });
 
-    testWidgets('目录失败退回选集 UI 并提示重试，重试后出网格', (
-      tester,
-    ) async {
+    testWidgets('目录失败退回选集 UI 并提示重试，重试后出网格', (tester) async {
       await pumpFolderDetail(tester, items: folderItems(3), failCatalog: true);
       expect(find.text('选集 · 1 集'), findsOneWidget);
       expect(find.text('作品列表加载失败，已显示选集'), findsOneWidget);
@@ -582,10 +575,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('folder-retry')));
       for (var i = 0; i < 60; i++) {
         await tester.pump(const Duration(milliseconds: 100));
-        if (find
-            .byKey(const ValueKey('folder-grid'))
-            .evaluate()
-            .isNotEmpty) {
+        if (find.byKey(const ValueKey('folder-grid')).evaluate().isNotEmpty) {
           break;
         }
       }

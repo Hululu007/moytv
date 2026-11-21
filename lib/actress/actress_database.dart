@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'actress_generic_db.dart';
 import 'actress_models.dart';
+import 'actress_mytv_bind.dart';
 
 /// 同步断点：每源每阶段一条，记录下次接着跑的位置。
 class ActressSyncCheckpoint {
@@ -42,10 +44,17 @@ class ActressSyncOverview {
     required this.works,
     required this.sources,
     required this.lastUpdatedAt,
+    this.personsWithWorks = 0,
   });
 
   final int persons;
   final int works;
+
+  /// 有入库作品的人数（SELECT COUNT(DISTINCT person_id) FROM
+  /// works）：头顶人数只算这个（2026-11-20 用户令：要入库才算），
+  /// 只有名册、还没入库作品的人不算；[persons] 仍是名册总人数，
+  /// 供同步进度与叠加总量用，不改语义。
+  final int personsWithWorks;
 
   /// 每源：是否三阶段都完成。
   final Map<ActressRosterSourceId, bool> sources;
@@ -62,6 +71,17 @@ abstract class ActressDatabase {
   /// 名字含硬线词时返回 null（整人剔除）。
   Future<ActressPerson?> upsertRosterPerson(RosterPerson roster);
 
+  /// 爬虫落库：按归一化名字合并人物（只补空字段、并标签与别名，
+  /// 不认领任何名册源身份、不碰来源 id 列）；名字含硬线词返回 null。
+  /// 爬到的女优名来自详情“演员：”行；mjv 站的演员记 sex 'female'，
+  /// 其他站 sex 未知记空（不臆断）。
+  Future<ActressPerson?> upsertCrawledPerson({
+    required String name,
+    String sex = '',
+    List<String> tags = const [],
+    String avatarUrl = '',
+  });
+
   Future<ActressPerson?> personById(int localId);
 
   Future<List<ActressPerson>> listPersons({
@@ -71,6 +91,7 @@ abstract class ActressDatabase {
     required int offset,
     required int limit,
     String tag = '',
+    String category = '',
   });
 
   Future<int> countPersons({
@@ -99,9 +120,17 @@ abstract class ActressDatabase {
     int personId, {
     required int offset,
     required int limit,
+
+    /// 只取该分类的作品：null/空 = 全部（头顶总数与旧调用同一口径）。
+    String? category,
   });
 
-  Future<int> countWorks(int personId);
+  Future<int> countWorks(int personId, {String? category});
+
+  /// 该人物作品里实际存在的分类（只含 category 非空的行），按作品
+  /// 数从多到少、同数按名字排；没有分类的作品不产生标签、不丢数据
+  /// （它们只在“全部”里显示）。详情页分类筛选的标签来源。
+  Future<List<({String name, int count})>> workCategories(int personId);
 
   /// 作品清单合并入库：按（站，番号键）去重、无番号按（站，标题键）
   /// 去重——同番号两站各留一条，各算一条可播线路；命中硬线词的
@@ -138,6 +167,24 @@ abstract class ActressDatabase {
     required String coverUrl,
     bool insertIfMissing = true,
     String site = '',
+  });
+
+  /// 数据库镜像“任一不同就更新替换”（2026-11-20 用户令）：按
+  /// （人，站，番号键/标题键）找到已有的作品行，把播放链接
+  /// （cover_drama_id）与封面（cover_source/cover_url）换成
+  /// 新值；标题/日期只在调用方给了非空值时才换；分类不动（与
+  /// upsertWorks 的“只补空分类”同一口径）。找到并更新了返回
+  /// true，没找到返回 false（调用方随后再按新建行处理）。
+  Future<bool> updateWorkPlayLink({
+    required int personId,
+    required String site,
+    required String codeKey,
+    required String titleKey,
+    String title = '',
+    String date = '',
+    required String coverSource,
+    required String coverDramaId,
+    required String coverUrl,
   });
 
   /// 某源作品清单待同步的人物（有该源身份、且该源 films 未完成）。
@@ -180,7 +227,37 @@ abstract class ActressDatabase {
 
   Future<void> saveCheckpoint(ActressSyncCheckpoint checkpoint);
 
+  /// 内置 json 版本戳（sync_state 里 source='actress_json'、
+  /// phase='version'，cursor 存合并后的 last_update）：列表页用它
+  /// 判断新版 json 到没到——只在新版到达时触发一次同步，
+  /// 不自动爬取网站。
+  Future<String?> jsonVersionStamp();
+
+  Future<void> saveJsonVersionStamp(String version);
+
   Future<ActressSyncOverview> overview();
+
+  /// 热换库（2026-11-20 用户令）：比对当前绑定路径下数据库文件的
+  /// 大小与修改时间，变了先验新库（能打开、结构对）再关旧连接重开；
+  /// 验不过留旧库并回原因，不崩、不丢数据。没变回
+  /// (reloaded: false, error: null)。[force] 为 true 时不管指纹
+  /// 都重读一次（手动“重新加载数据库”用）。实现落在共用的打开
+  /// 路径上（SqfliteActressDatabase），同步/现爬/叠加读库都走
+  /// 同一个实例，换库后它们读到的都是新库。
+  Future<({bool reloaded, String? error})> reloadIfChanged({
+    bool force = false,
+  });
+
+  /// 通用读库（2026-11-20 用户令）：当前打开的库不是女优库结构
+  /// 时返回通用读取器（动态探结构 + 字段映射，见
+  /// actress_generic_db.dart）；是女优库结构时返回 null，走严格
+  /// 路径。每次调用都按当前文件指纹重探，不沿用旧库的字段映射。
+  Future<GenericDbReader?> genericReader();
+
+  /// 开库回退提示（2026-11-20 用户令“全部使用数据库兜底”）：
+  /// MYTV 库损坏/打不开时自动回退到 app 内置 actress.db，
+  /// 本字段记下回退原因（供列表页绑定行显示）；正常打开时为 null。
+  String? get openFallbackNote;
 
   Future<void> close();
 }
@@ -281,6 +358,7 @@ ActressWork _workFromRow(Map<String, Object?> row) => ActressWork(
   coverDramaId: (row['cover_drama_id'] as String?) ?? '',
   coverUrl: (row['cover_url'] as String?) ?? '',
   fromCrossSite: (row['from_cross_site'] as num?)?.toInt() == 1,
+  category: (row['category'] as String?) ?? '',
 );
 
 /// sqflite 实现：独立 actress.db，不动 app.db 的版本与表结构。
@@ -314,11 +392,68 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   Future<Database> _openNow() async {
-    final documents = await getApplicationDocumentsDirectory();
-    final filePath = path.join(documents.path, 'actress.db');
-    final db = await openDatabase(
+    // 2026-11-20 MYTV 绑定：库落点由绑定模块定。已绑定时是
+    // MYTV/db/女优库应用.db；没权限/外部存储不可用时降级回原来的
+    // documents/actress.db，表结构与 Schema 版本都不变。
+    final bind = await ActressMytvBind.instance.ensureBound();
+    final filePath = bind.dbPath;
+    _openFallbackNote = null;
+    try {
+      final db = await _openDbAt(filePath);
+      _openedPath = filePath;
+      _openedSignature = _signatureOf(File(filePath));
+      _genericReaderCache = null;
+      _genericReaderKey = null;
+      return db;
+    } catch (e) {
+      // 2026-11-20 用户令“全部使用数据库兜底”：MYTV 库损坏/
+      // 打不开时回退 app 内置 actress.db，女优库照常能用，原因
+      // 记在 openFallbackNote 里供列表页显示。两条路都打不开
+      // 时抛原错（不在这里吞掉）。
+      final legacyPath = bind.legacyDbPath;
+      if (legacyPath == filePath) rethrow;
+      final db = await _openDbAt(legacyPath);
+      _openFallbackNote = 'MYTV 库打不开（${_shortDbError(e)}），'
+          '已回退内部存储库';
+      _openedPath = legacyPath;
+      _openedSignature = _signatureOf(File(legacyPath));
+      _genericReaderCache = null;
+      _genericReaderKey = null;
+      return db;
+    }
+  }
+
+  @override
+  String? get openFallbackNote => _openFallbackNote;
+
+  /// 按文件探结构再开库（2026-11-20 通用读库）：不存在/空文件走
+  /// 女优库建库路径；是女优库结构走建库/迁移路径；外来库直接打开，
+  /// 不跑女优库迁移、不动用户的文件结构，读走通用映射层。
+  Future<Database> _openDbAt(String filePath) async {
+    final file = File(filePath);
+    if (!file.existsSync() || file.lengthSync() == 0) {
+      return _openActressDb(filePath);
+    }
+    final db = await _looksLikeActressDb(filePath)
+        ? await _openActressDb(filePath)
+        : await openDatabase(filePath);
+    // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
+    // 才抛；这里验出来就关掉重抛，让 _openNow 走回退分支。
+    try {
+      await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
+    } catch (_) {
+      await db.close();
+      rethrow;
+    }
+    return db;
+  }
+
+  /// 女优库建库/迁移路径：version 4 + onCreate 建五张表 +
+  /// onUpgrade v1→v2、v2→v3、v3→v4。只对女优库结构的文件跑。
+  Future<Database> _openActressDb(String filePath) {
+    return openDatabase(
       filePath,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute(
           'CREATE TABLE persons('
@@ -367,6 +502,7 @@ class SqfliteActressDatabase implements ActressDatabase {
           'cover_source TEXT NOT NULL DEFAULT \'\', '
           'cover_drama_id TEXT NOT NULL DEFAULT \'\', '
           'cover_url TEXT NOT NULL DEFAULT \'\', '
+          'category TEXT NOT NULL DEFAULT \'\', '
           'from_cross_site INTEGER NOT NULL DEFAULT 0)',
         );
         // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突；
@@ -382,6 +518,10 @@ class SqfliteActressDatabase implements ActressDatabase {
         );
         await db.execute(
           'CREATE INDEX idx_works_person ON works(person_id, id)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_works_person_category '
+          'ON works(person_id, category)',
         );
         await db.execute(
           'CREATE TABLE source_films('
@@ -433,9 +573,209 @@ class SqfliteActressDatabase implements ActressDatabase {
             'WHERE code_key = \'\' AND title_key <> \'\'',
           );
         }
+        // v3 → v4：作品行加分类列（爬取/镜像时的列表分类，如
+        // “中文字幕”/“国产自拍”；旧行与无分类来源的行留空，只在
+        // “全部”里显示，不丢数据；下次镜像经过时由 upsertWorks
+        // 的回填把空分类补上）。
+        if (oldVersion < 4) {
+          await db.execute(
+            'ALTER TABLE works ADD COLUMN category TEXT NOT NULL DEFAULT \'\'',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_works_person_category '
+            'ON works(person_id, category)',
+          );
+        }
       },
     );
-    return db;
+  }
+
+  /// 当前打开库的文件指纹（大小 + 修改时间毫秒）：开库时记一次，
+  /// 热换库比对它，变了才重开。
+  String? _openedPath;
+  ({int length, int modifiedMs})? _openedSignature;
+
+  /// 开库回退提示（见 openFallbackNote）：MYTV 库损坏/打不开时
+  /// 回退内置库的原因；正常打开时为 null。
+  String? _openFallbackNote;
+
+  /// 通用读取器缓存：按（路径，文件指纹）缓存，文件变了自动重探，
+  /// 不沿用旧库的字段映射。
+  GenericDbReader? _genericReaderCache;
+  String? _genericReaderKey;
+
+  static ({int length, int modifiedMs})? _signatureOf(File file) {
+    try {
+      final stat = file.statSync();
+      return (
+        length: stat.size,
+        modifiedMs: stat.modified.millisecondsSinceEpoch,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 只读探一下：是不是女优库结构（persons + works 表，且 works
+  /// 有 code_key 列）。文件损坏/不是 sqlite 时返回 false（调用方
+  /// 再按外来库直接打开，同样打不开就报错，不静默当空库）。
+  Future<bool> _looksLikeActressDb(String filePath) async {
+    Database? probe;
+    try {
+      probe = await openDatabase(filePath, readOnly: true);
+      return await _isActressSchemaDb(probe);
+    } catch (_) {
+      return false;
+    } finally {
+      await probe?.close();
+    }
+  }
+
+  /// 已打开的库是不是女优库结构（persons + works 表，且 works 有
+  /// code_key 列）：严格路径只认这一套；表名撞上、字段不对的按
+  /// 外来库走通用映射。
+  Future<bool> _isActressSchemaDb(Database db) async {
+    final tables = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table'",
+    );
+    final names = {for (final row in tables) row['name'].toString()};
+    if (!names.contains('persons') || !names.contains('works')) {
+      return false;
+    }
+    final cols = await db.rawQuery('PRAGMA table_info("works")');
+    final colNames = {for (final row in cols) row['name'].toString()};
+    return colNames.contains('code_key') &&
+        colNames.contains('person_id');
+  }
+
+  /// 验一个已打开的候选库：女优库结构核对 works.code_key；外来库
+  /// 至少要有一张能认出作品的表（标题 + 播放地址），否则抛错——
+  /// 调用方留旧库并报原因。空库（0 张表）也接受（后面自动生成
+  /// 会灌种子；通用模式下列表为空，不报错）。
+  Future<void> _validateOpenDb(Database db) async {
+    final tables = await db.rawQuery(
+      "SELECT name FROM sqlite_master "
+      "WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    );
+    if (tables.isEmpty) return;
+    if (await _isActressSchemaDb(db)) return;
+    final schema = await probeGenericDbSchema(db);
+    if (schema.worksTable == null) {
+      throw StateError('没有找到带标题与播放地址的作品表');
+    }
+  }
+
+  static String _shortDbError(Object error) {
+    final first = error.toString().split('\n').first.trim();
+    return first.length > 120 ? '${first.substring(0, 120)}…' : first;
+  }
+
+  @override
+  Future<({bool reloaded, String? error})> reloadIfChanged({
+    bool force = false,
+  }) async {
+    final bind = await ActressMytvBind.instance.ensureBound();
+    final currentPath = bind.dbPath;
+    final file = File(currentPath);
+    FileStat? stat;
+    try {
+      stat = await file.stat();
+    } catch (_) {
+      stat = null;
+    }
+    if (stat == null || stat.type == FileSystemEntityType.notFound) {
+      return (reloaded: false, error: '数据库文件不存在：$currentPath');
+    }
+    final signature = (
+      length: stat.size,
+      modifiedMs: stat.modified.millisecondsSinceEpoch,
+    );
+    // 在途的开库先等它落定（不然它完成后会把 _db 指回旧文件，
+    // 盖掉这次换库）。
+    final pending = _openFuture;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {
+        // 开库失败：下面按没开过库走。
+      }
+    }
+    final opened = _db;
+    if (!force &&
+        opened != null &&
+        opened.isOpen &&
+        _openedPath == currentPath &&
+        _openedSignature == signature) {
+      return (reloaded: false, error: null);
+    }
+    if (opened == null) {
+      // 还没开过库：下次 _open 会按当前文件开；手动重载时在这里
+      // 开一次就算重载。
+      if (!force) return (reloaded: false, error: null);
+      try {
+        await _open();
+        _openedPath = currentPath;
+        _openedSignature = signature;
+        _genericReaderCache = null;
+        _genericReaderKey = null;
+        return (reloaded: true, error: null);
+      } catch (e) {
+        return (reloaded: false, error: '数据库打不开：${_shortDbError(e)}');
+      }
+    }
+    // 先在新连接上打开并验结构（旧库还开着）：验不过留旧库。
+    Database? candidate;
+    try {
+      candidate = await _openDbAt(currentPath);
+      await _validateOpenDb(candidate);
+    } catch (e) {
+      await candidate?.close();
+      return (reloaded: false, error: '新数据库打不开：${_shortDbError(e)}');
+    }
+    // 验过：换连接（旧连接关掉；_openFuture 指向新库）。
+    final old = _db;
+    _db = candidate;
+    _openFuture = Future.value(candidate);
+    _openedPath = currentPath;
+    _openedSignature = signature;
+    _genericReaderCache = null;
+    _genericReaderKey = null;
+    await old?.close();
+    return (reloaded: true, error: null);
+  }
+
+  @override
+  Future<GenericDbReader?> genericReader() async {
+    final db = await _open();
+    if (await _isActressSchemaDb(db)) return null;
+    final key =
+        '$_openedPath|${_openedSignature?.length}|'
+        '${_openedSignature?.modifiedMs}';
+    final cached = _genericReaderCache;
+    if (cached != null && _genericReaderKey == key) return cached;
+    final schema = await probeGenericDbSchema(db);
+    // 手动映射文件与库文件放一起（MYTV/db/字段映射.json；未绑定
+    // 时在 documents 下），换同结构库直接复用。
+    final bind = await ActressMytvBind.instance.ensureBound();
+    final store = GenericDbMappingStore(
+      file: File(path.join(path.dirname(bind.dbPath), '字段映射.json')),
+    );
+    var resolvedSchema = schema;
+    final saved = await store.loadMapping(schema.fingerprint);
+    if (saved != null) {
+      resolvedSchema = schema.withManualMapping(
+        table: saved.table,
+        columns: saved.columns,
+      );
+    }
+    final reader = GenericDbReader(
+      db: db,
+      schema: resolvedSchema,
+      mappingStore: store,
+    );
+    _genericReaderCache = reader;
+    _genericReaderKey = key;
+    return reader;
   }
 
   @override
@@ -512,6 +852,107 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<ActressPerson?> upsertCrawledPerson({
+    required String name,
+    String sex = '',
+    List<String> tags = const [],
+    String avatarUrl = '',
+  }) async {
+    final variants = actressNameVariants(name);
+    if (variants.isEmpty) return null;
+    if (variants.any(actressTextBlocked) ||
+        tags.any(actressTextBlocked)) {
+      return null;
+    }
+    final db = await _open();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return db.transaction((txn) async {
+      ActressPerson? existing;
+      for (final variant in variants) {
+        final rows = await txn.query(
+          'person_names',
+          columns: ['person_id'],
+          where: 'name_key = ?',
+          whereArgs: [actressNameKey(variant)],
+          limit: 1,
+        );
+        if (rows.isEmpty) continue;
+        final id = (rows.first['person_id'] as num).toInt();
+        final personRows = await txn.query(
+          'persons',
+          where: 'id = ?',
+          whereArgs: [id],
+          limit: 1,
+        );
+        if (personRows.isNotEmpty) {
+          existing = _personFromRow(personRows.first);
+          break;
+        }
+      }
+      // 只补空字段、并标签与别名：不认领任何名册源身份（fromX 与
+      // 来源 id 列一律不动），名册跑过之后再合也不会被爬虫覆盖。
+      ActressPerson merged;
+      if (existing == null) {
+        merged = ActressPerson(
+          displayName: variants.first,
+          aliases: variants.skip(1).toList(),
+          sex: sex,
+          avatarUrl: avatarUrl,
+          tags: tags,
+        );
+      } else {
+        final aliasKeys = <String>{
+          actressNameKey(existing.displayName),
+          for (final alias in existing.aliases) actressNameKey(alias),
+        };
+        final extra = <String>[];
+        for (final variant in variants) {
+          if (aliasKeys.add(actressNameKey(variant))) extra.add(variant);
+        }
+        merged = existing.copyWith(
+          aliases: [...existing.aliases, ...extra],
+          sex: existing.sex.isNotEmpty ? existing.sex : sex,
+          avatarUrl: existing.avatarUrl.isNotEmpty
+              ? existing.avatarUrl
+              : avatarUrl,
+          tags: <String>{...existing.tags, ...tags}.toList(),
+        );
+      }
+      int personId;
+      if (existing == null) {
+        personId = await txn.insert('persons', _personToRow(merged, now));
+      } else {
+        personId = existing.localId;
+        await txn.update(
+          'persons',
+          _personToRow(merged.copyWith(localId: personId), now),
+          where: 'id = ?',
+          whereArgs: [personId],
+        );
+      }
+      final keys = <String>{
+        actressNameKey(merged.displayName),
+        for (final alias in merged.aliases) actressNameKey(alias),
+        for (final variant in variants) actressNameKey(variant),
+      };
+      for (final key in keys) {
+        if (key.isEmpty) continue;
+        await txn.insert('person_names', {
+          'name_key': key,
+          'person_id': personId,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      final rows = await txn.query(
+        'persons',
+        where: 'id = ?',
+        whereArgs: [personId],
+        limit: 1,
+      );
+      return _personFromRow(rows.first);
+    });
+  }
+
+  @override
   Future<ActressPerson?> personById(int localId) async {
     final db = await _open();
     final rows = await db.query(
@@ -521,7 +962,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       limit: 1,
     );
     if (rows.isEmpty) return null;
-    return _personFromRow(rows.first);
+    return (await _withLiveWorksCounts([_personFromRow(rows.first)])).first;
   }
 
   String _sexWhere(ActressSexFilter sex, List<Object?> args) {
@@ -564,10 +1005,25 @@ class SqfliteActressDatabase implements ActressDatabase {
     return 'tags LIKE ?';
   }
 
+  // 数据库分类：只留该分类里有作品的人（video_category 主分类
+  // 经同步写进 works.category；见 upsertWorks）。
+  String _categoryWhere(String category, List<Object?> args) {
+    if (category.isEmpty) return '1 = 1';
+    args.add(category);
+    return 'EXISTS (SELECT 1 FROM works w '
+        'WHERE w.person_id = persons.id AND w.category = ?)';
+  }
+
   String _sortOrder(ActressSort sort) => switch (sort) {
-    ActressSort.worksDesc =>
-      'MAX(works_count, roster_works) DESC, display_name ASC',
+    // 作品数只算入库数（2026-11-20 用户令：要入库才算），
+    // 不再拿 MAX(works_count, roster_works) 充数。
+    ActressSort.worksDesc => 'works_count DESC, display_name ASC',
     ActressSort.nameAsc => 'display_name ASC',
+    // 最近更新：每人入库作品里最新作品日期倒序；COALESCE 把
+    // 无入库作品的人的空值当 ''，倒序时沉底；同日按名字。
+    // 只算 works 表里实际有的日期，不用站方宣称的更新时间。
+    ActressSort.recentDesc =>
+      "COALESCE((SELECT MAX(date) FROM works WHERE works.person_id = persons.id), '') DESC, display_name ASC",
   };
 
   @override
@@ -578,12 +1034,13 @@ class SqfliteActressDatabase implements ActressDatabase {
     required int offset,
     required int limit,
     String tag = '',
+    String category = '',
   }) async {
     final db = await _open();
     final args = <Object?>[];
     final where =
         '${_sexWhere(sex, args)} AND ${_queryWhere(query, args)} '
-        'AND ${_tagWhere(tag, args)}';
+        'AND ${_tagWhere(tag, args)} AND ${_categoryWhere(category, args)}';
     final rows = await db.query(
       'persons',
       where: where,
@@ -592,7 +1049,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       limit: limit,
       offset: offset,
     );
-    return rows.map(_personFromRow).toList();
+    return _withLiveWorksCounts(rows.map(_personFromRow).toList());
   }
 
   @override
@@ -624,7 +1081,9 @@ class SqfliteActressDatabase implements ActressDatabase {
       where: _sexWhere(sex, args),
       whereArgs: args,
     );
-    final persons = rows.map(_personFromRow).toList()..sort(compareActressRank);
+    final persons =
+        await _withLiveWorksCounts(rows.map(_personFromRow).toList())
+          ..sort(compareActressRank);
     return persons;
   }
 
@@ -686,12 +1145,14 @@ class SqfliteActressDatabase implements ActressDatabase {
     int personId, {
     required int offset,
     required int limit,
+    String? category,
   }) async {
     final db = await _open();
+    final useCategory = category != null && category.isNotEmpty;
     final rows = await db.query(
       'works',
-      where: 'person_id = ?',
-      whereArgs: [personId],
+      where: useCategory ? 'person_id = ? AND category = ?' : 'person_id = ?',
+      whereArgs: useCategory ? [personId, category] : [personId],
       orderBy: 'id ASC',
       limit: limit,
       offset: offset,
@@ -700,13 +1161,37 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
-  Future<int> countWorks(int personId) async {
+  Future<int> countWorks(int personId, {String? category}) async {
     final db = await _open();
+    final useCategory = category != null && category.isNotEmpty;
     final rows = await db.rawQuery(
-      'SELECT COUNT(*) AS c FROM works WHERE person_id = ?',
-      [personId],
+      useCategory
+          ? 'SELECT COUNT(*) AS c FROM works '
+                'WHERE person_id = ? AND category = ?'
+          : 'SELECT COUNT(*) AS c FROM works WHERE person_id = ?',
+      useCategory ? [personId, category] : [personId],
     );
     return (rows.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  @override
+  Future<List<({String name, int count})>> workCategories(
+    int personId,
+  ) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      'SELECT category AS name, COUNT(*) AS c FROM works '
+      'WHERE person_id = ? AND category <> \'\' '
+      'GROUP BY category ORDER BY c DESC, category ASC',
+      [personId],
+    );
+    return [
+      for (final row in rows)
+        (
+          name: (row['name'] as String?) ?? '',
+          count: (row['c'] as num?)?.toInt() ?? 0,
+        ),
+    ];
   }
 
   Future<void> _refreshWorksCount(
@@ -718,6 +1203,34 @@ class SqfliteActressDatabase implements ActressDatabase {
       '(SELECT COUNT(*) FROM works WHERE person_id = ?) WHERE id = ?',
       [personId, personId],
     );
+  }
+
+  /// 读数口径（2026-11-20 计数修复）：列表卡片与详情头顶的
+  /// worksCount 一律以 works 表实时行数为准——单次聚合查询覆盖
+  /// 本批全部人，覆盖掉 persons.works_count 缓存列的值。
+  /// 缓存列仍由各写路径维护、只供 SQL 排序用；显示数与
+  /// countWorks() 从此永远是同一份数，不存在“列表一个数、
+  /// 详情另一个数”。
+  Future<List<ActressPerson>> _withLiveWorksCounts(
+    List<ActressPerson> persons,
+  ) async {
+    if (persons.isEmpty) return persons;
+    final db = await _open();
+    final ids = persons.map((person) => person.localId).toList();
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final rows = await db.rawQuery(
+      'SELECT person_id, COUNT(*) AS c FROM works '
+      'WHERE person_id IN ($placeholders) GROUP BY person_id',
+      ids,
+    );
+    final counts = <int, int>{
+      for (final row in rows)
+        (row['person_id'] as num).toInt(): (row['c'] as num).toInt(),
+    };
+    return [
+      for (final person in persons)
+        person.copyWith(worksCount: counts[person.localId] ?? 0),
+    ];
   }
 
   @override
@@ -759,6 +1272,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'code_display': codeDisplay,
             'title': title == codeDisplay ? '' : title,
             'date': film.date.trim(),
+            'category': film.category,
             ...coverFields,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
         } else {
@@ -770,12 +1284,71 @@ class SqfliteActressDatabase implements ActressDatabase {
             'code_display': '',
             'title': title,
             'date': film.date.trim(),
+            'category': film.category,
             ...coverFields,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
+        // 分类回填：这部已在库里（同步先写了空分类的行、或旧库行）、
+        // 本次带真实分类时，只把空分类补上；已有分类的行不动，
+        // 不覆盖。老用户库里的旧行下次镜像经过时自动补上分类。
+        if (film.category.isNotEmpty) {
+          if (codeKey.isNotEmpty) {
+            await txn.rawUpdate(
+              'UPDATE works SET category = ? WHERE person_id = ? '
+              'AND site = ? AND code_key = ? AND category = \'\'',
+              [film.category, personId, site, codeKey],
+            );
+          } else {
+            await txn.rawUpdate(
+              'UPDATE works SET category = ? WHERE person_id = ? '
+              'AND site = ? AND code_key = \'\' AND title_key = ? '
+              'AND category = \'\'',
+              [film.category, personId, site, titleKey],
+            );
+          }
         }
       }
       await _refreshWorksCount(txn, personId);
     });
+  }
+
+  @override
+  Future<bool> updateWorkPlayLink({
+    required int personId,
+    required String site,
+    required String codeKey,
+    required String titleKey,
+    String title = '',
+    String date = '',
+    required String coverSource,
+    required String coverDramaId,
+    required String coverUrl,
+  }) async {
+    if (codeKey.isEmpty && titleKey.isEmpty) return false;
+    final db = await _open();
+    final values = <String, Object?>{
+      'cover_source': coverSource,
+      'cover_drama_id': coverDramaId,
+      'cover_url': coverUrl,
+    };
+    // 标题/日期只在调用方给了非空值时才换（不拿空值盖掉已有标题）。
+    if (title.isNotEmpty) values['title'] = title;
+    if (date.isNotEmpty) values['date'] = date;
+    final changed = codeKey.isNotEmpty
+        ? await db.update(
+            'works',
+            values,
+            where: 'person_id = ? AND site = ? AND code_key = ?',
+            whereArgs: [personId, site, codeKey],
+          )
+        : await db.update(
+            'works',
+            values,
+            where: 'person_id = ? AND site = ? AND code_key = \'\' '
+                'AND title_key = ?',
+            whereArgs: [personId, site, titleKey],
+          );
+    return changed > 0;
   }
 
   @override
@@ -1108,10 +1681,41 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<String?> jsonVersionStamp() async {
+    final db = await _open();
+    final rows = await db.query(
+      'sync_state',
+      columns: ['cursor'],
+      where: 'source = ? AND phase = ?',
+      whereArgs: ['actress_json', 'version'],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['cursor'] as String?;
+  }
+
+  @override
+  Future<void> saveJsonVersionStamp(String version) async {
+    final db = await _open();
+    await db.insert('sync_state', {
+      'source': 'actress_json',
+      'phase': 'version',
+      'cursor': version,
+      'total': 0,
+      'finished': 1,
+      'error': '',
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
   Future<ActressSyncOverview> overview() async {
     final db = await _open();
     final personRows = await db.rawQuery('SELECT COUNT(*) AS c FROM persons');
     final workRows = await db.rawQuery('SELECT COUNT(*) AS c FROM works');
+    final withWorksRows = await db.rawQuery(
+      'SELECT COUNT(DISTINCT person_id) AS c FROM works',
+    );
     final updatedRows = await db.rawQuery(
       'SELECT MAX(updated_at) AS m FROM persons',
     );
@@ -1130,6 +1734,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     return ActressSyncOverview(
       persons: (personRows.first['c'] as num?)?.toInt() ?? 0,
       works: (workRows.first['c'] as num?)?.toInt() ?? 0,
+      personsWithWorks: (withWorksRows.first['c'] as num?)?.toInt() ?? 0,
       sources: sources,
       lastUpdatedAt: (updatedRows.first['m'] as num?)?.toInt() ?? 0,
     );
@@ -1139,6 +1744,15 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<void> close() async {
     final db = _db;
     _db = null;
+    // 2026-11-20 MYTV 绑定：close 后再开必须重新走 _openNow
+    // 拿新路径（授权后重新绑定换库用）。原来只清 _db 不清
+    // _openFuture，close 后再开会拿到已关闭的旧库。
+    _openFuture = null;
+    // 2026-11-20 热换库：指纹与通用缓存也清掉，下次开库重探。
+    _openedPath = null;
+    _openedSignature = null;
+    _genericReaderCache = null;
+    _genericReaderKey = null;
     await db?.close();
   }
 }
@@ -1196,7 +1810,73 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
-  Future<ActressPerson?> personById(int localId) async => _persons[localId];
+  Future<ActressPerson?> upsertCrawledPerson({
+    required String name,
+    String sex = '',
+    List<String> tags = const [],
+    String avatarUrl = '',
+  }) async {
+    final variants = actressNameVariants(name);
+    if (variants.isEmpty) return null;
+    if (variants.any(actressTextBlocked) ||
+        tags.any(actressTextBlocked)) {
+      return null;
+    }
+    ActressPerson? existing;
+    for (final variant in variants) {
+      final id = _nameIndex[actressNameKey(variant)];
+      if (id != null && _persons.containsKey(id)) {
+        existing = _persons[id];
+        break;
+      }
+    }
+    final ActressPerson merged;
+    if (existing == null) {
+      merged = ActressPerson(
+        displayName: variants.first,
+        aliases: variants.skip(1).toList(),
+        sex: sex,
+        avatarUrl: avatarUrl,
+        tags: tags,
+      );
+    } else {
+      final aliasKeys = <String>{
+        actressNameKey(existing.displayName),
+        for (final alias in existing.aliases) actressNameKey(alias),
+      };
+      final extra = <String>[];
+      for (final variant in variants) {
+        if (aliasKeys.add(actressNameKey(variant))) extra.add(variant);
+      }
+      merged = existing.copyWith(
+        aliases: [...existing.aliases, ...extra],
+        sex: existing.sex.isNotEmpty ? existing.sex : sex,
+        avatarUrl: existing.avatarUrl.isNotEmpty
+            ? existing.avatarUrl
+            : avatarUrl,
+        tags: <String>{...existing.tags, ...tags}.toList(),
+      );
+    }
+    final stored = existing == null
+        ? merged.copyWith(localId: _nextPersonId++)
+        : merged.copyWith(localId: existing.localId);
+    _persons[stored.localId] = stored;
+    final keys = <String>{
+      actressNameKey(stored.displayName),
+      for (final alias in stored.aliases) actressNameKey(alias),
+      for (final variant in variants) actressNameKey(variant),
+    };
+    for (final key in keys) {
+      if (key.isNotEmpty) _nameIndex[key] = stored.localId;
+    }
+    return stored;
+  }
+
+  @override
+  Future<ActressPerson?> personById(int localId) async {
+    final person = _persons[localId];
+    return person == null ? null : _withLiveWorksCount(person);
+  }
 
   bool _sexMatches(ActressPerson person, ActressSexFilter sex) => switch (sex) {
     ActressSexFilter.all => true,
@@ -1233,12 +1913,19 @@ class MemoryActressDatabase implements ActressDatabase {
     required ActressSexFilter sex,
     required String query,
     String tag = '',
+    String category = '',
   }) => _persons.values
       .where(
         (person) =>
             _sexMatches(person, sex) &&
             _queryMatches(person, query) &&
-            (tag.isEmpty || person.tags.contains(tag)),
+            (tag.isEmpty || person.tags.contains(tag)) &&
+            (category.isEmpty ||
+                _works.values.any(
+                  (work) =>
+                      work.personId == person.localId &&
+                      work.category == category,
+                )),
       )
       .toList();
 
@@ -1250,8 +1937,14 @@ class MemoryActressDatabase implements ActressDatabase {
     required int offset,
     required int limit,
     String tag = '',
+    String category = '',
   }) async {
-    final filtered = _filtered(sex: sex, query: query, tag: tag);
+    final filtered = _filtered(
+      sex: sex,
+      query: query,
+      tag: tag,
+      category: category,
+    );
     switch (sort) {
       case ActressSort.worksDesc:
         filtered.sort((a, b) {
@@ -1261,9 +1954,30 @@ class MemoryActressDatabase implements ActressDatabase {
         });
       case ActressSort.nameAsc:
         filtered.sort((a, b) => a.displayName.compareTo(b.displayName));
+      case ActressSort.recentDesc:
+        // 最近更新：每人入库作品里最新作品日期倒序，无入库作品的
+        // 人日期为空串、倒序沉底；同日按名字。只算库里实际有的。
+        final latest = <int, String>{};
+        for (final work in _works.values) {
+          final current = latest[work.personId] ?? '';
+          if (work.date.compareTo(current) > 0) {
+            latest[work.personId] = work.date;
+          }
+        }
+        filtered.sort((a, b) {
+          final cmp = (latest[b.localId] ?? '').compareTo(
+            latest[a.localId] ?? '',
+          );
+          if (cmp != 0) return cmp;
+          return a.displayName.compareTo(b.displayName);
+        });
     }
     if (offset >= filtered.length) return const [];
-    return filtered.skip(offset).take(limit).toList();
+    return filtered
+        .skip(offset)
+        .take(limit)
+        .map(_withLiveWorksCount)
+        .toList();
   }
 
   @override
@@ -1278,7 +1992,10 @@ class MemoryActressDatabase implements ActressDatabase {
     required ActressSexFilter sex,
   }) async {
     final filtered =
-        _persons.values.where((person) => _sexMatches(person, sex)).toList()
+        _persons.values
+            .where((person) => _sexMatches(person, sex))
+            .map(_withLiveWorksCount)
+            .toList()
           ..sort(compareActressRank);
     return filtered;
   }
@@ -1325,17 +2042,48 @@ class MemoryActressDatabase implements ActressDatabase {
     int personId, {
     required int offset,
     required int limit,
+    String? category,
   }) async {
-    final works =
-        _works.values.where((work) => work.personId == personId).toList()
-          ..sort((a, b) => a.id.compareTo(b.id));
+    final useCategory = category != null && category.isNotEmpty;
+    final works = _works.values
+        .where((work) => work.personId == personId)
+        .where((work) => !useCategory || work.category == category)
+        .toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
     if (offset >= works.length) return const [];
     return works.skip(offset).take(limit).toList();
   }
 
   @override
-  Future<int> countWorks(int personId) async =>
-      _works.values.where((work) => work.personId == personId).length;
+  Future<int> countWorks(int personId, {String? category}) async {
+    final useCategory = category != null && category.isNotEmpty;
+    return _works.values
+        .where((work) => work.personId == personId)
+        .where((work) => !useCategory || work.category == category)
+        .length;
+  }
+
+  @override
+  Future<List<({String name, int count})>> workCategories(
+    int personId,
+  ) async {
+    final counts = <String, int>{};
+    for (final work in _works.values) {
+      if (work.personId != personId) continue;
+      if (work.category.isEmpty) continue;
+      counts[work.category] = (counts[work.category] ?? 0) + 1;
+    }
+    final out = [
+      for (final entry in counts.entries)
+        (name: entry.key, count: entry.value),
+    ];
+    out.sort((a, b) {
+      final byCount = b.count.compareTo(a.count);
+      if (byCount != 0) return byCount;
+      return a.name.compareTo(b.name);
+    });
+    return out;
+  }
 
   void _refreshWorksCount(int personId) {
     final person = _persons[personId];
@@ -1345,6 +2093,17 @@ class MemoryActressDatabase implements ActressDatabase {
         .length;
     _persons[personId] = person.copyWith(worksCount: count);
   }
+
+  /// 读数口径（2026-11-20 计数修复，与 sqflite 实现同一口径）：
+  /// 列表卡片与详情头顶的 worksCount 一律以 works 表实时行数为准，
+  /// 读时现算，不拿存着的 worksCount 字段充数；显示数与
+  /// countWorks() 永远是同一份数。
+  ActressPerson _withLiveWorksCount(ActressPerson person) =>
+      person.copyWith(
+        worksCount: _works.values
+            .where((work) => work.personId == person.localId)
+            .length,
+      );
 
   @override
   Future<void> upsertWorks(
@@ -1361,14 +2120,27 @@ class MemoryActressDatabase implements ActressDatabase {
       final titleKey = film.titleKey;
       if (codeKey.isEmpty && titleKey.isEmpty) continue;
       // 去重键是（人，站，番号/标题）：同站同番号冲突即丢弃，
-      // 换站同番号不冲突，各留一条。
-      final exists = _works.values.any((work) {
-        if (work.personId != personId) return false;
-        if (work.site != site) return false;
-        if (codeKey.isNotEmpty) return work.codeKey == codeKey;
-        return work.codeKey.isEmpty && work.titleKey == titleKey;
-      });
-      if (exists) continue;
+      // 换站同番号不冲突，各留一条；冲突行只做分类回填（旧行没记
+      // 分类、新数据带真实分类时补上，已有分类的不覆盖）。
+      ActressWork? existing;
+      for (final work in _works.values) {
+        if (work.personId != personId) continue;
+        if (work.site != site) continue;
+        if (codeKey.isNotEmpty) {
+          if (work.codeKey == codeKey) existing = work;
+        } else if (work.codeKey.isEmpty && work.titleKey == titleKey) {
+          existing = work;
+        }
+        if (existing != null) break;
+      }
+      if (existing != null) {
+        if (existing.category.isEmpty && film.category.isNotEmpty) {
+          _works[existing.id] = existing.copyWith(
+            category: film.category,
+          );
+        }
+        continue;
+      }
       final codeDisplay = film.code.trim();
       final title = film.title.trim();
       _works[_nextWorkId] = ActressWork(
@@ -1380,6 +2152,7 @@ class MemoryActressDatabase implements ActressDatabase {
         codeDisplay: codeDisplay,
         title: title == codeDisplay ? '' : title,
         date: film.date.trim(),
+        category: film.category,
         // 同步时已取到的封面：开关关闭/无图/来源站为空时三字段恒为空；
         // 封面来源站按调用方传入的 [coverSource] 写，不再写死。
         coverSource: film.coverUrl.isEmpty || coverSource.isEmpty
@@ -1394,6 +2167,38 @@ class MemoryActressDatabase implements ActressDatabase {
       );
     }
     _refreshWorksCount(personId);
+  }
+
+  @override
+  Future<bool> updateWorkPlayLink({
+    required int personId,
+    required String site,
+    required String codeKey,
+    required String titleKey,
+    String title = '',
+    String date = '',
+    required String coverSource,
+    required String coverDramaId,
+    required String coverUrl,
+  }) async {
+    if (codeKey.isEmpty && titleKey.isEmpty) return false;
+    for (final work in _works.values) {
+      if (work.personId != personId) continue;
+      if (work.site != site) continue;
+      final matches = codeKey.isNotEmpty
+          ? work.codeKey == codeKey
+          : work.codeKey.isEmpty && work.titleKey == titleKey;
+      if (!matches) continue;
+      _works[work.id] = work.copyWith(
+        title: title.isNotEmpty ? title : work.title,
+        date: date.isNotEmpty ? date : work.date,
+        coverSource: coverSource,
+        coverDramaId: coverDramaId,
+        coverUrl: coverUrl,
+      );
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -1635,6 +2440,20 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<String?> jsonVersionStamp() async =>
+      _checkpoints['actress_json:version']?.cursor;
+
+  @override
+  Future<void> saveJsonVersionStamp(String version) async {
+    _checkpoints['actress_json:version'] = ActressSyncCheckpoint(
+      source: 'actress_json',
+      phase: 'version',
+      cursor: version,
+      finished: true,
+    );
+  }
+
+  @override
   Future<ActressSyncOverview> overview() async {
     final sources = <ActressRosterSourceId, bool>{};
     for (final source in ActressRosterSourceId.values) {
@@ -1651,10 +2470,24 @@ class MemoryActressDatabase implements ActressDatabase {
     return ActressSyncOverview(
       persons: _persons.length,
       works: _works.length,
+      personsWithWorks: {
+        for (final work in _works.values) work.personId,
+      }.length,
       sources: sources,
       lastUpdatedAt: 0,
     );
   }
+
+  @override
+  Future<({bool reloaded, String? error})> reloadIfChanged({
+    bool force = false,
+  }) async => (reloaded: false, error: null);
+
+  @override
+  Future<GenericDbReader?> genericReader() async => null;
+
+  @override
+  String? get openFallbackNote => null;
 
   @override
   Future<void> close() async {}

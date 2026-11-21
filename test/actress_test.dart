@@ -12,12 +12,25 @@ import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/actress/actress_widgets.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/crosssite_probe.dart';
+import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
+
+/// 验活假探针：永远可播（合成地址 example.test 在测试里没有真服务，
+/// 默认探针会判死；链测试只测链逻辑，不测真网络）。
+Future<FeedProbeResponse> _alwaysPlayable(
+  String url,
+  Map<String, String> headers,
+  Duration timeout,
+) async => const FeedProbeResponse(
+  statusCode: 200,
+  headers: {'content-type': 'video/mp4'},
+  headBytes: [1],
+);
 
 Future<ActressHttpResponse> _unusedFetch(
   String url, {
@@ -462,7 +475,10 @@ void main() {
     });
 
     test('筛选排序分页搜索', () async {
-      await db.upsertRosterPerson(
+      // “要入库才算”（2026-11-20）：排序只看入库作品数，名册宣称数
+      // 不算——这里直接写真实作品行，男演员乙 3 部、女演员甲 2 部、
+      // 未知性别丙 0 部。
+      final female = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
           sourceId: 'F1',
@@ -470,8 +486,12 @@ void main() {
           sex: 'female',
           worksHint: 30,
         ),
-      );
-      await db.upsertRosterPerson(
+      ))!;
+      await db.upsertWorks(female.localId, const [
+        RosterFilm(code: 'AAA-001'),
+        RosterFilm(code: 'AAA-002'),
+      ]);
+      final male = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
           sourceId: 'M1',
@@ -479,7 +499,12 @@ void main() {
           sex: 'male',
           worksHint: 100,
         ),
-      );
+      ))!;
+      await db.upsertWorks(male.localId, const [
+        RosterFilm(code: 'BBB-001'),
+        RosterFilm(code: 'BBB-002'),
+        RosterFilm(code: 'BBB-003'),
+      ]);
       await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.whos,
@@ -787,7 +812,10 @@ void main() {
       addTearDown(sync1.dispose);
       final result1 = await sync1.run();
       expect(result1.hasFailures, isTrue);
-      expect(failing.fetchedRosterPages, [1, 2, 2, 2]);
+      // 3 个取页工人并行：页 1、2、3 同时领走；页 2 失败重试 3 次，
+      // 页 3 是超前取到的空页（无更多时停）；断点留在最早缺口第 2 页。
+      expect(failing.fetchedRosterPages.toSet(), {1, 2, 3});
+      expect(failing.fetchedRosterPages.where((p) => p == 2).length, 3);
       final checkpoint = await db.checkpoint(
         ActressRosterSourceId.chaoliu,
         'roster',
@@ -809,8 +837,10 @@ void main() {
       );
       addTearDown(sync2.dispose);
       await sync2.run();
-      // 续跑只拉第 2 页，第 1 页不再拉。
-      expect(resumed.fetchedRosterPages, [2]);
+      // 续跑从最早缺口第 2 页续爬，第 1 页不再拉（超前取到的空页
+      // 3、4 不影响断言，只认第 1 页没再拉、第 2 页拉了）。
+      expect(resumed.fetchedRosterPages.contains(1), isFalse);
+      expect(resumed.fetchedRosterPages.contains(2), isTrue);
       expect(await db.countPersons(sex: ActressSexFilter.all, query: ''), 2);
     });
 
@@ -1135,6 +1165,7 @@ void main() {
         avId: 'SSIS-00123',
         candidateSites: sites ?? [_testSiteA, _testSiteB, _testSiteC],
         probeService: probe,
+        verifyFetch: _alwaysPlayable,
       );
     }
 
@@ -1190,6 +1221,7 @@ void main() {
         avId: 'SSIS-00123',
         candidateSites: [_testSiteB, _lazySite],
         probeService: probe,
+        verifyFetch: _alwaysPlayable,
       );
       final candidate = await chain.nextPlayable(
         profileEpoch: store.profileEpoch,
@@ -1235,6 +1267,7 @@ void main() {
         avId: 'SSIS-00123',
         candidateSites: [_testSiteA],
         probeService: probe,
+        verifyFetch: _alwaysPlayable,
       );
       expect(
         await blocked.nextPlayable(profileEpoch: store.profileEpoch),
@@ -1262,6 +1295,7 @@ void main() {
         avId: '',
         titleQuery: '测试标题',
         candidateSites: [_testSiteA, _testSiteB],
+        verifyFetch: _alwaysPlayable,
       );
       final candidate = await chain.nextPlayable(
         profileEpoch: store.profileEpoch,
@@ -1325,6 +1359,13 @@ void main() {
         ),
       ))!;
       if (rank != null) await db.setMissavRank(person.localId, rank);
+      // “要入库才算”：works 参数写真实作品行，不只写名册宣称数
+      // （displayWorks 与头顶人数都只算入库的，宣称数不算）。
+      if (works > 0) {
+        await db.upsertWorks(person.localId, [
+          for (var i = 0; i < works; i++) RosterFilm(code: 'TST-${i + 1}'),
+        ], site: ActressRosterSourceId.chaoliu.name);
+      }
       return (await db.personById(person.localId))!;
     }
 
@@ -1476,7 +1517,7 @@ void main() {
     });
 
     testWidgets('详情页作品按卡片网格展示', (tester) async {
-      final person = await seedPerson('女演员甲', works: 3);
+      final person = await seedPerson('女演员甲', works: 0);
       await db.upsertWorks(person.localId, const [
         RosterFilm(code: 'SSIS-00123', date: '2024-01-01'),
         RosterFilm(code: 'HMN-927'),
@@ -1498,7 +1539,7 @@ void main() {
       expect(find.text('无番号作品标题'), findsOneWidget);
     });
 
-    testWidgets('详情页点卡无源可播报暂无可播片源', (tester) async {
+    testWidgets('详情页点卡无源可播报已试过站数', (tester) async {
       final person = await seedPerson('女演员甲', works: 1);
       await db.upsertWorks(person.localId, const [
         RosterFilm(code: 'SSIS-00123'),
@@ -1521,6 +1562,7 @@ void main() {
                     repository: repository,
                     results: const {},
                   ),
+                  verifyFetch: _alwaysPlayable,
                 ),
           ),
         ),
@@ -1528,7 +1570,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byType(DramaTile).first);
       await tester.pumpAndSettle();
-      expect(find.text('暂无可播片源'), findsOneWidget);
+      // 2026-11-20 兜底播放修：两站都探过，报试过的站数，不再只报
+      // “暂无可播片源”（一个没试过时才报那句）。
+      expect(find.text('这条播不了，已试过 2 个站'), findsOneWidget);
     });
 
     testWidgets('排行榜按综合分排序', (tester) async {
@@ -1582,7 +1626,6 @@ void main() {
       }
     }
 
-
     // 自动续跑链靠 2 秒 Timer：pumpAndSettle 不等长 Timer，显式推进假时钟。
     Future<void> advanceAutoChain(WidgetTester tester) async {
       for (var i = 0; i < 2; i++) {
@@ -1607,15 +1650,23 @@ void main() {
       );
     }
 
-    testWidgets('没同步完进页自动断点续跑，最多自动跑 3 次', (tester) async {
+    // 不自动爬取（2026-11-20 用户令）：进页不再自动起爬、自动续跑
+    // 已废除；同步只在用户手动点刷新/继续/开始时跑一次，跑完或
+    // 取消后都不自动再续。
+    testWidgets('没同步完进页不自动跑，手动点继续同步才跑一次', (tester) async {
       await seedPerson('女演员甲', works: 30);
       final sync = _CountingSync(db: db);
       addTearDown(sync.dispose);
       await pumpListPage(tester, sync);
       await tester.pumpAndSettle();
       await advanceAutoChain(tester);
-      expect(sync.runs, 3);
-      expect(sync.refreshArgs, [false, false, false]);
+      expect(sync.runs, 0);
+      await tester.tap(find.text('继续同步'));
+      await tester.pumpAndSettle();
+      expect(sync.runs, 1);
+      expect(sync.refreshArgs, [false]);
+      await advanceAutoChain(tester);
+      expect(sync.runs, 1);
     });
 
     testWidgets('已同步完进页不自动跑', (tester) async {
@@ -1629,28 +1680,33 @@ void main() {
       expect(sync.runs, 0);
     });
 
-    testWidgets('库空进页自动开始同步', (tester) async {
+    testWidgets('库空进页不自动跑，点开始同步才跑一次', (tester) async {
       final sync = _CountingSync(db: db);
       addTearDown(sync.dispose);
       await pumpListPage(tester, sync);
       await tester.pumpAndSettle();
       await advanceAutoChain(tester);
-      expect(sync.runs, 3);
-      expect(sync.refreshArgs, [false, false, false]);
+      expect(sync.runs, 0);
+      expect(find.text('还没有数据，点刷新开始同步演员库。'), findsOneWidget);
+      await tester.tap(find.text('开始同步'));
+      await tester.pumpAndSettle();
+      expect(sync.runs, 1);
+      expect(sync.refreshArgs, [false]);
     });
 
-    testWidgets('手动点继续同步也是断点续跑', (tester) async {
+    testWidgets('手动点刷新跑一次，跑完不自动再续', (tester) async {
       await seedPerson('女演员甲', works: 30);
       final sync = _CountingSync(db: db);
       addTearDown(sync.dispose);
       await pumpListPage(tester, sync);
       await tester.pumpAndSettle();
       await advanceAutoChain(tester);
-      expect(sync.runs, 3);
-      await tester.tap(find.text('继续同步'));
+      expect(sync.runs, 0);
+      await tester.tap(find.byKey(const ValueKey('refresh-actress-library')));
       await tester.pumpAndSettle();
-      expect(sync.runs, 4);
-      expect(sync.refreshArgs.last, false);
+      expect(sync.runs, 1);
+      await advanceAutoChain(tester);
+      expect(sync.runs, 1);
     });
 
     testWidgets('取消后不自动续跑', (tester) async {
@@ -1659,6 +1715,11 @@ void main() {
       addTearDown(sync.dispose);
       await pumpListPage(tester, sync);
       await tester.pumpAndSettle();
+      await advanceAutoChain(tester);
+      expect(sync.runs, 0);
+      await tester.tap(find.text('继续同步'));
+      await tester.pumpAndSettle();
+      expect(sync.runs, 1);
       await advanceAutoChain(tester);
       expect(sync.runs, 1);
     });

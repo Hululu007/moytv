@@ -701,20 +701,4 @@ void main() {
       expect(isVodZoneSource(BuiltinPySites.qilinyingshiSite), isTrue);
     });
   });
-
-  group('内置 py 视频站', () {
-    test('黑颜禁播站注册值：视频分区、内置来源、py 类型、🔞 名', () {
-      final site = BuiltinPySites.heiyanSite;
-      expect(site.id, 'heiyan');
-      expect(site.name, '🔞黑颜禁播');
-      expect(site.section, SourceSite.sectionVideo);
-      expect(site.origin, SourceSite.originBuiltin);
-      expect(site.importType, 'py');
-      expect(BuiltinPySites.heiyanAssetPath, 'assets/py_spiders/heiyan.py');
-      expect(BuiltinPySites.entryFor('heiyan')?.siteId, 'heiyan');
-    });
-    test('黑颜禁播站进点播区（统一视频区）', () {
-      expect(isVodZoneSource(BuiltinPySites.heiyanSite), isTrue);
-    });
-  });
 }

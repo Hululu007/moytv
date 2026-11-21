@@ -4,6 +4,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'exo_subtitle.dart';
+import 'live_subtitle_engine.dart';
+import 'live_subtitle_service.dart';
+import 'live_subtitle_settings.dart';
 import 'models.dart';
 import 'playback_preferences.dart';
 import 'tvbox_player_bridge.dart';
@@ -90,6 +93,24 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
   // 时间轴自动对齐，偏移逻辑在 ExoSubtitleBuffer 里，入口待拍板。
   static const _subtitleOffsetMs = 0;
 
+  // 实时翻译字幕：与内嵌字幕共用同一个叠加层，有实时字幕时优先
+  // 显示实时字幕，没有时回落到内嵌字幕，不另起一层叠画。
+  LiveSubtitleSettings? _liveSettings;
+  LiveSubtitleService? _liveSubtitle;
+  final List<StreamSubscription<dynamic>> _liveSubscriptions = [];
+  String _livePartial = '';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadLiveSubtitleSettings());
+  }
+
+  Future<void> _loadLiveSubtitleSettings() async {
+    final settings = await LiveSubtitleSettings.load();
+    if (mounted) setState(() => _liveSettings = settings);
+  }
+
   @override
   void didUpdateWidget(TvboxVideoPane oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -111,6 +132,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
       unawaited(subscription.cancel());
     }
     _subscriptions.clear();
+    unawaited(_stopLiveSubtitle());
     widget.handle.detach();
     unawaited(_controller?.release());
     _controller = null;
@@ -181,6 +203,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     widget.handle.completed = false;
     _subtitleBuffer.clear();
     _subtitleLines = const [];
+    await _stopLiveSubtitle();
     await controller.open(
       url: plan.url,
       headers: plan.headers,
@@ -191,17 +214,76 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     if (!_openedAutoplay) {
       await controller.pause();
     }
+    await _startLiveSubtitle(plan, startPosition);
+  }
+
+  /// 实时翻译字幕：只在总开关开着、平台支持、源不是播放器侧内存
+  /// 密钥解密时才启动（内存密钥解密的源后台取不到音轨）。
+  Future<void> _startLiveSubtitle(PlaybackPlan plan, double startPosition) async {
+    final settings = _liveSettings;
+    if (settings == null || !settings.enabled) return;
+    if (!liveSubtitleEngineSupported) return;
+    if (plan.decryptionKey.isNotEmpty) return;
+    final service = LiveSubtitleService(settings: settings);
+    _liveSubtitle = service;
+    _liveSubscriptions.add(
+      service.cueStream.listen((_) {
+        if (mounted) _updateSubtitleLines();
+      }),
+    );
+    _liveSubscriptions.add(
+      service.partialStream.listen((partial) {
+        if (!mounted) return;
+        _livePartial = partial;
+        _updateSubtitleLines();
+      }),
+    );
+    await service.start(
+      url: plan.url,
+      headers: plan.headers,
+      startPosition: Duration(milliseconds: (startPosition * 1000).round()),
+    );
+  }
+
+  Future<void> _stopLiveSubtitle() async {
+    for (final subscription in _liveSubscriptions) {
+      await subscription.cancel();
+    }
+    _liveSubscriptions.clear();
+    final service = _liveSubtitle;
+    _liveSubtitle = null;
+    if (service != null) await service.dispose();
+    _livePartial = '';
+  }
+
+  /// 取当前播放进度对应的实时字幕行；没有则返回空，回落内嵌字幕。
+  /// 有确认字幕时不画临时行，避免同一句话在两行里重复。
+  List<String> _liveLinesAt(Duration position) {
+    final service = _liveSubtitle;
+    if (service == null || !service.isRunning) return const [];
+    final cue = service.cueAt(position);
+    if (cue != null) {
+      return cue.displayLines(
+        showOriginal: _liveSettings?.showOriginal ?? true,
+      );
+    }
+    if (_livePartial.isNotEmpty) return [_livePartial];
+    return const [];
   }
 
   /// 按当前位置刷新应显示的字幕行；行内容变化时返回 true。
   /// 位置 tick 与 cue 到达两路都走这里，偏移只影响取组不影响 tick。
+  /// 有实时翻译字幕时优先显示实时行，否则回落到内嵌字幕。
   bool _updateSubtitleLines() {
-    final lines = layoutExoSubtitleLines(
-      _subtitleBuffer.activeCuesAt(
-        widget.handle.position.inMilliseconds,
-        offsetMs: _subtitleOffsetMs,
-      ),
-    );
+    final liveLines = _liveLinesAt(widget.handle.position);
+    final lines = liveLines.isNotEmpty
+        ? liveLines
+        : layoutExoSubtitleLines(
+            _subtitleBuffer.activeCuesAt(
+              widget.handle.position.inMilliseconds,
+              offsetMs: _subtitleOffsetMs,
+            ),
+          );
     if (lines.length == _subtitleLines.length) {
       var same = true;
       for (var i = 0; i < lines.length; i++) {
@@ -316,6 +398,10 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
                         widget.handle.seek(
                           Duration(milliseconds: value.round()),
                         ),
+                      );
+                      // 拖进度条后重新锚一次实时字幕时间轴。
+                      _liveSubtitle?.reanchor(
+                        Duration(milliseconds: value.round()),
                       );
                     },
                   ),
