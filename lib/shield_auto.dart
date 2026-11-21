@@ -3,13 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import 'clearance_bridge.dart' show openClearanceFlow, shieldUserAgent;
+import 'clearance_bridge.dart'
+    show openClearanceFlow, shieldClearedNotifier, shieldUserAgent;
 import 'core_bridge.dart';
 import 'models.dart';
 
-/// 盾已解开的通知：value 是被解开的主机名。
-/// 页面可以监听它做一次自动重载，用户不需要手动下拉。
-final ValueNotifier<String?> shieldClearedNotifier = ValueNotifier<String?>(null);
+// 解盾通知与验证页放在 clearance_bridge 里统一维护，
+// 这里转出去，老的引用（shield_auto 的导入方）不用改。
+export 'clearance_bridge.dart' show shieldClearedNotifier;
 
 /// 通用自动过盾。
 ///
@@ -152,8 +153,12 @@ class _ShieldAutoResolverState extends State<ShieldAutoResolver> {
       final go = await showDialog<bool>(
         context: ctx,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('站点需要验证一下'),
-          content: Text('$host 做了人机校验，需要你点一下通过。通过后这个站点以后就不用再点了。'),
+          title: const Text('这个站点要你点一下'),
+          content: Text(
+            '$host 的人机校验必须真人点那个勾选框，后台自动解不开。\n\n'
+            '点「去验证」把页面打开，勾一下「验证您是真人」，通过后自动回填，'
+            '这个站点以后就不用再点了。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -167,7 +172,7 @@ class _ShieldAutoResolverState extends State<ShieldAutoResolver> {
         ),
       );
       if (go != true || !mounted || !ctx.mounted) return;
-      await openClearanceFlow(ctx, widget.repository);
+      await openClearanceFlow(ctx, widget.repository, challenge: challenge);
     });
   }
 
