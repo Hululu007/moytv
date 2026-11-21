@@ -1,3 +1,142 @@
+// === zaAes: 自包含 AES-128-CBC/PKCS7 解密（不依赖外部加密库） ===
+// AES-128-CBC/PKCS7 解密的最小实现（自包含，不依赖外部库）
+var ZaAes = (function () {
+  var sbox = new Array(256), rsbox = new Array(256);
+  (function () {
+    var p = 1, q = 1;
+    do {
+      p = p ^ ((p << 1) & 0xff) ^ (p & 0x80 ? 0x1b : 0);
+      q ^= q << 1; q ^= q << 2; q ^= q << 4; q &= 0xff;
+      if (q & 0x80) q ^= 0x09;
+      var x = q ^ ((q << 1) | (q >> 7)) ^ ((q << 2) | (q >> 6)) ^ ((q << 3) | (q >> 5)) ^ ((q << 4) | (q >> 4));
+      sbox[p] = (x ^ 0x63) & 0xff;
+    } while (p !== 1);
+    sbox[0] = 0x63;
+    for (var i = 0; i < 256; i++) rsbox[sbox[i]] = i;
+  })();
+  function xtime(a) { return ((a << 1) ^ (a & 0x80 ? 0x1b : 0)) & 0xff; }
+  function mul(a, b) {
+    var r = 0;
+    while (b) { if (b & 1) r ^= a; a = xtime(a); b >>= 1; }
+    return r;
+  }
+  function expandKey(key) {
+    var w = [], nk = key.length / 4, nr = nk + 6;
+    for (var i = 0; i < nk; i++) w[i] = [key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]];
+    var rcon = 1;
+    for (var i = nk; i < 4 * (nr + 1); i++) {
+      var t = w[i - 1].slice();
+      if (i % nk === 0) {
+        t = [sbox[t[1]] ^ rcon, sbox[t[2]], sbox[t[3]], sbox[t[0]]];
+        rcon = xtime(rcon);
+        if (rcon === 0) rcon = 1;
+      } else if (nk > 6 && i % nk === 4) {
+        t = [sbox[t[0]], sbox[t[1]], sbox[t[2]], sbox[t[3]]];
+      }
+      w[i] = [w[i - nk][0] ^ t[0], w[i - nk][1] ^ t[1], w[i - nk][2] ^ t[2], w[i - nk][3] ^ t[3]];
+    }
+    return { w: w, nr: nr };
+  }
+  function decryptBlock(ks, input) {
+    var s = input.slice(), nr = ks.nr, w = ks.w;
+    function addRoundKey(r) {
+      for (var c = 0; c < 4; c++) for (var row = 0; row < 4; row++) s[c * 4 + row] ^= w[r * 4 + c][row];
+    }
+    addRoundKey(nr);
+    for (var round = nr - 1; round >= 0; round--) {
+      for (var i = 0; i < 16; i++) s[i] = rsbox[s[i]];
+      // inv shift rows
+      var t = s.slice();
+      for (var row = 1; row < 4; row++) for (var c = 0; c < 4; c++) s[((c + row) % 4) * 4 + row] = t[c * 4 + row];
+      addRoundKey(round);
+      if (round !== 0) {
+        for (var c = 0; c < 4; c++) {
+          var a0 = s[c * 4], a1 = s[c * 4 + 1], a2 = s[c * 4 + 2], a3 = s[c * 4 + 3];
+          s[c * 4]     = mul(a0, 14) ^ mul(a1, 11) ^ mul(a2, 13) ^ mul(a3, 9);
+          s[c * 4 + 1] = mul(a0, 9)  ^ mul(a1, 14) ^ mul(a2, 11) ^ mul(a3, 13);
+          s[c * 4 + 2] = mul(a0, 13) ^ mul(a1, 9)  ^ mul(a2, 14) ^ mul(a3, 11);
+          s[c * 4 + 3] = mul(a0, 11) ^ mul(a1, 13) ^ mul(a2, 9)  ^ mul(a3, 14);
+        }
+      }
+    }
+    return s;
+  }
+  function utf8ToBytes(str) {
+    var out = [], i, c;
+    for (i = 0; i < str.length; i++) {
+      c = str.charCodeAt(i);
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) { out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f)); }
+      else if (c < 0xd800 || c >= 0xe000) { out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+      else {
+        i++; var c2 = 0x10000 + (((c & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
+        out.push(0xf0 | (c2 >> 18), 0x80 | ((c2 >> 12) & 0x3f), 0x80 | ((c2 >> 6) & 0x3f), 0x80 | (c2 & 0x3f));
+      }
+    }
+    return out;
+  }
+  function bytesToUtf8(b) {
+    var out = '', i = 0;
+    while (i < b.length) {
+      var c = b[i++];
+      if (c < 0x80) out += String.fromCharCode(c);
+      else if (c < 0xe0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
+      else if (c < 0xf0) out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
+      else {
+        var cp = ((c & 0x07) << 18) | ((b[i++] & 0x3f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f);
+        cp -= 0x10000;
+        out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+      }
+    }
+    return out;
+  }
+  function hexToBytes(h) {
+    var out = [];
+    for (var i = 0; i < h.length; i += 2) out.push(parseInt(h.substr(i, 2), 16));
+    return out;
+  }
+  function base64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var out = [], buf = 0, bits = 0;
+    for (var i = 0; i < b64.length; i++) {
+      var v = chars.indexOf(b64[i]);
+      if (v < 0) continue;
+      buf = (buf << 6) | v; bits += 6;
+      if (bits >= 8) { bits -= 8; out.push((buf >> bits) & 0xff); }
+    }
+    return out;
+  }
+  return {
+    utf8ToBytes: utf8ToBytes,
+    bytesToUtf8: bytesToUtf8,
+    hexToBytes: hexToBytes,
+    base64ToBytes: base64ToBytes,
+    decryptCBC: function (dataBytes, keyStr, ivStr) {
+      var key = utf8ToBytes(keyStr), iv = utf8ToBytes(ivStr);
+      var ks = expandKey(key), prev = iv.slice(), out = [];
+      for (var off = 0; off < dataBytes.length; off += 16) {
+        var block = dataBytes.slice(off, off + 16);
+        if (block.length < 16) break;
+        var dec = decryptBlock(ks, block);
+        for (var i = 0; i < 16; i++) out.push(dec[i] ^ prev[i]);
+        prev = block;
+      }
+      // PKCS7 去填充
+      if (out.length) {
+        var pad = out[out.length - 1];
+        if (pad > 0 && pad <= 16) {
+          var ok = true;
+          for (var i = out.length - pad; i < out.length; i++) if (out[i] !== pad) { ok = false; break; }
+          if (ok) out = out.slice(0, out.length - pad);
+        }
+      }
+      return bytesToUtf8(out);
+    }
+  };
+})();
+
+
+// === end zaAes ===
 var Apollo = {
     version: "20250425",
     empty: "hiker://empty",
@@ -825,78 +964,108 @@ var Apollo = {
 
     //播放列表
     PlayParse: (html) => {
-        // 引入加密解密库
-        eval(getCryptoJS())
         let list = [];
-        let _hcdeedg252 = html.match(/hcdeedg252=\d+/)[0];
-        let _hadeedg252 = html.match(/hadeedg252=\d+/)[0];
-        // console.log(`_hcdeedg252:${_hcdeedg252}`);
-        // console.log(`_hadeedg252:${_hadeedg252}`);
-        let _argdeqweqweqwe = html.match(/.argdeqweqweqwe.=.'\w+';/)[0];
-        // console.log(`_argdeqweqweqwe:${_argdeqweqweqwe}`);
-        let _hdddedg252 = html.match(/.hdddedg252.=.'\w+';/)[0];
-        // console.log(`_hdddedg252:${_hdddedg252}`);
-        let _mvarr = html.match(/mvarr[\d_\[\]']+=\[\[.*\],\];/)[0];
-        // console.log(_mvarr);
-        let server = _mvarr.match(/mvarr[\d_\[\]']+/g).map(x => {
-            return x.replace('mvarr[\'', '').replace('\']', '');
-        });
-        let mvarr = {};
-        let hcdeedg252;
-        let hadeedg252;
-        let argdeqweqweqwe;
-        let hdddedg252;
-        let _js = `${_hcdeedg252},${_hadeedg252};${_argdeqweqweqwe}${_hdddedg252}${_mvarr}`;
-        // console.log(_js);
-        eval(_js);
-
-        function hsdfdg252(a) {
-            let hsddfdg252 = [];
-            let hedeedg252 = [];
-            hcdeedg252 = hcdeedg252 <= 25 ? hcdeedg252 : hcdeedg252 % 25;
-            let splitStr = String.fromCharCode(hcdeedg252 + 97);
-            hsddfdg252 = a.split(splitStr);
-            for (let i = 0; i < hsddfdg252.length; i++) {
-                let hfdeedg252 = parseInt(hsddfdg252[i], hcdeedg252);
-                hfdeedg252 = (hfdeedg252 * 1) ^ hadeedg252;
-                let hjdeedg252 = String.fromCharCode(hfdeedg252);
-                hedeedg252.push(hjdeedg252)
+        // 解析最简单的 JS 数组/字符串字面量（站点把播放器参数塞在 mvarr 里，逐条解比整段 eval 稳）
+        var parseArr = function zaParseArr(src) {
+        var i = 0, n = src.length;
+        function ws() { while (i < n && /\s/.test(src.charAt(i))) i++; }
+        function val() {
+            ws();
+            var c = src.charAt(i);
+            if (c === '[') {
+                i++; var arr = [];
+                while (true) {
+                    ws();
+                    if (src.charAt(i) === ']') { i++; return arr; }
+                    arr.push(val()); ws();
+                    var t = src.charAt(i);
+                    if (t === ',') { i++; continue; }
+                    if (t === ']') { i++; return arr; }
+                    throw new Error('bad array at ' + i);
+                }
             }
-            let hgdeedg252 = hedeedg252.join("");
-            return hgdeedg252
+            if (c === "'" || c === '"') {
+                var q = c; i++; var out = '';
+                while (i < n) {
+                    var ch = src.charAt(i++);
+                    if (ch === '\\') {
+                        var e = src.charAt(i++);
+                        if (e === 'n') out += '\n';
+                        else if (e === 't') out += '\t';
+                        else if (e === 'r') out += '\r';
+                        else out += e;
+                    } else if (ch === q) break;
+                    else out += ch;
+                }
+                return out;
+            }
+            var st = i;
+            while (i < n && !/[,\]\s]/.test(src.charAt(i))) i++;
+            var raw = src.slice(st, i);
+            if (/^-?\d+$/.test(raw)) return parseInt(raw, 10);
+            if (raw === 'true') return true;
+            if (raw === 'false') return false;
+            if (raw === 'null') return null;
+            return raw;
+        }
+        return val();
+        };
+
+        // 站点每次访问都会换 key/iv，还会放近似名的诱饵变量，必须带词边界精确取
+        var hcM = html.match(/\bhcdeedg252\s*=\s*(\d+)/);
+        var haM = html.match(/\bhadeedg252\s*=\s*(\d+)/);
+        var keyM = html.match(/\bargdeqweqweqwe\s*=\s*'([^']*)'/);
+        var ivM = html.match(/\bhdddedg252\s*=\s*'([^']*)'/);
+        var hc = hcM ? parseInt(hcM[1], 10) : 0;
+        var ha = haM ? parseInt(haM[1], 10) : 0;
+        var keyStr = keyM ? keyM[1] : '';
+        var ivStr = ivM ? ivM[1] : '';
+
+        var okParams = !!(hc && !isNaN(ha) && keyStr && ivStr);
+
+        function zaDecode(enc) {
+            var sep = String.fromCharCode(hc + 97);
+            var toks = String(enc).split(sep);
+            var s1 = '';
+            for (var i = 0; i < toks.length; i++) {
+                var v = parseInt(toks[i], hc);
+                if (!isNaN(v) && v >= 0) s1 += String.fromCharCode(v ^ ha);
+            }
+            var bytes;
+            if (/^[0-9a-fA-F]+$/.test(s1) && s1.length % 2 === 0) bytes = ZaAes.hexToBytes(s1);
+            else bytes = ZaAes.base64ToBytes(s1);
+            return ZaAes.decryptCBC(bytes, keyStr, ivStr);
         }
 
-        function decr_sun(a, b, c, d) {
-            a = hsdfdg252(a);
-            var e = CryptoJS.enc.Utf8.parse(argdeqweqweqwe);
-            var f = CryptoJS.enc.Utf8.parse(hdddedg252);
-            var g = CryptoJS.AES.decrypt(a, e, {
-                iv: f,
-                padding: CryptoJS.pad.Pkcs7
-            });
-            // console.log(b + g.toString(CryptoJS.enc.Utf8) + c);
-            return b + g.toString(CryptoJS.enc.Utf8) + c;
-            // $("#" + d).attr("src", b + g.toString(CryptoJS.enc.Utf8) + c)
-        }
+        var lineName = (tag) => tag
+            .replace("28", "DO").replace("29", "🔥ST").replace("37", "🔥SW")
+            .replace("38", "🔥VH").replace("39", "EM").replace("40", "🔥TV")
+            .replace("41", "US").replace("42", "SP");
 
-        function jfun_show_mvinnerHTML(a) {
-            if (a === '7_1' || a === '28_1') {
-                //return;
-            }
-            for (let mvarr_i = 0; mvarr_i < mvarr[a].length; mvarr_i++) {
-                let res = mvarr[a][mvarr_i][2] + mvarr[a][mvarr_i][5];
-                // console.log(res);
-                let decUrl = decr_sun(mvarr[a][mvarr_i][1], mvarr[a][mvarr_i][3], mvarr[a][mvarr_i][4], mvarr[a][mvarr_i][0]);
-                //log(decUrl)
-                list.push({
-                    'title': a.replace("28", "DO").replace("29", "🔥ST").replace("37", "🔥SW").replace("38", "🔥VH").replace("39", "EM").replace("40", "🔥TV").replace("41", "US").replace("42", "SP"),
-                    'url': decUrl.startsWith('//') ? `https:${decUrl}` : decUrl.replace(/http.*?(http.*)/, "$1")
-                });
+        var re = /mvarr\['(\d+_\d+)'\]\s*=/g;
+        var mm, got = 0;
+        while ((mm = re.exec(html)) !== null) {
+            var tag = mm[1], arr;
+            var seg = html.slice(mm.index + mm[0].length);
+            try { arr = parseArr(seg); } catch (e) { arr = null; }
+            if (!arr || !arr.length) continue;
+            for (var k = 0; k < arr.length; k++) {
+                var it = arr[k];
+                if (!it || it.length < 4) continue;
+                var enc = it[1], pre = it[3] || '', mid = it[4] || '';
+                var dec = '';
+                if (okParams) {
+                    try { dec = zaDecode(enc); } catch (e) { dec = ''; }
+                }
+                if (!dec) continue;
+                var full = pre + dec + mid;
+                if (full.indexOf('//') === 0) full = 'https:' + full;
+                else full = full.replace(/http.*?(http.*)/, '$1');
+                list.push({ 'title': lineName(tag), 'url': full });
+                got++;
             }
         }
-        server.forEach(x => {
-            jfun_show_mvinnerHTML(x);
-        })
+        if (!got && typeof log === 'function') log('7mmtv: 未解出播放线路, params=' + okParams + ' hc=' + hc + ' keys=' + !!keyStr);
 
         var lazy = $('').lazyRule(() => {
             // 定义一个解析分辨率的函数
@@ -907,21 +1076,35 @@ var Apollo = {
             let videoUrl = '';
             var html = fetch(input)
             //log(html)
-            if (input.indexOf("7mmtv.sx/assets") != -1) {
-                //TV线路42    
-                var group = html.match(/const videoSources[^;]+/)[0]
-                eval(group.replace(/^const videoSources/, 'var videoSources'))
-                sortedData = videoSources.sort((a, b) => b.size - a.size);
-                var sortedNames = sortedData.map(item => item.size);
-                var sortedUrls = sortedData.map(item => item.src);
-                let playlist = JSON.stringify({
-                    names: sortedNames,
-                    urls: sortedUrls,
-                    headers: new Array(sortedData.length).fill({
-                        Referer: "https://7mmtv.sx/"
-                    })
+            if (input.indexOf("7mmtv.sx/assets") != -1 || input.indexOf("7mmtv") != -1 && html.indexOf("videoSources") != -1) {
+                //SP线路42：播放页里是 const videoSources = [{src,type,size},...]
+                var srcList = [];
+                var vm = html.match(/videoSources\s*=\s*(\[[\s\S]*?\])\s*;/);
+                if (vm) {
+                    try { srcList = eval('(' + vm[1] + ')') } catch (e) { srcList = [] }
+                }
+                var urls = [];
+                for (var i = 0; i < srcList.length; i++) {
+                    var it = srcList[i];
+                    if (!it || !it.src) continue;
+                    if (it.type && String(it.type).indexOf('mpegURL') === -1 && String(it.src).indexOf('.m3u8') === -1) continue;
+                    urls.push({ name: String(it.size || (urls.length + 1)), url: it.src });
+                }
+                // 兜底：结构变了就直接从整页抓 m3u8 直链
+                if (!urls.length) {
+                    var raw = html.match(/https?:\/\/[^'"\s\\]+?\.m3u8[^'"\s\\]*/g) || [];
+                    for (var j = 0; j < raw.length; j++) {
+                        if (raw[j].indexOf('//') === 0) continue;
+                        urls.push({ name: String(raw.length - j), url: raw[j] });
+                    }
+                }
+                urls.sort(function (a, b) { return (parseInt(b.name) || 0) - (parseInt(a.name) || 0) });
+                if (!urls.length) return 'toast://没取到播放地址，换个线路试试';
+                return JSON.stringify({
+                    names: urls.map(function (x) { return x.name }),
+                    urls: urls.map(function (x) { return x.url }),
+                    headers: new Array(urls.length).fill({ Referer: "https://7mmtv.sx/" })
                 });
-                return playlist;
             } else if (input.indexOf("7mmtv.sx") != -1) {
                 //TV线路40               
                 var s = html.match(/src.?=[^\>]+/)[0];

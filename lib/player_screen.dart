@@ -45,6 +45,7 @@ import 'playback_recovery.dart';
 import 'playback_error.dart';
 import 'player_backend.dart';
 import 'playback_preferences.dart';
+import 'media_shield.dart';
 import 'player_controls.dart';
 import 'player_core.dart';
 import 'player_route.dart';
@@ -1763,10 +1764,19 @@ class _PlayerScreenState extends State<PlayerScreen>
           _ijkStartPosition = position;
           _ijkAutoplay = _foreground && _playIntent;
         } else {
+          // 通用过盾：媒体 CDN 被 Cloudflare 挡时补齐通行证与 UA
+          // （没有需要就原样返回，零成本）。所有站走同一条路。
+          final shieldedHeaders = await MediaShield.headersFor(
+            plan.url,
+            plan.headers,
+          );
+          if (_closed || ticket != _generation) {
+            return;
+          }
           await _player.open(
             Media(
               plan.url,
-              httpHeaders: plan.headers,
+              httpHeaders: shieldedHeaders,
               start: position > 0
                   ? Duration(milliseconds: (position * 1000).round())
                   : null,
@@ -2910,6 +2920,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 叠一个 1 像素的隐藏浏览器：只在播放地址被盾挡住时才会真的干活，
+  /// 平时不加载任何页面、不占布局。
+  Widget _withMediaShield(Widget child) {
+    return Stack(
+      children: [
+        Positioned.fill(child: child),
+        const MediaShieldHost(),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_audioMiniBar != null && ModalRoute.of(context)?.isCurrent == true) {
@@ -2924,7 +2945,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         data: theme,
         child: Focus(
           focusNode: _playerFocus,
-          child: _nonVideo != null ? _nonVideoPane() : _videoPane(context),
+          child: _withMediaShield(
+            _nonVideo != null ? _nonVideoPane() : _videoPane(context),
+          ),
         ),
       );
     }
@@ -2938,7 +2961,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               : Theme.of(context).brightness;
           return AnnotatedRegion<SystemUiOverlayStyle>(
             value: AppTheme.systemBars(overlayBrightness),
-            child: _buildPlayer(context),
+            child: _withMediaShield(_buildPlayer(context)),
           );
         },
       ),
