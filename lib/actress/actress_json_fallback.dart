@@ -794,3 +794,22 @@ class ActressJsonFallback {
     return out;
   }
 }
+
+/// 从兜底池里挑出「能播、且番号与这部作品对得上」的行（库行本来就
+/// 排在池子最前，返回顺序即点播尝试顺序）。
+///
+/// 2026-11-22 修：作品侧的 codeKey 是库里的 vod_id 原样（`rki-6042`），
+/// 兜底条目的 codeKey 是归一化番号（`RKI6042`）——两边直接比字符串
+/// 永远不相等，库里 32 万条直链一条都取不到，点播放只能回退去跨站
+/// 爬。这里统一走 normalizeAvCode 归一化再比。
+List<ActressJsonEntry> jsonEntriesForWorkCode(
+  Iterable<ActressJsonEntry> pool,
+  String workCode,
+) {
+  final key = normalizeAvCode(workCode);
+  if (key.isEmpty) return const [];
+  return [
+    for (final entry in pool)
+      if (entry.playable && entry.codeKey == key) entry,
+  ];
+}

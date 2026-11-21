@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'actress_database.dart';
+import 'actress_film_library.dart';
 import 'actress_multi_db_fallback.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
@@ -112,13 +113,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _filteredTotal = 0;
 
   /// JSON 兜底区：本地库没有的作品才补（同番号已有卡的不重复占位）。
-  /// 顺序就是取流的三档：打头 _dbFallbackCount 条是第一档本地 db
-  /// 行，其余是第二档内置 json/m3u 行；点播时按档试（见 _playWork）。
+  /// 顺序：打头是本地 db 行，其后是内置 json/m3u 行；点播按这个顺序
+  /// 逐条试（见 _playWork），库里先命中的直链先播。
   var _fallbackEntries = <ActressJsonEntry>[];
-
-  /// _fallbackEntries 里打头的 DB 行数（第一档边界；其余是第二档
-  /// 内置行）。由 _loadFallback 的 DB 重排段维护，本轮没 DB 行时为 0。
-  var _dbFallbackCount = 0;
 
   /// 第一档服务：只建一次，复用同一条 DB 连接（进详情页多次不重开）。
   /// 三库合并内置兜底（主库 + 其它 .db）：本页自己建的时候持有。
@@ -241,8 +238,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     // 数据库行排在 json 行之前、m3u 行之前；库读不到（没接提供方、
     // 文件不存在）时 dbEntries 回空，本段什么都不做，继续走 m3u。
     // 去重口径与上面一致（站|番号），本地已有的番号不补。
-    // 第一档边界初始化：本轮没 DB 行时为 0。
-    _dbFallbackCount = 0;
+    // 第一档：库里这个人的作品行，排在 json/m3u 行之前。
     final dbRows = <ActressJsonEntry>[];
     for (final name in [person.displayName, ...person.aliases]) {
       dbRows.addAll(await fallback.dbEntriesForActress(name, site: site));
@@ -259,29 +255,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         seenDb.add(dedup);
         reordered.add(entry);
       }
-      var same = reordered.length == merged.length;
-      if (same) {
-        for (var i = 0; i < reordered.length; i++) {
-          if (!identical(reordered[i], merged[i])) {
-            same = false;
-            break;
-          }
-        }
-      }
-      if (!same) {
-        merged
-          ..clear()
-          ..addAll(reordered);
-        seen
-          ..clear()
-          ..addAll(seenDb);
-        // 第一档边界：reordered 里打头的 DB 行数（去重后存活的；
-        // ActressJsonEntry 没重载 ==，contains 按对象身份算）。
-        // 点播时先试这几条，再试后面的内置行。
-        _dbFallbackCount = reordered.where((e) => dbRows.contains(e)).length;
-        if (!mounted) return;
-        setState(() => _fallbackEntries = merged);
-      }
+      merged
+        ..clear()
+        ..addAll(reordered);
+      seen
+        ..clear()
+        ..addAll(seenDb);
+      if (!mounted) return;
+      setState(() => _fallbackEntries = merged);
     }
     // m3u 只有 whos 一路；只有全部/whos 才查，选片库站时不查
     // （否则 whos 的 m3u 行会混进该站的兜底）。
@@ -565,20 +546,23 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           store: widget.store,
           avId: avId,
           titleQuery: queryKey,
-          // 作品自己记的站先探（见 actress_play.dart）。
-          preferSiteId: currentWork.site.isNotEmpty ? currentWork.site : null,
+          // 作品自己记的站先探（见 actress_play.dart）。库里的站名是
+          // vod_play_from 原样（如 whos.tv），计划侧的站 id 是归一形
+          // （whos），先过一次 filmSiteId，否则永远先探不到自家的站。
+          preferSiteId: currentWork.site.isNotEmpty
+              ? filmSiteId(currentWork.site)
+              : null,
           verifyFetch: _verifyFetch,
         );
-    // 库里这个人名下、番号相同的地址行（第一档边界 _dbFallbackCount）。
-    final dbRows = currentWork.codeKey.isEmpty
-        ? const <ActressJsonEntry>[]
-        : _fallbackEntries
-              .take(_dbFallbackCount)
-              .where(
-                (entry) =>
-                    entry.playable && entry.codeKey == currentWork.codeKey,
-              )
-              .toList();
+    // 库里这个人名下、番号相同的地址行（DB 行在池子最前，先试它）。
+    // 2026-11-22 修复：作品侧 codeKey 是库里的 vod_id 原样（rki-6042），
+    // 兜底条目的 codeKey 是归一化番号（RKI6042）——直接比字符串永远
+    // 不相等，导致库里 32 万条直链一条都取不到、点播放只能去跨站爬。
+    // 统一归一化比较，见 jsonEntriesForWorkCode。
+    final dbRows = jsonEntriesForWorkCode(
+      _fallbackEntries,
+      currentWork.codeKey,
+    );
     DramaDetail? storedDetail;
     try {
       // 只认本地库这一档：逐条 resolve + 验活，首条活的直接进详情页播

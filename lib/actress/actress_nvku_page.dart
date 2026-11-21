@@ -10,7 +10,6 @@ import '../models.dart';
 import '../player_picker.dart';
 import 'actress_database.dart';
 import 'actress_list_page.dart';
-import 'actress_models.dart';
 import '../whos_fallback.dart';
 import '../whos_local_library.dart';
 
@@ -499,6 +498,14 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
         children: [
+          // 2026-11-22 用户令「分类不是卡片」：分类改成一条横向胶囊
+          // 标签，置顶放在作品前面（原来是排在作品下面的两列卡片
+          // 网格，既占地方又不像分类）。
+          if (cats.isNotEmpty && _query.isEmpty)
+            _categoryChips(
+              cats,
+              padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+            ),
           _sectionTitle(
             _query.isEmpty ? '最新上架' : '搜索结果',
             _query.isEmpty ? '按发行日期' : _query,
@@ -525,73 +532,43 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               padding: EdgeInsets.symmetric(vertical: 16),
               child: Center(child: CircularProgressIndicator(color: _pk)),
             ),
-          if (cats.isNotEmpty && _query.isEmpty) ...[
-            _sectionTitle('分类', '${cats.length} 类'),
-            _categoryTiles(cats),
-          ],
         ],
       ),
     );
   }
 
-  Widget _categoryTiles(List<CatalogCategory> cats) {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: cats.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 9,
-        crossAxisSpacing: 9,
-        childAspectRatio: 2.6,
+  /// 分类胶囊条（首页与分类页共用）：横向滚动的一排标签，选中项用
+  /// 主题粉色实心，不占版面、不像卡片。
+  Widget _categoryChips(
+    List<CatalogCategory> cats, {
+    EdgeInsets padding = const EdgeInsets.fromLTRB(12, 8, 12, 6),
+  }) {
+    return SizedBox(
+      height: 46,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: padding,
+        itemCount: cats.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final cat = cats[index];
+          final on = _category == cat.id;
+          return ChoiceChip(
+            key: ValueKey('nvku-chip-${cat.id}'),
+            selected: on,
+            onSelected: (_) => _pickCategory(cat.id),
+            label: Text(cat.name),
+            labelStyle: TextStyle(
+              color: on ? Colors.white : _dim,
+              fontSize: 13,
+            ),
+            backgroundColor: _card,
+            selectedColor: _pk,
+            side: const BorderSide(color: _line),
+            showCheckmark: false,
+          );
+        },
       ),
-      itemBuilder: (context, index) {
-        final cat = cats[index];
-        final hot = cat.id != 'new' && index < 3;
-        return InkWell(
-          key: ValueKey('nvku-cat-${cat.id}'),
-          borderRadius: BorderRadius.circular(14),
-          onTap: () {
-            _pickCategory(cat.id);
-            setState(() => _tab = 1);
-          },
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(13, 14, 13, 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _line),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: hot
-                    ? const [Color(0xFF2A1A26), Color(0xFF15151F)]
-                    : const [Color(0xFF1D1D2B), Color(0xFF15151F)],
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text(
-                  cat.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _tx,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  cat.id == 'new' ? '按发行日期' : cat.id,
-                  style: const TextStyle(color: _dim, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -604,34 +581,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     ];
     return Column(
       children: [
-        if (cats.isNotEmpty)
-          SizedBox(
-            height: 46,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-              itemCount: cats.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final cat = cats[index];
-                final on = _category == cat.id;
-                return ChoiceChip(
-                  key: ValueKey('nvku-chip-${cat.id}'),
-                  selected: on,
-                  onSelected: (_) => _pickCategory(cat.id),
-                  label: Text(cat.name),
-                  labelStyle: TextStyle(
-                    color: on ? Colors.white : _dim,
-                    fontSize: 13,
-                  ),
-                  backgroundColor: _card,
-                  selectedColor: _pk,
-                  side: const BorderSide(color: _line),
-                  showCheckmark: false,
-                );
-              },
-            ),
-          ),
+        if (cats.isNotEmpty) _categoryChips(cats),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator(color: _pk))

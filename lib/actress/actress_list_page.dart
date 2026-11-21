@@ -1484,6 +1484,72 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
+  /// 演员筛选条（全部 / 女优 / 男优 + 排序）。
+  /// 2026-11-22 用户令：这一排放页面最顶部，紧跟工具栏，演员列表
+  /// 直接接在它下面。
+  Widget _buildSexFilterRow() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: Row(
+        children: [
+          ChoiceChip(
+            key: const ValueKey('actress-sex-all'),
+            label: const Text('全部'),
+            selected: _sex == ActressSexFilter.all,
+            onSelected: (_) => _setSex(ActressSexFilter.all),
+          ),
+          const SizedBox(width: 8),
+          ChoiceChip(
+            key: const ValueKey('actress-sex-female'),
+            label: const Text('女优'),
+            selected: _sex == ActressSexFilter.female,
+            onSelected: (_) => _setSex(ActressSexFilter.female),
+          ),
+          const SizedBox(width: 8),
+          ChoiceChip(
+            key: const ValueKey('actress-sex-male'),
+            label: const Text('男优'),
+            selected: _sex == ActressSexFilter.male,
+            onSelected: (_) => _setSex(ActressSexFilter.male),
+          ),
+          const Spacer(),
+          PopupMenuButton<ActressSort>(
+            key: const ValueKey('actress-sort-menu'),
+            tooltip: '排序',
+            initialValue: _sort,
+            onSelected: (sort) {
+              if (sort == _sort) return;
+              setState(() => _sort = sort);
+              unawaited(_loadPage(reset: true));
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: ActressSort.worksDesc,
+                child: Text('按作品数'),
+              ),
+              PopupMenuItem(
+                value: ActressSort.nameAsc,
+                child: Text('按名字'),
+              ),
+              PopupMenuItem(
+                value: ActressSort.recentDesc,
+                child: Text('最近更新'),
+              ),
+            ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.sort_rounded, size: 18),
+                const SizedBox(width: 4),
+                Text(_sort.label),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -1514,6 +1580,10 @@ class _ActressListPageState extends State<ActressListPage> {
       body: Column(
         children: [
           if (!widget.showTitle) _buildEmbeddedToolbar(colors),
+          // 2026-11-22 用户令「把演员那一栏所有全部放最顶部」：全部/
+          // 女优/男优 + 排序这一排提到最顶，紧跟工具栏；原先它压在
+          // 绑定行、库瓦片、搜索框下面，要往下翻才够得着。
+          _buildSexFilterRow(),
           // 2026-11-21 用户令：同步/叠加/现爬/数据库镜像不再在顶栏排
           // 一排横幅，全部收进右上角 ⚙️ 设置弹窗（弹窗里的“同步爬取”
           // 小窗可随手收回，见 _openSettingsSheet）。数据库绑定行与
@@ -1526,63 +1596,6 @@ class _ActressListPageState extends State<ActressListPage> {
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
               child: _buildSearchField(),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-            child: Row(
-              children: [
-                ChoiceChip(
-                  label: const Text('全部'),
-                  selected: _sex == ActressSexFilter.all,
-                  onSelected: (_) => _setSex(ActressSexFilter.all),
-                ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text('女优'),
-                  selected: _sex == ActressSexFilter.female,
-                  onSelected: (_) => _setSex(ActressSexFilter.female),
-                ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text('男优'),
-                  selected: _sex == ActressSexFilter.male,
-                  onSelected: (_) => _setSex(ActressSexFilter.male),
-                ),
-                const Spacer(),
-                PopupMenuButton<ActressSort>(
-                  key: const ValueKey('actress-sort-menu'),
-                  tooltip: '排序',
-                  initialValue: _sort,
-                  onSelected: (sort) {
-                    if (sort == _sort) return;
-                    setState(() => _sort = sort);
-                    unawaited(_loadPage(reset: true));
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: ActressSort.worksDesc,
-                      child: Text('按作品数'),
-                    ),
-                    PopupMenuItem(
-                      value: ActressSort.nameAsc,
-                      child: Text('按名字'),
-                    ),
-                    PopupMenuItem(
-                      value: ActressSort.recentDesc,
-                      child: Text('最近更新'),
-                    ),
-                  ],
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.sort_rounded, size: 18),
-                      const SizedBox(width: 4),
-                      Text(_sort.label),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
             child: Row(
