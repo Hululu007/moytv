@@ -275,6 +275,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
 
   void _submitSearch(String value) {
     final next = value.trim();
+    // 女优页签（2026-11-21）：这条搜索框由演员列表页接管（同一个
+    // controller，列表自己 debounce 搜索），这里不再拿它搜作品，
+    // 免得把「首页」那套作品列表也一起刷一遍。
+    if (_tab == 2) {
+      setState(() {});
+      return;
+    }
     if (next == _query) return;
     setState(() => _query = next);
     unawaited(_loadWorks(reset: true));
@@ -364,16 +371,20 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
             style: const TextStyle(color: _tx, fontSize: 15),
             decoration: InputDecoration(
               isDense: true,
-              hintText: '搜番号 / 片名 / 女优',
+              hintText: _tab == 2 ? '搜女优名 / 番号' : '搜番号 / 片名 / 女优',
               hintStyle: const TextStyle(color: _dim, fontSize: 14),
               prefixIcon: const Icon(Icons.search, color: _dim, size: 20),
-              suffixIcon: _query.isEmpty
+              suffixIcon: _search.text.isEmpty
                   ? null
                   : IconButton(
                       icon: const Icon(Icons.close, color: _dim, size: 18),
                       onPressed: () {
                         _search.clear();
-                        _submitSearch('');
+                        if (_tab == 2) {
+                          setState(() {});
+                        } else {
+                          _submitSearch('');
+                        }
                       },
                     ),
               filled: true,
@@ -758,6 +769,9 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       store: widget.store,
       database: widget.database,
       showTitle: false,
+      // 2026-11-21 用户令：女优页签里不许再冒第二个搜索框——搜索只用
+      // 顶栏那一条，本页监听同一个输入框（搜索框置顶、不随列表滚）。
+      externalSearch: _search,
     );
   }
 

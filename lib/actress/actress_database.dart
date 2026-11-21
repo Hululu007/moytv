@@ -600,6 +600,12 @@ class SqfliteActressDatabase implements ActressDatabase {
       _videoLibraryMode = true;
       try {
         await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
+        // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
+        // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
+        // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
+        // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
+        // 或磁盘满时建不了就跳过，查询照样能跑。
+        await _ensureVideoIndexes(db);
       } catch (_) {
         _videoLibraryMode = false;
         await db.close();
@@ -620,10 +626,43 @@ class SqfliteActressDatabase implements ActressDatabase {
     return db;
   }
 
+  /// 视频库里一个人的关联键（2026-11-21 注意字段）：这个库的
+  /// `actresses.cate_id` 存的是**名字**（如「今村由美」），
+  /// `video_actress` 用它关联，不是数字 ID；rowid 才是列表里用的
+  /// 那个 id。所以取作品要先把 rowid 换成 cate_id。
+  Future<String?> _videoCateIdOf(Database db, int personRowId) async {
+    final rows = await db.query(
+      'actresses',
+      columns: ['cate_id'],
+      where: 'rowid = ?',
+      whereArgs: [personRowId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final value = rows.first['cate_id']?.toString() ?? '';
+    return value.isEmpty ? null : value;
+  }
+
+  /// 视频库索引（best-effort）：只 CREATE INDEX，不改数据。
+  /// - video_actress(cate_id)：点开一个人时按人名取自己的作品；
+  /// - video_actress(vod_id)：按番号查/播时反查。
+  /// 建不出来（只读库/空间不足）就当没有，查询仍能跑，只是慢。
+  Future<void> _ensureVideoIndexes(Database db) async {
+    for (final sql in const [
+      'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
+      'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {
+        // 单个索引建不了不影响另一个，也不影响读。
+      }
+    }
+  }
+
   /// 女优库建库/迁移路径：version 4 + onCreate 建五张表 +
   /// onUpgrade v1→v2、v2→v3、v3→v4。只对女优库结构的文件跑。
-  Future<Database> _openActressDb(String filePath) {
-    return openDatabase(
+  Future<Database> _openActressDb(String filePath) {    return openDatabase(
       filePath,
       version: 4,
       onCreate: (db, version) async {
@@ -1511,6 +1550,12 @@ class SqfliteActressDatabase implements ActressDatabase {
     final db = await _open();
     if (_videoLibraryMode) {
       final useCategory = category != null && category.isNotEmpty;
+      // 2026-11-21：先按 rowid 取这个人（主键，瞬时），再用 cate_id
+      // 反查作品。原来一条大 JOIN（videos × video_actress × actresses）
+      // 再 ORDER BY 排序，32 万视频的库在手机上点一下要转半天，
+      // 看着就是「点了头像没作品」。
+      final cateId = await _videoCateIdOf(db, personId);
+      if (cateId == null) return const [];
       final rows = await db.rawQuery(
         'SELECT v.rowid AS id, v.vod_id AS code_key, '
         'v.title AS title, v.vod_pubdate AS date, '
@@ -1518,14 +1563,14 @@ class SqfliteActressDatabase implements ActressDatabase {
         'v.pic_url AS cover_url, '
         "COALESCE(vc.main_category, v.type_name, '') AS category "
         'FROM videos v '
-        'JOIN video_actress va ON va.vod_id = v.vod_id '
-        'JOIN actresses a ON a.cate_id = va.cate_id '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
-        'WHERE a.rowid = ? '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress WHERE cate_id = ?) '
         "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ? " : ''}"
         'ORDER BY v.vod_pubdate DESC, v.vod_id ASC '
         'LIMIT ? OFFSET ?',
-        useCategory ? [personId, category, limit, offset] : [personId, limit, offset],
+        useCategory
+            ? [cateId, category, limit, offset]
+            : [cateId, limit, offset],
       );
       return [
         for (final row in rows) videoLibraryWorkFromRow(row, personId),
@@ -1548,14 +1593,14 @@ class SqfliteActressDatabase implements ActressDatabase {
     final db = await _open();
     if (_videoLibraryMode) {
       final useCategory = category != null && category.isNotEmpty;
+      final cateId = await _videoCateIdOf(db, personId);
+      if (cateId == null) return 0;
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS c FROM videos v '
-        'JOIN video_actress va ON va.vod_id = v.vod_id '
-        'JOIN actresses a ON a.cate_id = va.cate_id '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
-        'WHERE a.rowid = ? '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress WHERE cate_id = ?) '
         "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ?" : ''}",
-        useCategory ? [personId, category] : [personId],
+        useCategory ? [cateId, category] : [cateId],
       );
       return (rows.first['c'] as num?)?.toInt() ?? 0;
     }

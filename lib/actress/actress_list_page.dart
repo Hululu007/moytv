@@ -79,6 +79,7 @@ class ActressListPage extends StatefulWidget {
     this.fallback,
     this.crawlService,
     this.showTitle = true,
+    this.externalSearch,
   });
 
   final AppRepository repository;
@@ -87,6 +88,11 @@ class ActressListPage extends StatefulWidget {
   /// 内嵌进区域/窗口/内层页签时宿主已有“女优库”标题，页内顶栏不再
   /// 重复标题字（只留人数），与 MiniAppHomePage 的做法同口径。
   final bool showTitle;
+
+  /// 宿主已经有一条置顶搜索框时传进来（2026-11-21 用户令：搜索框
+  /// 不许叠两个、顶栏不许叠两条）。传了就用宿主的输入框做搜索源，
+  /// 本页不再画自己的搜索框，只留人数与右侧动作按钮。
+  final TextEditingController? externalSearch;
 
   /// 测试/预览注入：不传时用 sqflite 真库 + 默认三家名册源。
   @visibleForTesting
@@ -317,6 +323,11 @@ class _ActressListPageState extends State<ActressListPage> {
     _stackingSub = _stacking.progress.listen(_onStackingProgress);
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
+    // 宿主搜索框（内嵌进女优库区域时）：同一个输入框驱动本页搜索，
+    // 本页不再画第二个搜索框。
+    widget.externalSearch?.addListener(_onSearchChanged);
+    final initialSearch = widget.externalSearch?.text.trim() ?? '';
+    if (initialSearch.isNotEmpty) _query = initialSearch;
     // 站点筛选选项进页时按活的站源注册表读一次（不是启动快照）；
     // 之后站源注册表再变（新站导入/站点摘掉/隐藏）走监听重建。
     _siteOptionIds = _siteFilterOptions().map((o) => o.siteId).toSet();
@@ -334,6 +345,7 @@ class _ActressListPageState extends State<ActressListPage> {
     _crawl.cancel();
     _crawl.dispose();
     _scrollController.dispose();
+    widget.externalSearch?.removeListener(_onSearchChanged);
     _searchController.dispose();
     _genericUrlController.dispose();
     _searchDebounce?.cancel();
@@ -494,30 +506,67 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 顶部瓦片行：一级分类式的方块（名字 + 库图标），横向可滑。
+  /// 内嵌进女优库外壳时（2026-11-21 用户令：顶区别占半屏）压成
+  /// 一条横向小卡：去掉标题行、高度减到 30，功能不变。
   Widget _buildDbTiles(ColorScheme colors) {
     if (_dbTiles.isEmpty) return const SizedBox.shrink();
+    final compact = !widget.showTitle;
     return Container(
       key: const ValueKey('actress-db-tiles'),
       width: double.infinity,
       color: colors.surfaceContainerLow,
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      padding: EdgeInsets.fromLTRB(12, compact ? 4 : 6, 12, compact ? 4 : 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            '其它数据库（按库浏览 ${_dbTiles.length} 个）',
-            style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
-          ),
-          const SizedBox(height: 6),
+          if (!compact) ...[
+            Text(
+              '其它数据库（按库浏览 ${_dbTiles.length} 个）',
+              style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 6),
+          ],
           SizedBox(
-            height: 62,
+            height: compact ? 30 : 62,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: _dbTiles.length,
               separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, index) {
                 final tile = _dbTiles[index];
+                if (compact) {
+                  return InkWell(
+                    key: ValueKey('actress-db-tile-${tile.name}'),
+                    onTap: () => _openDbTile(tile),
+                    borderRadius: BorderRadius.circular(15),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: colors.surfaceContainerHigh,
+                        borderRadius: BorderRadius.circular(15),
+                        border: Border.all(
+                          color: colors.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.storage_rounded,
+                            size: 13,
+                            color: colors.primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            tile.name,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
                 return InkWell(
                   key: ValueKey('actress-db-tile-${tile.name}'),
                   onTap: () => _openDbTile(tile),
@@ -956,10 +1005,15 @@ class _ActressListPageState extends State<ActressListPage> {
     }
   }
 
+  /// 当前生效的搜索输入框：宿主给了就用宿主的（只有一条搜索框，
+  /// 不会出现两个输入框各搜各的）。
+  TextEditingController get _activeSearchController =>
+      widget.externalSearch ?? _searchController;
+
   void _onSearchChanged() {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
-      final query = _searchController.text.trim();
+      final query = _activeSearchController.text.trim();
       if (query == _query) return;
       setState(() => _query = query);
       unawaited(_loadPage(reset: true));
@@ -1684,16 +1738,27 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 内嵌进女优库区域时的置顶工具栏：搜索框 + 动作按钮同一行，
+  /// 内嵌进女优库区域时的置顶工具栏：人数 + 动作按钮同一行，
   /// 固定在列表上方不随滚动移动（2026-11-21 用户令）。
+  /// 宿主传了外部搜索框时（女优库 nvku 外壳），搜索框只在宿主顶栏
+  /// 留一个，这里不再重复画——原来两个搜索框看着就是叠在一起。
   Widget _buildEmbeddedToolbar(ColorScheme colors) {
+    final external = widget.externalSearch != null;
     return Container(
       key: const ValueKey('actress-embedded-toolbar'),
       color: Theme.of(context).scaffoldBackgroundColor,
-      padding: const EdgeInsets.fromLTRB(10, 6, 2, 0),
+      padding: EdgeInsets.fromLTRB(external ? 12 : 10, 6, 2, 0),
       child: Row(
         children: [
-          Expanded(child: _buildSearchField()),
+          if (!external) Expanded(child: _buildSearchField()),
+          Text(
+            _overview == null ? '演员库' : '${_overview!.personsWithWorks} 位演员',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
           ..._toolbarActions(),
         ],
       ),
@@ -1764,6 +1829,13 @@ class _ActressListPageState extends State<ActressListPage> {
     // 损坏回退内置库的原因。
     if (_mytvOpenNote != null) {
       noteLines.add(_mytvOpenNote!);
+    }
+    // 内嵌进女优库外壳时（2026-11-21 用户令：顶部别叠一层又一层）：
+    // 一切正常（已绑定、无迁移提示、无错误）就把这整块收起来，
+    // 路径仍可从 ⚙️ 设置里看到；只有真出问题（未绑定/打不开/迁移）
+    // 才显示，免得把列表挤掉半屏。
+    if (!widget.showTitle && noteLines.isEmpty && bind.bound) {
+      return const SizedBox.shrink();
     }
     return Container(
       width: double.infinity,

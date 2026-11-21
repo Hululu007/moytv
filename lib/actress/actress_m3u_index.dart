@@ -74,21 +74,31 @@ class WhosM3uIndex {
   }
 
   Future<Map<String, dynamic>> _loadManifest() async {
-    final bytes = await _bytesReader(manifestAsset);
-    final doc = jsonDecode(utf8.decode(gzip.decode(bytes)));
-    if (doc is! Map<String, dynamic>) {
-      throw const FormatException('m3u manifest 不是对象');
+    // 2026-11-21：内置分片已从包里删掉（22.4 万条地址实测 224,454/224,456
+    // 都能在用户库里按番号取到，库里还多 9.8 万条，内置那份纯属白占
+    // 24MB 安装包）。这里缺资源就当没有，返回空表：查不到就走库/用户
+    // 自己的 MYTV/m3u，不再抛异常拖慢每次点播。
+    try {
+      final bytes = await _bytesReader(manifestAsset);
+      final doc = jsonDecode(utf8.decode(gzip.decode(bytes)));
+      if (doc is! Map<String, dynamic>) return const {};
+      return doc;
+    } catch (_) {
+      return const {};
     }
-    return doc;
   }
 
   Future<Map<String, dynamic>> _shard(int idx) async {
     final cached = _shardCache[idx];
     if (cached != null) return cached;
-    final bytes = await _bytesReader(shardAsset(idx));
-    final doc = jsonDecode(utf8.decode(gzip.decode(bytes)));
-    if (doc is! Map<String, dynamic>) {
-      throw FormatException('m3u shard $idx 不是对象');
+    Map<String, dynamic> doc;
+    try {
+      final bytes = await _bytesReader(shardAsset(idx));
+      final parsed = jsonDecode(utf8.decode(gzip.decode(bytes)));
+      doc = parsed is Map<String, dynamic> ? parsed : const {};
+    } catch (_) {
+      // 分片不在包里（已删）/资源读失败：当这个分片没有数据。
+      doc = const {};
     }
     _shardCache[idx] = doc;
     _shardOrder.add(idx);

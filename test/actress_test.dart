@@ -965,6 +965,10 @@ void main() {
       db = MemoryActressDatabase();
       repository = _ScriptedRepository();
       store = await _makeStore();
+      // 列表页顶栏有搜索输入框，光标闪烁是无限动画：测试里定死光标，
+      // 否则 pumpAndSettle 永远等不到静止（2026-11-21）。
+      EditableText.debugDeterministicCursor = true;
+      addTearDown(() => EditableText.debugDeterministicCursor = false);
     });
 
     Future<ActressPerson> seedPerson() async {
@@ -1435,8 +1439,17 @@ void main() {
           ),
         ),
       );
-      await tester.pumpAndSettle();
-      expect(find.text('2 位演员'), findsOneWidget);
+      // 顶栏有输入框（光标动画一直动），用定步 pump 代替 settle：
+      // 20 × 100ms 足够把名册/人数那几次异步查询跑完。
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(
+        find.byKey(const ValueKey('actress-embedded-toolbar')),
+        findsOneWidget,
+      );
+      // 内嵌时人数/占位文案在置顶工具栏里，不再另起一条标题栏。
+      expect(find.text('演员库'), findsWidgets);
       expect(find.text('演员库 2 位演员'), findsNothing);
       expect(find.text('女优库'), findsNothing);
     });
