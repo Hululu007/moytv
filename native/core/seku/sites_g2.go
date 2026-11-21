@@ -837,10 +837,52 @@ var (
 	missavIndexIDRe = regexp.MustCompile(`/cn/(actresses|genres|makers)/([^/]+)$`)
 )
 
+// missavFolderPages 是女优/分类文件夹详情一次翻的页数（站点每页 12 部）。
+// 2026-11-22:此前 idx 文件夹只取第一页,女优名下几百部作品在 App 里
+// 只看到 12 部,用户反馈「作品没有」「太少」就是这里。
+const missavFolderPages = 5
+
+// missavFolderWorks 并发取 path 的前 pages 页作品并按顺序去重合并。
+func missavFolderWorks(path string, pages int) []g2Work {
+	if pages < 1 {
+		pages = 1
+	}
+	chunks := make([][]g2Work, pages)
+	var wg sync.WaitGroup
+	for i := 0; i < pages; i++ {
+		target := missavBase + path
+		if i > 0 {
+			sep := "?"
+			if strings.Contains(path, "?") {
+				sep = "&"
+			}
+			target += sep + "page=" + strconv.Itoa(i+1)
+		}
+		wg.Add(1)
+		go func(idx int, u string) {
+			defer wg.Done()
+			chunks[idx] = missavParseList(missavFetch(u))
+		}(i, target)
+	}
+	wg.Wait()
+	out := []g2Work{}
+	seen := map[string]bool{}
+	for _, chunk := range chunks {
+		for _, w := range chunk {
+			if w.RawID == "" || seen[w.RawID] {
+				continue
+			}
+			seen[w.RawID] = true
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func missavDetail(slot, rawID string) (map[string]interface{}, error) {
 	if strings.HasPrefix(rawID, "idx:") {
 		path := strings.TrimPrefix(rawID, "idx:")
-		works := missavParseList(missavFetch(missavBase + path))
+		works := missavFolderWorks(path, missavFolderPages)
 		if len(works) == 0 {
 			return nil, fmt.Errorf("missav index folder empty: %s", path)
 		}
@@ -851,8 +893,8 @@ func missavDetail(slot, rawID string) (map[string]interface{}, error) {
 			}
 		}
 		return g2WorksDetail(slot, rawID, name, works[0].Cover,
-			fmt.Sprintf("%d 部作品（第一页）", len(works)), "索引", works,
-			fmt.Sprintf("共 %d 部作品（第一页）", len(works))), nil
+			fmt.Sprintf("%d 部作品", len(works)), "索引", works,
+			fmt.Sprintf("共 %d 部作品", len(works))), nil
 	}
 	vid := rawID
 	if strings.HasPrefix(vid, "/") {

@@ -48,6 +48,21 @@ void main() {
         'v_missav');
   });
 
+  test('MissAV镜像|免代理 也交给 Go 核', () {
+    JarBridge.register(JarSiteSpec(
+      siteId: 'jar:zakatv:ZakaMirror',
+      configId: 'zakatv',
+      name: 'MissAV镜像|免代理',
+      className: 'com.github.catvod.spider.ZakaMirrorAmns',
+      jarUrl: '',
+      jarMd5: '',
+      ext: '{"host":"https://www.thisav.my"}',
+    ));
+    expect(
+        JarHaijiaoTakeover.goSourceForJarSite('jar:zakatv:ZakaMirror'),
+        'v_missav');
+  });
+
   test('详情用的剧集编号改成站源加编号的形式', () {
     const drama = Drama(id: '2347171', source: 'jar:zakatv:ZakaHaijiao', title: 't');
     final remapped = JarHaijiaoTakeover.remapDrama(drama, 'v_haijiao');

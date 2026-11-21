@@ -159,7 +159,9 @@ void main() {
     expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMissavOff'), isFalse);
     expect(zakatvBuiltinSites.any((s) => s.key == 'missavt'), isFalse);
     expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMirror'), isTrue);
-    expect(zakatvBuiltinSites.length, 140);
+    // 2026-11-22:Eroshort、腐老二下线后 zakatv 侧从 140 降到 138 条
+    // （其中 1 条纯音频不计入可见站，故 siteCount = 137）。
+    expect(zakatvBuiltinSites.length, 138);
   });
 
   test('missav30 有独立插件条目，在 one 条目之后', () {
@@ -184,12 +186,12 @@ void main() {
         plugins.indexWhere((p) => p.id == PluginManager.oneJarPluginId),
       ),
     );
-    // zakatv 插件自动少 3 条：140 条配置、1 条纯音频，139 个可见站。
+    // zakatv 插件自动少 3 条：138 条配置、1 条纯音频，137 个可见站。
     final zakatv = plugins.singleWhere(
       (p) => p.id == PluginManager.jarPluginId,
     );
-    expect(zakatv.siteCount, 139);
-    expect(zakatv.detail, contains('140'));
+    expect(zakatv.siteCount, 137);
+    expect(zakatv.detail, contains('138'));
   });
 
   test('JSON 镜像：3 条 api 映到新 jar 的 3 个蜘蛛类，条数 145 不变', () {

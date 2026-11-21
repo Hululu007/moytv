@@ -15,6 +15,10 @@ class JarHaijiaoTakeover {
     'com.github.catvod.spider.ZakaMissavAmns': 'v_missav',
     'com.github.catvod.spider.ZakaMissavOffAmns': 'v_missav',
     'com.github.catvod.spider.ZakaMissavtAmns': 'v_missav',
+    // 2026-11-22:「MissAV镜像|免代理」走的是 ZakaMirrorAmns,jar 里只认
+    // thisav.my 的老版式,站点改版后详情页一片空白(女优卡点进去没作品)。
+    // 同样交给 Go 核,镜像降级和封面、播放都在那边。
+    'com.github.catvod.spider.ZakaMirrorAmns': 'v_missav',
   };
 
   static const Map<String, String> _byKey = {
@@ -25,6 +29,7 @@ class JarHaijiaoTakeover {
     'ZakaMissav': 'v_missav',
     'ZakaMissavOff': 'v_missav',
     'missavt': 'v_missav',
+    'ZakaMirror': 'v_missav',
   };
 
   static String? goSourceForJarSite(String source) {
