@@ -128,6 +128,10 @@ class _ActressListPageState extends State<ActressListPage> {
 
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
+
+  /// 任意站点现爬的地址输入（2026-11-21）：粘一个列表页/分类页地址，
+  /// 自动认列表结构与翻页规律，不认识站点名也照爬。
+  final _genericUrlController = TextEditingController();
   Timer? _searchDebounce;
 
   var _persons = <ActressPerson>[];
@@ -331,6 +335,7 @@ class _ActressListPageState extends State<ActressListPage> {
     _crawl.dispose();
     _scrollController.dispose();
     _searchController.dispose();
+    _genericUrlController.dispose();
     _searchDebounce?.cancel();
     _sync.cancel();
     _sync.dispose();
@@ -1064,6 +1069,25 @@ class _ActressListPageState extends State<ActressListPage> {
     await _crawl.start(site: _source.siteId);
   }
 
+  /// 任意站点现爬（2026-11-21 用户令）：粘一个站点列表页/分类页地址就爬。
+  /// 不认站点名：列表结构、翻页规律、详情字段全部按页面实测识别。
+  Future<void> _runGenericCrawl() async {
+    if (_crawl.running) return;
+    final url = _genericUrlController.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('先填一个站点地址（列表页或分类页）')));
+      return;
+    }
+    if (_source != ActressSiteFilter.all) {
+      setState(() => _source = ActressSiteFilter.all);
+    }
+    await _crawl.startGenericSite(url);
+    if (!mounted) return;
+    await _refreshAfterSync();
+  }
+
   void _setSiteFilter(ActressSiteFilter source) {
     if (source == _source) return;
     setState(() {
@@ -1411,7 +1435,12 @@ class _ActressListPageState extends State<ActressListPage> {
     final colors = Theme.of(context).colorScheme;
     final overview = _overview;
     return Scaffold(
-      appBar: AppBar(
+      // 2026-11-21 用户令：内嵌进女优库区域时宿主已有自己的顶栏，
+      // 这里再渲染一个 AppBar 就是两条栏叠在一起（搜索框看着像压住了顶栏）。
+      // 内嵌时改由 _buildEmbeddedToolbar 提供一条置顶工具栏。
+      appBar: !widget.showTitle
+          ? null
+          : AppBar(
         toolbarHeight: 40,
         title: _genericMode
             ? const Text('演员库 · 外来数据库')
@@ -1426,65 +1455,11 @@ class _ActressListPageState extends State<ActressListPage> {
             : overview == null
             ? null
             : Text('${overview.personsWithWorks} 位演员'),
-        actions: [
-          if (!_genericMode)
-            PopupMenuButton<ActressSiteFilter>(
-              key: const ValueKey('actress-site-filter'),
-              tooltip: '站点筛选',
-              initialValue: _source,
-              onSelected: _setSiteFilter,
-              itemBuilder: (_) => [
-                for (final filter in _siteFilterOptions())
-                  PopupMenuItem(value: filter, child: Text(filter.label)),
-              ],
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.public_outlined, size: 18),
-                  const SizedBox(width: 2),
-                  Text(_source.label),
-                ],
-              ),
-            ),
-          if (!_genericMode)
-            IconButton(
-              key: const ValueKey('open-actress-ranking'),
-              tooltip: '演员排行榜',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.emoji_events_outlined),
-              onPressed: _openRanking,
-            ),
-          IconButton(
-            key: const ValueKey('refresh-actress-library'),
-            // 2026-11-20 热换库：通用模式下刷新按钮就是手动重载数据库。
-            tooltip: _genericMode ? '重新加载数据库' : '刷新同步',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _genericMode
-                ? _manualReloadDb
-                : _progress.running
-                ? null
-                : () => _runSync(),
-          ),
-          // 2026-11-21 用户令：右上角“影视库”按钮没用，删掉。
-          // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬/镜像全部
-          // 收进这个弹窗，顶栏不再排一列横幅。
-          IconButton(
-            key: const ValueKey('open-actress-settings'),
-            tooltip: '设置',
-            visualDensity: VisualDensity.compact,
-            icon: _anyRunning
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.settings_outlined),
-            onPressed: _openSettingsSheet,
-          ),
-        ],
+        actions: _toolbarActions(),
       ),
       body: Column(
         children: [
+          if (!widget.showTitle) _buildEmbeddedToolbar(colors),
           // 2026-11-21 用户令：同步/叠加/现爬/数据库镜像不再在顶栏排
           // 一排横幅，全部收进右上角 ⚙️ 设置弹窗（弹窗里的“同步爬取”
           // 小窗可随手收回，见 _openSettingsSheet）。数据库绑定行与
@@ -1492,28 +1467,11 @@ class _ActressListPageState extends State<ActressListPage> {
           _buildMytvBindRow(colors),
           _buildDbTiles(colors),
           _buildGenericModeRow(colors),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
-            child: TextField(
-              key: const ValueKey('actress-search'),
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: _genericMode
-                    ? '搜标题或番号'
-                    : '搜名字或番号：中文 / 日文 / SSIS-123 都行',
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: '清除搜索',
-                        icon: const Icon(Icons.clear_rounded),
-                        onPressed: () => _searchController.clear(),
-                      ),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
+          if (widget.showTitle)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
+              child: _buildSearchField(),
             ),
-          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Row(
@@ -1636,6 +1594,107 @@ class _ActressListPageState extends State<ActressListPage> {
               ),
             ),
           Expanded(child: _buildList(colors)),
+        ],
+      ),
+    );
+  }
+
+
+  /// 顶栏动作：站点筛选 / 排行榜 / 刷新 / 设置。
+  /// 抽出来是为了外层 AppBar 和内嵌时的置顶工具栏共用一份，
+  /// 不出现「内嵌进女优库区域后这几个按钮消失」的问题。
+  List<Widget> _toolbarActions() {
+    return [            if (!_genericMode)
+              PopupMenuButton<ActressSiteFilter>(
+                key: const ValueKey('actress-site-filter'),
+                tooltip: '站点筛选',
+                initialValue: _source,
+                onSelected: _setSiteFilter,
+                itemBuilder: (_) => [
+                  for (final filter in _siteFilterOptions())
+                    PopupMenuItem(value: filter, child: Text(filter.label)),
+                ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.public_outlined, size: 18),
+                    const SizedBox(width: 2),
+                    Text(_source.label),
+                  ],
+                ),
+              ),
+            if (!_genericMode)
+              IconButton(
+                key: const ValueKey('open-actress-ranking'),
+                tooltip: '演员排行榜',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.emoji_events_outlined),
+                onPressed: _openRanking,
+              ),
+            IconButton(
+              key: const ValueKey('refresh-actress-library'),
+              // 2026-11-20 热换库：通用模式下刷新按钮就是手动重载数据库。
+              tooltip: _genericMode ? '重新加载数据库' : '刷新同步',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: _genericMode
+                  ? _manualReloadDb
+                  : _progress.running
+                  ? null
+                  : () => _runSync(),
+            ),
+            // 2026-11-21 用户令：右上角“影视库”按钮没用，删掉。
+            // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬/镜像全部
+            // 收进这个弹窗，顶栏不再排一列横幅。
+            IconButton(
+              key: const ValueKey('open-actress-settings'),
+              tooltip: '设置',
+              visualDensity: VisualDensity.compact,
+              icon: _anyRunning
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.settings_outlined),
+              onPressed: _openSettingsSheet,
+            ),
+    ];
+  }
+
+  /// 搜索框本体（外层顶栏下方和内嵌工具栏里共用同一份）。
+  Widget _buildSearchField() {
+    return TextField(
+      key: const ValueKey('actress-search'),
+      controller: _searchController,
+      decoration: InputDecoration(
+        hintText: _genericMode
+            ? '搜标题或番号'
+            : '搜名字或番号：中文 / 日文 / SSIS-123 都行',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: _query.isEmpty
+            ? null
+            : IconButton(
+                tooltip: '清除搜索',
+                icon: const Icon(Icons.clear_rounded),
+                onPressed: () => _searchController.clear(),
+              ),
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+    );
+  }
+
+  /// 内嵌进女优库区域时的置顶工具栏：搜索框 + 动作按钮同一行，
+  /// 固定在列表上方不随滚动移动（2026-11-21 用户令）。
+  Widget _buildEmbeddedToolbar(ColorScheme colors) {
+    return Container(
+      key: const ValueKey('actress-embedded-toolbar'),
+      color: Theme.of(context).scaffoldBackgroundColor,
+      padding: const EdgeInsets.fromLTRB(10, 6, 2, 0),
+      child: Row(
+        children: [
+          Expanded(child: _buildSearchField()),
+          ..._toolbarActions(),
         ],
       ),
     );
@@ -2417,6 +2476,60 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                       host._exportingJson ? null : host._exportMergedJson,
                     ),
                 ],
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 3),
+                      child: Icon(Icons.public, size: 14),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('任意站点爬取', style: textStyle.titleSmall),
+                          const SizedBox(height: 2),
+                          Text(
+                            '粘一个列表页/分类页地址：自动认列表结构、翻页规律、'
+                            '女优与番号，不用先把站加进列表。',
+                            style: textStyle.bodySmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          TextField(
+                            key: const ValueKey('generic-crawl-url'),
+                            controller: host._genericUrlController,
+                            enabled: !host._crawlProgress.running,
+                            keyboardType: TextInputType.url,
+                            style: textStyle.bodySmall,
+                            onSubmitted: (_) => host._runGenericCrawl(),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'https://站点.com/videos',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 10,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    button(
+                      '开始爬',
+                      host._crawlProgress.running
+                          ? null
+                          : host._runGenericCrawl,
+                    ),
+                  ],
+                ),
               ),
               section(
                 title: '数据库镜像（其它 .db 追加）',

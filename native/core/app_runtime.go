@@ -378,6 +378,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 		},
 		func(rawurl string) { d.recordShieldChallenge(rawurl) },
 	)
+	// 带票重试仍被 403/451 挡回，说明这张票已经和当前出口/UA 对不上了：
+	// 让 Go 核把它从 App 清关库里也删掉，否则后续每个请求都会继续被封。
+	seku.SetShieldForget(func(host string) { d.removeShieldClearance(host) })
 	engine.loadResourceSettings()
 	d.loadRankingCache()
 	engine.loadCatalogCache()

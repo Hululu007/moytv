@@ -50,6 +50,7 @@ var zkShieldJinaLast time.Time
 // attached (tests, CLI), and the old behaviour is unchanged.
 var zkShieldExternalTicket func(host string) (cookie, ua string, ok bool)
 var zkShieldExternalReport func(rawurl string)
+var zkShieldExternalForget func(host string)
 var zkShieldReported = map[string]time.Time{}
 
 const zkShieldReportGap = 5 * time.Minute
@@ -219,6 +220,61 @@ func zkShieldClearTicket(host string) {
 	host = zkShieldNormHost(host)
 	zkShieldMu.Lock()
 	delete(zkShieldTickets, host)
+	zkShieldMu.Unlock()
+}
+
+// zkShieldBareHeaders 复制调用方的 header，不加票、不改 UA。
+// 第一发请求永远走这条：票一旦是废的，带上就是 403/451，
+// 连挑战页都看不到，App 侧也就没法解盾。
+func zkShieldBareHeaders(headers map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range headers {
+		out[k] = v
+	}
+	return out
+}
+
+// zkShieldLookupTicket 回答「这个 host 现在手上有票吗」，
+// 包内票池和 App 清关库都算，但不写入、不阻塞。
+func zkShieldLookupTicket(host string) (zkShieldTicket, bool) {
+	if t, ok := zkShieldLiveTicket(zkShieldNormHost(host)); ok {
+		return t, true
+	}
+	zkShieldMu.Lock()
+	lookup := zkShieldExternalTicket
+	on := zkShieldOn
+	zkShieldMu.Unlock()
+	if !on || lookup == nil {
+		return zkShieldTicket{}, false
+	}
+	cookie, ua, found := lookup(zkShieldNormHost(host))
+	if !found || cookie == "" {
+		return zkShieldTicket{}, false
+	}
+	return zkShieldTicket{cookie: cookie, ua: ua}, true
+}
+
+// zkShieldForgetHost 作废一个 host 的票（包内 + App 清关库）。
+// 带票重试仍然被挡时调用：不丢掉这张票，之后每个请求都会被继续封。
+func zkShieldForgetHost(host string) {
+	host = zkShieldNormHost(host)
+	if host == "" {
+		return
+	}
+	zkShieldClearTicket(host)
+	zkShieldMu.Lock()
+	forget := zkShieldExternalForget
+	zkShieldMu.Unlock()
+	if forget != nil {
+		forget(host)
+	}
+}
+
+// SetShieldForget wires the App-side store's delete path so a ticket that
+// Cloudflare has already rejected cannot poison every later request.
+func SetShieldForget(forget func(host string)) {
+	zkShieldMu.Lock()
+	zkShieldExternalForget = forget
 	zkShieldMu.Unlock()
 }
 

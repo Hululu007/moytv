@@ -163,20 +163,21 @@ void main() {
     expect(checkpoint!.finished, isFalse);
   });
 
-  test('whos 现爬报缺口：没有 whos 分类蜘蛛，不编假蜘蛛', () async {
+  test('whos 现爬：列表取不到就不写盘、不死循环、不编条目', () async {
+    // whos 现在走 validator.nu 列表通道（见 _runWhos）。这里注入
+    // 取不到页面的假取数：现爬应停在 0 条，不许用空数据冒充成功，
+    // 也不许落到蜘蛛上乱抓。
     final repo = _CrawlRepository();
-    final service = makeService(repo);
+    final service = ActressSiteCrawlService(
+      repository: repo,
+      db: db,
+      documentsDir: temp,
+      whosListFetcher: (_) async => '',
+    );
     addTearDown(service.dispose);
-    final progresses = <ActressSiteCrawlProgress>[];
-    service.progress.listen(progresses.add);
     await service.start(site: 'whos');
     expect(repo.calls, isEmpty);
-    expect(service.current.error, contains('whos 暂无手机现爬'));
-    expect(
-      File('${temp.path}/actress_json/whos.json').existsSync(),
-      isFalse,
-    );
-    // 单文件模型：whos 报缺口时什么文件都不写。
+    expect(service.current.items, 0);
     expect(
       File('${temp.path}/actress_json/mjv011.json').existsSync(),
       isFalse,

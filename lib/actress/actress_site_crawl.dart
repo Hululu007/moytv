@@ -10,6 +10,7 @@ import '../core_bridge.dart';
 import '../crosssite_probe.dart';
 import '../models.dart';
 import 'actress_database.dart';
+import 'actress_generic_crawl.dart';
 import 'actress_film_library.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
@@ -583,6 +584,182 @@ class ActressSiteCrawlService {
       _running = false;
     }
   }
+
+  /// 任意站点现爬（2026-11-21 用户令「不管什么站点都可以爬取」）：
+  /// 只认页面结构，不认站点名。侦察（MacCMS 接口 / 页面卡片簇 + 翻页
+  /// 规律）→ 逐页取列表 → 按需补详情（女优名/番号/直链）→ 与内置站
+  /// 同一条落地管线（json 单文件 + 库镜像 + 影视库）。
+  ///
+  /// 站点身份 `custom_<host>`：同一网址反复爬落同一身份，行按站隔离。
+  /// 认不出的站（盾/纯脚本渲染/没有列表）直接报原因，不静默空跑；
+  /// 抓到一半网络抖了也只停当前页，断点存页码，下次接着爬。
+  Future<void> startGenericSite(
+    String url, {
+    int maxPages = defaultMaxPagesPerCategory,
+    int enrichPerPage = 12,
+    GenericSiteCrawler? crawler,
+  }) async {
+    if (_running) return;
+    _running = true;
+    _cancelled = false;
+    final engine = crawler ?? GenericSiteCrawler();
+    var items = 0;
+    var enriched = 0;
+    try {
+      final plan = await engine.probe(url);
+      final siteId = plan.siteId;
+      _localByKey = await _loadLocalEntries(siteId);
+      _localSite = siteId;
+      final phase = _checkpointPhase('generic_$siteId');
+      final saved = await db.checkpoint(_checkpointSource, phase);
+      var startPage = 1;
+      if (saved != null && !saved.finished && saved.cursor.isNotEmpty) {
+        startPage = int.tryParse(saved.cursor) ?? 1;
+        if (startPage < 1) startPage = 1;
+        items = saved.total;
+      }
+      var lastPage = startPage - 1;
+      for (var page = startPage; page <= maxPages; page++) {
+        if (_cancelled) break;
+        _emit(
+          ActressSiteCrawlProgress(
+            running: true,
+            site: siteId,
+            categoryIndex: 1,
+            categoryCount: 1,
+            categoryName: plan.note,
+            page: page,
+            items: items,
+            enriched: enriched,
+          ),
+        );
+        final result = await engine.fetchPage(plan, page);
+        if (result.cards.isEmpty) break;
+        final entries = <ActressJsonEntry>[];
+        var enrichLeft = enrichPerPage;
+        for (final card in result.cards) {
+          var title = card.title;
+          var actor = card.actor;
+          var cover = card.cover;
+          var code = card.code;
+          var playUrl = card.playUrl;
+          var description = card.description;
+          var pubdate = card.pubdate;
+          // 采集接口的行已经带女优名和播放地址；页面卡片缺的才去抓详情。
+          if ((actor.isEmpty || playUrl.isEmpty) && enrichLeft > 0) {
+            enrichLeft--;
+            final detail = await engine.fetchDetail(card.url);
+            if (detail != null) {
+              if (detail.title.isNotEmpty) title = detail.title;
+              if (actor.isEmpty) actor = detail.actor;
+              if (code.isEmpty) code = detail.code;
+              if (cover.isEmpty) cover = detail.cover;
+              if (description.isEmpty) description = detail.description;
+              if (playUrl.isEmpty && detail.mediaUrl.isNotEmpty) {
+                playUrl = detail.mediaUrl;
+              } else if (playUrl.isEmpty && detail.playPageUrl.isNotEmpty) {
+                // 只有播放页时不当直链存（存了会变成「能点但播不了」），
+                // 地址记进简介，播放仍走本站点自己的详情。
+                description =
+                    '${description.isEmpty ? '' : '$description\n'}'
+                    '播放页：${detail.playPageUrl}';
+              }
+              if (actor.isNotEmpty || playUrl.isNotEmpty) enriched++;
+            }
+          }
+          if (code.isEmpty) {
+            code = extractAvId(title: title, id: card.url) ?? '';
+          }
+          entries.add(
+            ActressJsonEntry(
+              site: siteId,
+              vodId: card.url,
+              vodName: title,
+              vodPic: cover,
+              vodActor: actor,
+              vodDirector: '',
+              vodRemarks: '高清',
+              vodPubdate: pubdate,
+              vodArea: '',
+              vodYear: '',
+              vodContent:
+                  description.isNotEmpty
+                  ? '<p>${_escapeHtml(description)}</p>'
+                  : '<p>${_escapeHtml(title)}</p>',
+              vodPlayFrom: siteId,
+              vodPlayUrl: playUrl.isEmpty ? '' : '正片\$$playUrl',
+              typeName: '自定义站',
+              vodCode: code,
+              vodActressPic: '',
+            ),
+          );
+        }
+        items += entries.length;
+        lastPage = page;
+        await _appendEntries(siteId, entries);
+        await db.saveCheckpoint(
+          ActressSyncCheckpoint(
+            source: _checkpointSource.name,
+            phase: phase,
+            cursor: '${page + 1}',
+            total: items,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+        if (!result.hasNext) break;
+      }
+      await db.saveCheckpoint(
+        ActressSyncCheckpoint(
+          source: _checkpointSource.name,
+          phase: phase,
+          cursor: '',
+          total: items,
+          finished: !_cancelled,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+      _emit(
+        ActressSiteCrawlProgress(
+          site: siteId,
+          categoryIndex: 1,
+          categoryCount: 1,
+          categoryName: plan.note,
+          page: lastPage < 1 ? 1 : lastPage,
+          items: items,
+          enriched: enriched,
+          done: !_cancelled,
+          error: _cancelled ? '已取消' : '',
+        ),
+      );
+    } on GenericCrawlFailure catch (error) {
+      _emit(
+        ActressSiteCrawlProgress(
+          site: 'custom',
+          items: items,
+          enriched: enriched,
+          error: error.message,
+        ),
+      );
+    } catch (error) {
+      _emit(
+        ActressSiteCrawlProgress(
+          site: 'custom',
+          items: items,
+          enriched: enriched,
+          error: '现爬失败：$error',
+        ),
+      );
+    } finally {
+      _localByKey = null;
+      _localSite = null;
+      _running = false;
+    }
+  }
+
+  String _escapeHtml(String text) => text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
 
   /// whos 现爬：影片库当成一个分类“全部”，按页码逐页取 validator.nu
   /// 列表页源码、解析卡片、直链条目每页即写盘。条目已有直链，不补流。
