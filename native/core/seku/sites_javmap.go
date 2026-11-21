@@ -140,7 +140,7 @@ func jmapParseList(text string) []jmapCard {
 		}
 		cover := ""
 		if im := jmapImgRe.FindStringSubmatch(m[1]); im != nil {
-			cover = strings.TrimSpace(im[1])
+			cover = jmapFixCover(im[1])
 		}
 		parts := []string{}
 		if hd := jmapHDRe.FindStringSubmatch(full); hd != nil && hd[1] != "" {
@@ -152,6 +152,37 @@ func jmapParseList(text string) []jmapCard {
 		out = append(out, jmapCard{rawID, title, cover, strings.Join(parts, " · ")})
 	}
 	return out
+}
+
+// jmapFixCover 把站点的图片代理地址还原成 CDN 直链。
+// 站上封面写的是 images.x6av.com/getimages.php?src=<编码后的CDN地址>&w=&h=，
+// 该代理实测返回 HTTP 200 但正文 0 字节（等于没图），而 src 解出来的
+// CDN 直链是正常 JPEG（实测 201KB / 800x538），所以一律换直链；
+// 不是代理地址的原样返回。
+func jmapFixCover(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return ""
+	}
+	i := strings.Index(u, "getimages.php")
+	if i < 0 {
+		return u
+	}
+	j := strings.Index(u[i:], "src=")
+	if j < 0 {
+		return u
+	}
+	raw := u[i+j+4:]
+	if k := strings.IndexByte(raw, '&'); k >= 0 {
+		raw = raw[:k]
+	}
+	if dec, err := url.QueryUnescape(raw); err == nil {
+		raw = dec
+	}
+	if strings.HasPrefix(raw, "http") {
+		return raw
+	}
+	return u
 }
 
 func jmapCardsToItems(slot string, cards []jmapCard, catName string) []interface{} {
@@ -233,7 +264,7 @@ func jmapDetail(slot, rawID string) (map[string]interface{}, error) {
 	}
 	cover := ""
 	if bm := jmapBGRe.FindStringSubmatch(text); bm != nil {
-		cover = strings.Trim(strings.TrimSpace(bm[1]), `'"`)
+		cover = jmapFixCover(strings.Trim(strings.TrimSpace(bm[1]), `'"`))
 	}
 	desc := ""
 	if im := jmapInfoRe.FindStringSubmatch(text); im != nil {

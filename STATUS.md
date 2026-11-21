@@ -102,3 +102,35 @@ v33（未发布），基线 v32。
   missav.fans 200 正常；missav123.com 302；missav06.net 500。
 - v37 包已核验：versionCode 11，证书 MD5 与 v36 同一把（可直接覆盖装），
   SHA256 与 Release 上的 SHA256SUMS 一致。
+
+## v42（2026-11-22）五个 jar 站接管 + 封面直链/证书兜底
+### 这轮改了什么
+1. `lib/jar_haijiao_takeover.dart`：用户点名的五个 jar 站在 ART 上被 verifier
+   直接拒（`ZakaJavmapAmns.resolve` 声明返回 `String[]` 实际返回 `String`），
+   整个 spider 类装不上 → 表现就是没分类、没图、点开不能播。五个类全部接管到
+   Go 核，走 public id（与 `native/core/provider_seku.go` 的 `sekuSlotPublicIDs` 对齐）：
+   - `ZakaJavrateAmns`（鉴黄师）→ `v_javrate`（slot faguo）
+   - `ZakaJavmapAmns`（日本大平台/JAVMAP）→ `v_javmap`（slot hanxiaoquan）
+   - `ZakaPigavAmns`（朱古力）→ `v_pigav`
+   - `ZakaGoodavAmns`（正妹AV）→ `v_goodav`
+   - `Zaka9SexAmns`（av大平台）→ `v_avbigplat`
+   五个 id 在 `lib/models.dart` 里都已声明，接管链路完整。
+2. `seku/sites_javmap.go`：`jmapFixCover` 把 `images.x6av.com/getimages.php?src=`
+   这种图片代理换回 CDN 直链——该代理实测 200 但正文 0 字节（就是灰块根因），
+   直链实测 201KB/800x538 正常 JPEG。
+3. `seku/api.go`：`Cover` 加 `coverLooseClient`，图片域只下发叶子证书时放宽一次
+   证书链校验重取（只用于封面图片字节，不碰业务接口）。
+
+### 已排除的原因（别重复排查）
+- 五个站的 jar 类不是解析过时，是**字节码本身 verifier 不过**，改 jar 不如接管。
+- javrate（鉴黄师）/avbigplat（av大平台/9sex）机房出口被 CF Turnstile 级拦，
+  列表空是拦出来的，不是代码坏；真机侧走 `ShieldAutoResolver` 解盾回填票。
+- javmap（日本大平台）分类/列表/详情都通，播放卡在它外挂的 7mmtv 播放页 CF JSD；
+  `httpShieldMarker` 已含 `challenge-platform`，会进解盾队列。
+- 52av：站点活（www.52av.one 200，Discuz 论坛，fid 分类齐全），播放器是第三方
+  `video1.yocoolnet.in/api/player2.php`，页内不直接给 m3u8，靠播放器 JS 取。
+
+### 验证
+- `go build ./...` 通过；`go test ./seku/` 与改动前基线一致（HjwParseFixtures /
+  JrMkURL / JrParseExpires / Av321B64AndSlug / Av321OrderCandidates 五条为历史红线，
+  改动前后同样失败；TestZ2Smoke 内 z2_thdh 未注册亦为原有）。

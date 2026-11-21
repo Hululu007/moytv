@@ -1,6 +1,7 @@
 package seku
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -190,6 +191,15 @@ func Resolve(slot, rawID string) (map[string]interface{}, error) {
 // Headers returns the slot's default request headers, if any.
 func Headers(slot string) map[string]string { return providerHeaders(slot) }
 
+// coverLooseClient 只用于封面图取字节：跳过证书链校验（不少图床
+// 只给叶子证书）。不用于任何业务接口请求。
+var coverLooseClient = &http.Client{
+	Timeout: 20 * time.Second,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
+}
+
 // Cover fetches a cover image the way the provider prescribes: its
 // registered CoverFetch when present (byte-transformed covers),
 // otherwise a plain GET carrying the provider's headers.
@@ -211,7 +221,13 @@ func Cover(slot, rawURL string) ([]byte, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		// 一些图床（如 cdn-N.ggjav.com）只下发叶子证书、不带中间证书，
+		// 系统信任库补不上就直接握手失败，卡片就成灰块。封面是公开
+		// 图片，这里对图片域放宽一次证书校验重取，不涉及任何账号数据。
+		resp, err = coverLooseClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
