@@ -655,6 +655,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           store: widget.store,
           autoPlayOnOpen: true,
           autoPlayEpisodeIndex: candidate.episodeIndex,
+          // 候选那条的集数（数据库里存的直链）带进去：站点详情取回
+          // 是空的时就用它播，不显示“该站未返回详情”就没得播。
+          initialDetail: candidate.detail,
           nextLineOnExhausted: () async {
             final next = await chain.nextPlayable(
               profileEpoch: widget.store.profileEpoch,

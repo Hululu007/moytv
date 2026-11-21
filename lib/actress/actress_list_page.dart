@@ -213,12 +213,16 @@ class _ActressListPageState extends State<ActressListPage> {
   String? _mytvOpenNote;
 
   /// 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件的追加
-  /// 进行中、已追加数、总行数、正在追加的文件名、失败原因。
+  /// 进行中、已追加数、已处理行数、总行数、正在追加的文件名、失败
+  /// 原因。已处理数每批都涨（新增数在源库内容已入库时可以是 0，
+  /// 只看新增数会以为卡住）；列表与总览刷新节流用。
   var _mirrorRunning = false;
   var _mirrorAppended = 0;
+  var _mirrorProcessed = 0;
   var _mirrorTotal = 0;
   var _mirrorFile = '';
   String? _mirrorError;
+  var _lastMirrorRefresh = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 2026-11-20 通用读库：当前库不是女优库结构时为 true，列表
   /// 改走通用作品模式（作品列表 + 点按直播），不走女优库的总览/
@@ -551,6 +555,7 @@ class _ActressListPageState extends State<ActressListPage> {
       _mirrorRunning = true;
       _mirrorFile = targets.map((f) => path.basename(f.path)).join('、');
       _mirrorAppended = 0;
+      _mirrorProcessed = 0;
       _mirrorTotal = 0;
       _mirrorError = null;
     });
@@ -560,13 +565,22 @@ class _ActressListPageState extends State<ActressListPage> {
         sourcePath: target.path,
         library: _db,
         libraryPath: bind.dbPath,
-        onProgress: (appended, total) {
+        onProgress: (appended, processed, total) {
           if (!mounted) return;
           setState(() {
             _mirrorAppended = appended;
+            _mirrorProcessed = processed;
             _mirrorTotal = total;
           });
-          // 每批刷新一次可见列表与总览：追加过程列表能看到数在涨。
+          // 每批都刷列表与总览会把数据库队列与界面刷爆（每批 200 行，
+          // 323798 行就是 1619 次）：数字每批照刷，最多每 5 秒才刷
+          // 一次列表与总览，追加过程列表照样能看到数在涨。
+          final now = DateTime.now();
+          if (now.difference(_lastMirrorRefresh) <
+              const Duration(seconds: 5)) {
+            return;
+          }
+          _lastMirrorRefresh = now;
           unawaited(_refreshVisiblePersons());
           unawaited(
             _db.overview().then((overview) {
@@ -691,6 +705,7 @@ class _ActressListPageState extends State<ActressListPage> {
       sort: _sort,
       query: _query,
       tag: _tagFilter.tagValue,
+      category: _category,
       offset: 0,
       limit: limit,
     );
@@ -1486,71 +1501,87 @@ class _ActressListPageState extends State<ActressListPage> {
       width: double.infinity,
       color: colors.surfaceContainerLow,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
+      // 按钮另起一行：四个按钮全挤在同一行会把文字列压到只剩一字宽
+      // （桌面窗口里竖排显示，2026-11-21 用户截图）。文字行独占
+      // 一行、按钮行靠右换行，窄屏也不会压坏文字。
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.folder_rounded, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '数据库：${bind.displayPath}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                for (final line in noteLines)
-                  Text(
-                    line,
-                    style: TextStyle(
-                      color: colors.onSurfaceVariant,
-                      fontSize: 12,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.folder_rounded, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '数据库：${bind.displayPath}',
+                      style: const TextStyle(fontSize: 12),
                     ),
+                    for (final line in noteLines)
+                      Text(
+                        line,
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 4,
+            children: [
+              // 2026-11-20 热换库：手动“重新加载数据库”入口（两种模式都有）。
+              TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: _manualReloadDb,
+                child: const Text('重新加载数据库'),
+              ),
+              if (bind.needsPermission)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-              ],
-            ),
+                  onPressed: _requestMytvPermission,
+                  child: const Text('去设置授权'),
+                ),
+              if (!bind.bound)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: _rebindMytv,
+                  child: const Text('重新绑定'),
+                ),
+              if (!bind.bound)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => setState(() => _mytvRowDismissed = true),
+                  child: const Text('继续用内部存储'),
+                ),
+            ],
           ),
-          // 2026-11-20 热换库：手动“重新加载数据库”入口（两种模式都有）。
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: _manualReloadDb,
-            child: const Text('重新加载数据库'),
-          ),
-          if (bind.needsPermission)
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 28),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _requestMytvPermission,
-              child: const Text('去设置授权'),
-            ),
-          if (!bind.bound)
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 28),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _rebindMytv,
-              child: const Text('重新绑定'),
-            ),
-          if (!bind.bound)
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 28),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: () => setState(() => _mytvRowDismissed = true),
-              child: const Text('继续用内部存储'),
-            ),
         ],
       ),
     );
@@ -1558,15 +1589,17 @@ class _ActressListPageState extends State<ActressListPage> {
 
   /// 2026-11-20 通用读库：外来数据库模式行（表名 + 条数 + 字段入口）。
   /// 数据库镜像横幅（2026-11-20 用户令）：追加进行中显示
-  /// “正在追加数据库…已追加 N / 共 M 条”，失败显示原因（已有
-  /// 数据不受影响）；跑完/没文件时不显示。
+  /// “正在追加数据库…已处理 N / 共 M 条（新增 X 部）”，失败显示原因
+  /// （已有数据不受影响）；跑完/没文件时不显示。已处理数每批都涨，
+  /// 新增数在源库内容已入库时可以是 0，两数分开才看得出在跑。
   Widget _buildMirrorBanner(ColorScheme colors) {
     if (!_mirrorRunning && _mirrorError == null) {
       return const SizedBox.shrink();
     }
     final text = _mirrorRunning
-        ? '正在追加数据库 $_mirrorFile…已追加 $_mirrorAppended'
+        ? '正在追加数据库 $_mirrorFile…已处理 $_mirrorProcessed'
             ' / 共 ${_mirrorTotal > 0 ? _mirrorTotal : '…'} 条'
+            '（新增 $_mirrorAppended 部）'
         : '追加数据库失败：$_mirrorError（已有数据不受影响）';
     return Container(
       width: double.infinity,

@@ -66,6 +66,30 @@ class ActressSyncOverview {
 
 /// 女优本地库接口：名册 + 作品一次性全量存本地，打开只读本地。
 /// sqflite 实现跑真机，内存实现跑测试与预览；两者语义必须一致。
+/// [ActressDatabase.updateWorkPlayLinks] 的一条更新：与
+/// [ActressDatabase.updateWorkPlayLink] 同字段（人由调用方一次传，
+/// 不在每条里重复）。
+class WorkPlayLinkUpdate {
+  const WorkPlayLinkUpdate({
+    required this.site,
+    required this.codeKey,
+    required this.titleKey,
+    this.title = '',
+    this.date = '',
+    required this.coverSource,
+    required this.coverDramaId,
+    required this.coverUrl,
+  });
+  final String site;
+  final String codeKey;
+  final String titleKey;
+  final String title;
+  final String date;
+  final String coverSource;
+  final String coverDramaId;
+  final String coverUrl;
+}
+
 abstract class ActressDatabase {
   /// 名册人物合并入库：按任一名字变体键命中即合并，否则新建。
   /// 名字含硬线词时返回 null（整人剔除）。
@@ -169,6 +193,8 @@ abstract class ActressDatabase {
     String site = '',
   });
 
+  /// [updateWorkPlayLinks] 的一条更新：与 [updateWorkPlayLink] 同字
+  /// 段（人由调用方一次传，不在每条里重复）。
   /// 数据库镜像“任一不同就更新替换”（2026-11-20 用户令）：按
   /// （人，站，番号键/标题键）找到已有的作品行，把播放链接
   /// （cover_drama_id）与封面（cover_source/cover_url）换成
@@ -185,6 +211,15 @@ abstract class ActressDatabase {
     required String coverSource,
     required String coverDramaId,
     required String coverUrl,
+  });
+
+  /// 批量版 [updateWorkPlayLink]：多条更新只开一个事务，按顺序
+  /// 返回每条是否改了行。镜像每批几百条逐条调时每条一个事务、
+  /// 每次提交都要落盘（约 95ms/条，323798 行要几小时）；批量后
+  /// 约 0.9ms/条（2026-11-21 计时复现实测）。
+  Future<List<bool>> updateWorkPlayLinks({
+    required int personId,
+    required List<WorkPlayLinkUpdate> updates,
   });
 
   /// 某源作品清单待同步的人物（有该源身份、且该源 films 未完成）。
@@ -706,6 +741,20 @@ class SqfliteActressDatabase implements ActressDatabase {
         opened.isOpen &&
         _openedPath == currentPath &&
         _openedSignature == signature) {
+      return (reloaded: false, error: null);
+    }
+    // 同一文件、只是内容变了（指纹变了）：不重开。镜像/同步正是
+    // 通过当前连接在写这个文件，当前连接本来就能读到已提交的新
+    // 数据；重开反而要等镜像的写锁（PRAGMA journal_mode 报
+    // SQLITE_BUSY，2026-11-21 用户截图里详情页一点作品就弹这个
+    // 错），还把正在用的连接关了。只有换了路径（重新绑定到另一
+    // 个文件）或用户手动点“重新加载数据库”（force）时才重开；
+    // 外部直接替换同路径文件时也用手动重载。
+    if (!force &&
+        opened != null &&
+        opened.isOpen &&
+        _openedPath == currentPath) {
+      _openedSignature = signature;
       return (reloaded: false, error: null);
     }
     if (opened == null) {
@@ -1349,6 +1398,49 @@ class SqfliteActressDatabase implements ActressDatabase {
             whereArgs: [personId, site, titleKey],
           );
     return changed > 0;
+  }
+
+  @override
+  Future<List<bool>> updateWorkPlayLinks({
+    required int personId,
+    required List<WorkPlayLinkUpdate> updates,
+  }) async {
+    if (updates.isEmpty) return const [];
+    final db = await _open();
+    final results = <bool>[];
+    // 多条更新只开一个事务：逐条调时每条一个事务、每次提交都要
+    // 落盘（约 95ms/条）；批量后约 0.9ms/条。
+    await db.transaction((txn) async {
+      for (final u in updates) {
+        if (u.codeKey.isEmpty && u.titleKey.isEmpty) {
+          results.add(false);
+          continue;
+        }
+        final values = <String, Object?>{
+          'cover_source': u.coverSource,
+          'cover_drama_id': u.coverDramaId,
+          'cover_url': u.coverUrl,
+        };
+        if (u.title.isNotEmpty) values['title'] = u.title;
+        if (u.date.isNotEmpty) values['date'] = u.date;
+        final changed = u.codeKey.isNotEmpty
+            ? await txn.update(
+                'works',
+                values,
+                where: 'person_id = ? AND site = ? AND code_key = ?',
+                whereArgs: [personId, u.site, u.codeKey],
+              )
+            : await txn.update(
+                'works',
+                values,
+                where: 'person_id = ? AND site = ? AND code_key = \'\' '
+                    'AND title_key = ?',
+                whereArgs: [personId, u.site, u.titleKey],
+              );
+        results.add(changed > 0);
+      }
+    });
+    return results;
   }
 
   @override
@@ -2199,6 +2291,30 @@ class MemoryActressDatabase implements ActressDatabase {
       return true;
     }
     return false;
+  }
+
+  @override
+  Future<List<bool>> updateWorkPlayLinks({
+    required int personId,
+    required List<WorkPlayLinkUpdate> updates,
+  }) async {
+    final results = <bool>[];
+    for (final u in updates) {
+      results.add(
+        await updateWorkPlayLink(
+          personId: personId,
+          site: u.site,
+          codeKey: u.codeKey,
+          titleKey: u.titleKey,
+          title: u.title,
+          date: u.date,
+          coverSource: u.coverSource,
+          coverDramaId: u.coverDramaId,
+          coverUrl: u.coverUrl,
+        ),
+      );
+    }
+    return results;
   }
 
   @override

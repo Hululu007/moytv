@@ -124,10 +124,16 @@ class ActressDbMirrorResult {
 /// 播放链接相同则跳过，有且链接不同则更新替换。单条失败只记
 /// failed 不抛错；整批失败记 error 返回，不回滚已写部分。
 /// [onProgress] 每处理完一条调一次（done 从 1 开始）。
+/// [existingPlayUrls] 跨批复用：同一文件内各批共用（personId ->
+/// 去重键 -> 已存播放地址），避免每批每人重读全部已有作品
+/// （323798 行时每批重读是 O(n^2)，手机上几小时跑不完）。
+/// 调用方（[ActressDbMirror.mirrorFile]）每文件建一个；不传时
+/// 每批现读（老行为，单测用）。
 Future<ActressDbMirrorResult> mirrorWorks({
   required ActressDatabase library,
   required List<ActressDbMirrorWork> works,
   void Function(int done, int total)? onProgress,
+  Map<int, Map<String, String>>? existingPlayUrls,
 }) async {
   var appended = 0;
   var updated = 0;
@@ -164,25 +170,45 @@ Future<ActressDbMirrorResult> mirrorWorks({
           onProgress?.call(done, works.length);
           continue;
         }
-        // 该人已有作品一次读出（上限 10 万行，超了按“没有”处理，
-        // upsertWorks 的冲突丢弃会兜住，不会重复建行）。
-        final existing = <String, ActressWork>{};
-        try {
-          final rows = await library.worksForPerson(
-            person.localId,
-            offset: 0,
-            limit: 100000,
-          );
-          for (final row in rows) {
-            final key = row.codeKey.isNotEmpty
-                ? '${row.site}|code:${row.codeKey}'
-                : '${row.site}|title:${row.titleKey}';
-            existing[key] = row;
+        // 该人已有作品的去重键 -> 已存播放地址（只存地址串，不存
+        // 整行，323798 行时缓存也不会太大）。跨批复用时直接取缓存
+        // （同文件内前面批次已写的新行也在缓存里）；否则现读一次
+        // （上限 10 万行，超了按“没有”处理，upsertWorks 的冲突
+        // 丢弃会兜住，不会重复建行）。
+        final useCache = existingPlayUrls != null;
+        Map<String, String> existing;
+        if (useCache && existingPlayUrls.containsKey(person.localId)) {
+          existing = existingPlayUrls[person.localId]!;
+        } else {
+          existing = <String, String>{};
+          try {
+            final rows = await library.worksForPerson(
+              person.localId,
+              offset: 0,
+              limit: 100000,
+            );
+            for (final row in rows) {
+              final key = row.codeKey.isNotEmpty
+                  ? '${row.site}|code:${row.codeKey}'
+                  : '${row.site}|title:${row.titleKey}';
+              existing[key] = row.coverDramaId;
+            }
+          } catch (_) {
+            // 读已有行失败：当作空库继续，新行由 upsertWorks 的
+            // 冲突丢弃兜住，不会重复建行。
           }
-        } catch (_) {
-          // 读已有行失败：当作空库继续，新行由 upsertWorks 的
-          // 冲突丢弃兜住，不会重复建行。
+          if (useCache) existingPlayUrls[person.localId] = existing;
         }
+        // 批量写：同一个人先收齐再一次写（每批 200 行时逐条写每条
+        // 一个事务、每次提交都要落盘，约 95ms/条，323798 行要几
+        // 小时；批量后新建按组各一次事务、更新一次事务，约
+        // 0.9ms/条）。新建按（站，封面来源）分组调 upsertWorks
+        // （它本身一次调用就是一个事务）；更新走批量
+        // updateWorkPlayLinks。计数口径与逐条时一字不差：新建
+        // 成功记 appended、更新成功记 updated、没找到记 failed、
+        // 补地址的返回值不计。
+        final toInsert = <(String, String), List<(RosterFilm, String)>>{};
+        final toUpdate = <(WorkPlayLinkUpdate, bool, String)>[];
         for (final work in personWorks) {
           done++;
           try {
@@ -204,30 +230,48 @@ Future<ActressDbMirrorResult> mirrorWorks({
             final key = codeKey.isNotEmpty
                 ? '${work.site}|code:$codeKey'
                 : '${work.site}|title:$titleKey';
-            final row = existing[key];
-            if (row == null) {
-              await library.upsertWorks(
-                person.localId,
-                [
-                  RosterFilm(
-                    code: work.code.trim(),
-                    title: work.title.trim(),
-                    date: work.date.trim(),
-                    coverUrl: work.coverUrl.trim(),
-                    detailUrl: work.playUrl.trim(),
-                    category: work.category.trim(),
-                  ),
-                ],
-                coverSource: work.coverSource,
-                site: work.site,
-              );
+            final storedUrl = existing[key];
+            if (storedUrl == null) {
+              (toInsert[(work.site, work.coverSource)] ??= []).add((
+                RosterFilm(
+                  code: work.code.trim(),
+                  title: work.title.trim(),
+                  date: work.date.trim(),
+                  coverUrl: work.coverUrl.trim(),
+                  detailUrl: work.playUrl.trim(),
+                  category: work.category.trim(),
+                ),
+                key,
+              ));
               // upsertWorks 只在有封面时才写 cover 字段：没封面
               // 只有播放地址的条目，补一次更新把地址写进
               // cover_drama_id，否则地址丢了。
               if (work.playUrl.trim().isNotEmpty &&
                   work.coverUrl.trim().isEmpty) {
-                await library.updateWorkPlayLink(
-                  personId: person.localId,
+                toUpdate.add((
+                  WorkPlayLinkUpdate(
+                    site: work.site,
+                    codeKey: codeKey,
+                    titleKey: titleKey,
+                    title: work.title.trim(),
+                    date: work.date.trim(),
+                    coverSource: work.coverSource,
+                    coverDramaId: work.playUrl.trim(),
+                    coverUrl: '',
+                  ),
+                  true,
+                  key,
+                ));
+              }
+              existing[key] = work.playUrl.trim();
+            } else if (storedUrl == work.playUrl.trim()) {
+              // 番号 + 播放链接都相同：跳过，不重复加。
+              skipped++;
+            } else {
+              // 任一不同：更新替换（换链接与封面，标题/日期
+              // 有新值时也换，分类不动）。
+              toUpdate.add((
+                WorkPlayLinkUpdate(
                   site: work.site,
                   codeKey: codeKey,
                   titleKey: titleKey,
@@ -235,62 +279,62 @@ Future<ActressDbMirrorResult> mirrorWorks({
                   date: work.date.trim(),
                   coverSource: work.coverSource,
                   coverDramaId: work.playUrl.trim(),
-                  coverUrl: '',
-                );
-              }
-              existing[key] = ActressWork(
-                personId: person.localId,
-                codeKey: codeKey,
-                titleKey: titleKey,
-                site: work.site,
-                codeDisplay: work.code.trim(),
-                title: work.title.trim(),
-                date: work.date.trim(),
-                coverSource: work.coverSource,
-                coverDramaId: work.playUrl.trim(),
-                coverUrl: work.coverUrl.trim(),
-                category: work.category.trim(),
-              );
-              appended++;
-            } else if (row.coverDramaId == work.playUrl.trim()) {
-              // 番号 + 播放链接都相同：跳过，不重复加。
-              skipped++;
-            } else {
-              // 任一不同：更新替换（换链接与封面，标题/日期
-              // 有新值时也换，分类不动）。
-              final ok = await library.updateWorkPlayLink(
-                personId: person.localId,
-                site: work.site,
-                codeKey: codeKey,
-                titleKey: titleKey,
-                title: work.title.trim(),
-                date: work.date.trim(),
-                coverSource: work.coverSource,
-                coverDramaId: work.playUrl.trim(),
-                coverUrl: work.coverUrl.trim(),
-              );
-              if (ok) {
-                existing[key] = row.copyWith(
-                  title: work.title.trim().isNotEmpty
-                      ? work.title.trim()
-                      : row.title,
-                  date: work.date.trim().isNotEmpty
-                      ? work.date.trim()
-                      : row.date,
-                  coverSource: work.coverSource,
-                  coverDramaId: work.playUrl.trim(),
                   coverUrl: work.coverUrl.trim(),
-                );
-                updated++;
-              } else {
-                failed++;
-              }
+                ),
+                false,
+                key,
+              ));
+              existing[key] = work.playUrl.trim();
             }
           } catch (_) {
             // 单条失败不崩、不影响同批其他条与已有数据。
             failed++;
           }
           onProgress?.call(done, works.length);
+        }
+        // 落盘：先新建（按组各一次事务），再更新（一次事务）。
+        // 写失败时那几条记 failed，并把缓存里已记的地址撤回，
+        // 免得同文件后面批次以为已入库而跳过。
+        for (final group in toInsert.entries) {
+          try {
+            await library.upsertWorks(
+              person.localId,
+              [for (final item in group.value) item.$1],
+              coverSource: group.key.$2,
+              site: group.key.$1,
+            );
+            appended += group.value.length;
+          } catch (_) {
+            failed += group.value.length;
+            for (final item in group.value) {
+              existing.remove(item.$2);
+            }
+          }
+        }
+        if (toUpdate.isNotEmpty) {
+          try {
+            final results = await library.updateWorkPlayLinks(
+              personId: person.localId,
+              updates: [for (final item in toUpdate) item.$1],
+            );
+            for (var i = 0; i < toUpdate.length && i < results.length; i++) {
+              // 补地址的返回值不计（旧口径）。
+              if (toUpdate[i].$2) continue;
+              if (results[i]) {
+                updated++;
+              } else {
+                failed++;
+                existing.remove(toUpdate[i].$3);
+              }
+            }
+          } catch (_) {
+            // 整批更新失败：非补地址的更新记 failed，撤回缓存。
+            for (final item in toUpdate) {
+              if (item.$2) continue;
+              failed++;
+              existing.remove(item.$3);
+            }
+          }
         }
       } catch (_) {
         // 整个人失败（建/合人物时抛错）：该人的条目此时还没开始
@@ -423,7 +467,9 @@ class ActressDbMirrorStateStore {
 /// 文件级镜像：只读打开 [sourcePath]，分批读、分批合并进
 /// [library]。与当前库同一文件时直接跳过（只显示不写）；
 /// 源文件不存在/打不开/结构不对时返回带 error 的结果，不抛错、
-/// 不动已有数据。[onProgress] 每批调一次（已追加数，总行数）。
+/// 不动已有数据。[onProgress] 每批调一次（已追加数，已处理行数，
+/// 总行数）——已处理数一直涨，新增数在源库内容已入库时可以是 0，
+/// 两数分开显示才看得出在跑、没卡住。
 class ActressDbMirror {
   const ActressDbMirror();
 
@@ -432,7 +478,7 @@ class ActressDbMirror {
     required ActressDatabase library,
     required String libraryPath,
     int batchSize = 200,
-    void Function(int appended, int total)? onProgress,
+    void Function(int appended, int processed, int total)? onProgress,
     String? stateDir,
   }) async {
     if (path.equals(path.normalize(sourcePath), path.normalize(libraryPath))) {
@@ -486,6 +532,9 @@ class ActressDbMirror {
       var updated = 0;
       var skipped = 0;
       var failed = 0;
+      // 跨批缓存：同一文件内各批共用（personId -> 去重键 -> 已存
+      // 播放地址），每人已有作品只读一次，不每批重读。
+      final existingCache = <int, Map<String, String>>{};
       // 断点续跑：上次没跑完的从 offset 继续（文件未变才有效，
       // 指纹一变 offset 归零）。
       var offset = store.progressOffset(fingerprint);
@@ -496,12 +545,16 @@ class ActressDbMirror {
             : await _readGenericBatch(reader!, offset, batchSize);
         if (batch.isEmpty) break;
         offset += batch.length;
-        final result = await mirrorWorks(library: library, works: batch);
+        final result = await mirrorWorks(
+          library: library,
+          works: batch,
+          existingPlayUrls: existingCache,
+        );
         appended += result.appended;
         updated += result.updated;
         skipped += result.skipped;
         failed += result.failed;
-        onProgress?.call(appended, total);
+        onProgress?.call(appended, offset, total);
         store.markProgress(fingerprint, offset: offset, total: total);
       }
       store.markDone(fingerprint, total: total);

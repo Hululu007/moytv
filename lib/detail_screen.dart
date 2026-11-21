@@ -73,6 +73,7 @@ class DetailScreen extends StatefulWidget {
     this.resumeOnOpen = false,
     this.autoPlayOnOpen = false,
     this.autoPlayEpisodeIndex = 0,
+    this.initialDetail,
     this.nextLineOnExhausted,
     this.onRetryProbe,
     this.onTagTap,
@@ -89,6 +90,12 @@ class DetailScreen extends StatefulWidget {
   /// （演员库点卡流程注入，MJV 命中直进详情页并播放）。
   final bool autoPlayOnOpen;
   final int autoPlayEpisodeIndex;
+
+  /// 点卡带进来的候选详情（演员库点作品时数据库那条的集数，直链）：
+  /// 站点详情取回是空的（该站未返回详情）时用它的集数播，不丢掉，
+  /// 否则明明数据库里有地址也显示“暂时没有可播放的集数”。站点
+  /// 有集数时照旧用站点的。不传时行为与此前一字不差。
+  final DramaDetail? initialDetail;
 
   /// 播放耗尽时的换线回调（演员库点卡流程注入）：内嵌播放或跨站
   /// 线路播放耗尽时调用，返回下一条可播线路；返回 null 表示链
@@ -421,7 +428,7 @@ class _DetailScreenState extends State<DetailScreen> {
       _folderPage = 1;
     });
     try {
-      final detail = await widget.repository.detail(widget.drama);
+      final fetched = await widget.repository.detail(widget.drama);
       if (!mounted ||
           generation != _generation ||
           _profileEpoch != widget.store.profileEpoch) {
@@ -429,9 +436,20 @@ class _DetailScreenState extends State<DetailScreen> {
       }
       final merged = widget.repository.catalogUpdates
           .current(widget.drama)
-          .merge(detail.drama);
+          .merge(fetched.drama);
+      // 演员库点卡带进来的候选集数（数据库里存的直链）：站点详情取
+      // 回是空的（该站未返回详情）时不要丢掉它——就用这条播，否则
+      // 明明数据库里有地址也显示“暂时没有可播放的集数”。站点有
+      // 集数时照旧用站点的。
+      final initial = widget.initialDetail;
+      final detail =
+          fetched.episodes.isEmpty &&
+              initial != null &&
+              initial.episodes.isNotEmpty
+          ? initial.withDrama(merged)
+          : fetched.withDrama(merged);
       setState(() {
-        _detail = detail.withDrama(merged);
+        _detail = detail;
         _loading = false;
         _episodePage =
             resumeEpisodeIndex(

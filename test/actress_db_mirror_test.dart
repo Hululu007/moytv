@@ -309,6 +309,59 @@ void main() {
       );
       expect(miss, isFalse);
     });
+
+    test('批量 updateWorkPlayLinks：按顺序返回每条是否改了行', () async {
+      final db = MemoryActressDatabase();
+      final person = await db.upsertCrawledPerson(name: '波多野结衣');
+      expect(person, isNotNull);
+      await db.upsertWorks(
+        person!.localId,
+        const [
+          RosterFilm(code: 'SSIS-001', title: '测试作品一'),
+          RosterFilm(code: 'SSIS-002', title: '测试作品二'),
+        ],
+        site: 'mjv',
+      );
+      final results = await db.updateWorkPlayLinks(
+        personId: person.localId,
+        updates: const [
+          WorkPlayLinkUpdate(
+            site: 'mjv',
+            codeKey: 'SSIS1',
+            titleKey: '',
+            coverSource: 'chaoliu',
+            coverDramaId: 'https://example.com/a2.m3u8',
+            coverUrl: '',
+          ),
+          WorkPlayLinkUpdate(
+            site: 'mjv',
+            codeKey: 'SSIS2',
+            titleKey: '',
+            coverSource: 'chaoliu',
+            coverDramaId: 'https://example.com/b2.m3u8',
+            coverUrl: '',
+          ),
+          WorkPlayLinkUpdate(
+            site: 'mjv',
+            codeKey: 'NOPE1',
+            titleKey: '',
+            coverSource: 'chaoliu',
+            coverDramaId: 'https://example.com/no.m3u8',
+            coverUrl: '',
+          ),
+        ],
+      );
+      expect(results, [true, true, false]);
+      final rows = await db.worksForPerson(
+        person.localId,
+        offset: 0,
+        limit: 10,
+      );
+      expect(
+        rows.map((row) => row.coverDramaId).toSet(),
+        {'https://example.com/a2.m3u8', 'https://example.com/b2.m3u8'},
+      );
+    });
   });
 
   group('ActressDbMirrorWork.fromGenericWork', () {
