@@ -53,6 +53,10 @@ type htmlProfile struct {
 	Format string // "m3u8"/"mp4" hint for resolve; "" = sniff by suffix
 
 	Fetch func(rawurl string, headers map[string]string, referer string) ([]byte, int, error)
+
+	// CatalogJSON 非 nil 时优先用于列表：部分站点已把服务端渲染的列表页
+	// 换成 XHR（POST/GET 返回 JSON），HTML 里只剩空壳容器。
+	CatalogJSON func(slot, cat string, page int) ([]interface{}, int, bool, error)
 }
 
 func (p *htmlProfile) headers() map[string]string {
@@ -174,6 +178,9 @@ func htmlProfileImpl(key, name string, p *htmlProfile) *siteImpl {
 	impl.Catalog = func(slot, category string, page int) ([]interface{}, int, bool, error) {
 		if category == "" {
 			category = defCat
+		}
+		if p.CatalogJSON != nil {
+			return p.CatalogJSON(slot, category, page)
 		}
 		body, code, err := p.fetchPage(p.listURL(category, page), p.headers())
 		if err != nil || code != 200 {

@@ -240,27 +240,46 @@ func tgThrottle() {
 }
 
 func tgFetchBlockTO(user string, page int, timeout time.Duration) (*tgBlockResp, error) {
-	tgThrottle()
 	u := fmt.Sprintf("%s/json/%s?limit=%d&page=%d", tgMirror, user, tgPageSize, page)
-	var body []byte
-	var code int
-	var err error
-	if timeout > 0 {
-		body, code, _, err = httpGetTimeout(u, tgHeaders(), timeout)
-	} else {
-		body, code, _, err = httpGet(u, tgHeaders())
+	// 镜像站有速率限制：短时间内连刷会回 429。这里做指数退避重试
+	// （0.8s / 1.6s / 3.2s），429/5xx 才重试，其余错误直接上抛。
+	var lastErr error
+	var lastCode int
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<uint(attempt-1)) * 800 * time.Millisecond)
+		}
+		tgThrottle()
+		var body []byte
+		var code int
+		var err error
+		if timeout > 0 {
+			body, code, _, err = httpGetTimeout(u, tgHeaders(), timeout)
+		} else {
+			body, code, _, err = httpGet(u, tgHeaders())
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lastCode = code
+		if code == 429 || code >= 500 {
+			lastErr = fmt.Errorf("tg http %d for %s", code, u)
+			continue
+		}
+		if code != 200 {
+			return nil, fmt.Errorf("tg http %d for %s", code, u)
+		}
+		var resp tgBlockResp
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("tg parse: %v", err)
+		}
+		return &resp, nil
 	}
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = fmt.Errorf("tg http %d for %s", lastCode, u)
 	}
-	if code != 200 {
-		return nil, fmt.Errorf("tg http %d for %s", code, u)
-	}
-	var resp tgBlockResp
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("tg parse: %v", err)
-	}
-	return &resp, nil
+	return nil, lastErr
 }
 
 func tgCard(slot string, user string, m tgMessage) map[string]interface{} {

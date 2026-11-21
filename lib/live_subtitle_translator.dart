@@ -83,3 +83,105 @@ class LibreTranslateTranslator implements LiveSubtitleTranslator {
     return translated.isEmpty ? null : translated;
   }
 }
+
+/// 语言码映射：Whisper/设置里的简写 → 各翻译服务的写法。
+String liveTranslateLangCode(String code, {required bool target}) {
+  final c = code.trim().toLowerCase();
+  if (c.isEmpty) return target ? 'zh-CN' : 'auto';
+  if (c == 'auto' || c == 'detect') return 'auto';
+  if (c == 'zh' || c == 'zh-cn' || c == 'zh_cn' || c == 'cmn') return 'zh-CN';
+  if (c == 'zh-tw' || c == 'zh_tw') return 'zh-TW';
+  return c;
+}
+
+/// 谷歌翻译免费端点（App 常见内置方案，无需 Key、无需用户填地址）：
+/// GET translate.googleapis.com/translate_a/single?client=gtx&sl=&tl=&dt=t&q=
+/// 返回 [ [ ["译文","原文",...], ... ], ... ]，把所有分段拼起来。
+class GoogleTranslateTranslator implements LiveSubtitleTranslator {
+  GoogleTranslateTranslator({http.Client? client})
+    : _client = client ?? http.Client();
+
+  final http.Client _client;
+
+  static const String _endpoint =
+      'https://translate.googleapis.com/translate_a/single';
+
+  @override
+  Future<String?> translate(
+    String text, {
+    required String source,
+    required String target,
+  }) async {
+    final q = text.trim();
+    if (q.isEmpty) return null;
+    final uri = Uri.parse(_endpoint).replace(
+      queryParameters: {
+        'client': 'gtx',
+        'sl': liveTranslateLangCode(source, target: false),
+        'tl': liveTranslateLangCode(target, target: true),
+        'dt': 't',
+        'q': q,
+      },
+    );
+    late final http.Response response;
+    try {
+      response = await _client.get(
+        uri,
+        headers: const {
+          'User-Agent':
+              'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+        },
+      ).timeout(const Duration(seconds: 12));
+    } catch (e) {
+      throw LiveSubtitleTranslationException('翻译请求失败：$e');
+    }
+    if (response.statusCode != 200) {
+      throw LiveSubtitleTranslationException('翻译服务器返回 ${response.statusCode}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List || decoded.isEmpty) {
+      throw const LiveSubtitleTranslationException('翻译返回格式不对');
+    }
+    final segments = decoded[0];
+    if (segments is! List) {
+      throw const LiveSubtitleTranslationException('翻译返回格式不对');
+    }
+    final buffer = StringBuffer();
+    for (final seg in segments) {
+      if (seg is List && seg.isNotEmpty && seg[0] is String) {
+        buffer.write(seg[0] as String);
+      }
+    }
+    final out = buffer.toString().trim();
+    return out.isEmpty ? null : out;
+  }
+}
+
+/// 依次尝试多个翻译器：前一个失败自动落到下一个。
+/// 全失败时抛最后一个错误，调用方照旧当“翻译失败”处理。
+class ChainTranslator implements LiveSubtitleTranslator {
+  ChainTranslator(this._translators);
+
+  final List<LiveSubtitleTranslator> _translators;
+
+  @override
+  Future<String?> translate(
+    String text, {
+    required String source,
+    required String target,
+  }) async {
+    Object? lastError;
+    for (final t in _translators) {
+      try {
+        final r = await t.translate(text, source: source, target: target);
+        if (r != null && r.trim().isNotEmpty) return r;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError != null) {
+      throw LiveSubtitleTranslationException('所有翻译通道均失败：$lastError');
+    }
+    return null;
+  }
+}

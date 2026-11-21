@@ -80,6 +80,8 @@ func yhPron91Get(rawurl string) ([]byte, error) {
 
 var (
 	yhPron91TitleRe   = regexp.MustCompile(`(?s)video-title title-truncate m-t-5[^>]*>(.*?)<`)
+	// 2026-11 改版：卡片标题改为 <div class="tc…"><bdi>标题</bdi></div>
+	yhPron91TitleBdiRe = regexp.MustCompile(`(?s)<bdi>(.*?)</bdi>`)
 	yhPron91ImgRe     = regexp.MustCompile(`<img[^>]+src="([^"]+)"`)
 	yhPron91DurRe     = regexp.MustCompile(`(?s)<span[^>]*duration[^>]*>(.*?)</span>`)
 	yhPron91ViewkeyRe = regexp.MustCompile(`viewkey=([A-Za-z0-9_-]+)`)
@@ -99,15 +101,24 @@ func yhPron91Cards(slot, html string) []interface{} {
 	// 按容器切块: 每个 "well well-sm videos-text-align" 块即一视频.
 	// 块内以 viewkey 锚定取 id 与封面 (块首 <a viewkey> 包 <img>),
 	// 避免标题窗口向前误取翻页导航的 img/a (实测教训).
-	const marker = "well well-sm videos-text-align"
-	var starts []int
-	for off := 0; ; {
-		j := strings.Index(html[off:], marker)
-		if j < 0 {
-			break
+	// 2026-11 改版：容器 class 变为 <article class="vitem well-sm well">，
+	// 两种标记都切，取能切出卡片的那一种。
+	const markerLegacy = "well well-sm videos-text-align"
+	const markerVitem = `<article class="vitem`
+	starts := []int{}
+	for _, marker := range []string{markerLegacy, markerVitem} {
+		var got []int
+		for off := 0; ; {
+			j := strings.Index(html[off:], marker)
+			if j < 0 {
+				break
+			}
+			got = append(got, off+j)
+			off += j + len(marker)
 		}
-		starts = append(starts, off+j)
-		off += j + len(marker)
+		if len(got) > len(starts) {
+			starts = got
+		}
 	}
 	for i, st := range starts {
 		end := len(html)
@@ -118,6 +129,11 @@ func yhPron91Cards(slot, html string) []interface{} {
 		title := ""
 		if mm := yhPron91TitleRe.FindStringSubmatch(seg); mm != nil {
 			title = yhPron91Clean(mm[1])
+		}
+		if title == "" {
+			if mm := yhPron91TitleBdiRe.FindStringSubmatch(seg); mm != nil {
+				title = yhPron91Clean(mm[1])
+			}
 		}
 		viewkey := ""
 		if mm := yhPron91ViewkeyRe.FindStringSubmatch(seg); mm != nil {

@@ -43,7 +43,7 @@ class LiveSubtitleSettings {
   final bool wifiOnlyDownload;
 
   /// LibreTranslate 服务器地址（用户自填，默认空）。
-  /// 填了才走联网翻译；留空则只出 Whisper 自带的英文翻译。
+  /// 填了就优先走它，失败回退内置翻译通道；留空直接用内置通道。
   /// 绝不写死任何私人地址。
   final String libreTranslateUrl;
 
@@ -61,11 +61,13 @@ class LiveSubtitleSettings {
   bool get hasRemoteTranslator => libreTranslateUrl.trim().isNotEmpty;
 
   /// 当前翻译路线说明（设置页直接展示，不虚构能力）。
+  /// 内置翻译通道（谷歌免费端点）默认可用，不再要求用户自填服务器；
+  /// 填了 LibreTranslate 就优先走它，失败自动回退内置通道。
   String get translationRouteLabel {
     if (hasRemoteTranslator) {
-      return '当前翻译路线：语音识别（端侧）→ LibreTranslate 翻译成中文';
+      return '当前翻译路线：语音识别（端侧）→ LibreTranslate（优先，失败回退内置翻译）';
     }
-    return '当前翻译路线：语音识别（端侧）→ 仅英文翻译（未填翻译服务器地址）';
+    return '当前翻译路线：语音识别（端侧）→ 内置翻译（无需配置）';
   }
 
   LiveSubtitleSettings copyWith({

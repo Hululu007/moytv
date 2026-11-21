@@ -49,3 +49,26 @@ v33（未发布），基线 v32。
   回退现算 SQL（0.8 秒）。
 - 人数：29,237 → 28,956 人（合并掉 281 组同名）。
 - 多人合并名（`A / B / C`）另 477 行、667 部，占 0.14%，暂不拆。
+
+## v36（2026-11-21 深夜）问题站点批量修复
+### 这轮改了什么
+1. `sites_z2_maccms.go`：17rip 列表改走 `POST /index.php/ds_api/vod`（JSON），
+   新增 `z2RipCatalogJSON`；`htmlprofile.go` 增加 `CatalogJSON` 钩子。
+2. `sites_yh_pron91.go`：卡片容器兼容 `<article class="vitem">`，标题加 `<bdi>` 兜底。
+3. `maccms_api.go`：MacCMS 引擎加「空分类自动回退」（`fallbackCategory`，带缓存）。
+4. `sites_jar_tg.go`：429/5xx 指数退避重试（0.8/1.6/3.2s）。
+5. 字幕翻译：新增 `GoogleTranslateTranslator`（gtx 免费端点）+ `ChainTranslator`；
+   service 默认用内置通道，填了 LibreTranslate 就优先它、失败回退；设置页文案同步。
+
+### 已排除的原因（别重复排查）
+- 17rip 不是站挂：`/vodshow/*` 一律 200，只是列表容器空，数据在 POST 接口里。
+- ikun 不是接口坏：`ac=list` 正常 67777 条；`t=1` 是空父类，videolist 才 0 条。
+- 91pron 不是接口坏：`/v.php` 200/100KB，只是卡片 class 改版。
+- 9sex/javrate/whos/javxu：真实 Chromium（反检测参数）+ 45s 等待仍卡在挑战页，
+  Turnstile 级校验；avbobo 所有路径 401（出口 IP 门）；bili 服务端 6004；
+  ins 官网域名已停放；gdian 只有下载引导页；heguo 5 域名全 NXDOMAIN；
+  tg 镜像 `/json/` 连公开频道都 429。
+- 单元测试 5 条红线为改动前基线（已 git stash 对比确认）。
+
+### 下一步
+- 云构建出包 v36，真机点验 17rip/91pron/ikun 与字幕翻译。

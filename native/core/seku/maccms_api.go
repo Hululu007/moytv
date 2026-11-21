@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // ---- Generic MacCMS v10 API engine ----
@@ -173,6 +174,49 @@ func (c *mcAPIConfig) toDrama(slot string, v *mcAPIVod, withChapters bool) map[s
 	return d
 }
 
+
+var (
+	mcFallbackMu   sync.Mutex
+	mcFallbackCats = map[string]string{}
+)
+
+// fallbackCategory 找本站第一个「真的有内容」的分类。
+// 有些 MacCMS 站的首个分类（常见 type_id=1）是站方留空的父类，
+// 首页默认分类指过去就是 0 条 —— 表现为「站点打不开」。
+// 结果按 key 缓存；只在前几条里探，避免一次拉几十个分类。
+func (c *mcAPIConfig) fallbackCategory(key string) string {
+	mcFallbackMu.Lock()
+	if v, ok := mcFallbackCats[key]; ok {
+		mcFallbackMu.Unlock()
+		return v
+	}
+	mcFallbackMu.Unlock()
+	resp, err := c.list(url.Values{"ac": {"list"}})
+	if err != nil {
+		return ""
+	}
+	found, tried := "", 0
+	for _, cl := range resp.Class {
+		tid := mcRawID(cl.TypeID)
+		if tid == "" || tid == "0" {
+			continue
+		}
+		if tried >= 6 {
+			break
+		}
+		tried++
+		r, err := c.list(url.Values{"ac": {"videolist"}, "t": {tid}, "pg": {"1"}})
+		if err == nil && len(r.List) > 0 {
+			found = tid
+			break
+		}
+	}
+	mcFallbackMu.Lock()
+	mcFallbackCats[key] = found
+	mcFallbackMu.Unlock()
+	return found
+}
+
 // mcAPIImpl builds a siteImpl from a MacCMS API config.
 func mcAPIImpl(key, name string, cfg *mcAPIConfig) *siteImpl {
 	impl := &siteImpl{
@@ -195,13 +239,32 @@ func mcAPIImpl(key, name string, cfg *mcAPIConfig) *siteImpl {
 		return out
 	}
 	impl.Catalog = func(slot, category string, page int) ([]interface{}, int, bool, error) {
-		p := url.Values{"ac": {"videolist"}, "pg": {fmt.Sprint(page)}}
-		if category != "" {
-			p.Set("t", category)
+		cat := category
+		if cat == "" {
+			cat = cfg.fallbackCategory(key)
 		}
+		build := func(tid string) (url.Values, error) {
+			p := url.Values{"ac": {"videolist"}, "pg": {fmt.Sprint(page)}}
+			if tid != "" {
+				p.Set("t", tid)
+			}
+			return p, nil
+		}
+		p, _ := build(cat)
 		resp, err := cfg.list(p)
 		if err != nil {
 			return nil, 0, false, err
+		}
+		// 指定分类为空（站方空父类）时，首屏回退到「有内容的分类」，
+		// 避免首页一片空白被当成站点坏了。
+		if len(resp.List) == 0 && page <= 1 {
+			if fb := cfg.fallbackCategory(key); fb != "" && fb != cat {
+				if p2, _ := build(fb); true {
+					if r2, err2 := cfg.list(p2); err2 == nil && len(r2.List) > 0 {
+						resp = r2
+					}
+				}
+			}
 		}
 		items := []interface{}{}
 		for _, v := range resp.List {

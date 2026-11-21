@@ -85,8 +85,11 @@ class LiveSubtitleService {
        _translator =
            translator ??
            (settings.hasRemoteTranslator
-               ? LibreTranslateTranslator(baseUrl: settings.libreTranslateUrl)
-               : null);
+               ? ChainTranslator([
+                   LibreTranslateTranslator(baseUrl: settings.libreTranslateUrl),
+                   GoogleTranslateTranslator(),
+                 ])
+               : GoogleTranslateTranslator());
 
   final LiveSubtitleSettings settings;
   final LiveSubtitleEngine? _engine;

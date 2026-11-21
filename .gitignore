@@ -62,3 +62,6 @@ android/app/.cxx/
 
 # drpy-node built-in miniapp: 59MB file cannot go through the API upload; repo stores chunks only, CI reassembles
 assets/miniapps/builtin/com.leospring.drpy_node.zip
+
+# 构建产物/交付包不入库
+output/

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -54,11 +55,90 @@ var (
 	z2RipM3u8Re     = regexp.MustCompile(`"url"\s*:\s*"(https?:\\?/\\?/[^"]+?\.m3u8[^"]*)"`)
 )
 
-func z2RipListURL(cat string, page int) string {
-	if page <= 1 {
-		return "https://17rip.com/vodshow/" + cat + "-----------.html"
+func z2RipAbs(base, u string) string {
+	if u == "" {
+		return ""
 	}
-	return fmt.Sprintf("https://17rip.com/vodshow/%s--------%d---.html", cat, page)
+	if strings.HasPrefix(u, "http") {
+		return u
+	}
+	if base == "" {
+		base = "https://17rip.com"
+	}
+	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(u, "/")
+}
+
+func ripCatName(cats []htmlCat, cat string) string {
+	for _, c := range cats {
+		if c.ID == cat {
+			return c.Name
+		}
+	}
+	return cat
+}
+
+func z2RipCatalogJSON(slot, cat string, page int) ([]interface{}, int, bool, error) {
+	// 2026-11 改版：列表页 HTML 只剩空容器 <div id="dataList">，
+	// 真实数据走模板 JS 的 POST /index.php/ds_api/vod（返回 JSON）。
+	// GET 该接口只会回主题授权串「短视主题 作者TG @tutucj」。
+	if page < 1 {
+		page = 1
+	}
+	form := url.Values{}
+	form.Set("type", cat)
+	form.Set("by", "time")
+	form.Set("page", strconv.Itoa(page))
+	for _, k := range []string{"class", "area", "year", "lang", "version", "state", "letter", "time", "weekday"} {
+		form.Set(k, "")
+	}
+	form.Set("level", "0")
+	hdr := map[string]string{
+		"User-Agent":      z2UA,
+		"Accept-Language": "zh-CN,zh;q=0.9",
+	}
+	hdr["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+	hdr["X-Requested-With"] = "XMLHttpRequest"
+	hdr["Accept"] = "application/json, text/javascript, */*; q=0.01"
+	hdr["Referer"] = fmt.Sprintf("https://17rip.com/vodshow/%s-----------.html", cat)
+	body, code, _, err := httpDo("POST", "https://17rip.com/index.php/ds_api/vod",
+		strings.NewReader(form.Encode()), hdr)
+	if err != nil || code != 200 {
+		return nil, 0, false, fmt.Errorf("z2_17rip catalog http %d err %v", code, err)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, 0, false, fmt.Errorf("z2_17rip catalog json: %v", err)
+	}
+	if c, ok := g5MapInt(resp, "code"); ok && c != 1 {
+		return nil, 0, false, fmt.Errorf("z2_17rip catalog code %d", c)
+	}
+	items := []interface{}{}
+	for _, e := range yhArr(resp["list"]) {
+		m := yhMap(e)
+		if m == nil {
+			continue
+		}
+		id := strings.TrimSpace(g5StrVal(m["vod_id"]))
+		if id == "" || id == "0" {
+			if u := g5StrVal(m["url"]); u != "" {
+				if mm := regexp.MustCompile(`/voddetail/(\d+)\.html`).FindStringSubmatch(u); mm != nil {
+					id = mm[1]
+				}
+			}
+		}
+		title := cleanText(g5StrVal(m["vod_name"]))
+		if id == "" || title == "" {
+			continue
+		}
+		items = append(items, makeDrama(slot, id, title,
+			z2RipAbs("", g5StrVal(m["vod_pic"])),
+			g5StrVal(m["vod_remarks"]), ripCatName(z2RipCats, cat), ""))
+	}
+	pages := page
+	if n, ok := g5MapInt(resp, "pagecount"); ok && n > 0 {
+		pages = n
+	}
+	return items, pages * 24, page < pages && len(items) > 0, nil
 }
 
 func z2RipResolve(slot, rawID string) (map[string]interface{}, error) {
@@ -587,9 +667,7 @@ func z2Av321Resolve(slot, rawID string) (map[string]interface{}, error) {
 
 func init() {
 	rip := htmlProfileImpl("z2_17rip", "🔞17rip", z2RipProfile)
-	rip.Catalog = z2PagedCatalog(z2RipProfile, "z2_17rip", func(cat string, page int) string {
-		return z2RipListURL(cat, page)
-	})
+	rip.Catalog = z2RipCatalogJSON
 	rip.Resolve = z2RipResolve
 	registerSite("z2_17rip", rip, "17rip")
 
