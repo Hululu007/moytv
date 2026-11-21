@@ -58,12 +58,12 @@ var slotOrder = []string{
 	// yh_bale file is present (shared yhMap/yhArr helpers) but its
 	// slot is not listed here, so it stays dormant on this host.
 	"yh_km", "yh_lxs",
-	"yh_km2", "yh_maomi",
+	"yh_km2",
 	"yh_xj", "yh_cucumber",
 	"yh_avbobo", "yh_bilibili",
 	"yh_fruitpie", "yh_melon", "yh_hl365",
 	"yh_pron91", "yh_short91", "yh_melon51", "yh_utube",
-	"yh_av91", "yh_md", "yh_haijiao", "yh_sex8",
+	"yh_av91", "yh_md", "yh_sex8",
 	"yh_gdian", "yh_ins", "yh_huangguo",
 	"mjv011",
 }

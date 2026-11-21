@@ -28,7 +28,7 @@ func httpGet(url string, headers map[string]string) ([]byte, int, http.Header, e
 // timeout once per candidate host (v5 device fix: a blackholed first
 // host must not eat minutes before the next host is tried).
 func httpGetTimeout(url string, headers map[string]string, timeout time.Duration) ([]byte, int, http.Header, error) {
-	headers = crackMergedHeaders(url, headers)
+	headers = zkShieldTicketHeaders(zkShieldHostOf(url), crackMergedHeaders(url, headers))
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, 0, nil, err
@@ -58,8 +58,94 @@ func httpGetTimeout(url string, headers map[string]string, timeout time.Duration
 	return b, resp.StatusCode, resp.Header, nil
 }
 
+// httpDo 是所有 Go 核站点的统一请求出口。
+//
+// 它做三件通用的事（不针对任何具体站点，新加的站点自动继承）：
+//  1. 直连时带上票池里的通行证（cf_clearance + 签发时的 UA）；
+//  2. 撞上挑战页就上报给 App 的解盾队列，并把该 host 标记为「有盾」；
+//  3. 直连拿不到正文时，交给盾层多通道（relay / 网关 / 渲染）兜底取回。
+//
+// 以前这些能力只存在于各站自己的取页函数里，所以每到新站就要重写一遍，
+// 漏写的站被盾一挡就是白页。收到这里之后，站点实现只管解析。
 func httpDo(method, url string, body io.Reader, headers map[string]string) ([]byte, int, http.Header, error) {
-	headers = crackMergedHeaders(url, headers)
+	first, code, hdr, err := httpDoDirect(method, url, body, headers)
+	if method != http.MethodGet {
+		return first, code, hdr, err
+	}
+
+	host := zkShieldHostOf(url)
+	text := string(first)
+	lower := strings.ToLower(text)
+	// 只有明确的人机校验特征才算撞盾。不能用「正文短/为空」或裸 403 当依据：
+	// 不少站点的小接口本来就返回几十字节，而 403 更常见的是防盗链/风控，
+	// 那些由站点自己的镜像/重试逻辑处理；误判会把正常响应替换掉，
+	// 直接表现就是列表变空（实测 av123 就是这样被误伤的）。
+	marker := httpShieldMarker(text) ||
+		(code == 403 && len(text) < 20000 && strings.Contains(lower, "cloudflare"))
+	if !marker {
+		return first, code, hdr, err
+	}
+
+	zkShieldMarkShielded(host)
+	zkShieldReportChallenge(url)
+
+	// 有票时立刻重试一次：票就是刚才自动解盾回填的，带上就能拿到原文。
+	// 没票就原样返回，绝不在这里等、也不拿中转内容顶替——
+	// 站点自己的镜像/重试逻辑要拿到真实响应才正常，
+	// 被替换成「看起来能解析」的中转内容反而会把列表搞空（av123 实测踩过）。
+	if _, ok := zkShieldTicketHeaders(host, headers)["Cookie"]; ok {
+		if b, c, h, e := httpDoDirect(method, url, nil, headers); e == nil &&
+			!httpShieldMarker(string(b)) {
+			return b, c, h, e
+		}
+	}
+
+	// 盾层多通道只作为最后一道兜底，而且只在直连完全没内容时才用；
+	// 有了上面那条，正常站点完全不受影响。
+	if len(strings.TrimSpace(text)) == 0 {
+		if alt := zkShieldFetch(url, headers, "", 20000, false); alt != "" {
+			return []byte(alt), http.StatusOK, hdr, nil
+		}
+	}
+	return first, code, hdr, err
+}
+
+// httpShieldMarker 只认真正的人机校验页面特征。
+//
+// 两个容易踩的坑都在这里挡掉：
+//   - 不能看响应长短就判定（小接口本来就几十字节）；
+//   - 不能只要页面里出现 challenge-platform 就当挑战页——接了 Cloudflare
+//     的正常站点首页照样会引用那段脚本。人机校验页必然是「很小 + 带特征」，
+//     所以先卡长度，正常内容页直接放行。
+func httpShieldMarker(body string) bool {
+	if body == "" || len(body) > 8000 {
+		return false
+	}
+	head := body
+	if len(head) > 6000 {
+		head = head[:6000]
+	}
+	lower := strings.ToLower(head)
+	for _, m := range []string{
+		"just a moment",
+		"cf_chl_opt",
+		"cf-browser-verification",
+		"challenge-platform",
+		"enable javascript and cookies to continue",
+		"attention required",
+		"cf-error-details",
+	} {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// httpDoDirect 是不带盾层兜底的直连实现：只做票池补头、加密配置合并，
+// 和改造前的行为一致（jina 中转失败自动降级直连仍在其中）。
+func httpDoDirect(method, url string, body io.Reader, headers map[string]string) ([]byte, int, http.Header, error) {
+	headers = zkShieldTicketHeaders(zkShieldHostOf(url), crackMergedHeaders(url, headers))
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, 0, nil, err

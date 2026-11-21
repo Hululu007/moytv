@@ -33,6 +33,7 @@ import 'nexhub_scraper/network/network_config_service.dart';
 import 'nexhub_scraper/network/runtime/nexhub_http_overrides.dart';
 import 'package_smoke.dart';
 import 'signature_check.dart';
+import 'shield_auto.dart';
 import 'video_enhancement_assets.dart';
 import 'xp_boot_screen.dart';
 import 'boot_video.dart';
@@ -325,7 +326,13 @@ class _MoyiAppState extends State<MoyiApp> {
                       SingleActivator(LogicalKeyboardKey.goBack):
                           DismissIntent(),
                     },
-                    child: FocusTraversalGroup(child: child!),
+                    child: FocusTraversalGroup(
+                      child: ShieldAutoResolver(
+                        repository: widget.repository,
+                        navigatorKey: widget.navigatorKey,
+                        child: child!,
+                      ),
+                    ),
                   ),
                 ),
               ),

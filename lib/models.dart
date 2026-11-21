@@ -594,13 +594,6 @@ class SourceSite {
       slotId: 'yh_km2',
     ),
     SourceSite(
-      'v_maomi',
-      '🔞猫咪',
-      '欲火移植 · 待真机验',
-      section: sectionVideo,
-      slotId: 'yh_maomi',
-    ),
-    SourceSite(
       'v_xj',
       '🔞香蕉视频',
       '欲火移植 · 全腿实测',
@@ -690,13 +683,6 @@ class SourceSite {
       '欲火移植 · 全链验通',
       section: sectionVideo,
       slotId: 'yh_md',
-    ),
-    SourceSite(
-      'v_haijiao',
-      '🔞海角社区',
-      '欲火移植 · 除搜索封面外全验',
-      section: sectionVideo,
-      slotId: 'yh_haijiao',
     ),
     SourceSite(
       'v_sex8',
