@@ -73,6 +73,12 @@ _CACHE = {}
 _CACHE_ORDER = []
 _CACHE_MAX = 4
 
+# 记录缓存与段缓存分开：列表一页 60 条会把段缓存挤爆，以前两拨共用
+# 4 个槽位，导致点第 5 张卡进详情就查不到记录、标题退化成 hash。
+_REC_CACHE = {}
+_REC_ORDER = []
+_REC_MAX = 4096
+
 # 段缓存与分类条数：同一进程里只算一次。
 _META = {}
 _SH_TOTAL = {}
@@ -112,6 +118,14 @@ def _get_bytes(url, timeout=90):
 
 
 def _cache_put(key, value):
+    if key.startswith("rec:"):
+        _REC_CACHE[key] = value
+        _REC_ORDER.append(key)
+        while len(_REC_ORDER) > _REC_MAX:
+            old = _REC_ORDER.pop(0)
+            if old != key:
+                _REC_CACHE.pop(old, None)
+        return
     _CACHE[key] = value
     _CACHE_ORDER.append(key)
     while len(_CACHE_ORDER) > _CACHE_MAX:
@@ -378,7 +392,10 @@ def _item(rec):
     title = _title_of(rec)
     year = _year_of(rec)
     item = {
-        "vod_id": "nvku:" + h,
+        # vod_id 带上番号：详情页冷启动（进程重启、缓存被挤掉）时还能按
+        # 番号回索引把整条记录捞回来，标题/演员/分类不丢。只带 hash 的话
+        # 冷启动后标题只能显示那串 hash。
+        "vod_id": ("nvku:%s:%s" % (code, h)) if code else ("nvku:" + h),
         "vod_name": title,
         "vod_pic": cover_url(h) if _has_img(rec) else "",
         "vod_remarks": " ".join([x for x in [code, year] if x]).strip(),
@@ -396,6 +413,10 @@ def _item(rec):
 
 def _remember(rec, item):
     if item:
+        # 双键写入：详情页无论拿到 vod_id 还是裸 hash 都能命中。
+        h = _hash_of(rec)
+        if h:
+            _cache_put("rec:nvku:" + h, rec)
         _cache_put("rec:" + item["vod_id"], rec)
 
 
@@ -561,6 +582,24 @@ class Spider(BaseSpider):
             "total": len(items),
         }
 
+    def _record_by_code(self, code, h):
+        """按番号回索引精确取记录：详情页冷启动时的兜底。"""
+        code = (code or "").strip().lower()
+        if not code:
+            return None
+        try:
+            for hit_code, cat, shard_idx, off in index_lookup(code, limit=8):
+                if hit_code != code:
+                    continue
+                rows = shard(_shard_key("c%d" % cat, shard_idx))
+                if 0 <= off < len(rows):
+                    rec = rows[off]
+                    if isinstance(rec, (list, tuple)) and _hash_of(rec) == h:
+                        return rec
+        except Exception:
+            return None
+        return None
+
     def detailContent(self, ids):
         raw = ids[0] if isinstance(ids, (list, tuple)) and ids else ids
         key = str(raw or "").strip()
@@ -568,28 +607,40 @@ class Spider(BaseSpider):
             key = key[5:]
         if not key:
             return {"list": []}
-        rec = _CACHE.get("rec:nvku:" + key)
-        if not rec:
-            h = key
-            if not re.match(r"^[0-9a-fA-F]{16,64}$", h):
-                return {"list": []}
-            return {
-                "list": [
-                    {
-                        "vod_id": "nvku:" + h,
-                        "vod_name": key,
-                        "vod_pic": cover_url(h),
-                        "vod_remarks": "高清",
-                        "vod_content": "<p>nvku</p>",
-                        "vod_play_from": "nvku",
-                        "vod_play_url": "正片$" + play_url(h),
-                    }
-                ]
-            }
-        item = _item(rec)
-        if not item:
+        code, h = "", ""
+        if ":" in key:
+            # 新格式 code:hash（见 _item）：番号在手，冷启动也能回查。
+            code, _, h = key.partition(":")
+            code, h = code.strip(), h.strip()
+        elif re.match(r"^[0-9a-fA-F]{16,64}$", key):
+            h = key.strip()
+        if not h or not re.match(r"^[0-9a-fA-F]{16,64}$", h):
             return {"list": []}
-        return {"list": [item]}
+        rec = _REC_CACHE.get("rec:nvku:" + h)
+        if not rec and code:
+            rec = _REC_CACHE.get("rec:nvku:%s:%s" % (code, h))
+        if not rec and code:
+            rec = self._record_by_code(code, h)
+        if rec:
+            item = _item(rec)
+            if item:
+                _remember(rec, item)
+                return {"list": [item]}
+        # 兜底：整条记录确实捞不回来时，标题也绝不拿那串 hash 顶上
+        # （以前详情页标题就是一串 32 位十六进制）。有番号用番号。
+        return {
+            "list": [
+                {
+                    "vod_id": ("nvku:%s:%s" % (code, h)) if code else ("nvku:" + h),
+                    "vod_name": code or "高清视频",
+                    "vod_pic": cover_url(h),
+                    "vod_remarks": code or "高清",
+                    "vod_content": "<p>%s</p>" % (code or "nvku"),
+                    "vod_play_from": "nvku",
+                    "vod_play_url": "正片$" + play_url(h),
+                }
+            ]
+        }
 
     def searchContent(self, key, quick=False, pg=1):
         try:
@@ -610,6 +661,9 @@ class Spider(BaseSpider):
         raw = str(id or "").strip()
         if raw.startswith("nvku:"):
             raw = raw[5:]
+        if ":" in raw:
+            # vod_id 是 code:hash（见 _item / detailContent），播放只认 hash。
+            raw = raw.rsplit(":", 1)[-1].strip()
         url = raw if raw.startswith("http") else (
             play_url(raw) if re.match(r"^[0-9a-fA-F]{16,64}$", raw) else ""
         )
