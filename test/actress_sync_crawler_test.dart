@@ -139,19 +139,6 @@ class _TrackingRosterSource implements ActressRosterSource {
   }) async => const ActressRosterPage(persons: [], hasMore: false);
 }
 
-/// 假兜底 asset：mjv/whos 两份都回同一份小文档（last_update 可指定）。
-ActressJsonAssetReader _fakeAssetReader(String lastUpdate) {
-  return (String asset) async {
-    final doc = {
-      'list': <Map<String, dynamic>>[],
-      'parse': 0,
-      'jx': 0,
-      'last_update': lastUpdate,
-    };
-    return const JsonEncoder.withIndent('  ').convert(doc);
-  };
-}
-
 void main() {
   group('同步改爬虫：潮流作品走爬虫腿', () {
     late Directory temp;
@@ -509,12 +496,10 @@ void main() {
       addTearDown(sync.dispose);
       final temp = Directory.systemTemp.createTempSync();
       addTearDown(() => temp.deleteSync(recursive: true));
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
-      // 2026-11-20 MYTV 绑定：空库打开会自动生成一次，所以这条
-      // “不自动跑”只在库非空时成立——先预置一人。
+      final fallback = ActressJsonFallback(documentsDir: temp);
+      // 2026-11-20 MYTV 绑定：空库打开也不自动生成（2026-11-22
+      // 用户令最终口径），所以这条“不自动跑”在库非空时成立——
+      // 先预置一人。
       await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
@@ -539,26 +524,31 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        // 没点刷新、没新 json：一次都没跑；横幅是未完成那条。
+        // 没点刷新、没新 json：一次都没跑；设置弹窗（2026-11-21
+        // 起顶栏不再排横幅，同步文案收进这个弹窗）里是未完成那条——
+        // 本测没记检查点，allDone 为假，所以带“部分还没同步完”
+        // 后缀；弹窗里同步区是多行拼成一个 Text（增长行 + 同步行），
+        // 用 textContaining 找这一行。
         expect(sync.runs, 0);
+        await tester.tap(
+          find.byKey(const ValueKey('open-actress-settings')),
+        );
+        await tester.pumpAndSettle();
         expect(
-          find.text('已同步 1 人 · 0 部作品，部分内容还没同步完，点刷新继续补。'),
+          find.textContaining('已同步 1 人 · 0 部作品，部分还没同步完'),
           findsOneWidget,
         );
       });
     });
 
-    testWidgets('库空时自动生成一次', (tester) async {
+    testWidgets('库空时也不自动生成同步', (tester) async {
       final db = MemoryActressDatabase();
       final store = await _makeStore();
       final sync = _CountingSyncService(db: db, sources: const []);
       addTearDown(sync.dispose);
       final temp = Directory.systemTemp.createTempSync();
       addTearDown(() => temp.deleteSync(recursive: true));
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
+      final fallback = ActressJsonFallback(documentsDir: temp);
       await tester.runAsync(() async {
         await tester.pumpWidget(
           MaterialApp(
@@ -572,51 +562,9 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        // 空库：种子灌入（假兜底 0 条）后走一次同步，只跑一次。
-        expect(sync.runs, 1);
-      });
-    });
-
-    testWidgets('检测到新版内置 json 才跑一次同步', (tester) async {
-      final db = MemoryActressDatabase();
-      final store = await _makeStore();
-      final sync = _CountingSyncService(db: db, sources: const []);
-      addTearDown(sync.dispose);
-      final temp = Directory.systemTemp.createTempSync();
-      addTearDown(() => temp.deleteSync(recursive: true));
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
-      // 2026-11-20 MYTV 绑定：空库打开会自动生成抢跑一次，
-      // 先预置一人，让这次跑的只能是新版 json 触发的那一次。
-      await db.upsertRosterPerson(
-        const RosterPerson(
-          source: ActressRosterSourceId.chaoliu,
-          sourceId: 'id-seed',
-          name: '种子演员',
-          sex: 'female',
-        ),
-      );
-      // 上次见到的还是旧版，假装新版到了。
-      await db.saveJsonVersionStamp('2026-11-19T00:00:00');
-      await tester.runAsync(() async {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: ActressListPage(
-              repository: FixtureRepository(),
-              store: store,
-              database: db,
-              syncService: sync,
-              fallback: fallback,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(sync.runs, 1);
-        // 版本戳已记成新版，再打开不会重复跑（ covered by runs == 1，
-        // 且 stamp 已更新）。
-        expect(await db.jsonVersionStamp(), '2026-11-20T12:00:00');
+        // 空库也不自动生成（2026-11-22 用户令最终口径）：不灌
+        // 内置 json 种子、不走互联网同步，同步一次都不跑。
+        expect(sync.runs, 0);
       });
     });
 
@@ -647,10 +595,7 @@ void main() {
       await seed('次新', [('CCC-001', '2026-02-01')]);
       final temp = Directory.systemTemp.createTempSync();
       addTearDown(() => temp.deleteSync(recursive: true));
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
+      final fallback = ActressJsonFallback(documentsDir: temp);
       await tester.runAsync(() async {
         await tester.pumpWidget(
           MaterialApp(

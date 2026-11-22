@@ -546,7 +546,7 @@ class FilmLibraryOpenResult {
   /// 实际打开的库文件路径。
   final String dbPath;
 
-  /// 界面显示的落点（MYTV/db/女优库.db 或内部存储/actress.db）。
+  /// 界面显示的落点（MYTV/db/女优库.db，或未找到外置数据库）。
   final String displayPath;
 
   /// true = 女优库 videos 严格结构（分类/站点/女优筛选全有）；
@@ -607,6 +607,17 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     final dbPath = bind.dbPath;
     _dbPath = dbPath;
     _displayPath = bind.displayPath;
+    if (dbPath.isEmpty) {
+      return FilmLibraryOpenResult(
+        dbPath: dbPath,
+        displayPath: bind.displayPath,
+        strict: false,
+        total: 0,
+        schema: const GenericDbSchema(tables: [], fingerprint: ''),
+        domain: '',
+        error: '未找到外置数据库：MYTV/db/女优库.db',
+      );
+    }
     final file = File(dbPath);
     if (!file.existsSync() || file.lengthSync() == 0) {
       return FilmLibraryOpenResult(

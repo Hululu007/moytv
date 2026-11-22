@@ -1,6 +1,10 @@
 package seku
 
 // ---- MissAV 镜像·免代理 (thisav.my -> missav06.net) — hongguo, v4 ----
+// 2026-11-22 用户令删 MissAV 全部旧站：hongguo 槽注册已摘除，唯一
+// MissAV 站改为内置 py（key missav）。本文件只留镜像取数/解析助手
+// （mirrorFetch / mirrorParseList / missavExtractM3u8 等）与共享
+// 提取器，供以后恢复时复用；测试仍直接调它们，不走注册。
 //
 // Ported from the user's ZakaTV jar class ZakaMirrorAmns (config key
 // ZakaMirror "🔞MissAV镜像┃免代理", ext host https://www.thisav.my).
@@ -461,20 +465,4 @@ func mirrorSearch(slot, kw string) ([]interface{}, error) {
 	return g2WorksToItems(slot, works, "搜索"), nil
 }
 
-func init() {
-	// 2026-11-22：hongguo 槽位改由 g2 的 MissAV 实现接管。
-	// 旧的 mirror* 一套只能解 thisav 老版式的列表，碰到 missav.fans
-	// 这种前端渲染页一张卡都解析不出来（列表 0 条、女优头像没图），
-	// 而 g2 那套本来就能解 fourhoi 封面 + 女优索引，还带整体镜像降级。
-	// 唯一缺的是兜底顺序，所以先在 missavDomains 里补了实测可用的镜像。
-	registerSite("hongguo", &siteImpl{
-		Key: "missav", Name: "🔞MissAV", DefaultCat: "release", HomeURL: missavBase + "/",
-		Categories: missavCategories,
-		Catalog:    missavCatalog,
-		Detail:     missavDetail,
-		Resolve:    missavResolve,
-		Search:     missavSearch,
-		Headers:    missavHeaders,
-		CoverFetch: missavCoverFetch,
-	}, "mirror", "thisav")
-}
+

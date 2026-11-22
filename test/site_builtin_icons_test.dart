@@ -41,7 +41,7 @@ void main() {
       expect(w, h, reason: '${entry.value} 不是方形：$w x $h');
       expect(w, lessThanOrEqualTo(192), reason: '${entry.value} 边长 $w 超过 192');
     }
-    expect(builtinSiteIcons.length, 26);
+    expect(builtinSiteIcons.length, 22);
     expect(builtinSiteIcons.values.toSet().length, 18);
   });
 
@@ -60,9 +60,11 @@ void main() {
     for (final key in builtinSiteIcons.keys) {
       expect(known, contains(key), reason: '图标映射 $key 不在任何注册表里');
     }
-    // 注册表计数不变：图标只配站，不加站。
-    expect(BuiltinPySites.entries.length, 124);
-    expect(zakatvBuiltinSites.length, 138);
+    // 注册表计数：2026-11-22 MissAV 单站内置——
+    // 图标只配站，不加站；BuiltinPySites +1（missav 新站），
+    // zakatvBuiltinSites -1（missav30 jar 已摘）。
+    expect(BuiltinPySites.entries.length, 125);
+    expect(zakatvBuiltinSites.length, 137);
     expect(builtinLegadoSources.length, 52);
   });
 

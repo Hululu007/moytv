@@ -5,9 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/jar_bridge.dart';
 import 'package:moyi/jar_site_config.dart';
-import 'package:moyi/plugin_icons.dart';
 import 'package:moyi/plugin_manager.dart';
 import 'package:moyi/zakatv_builtin.dart';
 
@@ -116,117 +114,43 @@ void main() {
     expect(guardClasses, isEmpty);
   });
 
-  test('missav30 登记：3 条与旧登记一字不动，只换 jar 归属', () {
-    expect(missav30BuiltinSites.length, 3);
-    final byKey = {for (final s in missav30BuiltinSites) s.key: s};
-
-    final missav = byKey['ZakaMissav']!;
-    expect(missav.name, '🔞MissAV官方┃过盾');
-    expect(missav.className, 'com.github.catvod.spider.ZakaMissavAmns');
-    expect(
-      missav.ext,
-      '{"base":"https://tv506.ystv.top","miss":"https://missav.ws286.ystv.top"}',
-    );
-
-    final off = byKey['ZakaMissavOff']!;
-    expect(off.name, '🔞MissAV官方┃原生');
-    expect(off.className, 'com.github.catvod.spider.ZakaMissavOffAmns');
-    expect(
-      off.ext,
-      '{"host":"https://missav.live","relay":"https://tv506.ystv.top","flare":"http://192.168.31.2:8191/v1"}',
-    );
-
-    final missavt = byKey['missavt']!;
-    expect(missavt.name, '🔞MissAVt┃原生');
-    expect(missavt.className, 'com.github.catvod.spider.ZakaMissavtAmns');
-    expect(missavt.ext, '');
-
-    for (final site in missav30BuiltinSites) {
-      expect(
-        JarSiteSpec.siteIdFor(missav30JarId, site.key),
-        'jar:missav30:${site.key}',
-      );
-      expect(site.audioOnly, isFalse);
-    }
-    // Fix 不当站点：登记表里没有它。
-    expect(missav30BuiltinSites.any((s) => s.key.contains('Fix')), isFalse);
-    expect(
-      missav30BuiltinSites.any((s) => s.className.contains('ZakaMissavFix')),
-      isFalse,
-    );
-    // 旧表里 3 条已搬走，ZakaMirror 还在 zakatv 上。
+  test('missav30 登记已摘空：2026-11-22 用户令删 MissAV 全部旧站', () {
+    expect(missav30BuiltinSites, isEmpty);
     expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMissav'), isFalse);
     expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMissavOff'), isFalse);
     expect(zakatvBuiltinSites.any((s) => s.key == 'missavt'), isFalse);
-    expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMirror'), isTrue);
-    // 2026-11-22:Eroshort、腐老二下线后 zakatv 侧从 140 降到 138 条
-    // （其中 1 条纯音频不计入可见站，故 siteCount = 137）。
-    expect(zakatvBuiltinSites.length, 138);
+    expect(zakatvBuiltinSites.any((s) => s.key == 'ZakaMirror'), isFalse);
+    // 2026-11-22：ZakaMirror 摘除后 zakatv 侧从 138 降到 137 条
+    // （其中 1 条纯音频不计入可见站，故 siteCount = 136）。
+    expect(zakatvBuiltinSites.length, 137);
   });
 
-  test('missav30 有独立插件条目，在 one 条目之后', () {
+  test('missav30 插件条目已摘除', () {
     final plugins = PluginManager.builtinPlugins();
-    final missav30 = plugins.singleWhere(
-      (p) => p.id == PluginManager.missav30JarPluginId,
-    );
-    expect(missav30.id, 'jar:missav30');
-    expect(missav30.name, 'MissAV v30');
-    expect(missav30.kind, PluginIconKind.jar);
-    expect(missav30.md5, missav30JarMd5);
-    expect(missav30.siteIds, [
-      'jar:missav30:ZakaMissav',
-      'jar:missav30:ZakaMissavOff',
-      'jar:missav30:missavt',
-    ]);
-    expect(missav30.siteCount, 3);
-    expect(missav30.detail, contains('3'));
-    expect(
-      plugins.indexOf(missav30),
-      greaterThan(
-        plugins.indexWhere((p) => p.id == PluginManager.oneJarPluginId),
-      ),
-    );
-    // zakatv 插件自动少 3 条：138 条配置、1 条纯音频，137 个可见站。
+    expect(plugins.any((p) => p.id == 'jar:missav30'), isFalse);
+    // zakatv 插件：137 条配置、1 条纯音频，136 个可见站。
     final zakatv = plugins.singleWhere(
       (p) => p.id == PluginManager.jarPluginId,
     );
-    expect(zakatv.siteCount, 137);
-    expect(zakatv.detail, contains('138'));
+    expect(zakatv.siteCount, 136);
+    expect(zakatv.detail, contains('137'));
   });
 
-  test('JSON 镜像：3 条 api 映到新 jar 的 3 个蜘蛛类，条数 145 不变', () {
+  test('JSON 镜像：4 条 MissAV 配置已摘除，条数 141', () {
     final text = File('assets/jar_site_configs.json').readAsStringSync();
     final configs = parseJarSiteConfigs(text);
-    expect(configs.length, 145);
-    final cases = {
-      'com.github.catvod.spider.ZakaMissavAmns': (
-        key: 'ZakaMissav',
-        name: '🔞MissAV官方┃过盾',
-        api: 'csp_ZakaMissavAmns',
-        ext:
-            '{"base":"https://tv506.ystv.top","miss":"https://missav.ws286.ystv.top"}',
-      ),
-      'com.github.catvod.spider.ZakaMissavOffAmns': (
-        key: 'ZakaMissavOff',
-        name: '🔞MissAV官方┃原生',
-        api: 'csp_ZakaMissavOffAmns',
-        ext:
-            '{"host":"https://missav.live","relay":"https://tv506.ystv.top","flare":"http://192.168.31.2:8191/v1"}',
-      ),
-      'com.github.catvod.spider.ZakaMissavtAmns': (
-        key: 'missavt',
-        name: '🔞MissAVt┃原生',
-        api: 'csp_ZakaMissavtAmns',
-        ext: '',
-      ),
-    };
-    for (final entry in cases.entries) {
-      final matched = matchJarSiteConfig(entry.key, configs);
-      expect(matched, isNotNull, reason: entry.key);
-      expect(matched!.key, entry.value.key);
-      expect(matched.name, entry.value.name);
-      expect(matched.api, entry.value.api);
-      expect(matched.ext, entry.value.ext);
+    expect(configs.length, 141);
+    for (final className in [
+      'com.github.catvod.spider.ZakaMissavAmns',
+      'com.github.catvod.spider.ZakaMissavOffAmns',
+      'com.github.catvod.spider.ZakaMissavtAmns',
+      'com.github.catvod.spider.ZakaMirrorAmns',
+    ]) {
+      expect(
+        matchJarSiteConfig(className, configs),
+        isNull,
+        reason: className,
+      );
     }
   });
 

@@ -33,18 +33,6 @@ Future<LocalStore> _makeStore() async {
   return store;
 }
 
-ActressJsonAssetReader _fakeAssetReader(String lastUpdate) {
-  return (String asset) async {
-    final doc = {
-      'list': <Map<String, dynamic>>[],
-      'parse': 0,
-      'jx': 0,
-      'last_update': lastUpdate,
-    };
-    return const JsonEncoder.withIndent('  ').convert(doc);
-  };
-}
-
 class _CountingSyncService extends ActressSyncService {
   _CountingSyncService({required super.db, required super.sources})
     : super(fetch: _unusedFetch);
@@ -83,41 +71,65 @@ void main() {
       ext = Directory('${temp.path}/ext')..createSync();
     });
 
-    ActressMytvBind bind({
-      Future<({int persons, int works})> Function(String)? counter,
-    }) {
+    ActressMytvBind bind() {
       return ActressMytvBind(
         externalRoot: () async => ext,
         hasAllFilesAccess: () async => true,
         documentsDir: () async => docs,
-        countDbRows: counter ?? ((_) async => (persons: 0, works: 0)),
       );
     }
 
-    test('成功建目录：库路径是 MYTV/db/女优库应用.db，显示路径带 MYTV', () async {
+    test('有外置库：库路径是 MYTV/db/女优库.db，显示路径带 MYTV', () async {
+      File('${ext.path}/MYTV/db/女优库.db')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('video-db-bytes');
       final result = await bind().ensureBound();
       expect(result.bound, isTrue);
-      expect(result.dbPath, '${ext.path}/MYTV/db/女优库应用.db');
-      expect(result.displayPath, 'MYTV/db/女优库应用.db');
+      expect(result.hasVideoDb, isTrue);
+      expect(result.dbPath, '${ext.path}/MYTV/db/女优库.db');
+      expect(result.displayPath, 'MYTV/db/女优库.db');
       expect(Directory('${ext.path}/MYTV/db').existsSync(), isTrue);
       expect(Directory('${ext.path}/MYTV/m3u').existsSync(), isTrue);
       expect(result.mergedJsonExportPath, '${ext.path}/MYTV/mjv011.json');
-      expect(result.migrated, isFalse);
+      expect(result.note, isNull);
     });
 
-    test('外部存储不可用：降级回 documents，不抛错', () async {
+    test('没有外置库：dbPath 为空、显示未找到外置数据库、带放库提示', () async {
+      final result = await bind().ensureBound();
+      expect(result.bound, isTrue);
+      expect(result.hasVideoDb, isFalse);
+      expect(result.dbPath, isEmpty);
+      expect(result.displayPath, '未找到外置数据库');
+      expect(result.note, contains('未找到外置数据库'));
+      expect(result.note, contains('MYTV/db/'));
+      expect(Directory('${ext.path}/MYTV/db').existsSync(), isTrue);
+      expect(Directory('${ext.path}/MYTV/m3u').existsSync(), isTrue);
+    });
+
+    test('外置库是空文件：按没有外置库处理', () async {
+      File('${ext.path}/MYTV/db/女优库.db')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('');
+      final result = await bind().ensureBound();
+      expect(result.hasVideoDb, isFalse);
+      expect(result.dbPath, isEmpty);
+      expect(result.note, contains('未找到外置数据库'));
+    });
+
+    test('外部存储不可用：未绑定、dbPath 为空，不抛错', () async {
       final noExt = ActressMytvBind(
         externalRoot: () async => null,
         documentsDir: () async => docs,
       );
       final result = await noExt.ensureBound();
       expect(result.bound, isFalse);
-      expect(result.dbPath, '${docs.path}/actress.db');
-      expect(result.displayPath, '内部存储/actress.db');
+      expect(result.hasVideoDb, isFalse);
+      expect(result.dbPath, isEmpty);
+      expect(result.displayPath, '未找到外置数据库');
       expect(result.note, contains('外部存储不可用'));
     });
 
-    test('写不进去且没权限：needsPermission，库仍可用', () async {
+    test('写不进去且没权限：needsPermission，dbPath 为空', () async {
       // 外部根是一份普通文件：建 MYTV/db 必然抛错，走权限分支。
       final fileRoot = File('${temp.path}/not-a-dir')
         ..writeAsStringSync('x');
@@ -129,57 +141,17 @@ void main() {
       final result = await noPerm.ensureBound();
       expect(result.bound, isFalse);
       expect(result.needsPermission, isTrue);
-      expect(result.dbPath, '${docs.path}/actress.db');
+      expect(result.dbPath, isEmpty);
     });
 
-    test('迁移成功：行数一致才切过去，老文件留着当备份', () async {
-      final legacyDb = File('${docs.path}/actress.db')
-        ..writeAsStringSync('legacy-db-bytes');
+    test('老 json 影子文件拷进 MYTV/db：只补没有的', () async {
       final legacyJsonDir = Directory('${docs.path}/actress_json')
         ..createSync();
       File('${legacyJsonDir.path}/mjv011.json')
           .writeAsStringSync('{"list": []}');
-      final result = await bind(
-        counter: (path) async {
-          // 旧库与目标副本都报 3 人 5 部，核对一致。
-          return (persons: 3, works: 5);
-        },
-      ).ensureBound();
-      expect(result.bound, isTrue);
-      expect(result.migrated, isTrue);
-      expect(result.migratedPersons, 3);
-      expect(result.migratedWorks, 5);
-      // 复制不是剪切：老文件还在，目标副本也建好了。
-      expect(legacyDb.existsSync(), isTrue);
-      expect(File(result.dbPath).existsSync(), isTrue);
-      // 老 json 影子文件拷进 MYTV/db。
-      expect(File('${ext.path}/MYTV/db/mjv011.json').existsSync(), isTrue);
-    });
-
-    test('迁移行数不一致：删目标副本、留旧库继续用', () async {
-      File('${docs.path}/actress.db').writeAsStringSync('legacy-db-bytes');
-      final result = await bind(
-        counter: (path) async {
-          if (path.contains('女优库应用.db')) return (persons: 0, works: 0);
-          return (persons: 3, works: 5);
-        },
-      ).ensureBound();
-      expect(result.bound, isFalse);
-      expect(result.note, contains('行数不一致'));
-      expect(result.dbPath, '${docs.path}/actress.db');
-      expect(File('${ext.path}/MYTV/db/女优库应用.db').existsSync(), isFalse);
-      expect(File('${docs.path}/actress.db').existsSync(), isTrue);
-    });
-
-    test('目标库已存在非空：不迁移', () async {
-      File('${ext.path}/MYTV/db/女优库应用.db')
-        ..createSync(recursive: true)
-        ..writeAsStringSync('existing-db');
-      File('${docs.path}/actress.db').writeAsStringSync('legacy-db-bytes');
       final result = await bind().ensureBound();
       expect(result.bound, isTrue);
-      expect(result.migrated, isFalse);
-      expect(File(result.dbPath).readAsStringSync(), 'existing-db');
+      expect(File('${ext.path}/MYTV/db/mjv011.json').existsSync(), isTrue);
     });
   });
 
@@ -286,10 +258,7 @@ void main() {
           'last_update': '2026-11-20T00:00:00',
         }),
       );
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader(''),
-        localJsonDir: newDir,
-      );
+      final fallback = ActressJsonFallback(localJsonDir: newDir);
       await fallback.load();
       expect(fallback.loaded, isTrue);
       final entries = fallback.entriesForActress('测试演员');
@@ -341,16 +310,13 @@ void main() {
       db = MemoryActressDatabase();
     });
 
-    testWidgets('空库自动生成一次，点“重新加载数据库”提示没有变化', (
+    testWidgets('空库不再自动生成，绑定行如实显示未找到外置数据库', (
       tester,
     ) async {
       final store = await _makeStore();
       final sync = _CountingSyncService(db: db, sources: const []);
       addTearDown(sync.dispose);
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
+      final fallback = ActressJsonFallback(documentsDir: temp);
       // 2026-11-20：列表页 bootstrap 里 await 平台通道拿 MYTV
       // 绑定（真机上毫秒级）；FakeAsync 下平台通道等不到返回，
       // 按树里老办法包在 runAsync 里跑（见 AGENTS.md）。
@@ -367,10 +333,11 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        // 空库自动生成：种子灌入 0 条后走同步，同步只跑一次。
-        expect(sync.runs, 1);
-        // 绑定行在（测试环境没外部存储，降级回内部存储）。
-        expect(find.text('数据库：内部存储/actress.db'), findsOneWidget);
+        // 空库不再自动生成（2026-11-22 用户令最终口径）：不灌
+        // 内置 json 种子、不走互联网同步，同步一次都不跑。
+        expect(sync.runs, 0);
+        // 绑定行在（测试环境没外部存储，未绑定、未找到外置数据库）。
+        expect(find.text('数据库：未找到外置数据库'), findsOneWidget);
         // 手动重载入口常驻，点按后内存库没有变化。
         expect(find.text('重新加载数据库'), findsOneWidget);
         await tester.tap(find.text('重新加载数据库'));
@@ -401,10 +368,7 @@ void main() {
           'videos': ['id', 'title', 'url'],
         }),
       );
-      final fallback = ActressJsonFallback(
-        assetReader: _fakeAssetReader('2026-11-20T12:00:00'),
-        documentsDir: temp,
-      );
+      final fallback = ActressJsonFallback(documentsDir: temp);
       await tester.runAsync(() async {
         await tester.pumpWidget(
           MaterialApp(

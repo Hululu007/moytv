@@ -39,7 +39,7 @@ var slotSites = map[string]*siteImpl{}
 // slotOrder is the presentation order used when the core reports all
 // slots (status lists, cross search defaults).
 var slotOrder = []string{
-	"hongguo", "ikanbot", "a123", "hanxiaoquan", "guipian",
+	"ikanbot", "a123", "hanxiaoquan", "guipian",
 	"huangdou", "huangju", "yeguo", "dsd", "huangguo-video",
 	"huangguoai", "cloudfront", "yaguo", "maoguo", "fanguo",
 	"guanguo", "heguo", "xingguo", "huaguo", "niuguo",

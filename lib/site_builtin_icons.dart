@@ -14,6 +14,7 @@ const Map<String, String> builtinSiteIcons = {
   // py 站：模块 key + 显示名一致。
   'aijav': 'assets/site_icons/ic_app_aijav.png',
   'insav': 'assets/site_icons/ic_app_insav.png',
+  'missav': 'assets/site_icons/ic_app_missav.png',
   'sp91': 'assets/site_icons/ic_app_91sp.png',
   'mmsq': 'assets/site_icons/ic_app_mmsq.png',
   // 阅读站：模块 key + 显示名一致。
@@ -23,7 +24,6 @@ const Map<String, String> builtinSiteIcons = {
   'legado_7621_0': 'assets/site_icons/ic_app_mw.png',
   'legado_8039_0': 'assets/site_icons/ic_app_jmtt.png',
   // Go 核站：模块 key + 显示名一致，或显示名 + 主页主机一致。
-  'v_missav': 'assets/site_icons/ic_app_missav.png',
   'v_hsck': 'assets/site_icons/ic_app_hsck.png',
   'v_javdb': 'assets/site_icons/ic_app_javdb.png',
   'v_sihu': 'assets/site_icons/ic_app_4hu.png',
@@ -38,10 +38,6 @@ const Map<String, String> builtinSiteIcons = {
   'ZakaQysq': 'assets/site_icons/ic_app_qysq.png',
   'zakasihu': 'assets/site_icons/ic_app_4hu.png',
   'zakasihucdn': 'assets/site_icons/ic_app_4hu.png',
-  'ZakaMissav': 'assets/site_icons/ic_app_missav.png',
-  'ZakaMissavOff': 'assets/site_icons/ic_app_missav.png',
-  'ZakaMirror': 'assets/site_icons/ic_app_missav.png',
-  'missavt': 'assets/site_icons/ic_app_missav.png',
 };
 
 /// 按站 id 取内置站标资源路径；id 带 `jar:` 这类前缀时取最后一段。

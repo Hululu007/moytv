@@ -2,6 +2,7 @@
 // 一测一张：调过 toImage 的测试在收尾时会挂起（旧预览测试同样如此，
 // PNG 已落地），跑单测、超时杀掉只取 PNG；不要把三张放进同一个
 // 测试体，也不要批量跑。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -13,6 +14,7 @@ import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
+import 'package:moyi/actress/actress_mytv_bind.dart';
 import 'package:moyi/actress/actress_site_crawl.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
@@ -76,7 +78,7 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// 列表页种子数据：A 八木奈奈（本地有 MIDA-619，随包 mjv JSON 里有
+/// 列表页种子数据：A 八木奈奈（本地有 MIDA-619，本地 mjv011.json 里有
 /// 这部）、B 测试二号（JSON 里没有）；名册检查点全记完成，不自动跑同步。
 Future<
     ({
@@ -118,14 +120,40 @@ Future<
       );
     }
   }
-  // 同步读（readAsStringSync）是双保险：种子在 setUp 里跑（FakeAsync
-  // 区之外）本来就不卡；万一以后有人把 load 移回测试体内，同步读
-  // 不走事件循环，也不会卡在文件读取上（实测教训：测试体内第一个
-  // pump 之前 await 异步文件读取时，mjv011.json 的 fd 一直开着、
-  // 测试进程在 epoll 里空等）。
-  final fallback = ActressJsonFallback(
-    assetReader: (asset) async => File(asset).readAsStringSync(),
+  // 兜底只读本地文件（2026-11-22 用户令最终口径：不内置 JSON 种子）：
+  // 本地 mjv011.json 里给八木奈奈放一部 MIDA-619（2026-11-22 前
+  // 这部在随包 mjv JSON 里，随包已删，改写本地文件）——mjv 筛选
+  // 预览就靠它留人；'全部'视图不受影响。
+  final temp = Directory.systemTemp.createTempSync();
+  final jsonDir = Directory('${temp.path}/actress_json')
+    ..createSync(recursive: true);
+  File('${jsonDir.path}/mjv011.json').writeAsStringSync(
+    const JsonEncoder.withIndent('  ').convert({
+      'list': [
+        {
+          'vod_id': 'mjv-mida-619',
+          'vod_name': 'MIDA-619 测试作品',
+          'vod_pic': '',
+          'vod_actor': '八木奈奈',
+          'vod_director': '',
+          'vod_remarks': '高清',
+          'vod_pubdate': '2026-01-01',
+          'vod_area': '日本',
+          'vod_year': '2026',
+          'vod_content': '',
+          'vod_play_from': 'mjv011',
+          'vod_play_url': '正片\$https://example.test/mida619.m3u8',
+          'type_name': '有码',
+          'vod_code': 'MIDA-619',
+          'vod_actress_pic': '',
+        },
+      ],
+      'parse': 0,
+      'jx': 0,
+      'last_update': '2026-11-20T00:00:00',
+    }),
   );
+  final fallback = ActressJsonFallback(localJsonDir: jsonDir);
   await fallback.load();
   final crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
   return (store: store, db: db, fallback: fallback, crawl: crawl);
@@ -219,6 +247,11 @@ void main() {
     _previewDb = seed.db;
     _previewFallback = seed.fallback;
     _previewCrawl = seed.crawl;
+    // MYTV 绑定预解析（树里既定做法，见 actress_count_fix_test.dart）：
+    // 列表页 bootstrap 开头 await ensureBound()，它里面有异步文件
+    // IO（探针写/删），在 widget 测试 FakeAsync 下挂起；setUp 在
+    // 真实异步区，先解析完缓存起来，页内再调直接回缓存值。
+    await ActressMytvBind.instance.ensureBound();
   });
 
   setUpAll(() async {

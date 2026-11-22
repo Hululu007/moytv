@@ -17,7 +17,7 @@ import 'actress_models.dart';
 /// 一致）；收集逻辑见 [collectDbMirrorTargets]。
 ///
 /// 口径调和（写进 REPORT，用户另有说法以用户为准）：当前库文件
-/// 本身（MYTV/db/女优库应用.db）走替换语义——读它只是显示，不写；
+/// 本身（MYTV/db/女优库.db）走替换语义——读它只是显示，不写；
 /// 追加只针对 MYTV/db 里除当前库文件之外的其他 .db 文件（通用
 /// 读库令已确认会有）。所以 [ActressDbMirror.mirrorFile] 遇到
 /// 与当前库同一文件时直接跳过，只读不写。
@@ -362,6 +362,8 @@ Future<ActressDbMirrorResult> mirrorWorks({
 /// 去掉当前库文件 [libraryPath]，按归一化路径去重（同一文件
 /// 在两个目录里出现也只收一次）。单个目录不存在/扫失败时跳过
 /// 它，不影响其他目录，不抛错。
+/// 2026-11-22 用户令最终口径：已删除的应用库（女优库应用.db）
+/// 与老库（actress.db）永不做镜像源（加载链里也不再回落到它们）。
 List<File> collectDbMirrorTargets({
   required Directory dbDir,
   required String libraryPath,
@@ -373,6 +375,8 @@ List<File> collectDbMirrorTargets({
     final normalized = path.normalize(file.path);
     if (!file.path.toLowerCase().endsWith('.db')) return;
     if (path.equals(normalized, path.normalize(libraryPath))) return;
+    final baseName = path.basename(file.path);
+    if (baseName == '女优库应用.db' || baseName == 'actress.db') return;
     if (!seen.add(normalized)) return;
     targets.add(file);
   }

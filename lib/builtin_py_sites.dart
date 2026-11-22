@@ -609,6 +609,22 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  // MissAV 唯一站（2026-11-22 单站内置，v5 重写版）：
+  // 旧 Go 槽 v_missav / hongguo 槽、jar missav30、旧 py v4 已全部摘除，
+  // 全树只剩这一个 MissAV 登记。主域 missav123.nl，34 分类已逐类验过。
+  static const missavSiteId = 'missav';
+  static const missavAssetPath = 'assets/py_spiders/missav.py';
+  static const missavFileId = 'builtin_missav';
+
+  static const missavSite = SourceSite(
+    missavSiteId,
+    '🔞MissAV',
+    '内置 py · missav',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+  );
+
   static const chaoliuSiteId = 'chaoliu';
   static const chaoliuAssetPath = 'assets/py_spiders/chaoliu.py';
   static const chaoliuFileId = 'builtin_chaoliu';
@@ -1915,6 +1931,12 @@ class BuiltinPySites {
       site: memojavSite,
       assetPath: memojavAssetPath,
       fileId: memojavFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: missavSiteId,
+      site: missavSite,
+      assetPath: missavAssetPath,
+      fileId: missavFileId,
     ),
     BuiltinPyEntry(
       siteId: chaoliuSiteId,

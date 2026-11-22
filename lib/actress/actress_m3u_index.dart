@@ -12,7 +12,9 @@ import 'actress_models.dart';
 /// 存储形态（不直接随包带 raw 100MB）：按 md5(女优名) % 32 分 32 个
 /// shard，每 shard `{"a": {女优名: [[hash, code, title], ...]}}` 再 gzip；
 /// 另附 manifest（女优→分片、归一化番号→分片、总数）。gzip 合计
-/// 约 24MB（24,213,597 字节），随包进 assets/actress_json/whos_m3u/。
+/// 约 24MB（24,213,597 字节）。2026-11-21 内置分片已从包里删掉
+///（库里按番号基本都能取到，内置那份纯属白占安装包），下面
+/// manifest/分片读不到时直接返回空表，不再抛异常。
 ///
 /// 查询只解需要的分片：按女优名查只解该女优所在分片（一般 1 个），
 /// 按番号查只解 manifest 指出的分片；分片缓存最多留 4 个，超了
@@ -25,9 +27,10 @@ import 'actress_models.dart';
 ///
 /// 2026-11-20 MYTV 绑定：m3u 兜底先读用户自己放进 MYTV/m3u 的
 /// m3u 文件（女优合集1.m3u～9.m3u 这种），读不到再回退上面这套
-/// 包里内置分片。用户用文件管理器往 MYTV/m3u 里丢新 m3u 就能
-/// 用，不用重编；用户文件里的行与内置分片里的同一播放地址，
-/// 调用方按播放地址去重（json 行优先、m3u 行只补缺）。
+/// 内置分片——内置分片 2026-11-21 已从包里删掉，读不到时返回空表，
+/// 只走库/用户自己的 MYTV/m3u。用户用文件管理器往 MYTV/m3u 里
+/// 丢新 m3u 就能用，不用重编；用户文件里的行与内置分片里的同一
+/// 播放地址，调用方按播放地址去重（json 行优先、m3u 行只补缺）。
 
 /// 读 asset 字节用：默认走 rootBundle；测试可注入假字节。
 typedef WhosM3uBytesReader = Future<Uint8List> Function(String assetPath);
@@ -43,8 +46,9 @@ class WhosM3uIndex {
       _userM3uDir = userM3uDir;
 
   /// 2026-11-20 MYTV 绑定：绑定解析出来后调，用户 m3u 目录改走
-  /// MYTV/m3u；传 null 回退到只读包里内置分片。目录换了就清掉
-  /// 用户 m3u 缓存（下次查按文件指纹重读）。
+  /// MYTV/m3u；传 null 时不读用户目录，只剩（已删的）内置分片，
+  /// 读不到返回空表。目录换了就清掉用户 m3u 缓存（下次查按文件
+  /// 指纹重读）。
   void bindUserM3uDir(Directory? dir) {
     if (dir?.path == _userM3uDir?.path) return;
     _userM3uDir = dir;

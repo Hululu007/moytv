@@ -415,12 +415,6 @@
       "ext": ""
     },
     {
-      "key": "ZakaMissav",
-      "name": "🔞MissAV官方┃过盾",
-      "api": "csp_ZakaMissavAmns",
-      "ext": "{\"base\":\"https://tv506.ystv.top\",\"miss\":\"https://missav.ws286.ystv.top\"}"
-    },
-    {
       "key": "ZakaJavRank",
       "name": "🏆JAV排行榜┃1769部战力榜",
       "api": "csp_ZakaJavRankAmns",
@@ -479,18 +473,6 @@
       "name": "🖼八色套图┃1.4万套",
       "api": "csp_ZakaSe8Amns",
       "ext": "{\"host\":\"https://8se.me\",\"cdn\":\"https://img.xchina.io\",\"brand\":\"🖼 八色套图\",\"relays\":\"https://tv506.ystv.top\"}"
-    },
-    {
-      "key": "ZakaMissavOff",
-      "name": "🔞MissAV官方┃原生",
-      "api": "csp_ZakaMissavOffAmns",
-      "ext": "{\"host\":\"https://missav.live\",\"relay\":\"https://tv506.ystv.top\",\"flare\":\"http://192.168.31.2:8191/v1\"}"
-    },
-    {
-      "key": "ZakaMirror",
-      "name": "🔞MissAV镜像┃免代理",
-      "api": "csp_ZakaMirrorAmns",
-      "ext": "{\"host\":\"https://www.thisav.my\"}"
     },
     {
       "key": "ZakaAdult",
@@ -802,12 +784,6 @@
       "key": "Zaka52av",
       "name": "🔞52AV┃華語論壇",
       "api": "csp_Zaka52avAmns",
-      "ext": ""
-    },
-    {
-      "key": "missavt",
-      "name": "🔞MissAVt┃原生",
-      "api": "csp_ZakaMissavtAmns",
       "ext": ""
     },
     {

@@ -197,16 +197,28 @@ Future<(_FakePlayback, List<LivePlaybackController>)> _pumpLive(
   return (playback, builtWith);
 }
 
-/// 当前挂载的播放画面数：内嵌替身 + 全屏替身，同一时刻只能有 1 个。
+/// 当前挂载的播放画面数：内嵌替身 + 全屏替身。
+/// 全屏期间两个同时挂载（同一纹理，两处同时显示），退出后只剩内嵌。
+/// 注意：全屏路由是不透明的，内嵌画面会被它盖住而进入 offstage，
+/// 默认查找器会跳过 offstage 子树，所以内嵌一律用 skipOffstage: false
+/// 找——找不到不代表被卸载（卸载与被盖住是两回事，本测试要断的就是
+/// “没被卸载”）。
+/// 画面层绝不卸载重挂（v56 四处黑屏修的是同一条：全屏时把画面层
+/// 从旧父级卸掉、挂到新父级，表面重建后解码器照旧出声、画面全黑；
+/// 直播全屏以前进全屏先卸内嵌、退全屏等动画结束才复位，中间纹理
+/// 无人持有，手机上直接黑屏）。内嵌全程留在树里，全屏页另挂一个
+/// 同 controller 的画面，进出全屏纹理始终有人持有。
+Finder _inlineFinder() => find.byKey(_inlineKey, skipOffstage: false);
+
 int _mountedVideoCount(WidgetTester tester) {
   var count = 0;
-  if (find.byKey(_inlineKey).evaluate().isNotEmpty) count++;
+  if (_inlineFinder().evaluate().isNotEmpty) count++;
   if (find.byKey(_fullscreenKey).evaluate().isNotEmpty) count++;
   return count;
 }
 
 Future<void> _enterFullscreen(WidgetTester tester) async {
-  expect(find.byKey(_inlineKey), findsOneWidget);
+  expect(_inlineFinder(), findsOneWidget);
   await tester.tap(find.byTooltip('全屏与旋转'));
   for (
     var i = 0;
@@ -219,7 +231,10 @@ Future<void> _enterFullscreen(WidgetTester tester) async {
   // 路由出现不等于过渡完成：再泵 300ms（过渡 260ms）等滑入动画结束，
   // 否则随后的手势面点按可能落在过渡中的错位上。
   await tester.pump(const Duration(milliseconds: 300));
-  expect(_mountedVideoCount(tester), 1);
+  // 全屏期间内嵌与全屏画面同时挂载（同一纹理），不卸载内嵌。
+  expect(_inlineFinder(), findsOneWidget);
+  expect(find.byKey(_fullscreenKey), findsOneWidget);
+  expect(_mountedVideoCount(tester), 2);
   return;
 }
 
@@ -241,18 +256,22 @@ Future<void> _revealControls(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('退出过渡期间同一时刻只能挂一个播放画面', (tester) async {
+  testWidgets('退出过渡期间内嵌画面始终挂载：全屏卸掉后只剩内嵌', (tester) async {
     final (playback, builtWith) = await _pumpLive(tester);
     await _enterFullscreen(tester);
 
     await tester.binding.handlePopRoute();
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 50));
-      expect(_mountedVideoCount(tester), 1);
+      // 内嵌全程不卸：退场过渡期间全屏画面还在（计数 2）或已卸（计数 1），
+      // 内嵌始终在，画面层不断档。
+      expect(_inlineFinder(), findsOneWidget);
+      expect(_mountedVideoCount(tester), greaterThanOrEqualTo(1));
+      expect(_mountedVideoCount(tester), lessThanOrEqualTo(2));
     }
     await _settleToList(tester);
     expect(find.byType(LivePlayerScreen), findsNothing);
-    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(_inlineFinder(), findsOneWidget);
     expect(_mountedVideoCount(tester), 1);
     expect(builtWith, isNotEmpty);
     expect(builtWith.every((item) => identical(item, playback)), isTrue);
@@ -269,7 +288,7 @@ void main() {
     await _settleToList(tester);
     expect(find.byType(LivePlayerScreen), findsNothing);
     expect(find.byType(LiveScreen), findsOneWidget);
-    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(_inlineFinder(), findsOneWidget);
     expect(_mountedVideoCount(tester), 1);
     expect(playback.channel?.name, '频道一');
     expect(tester.takeException(), isNull);
@@ -287,7 +306,7 @@ void main() {
     await _settleToList(tester);
     expect(find.byType(LivePlayerScreen), findsNothing);
     expect(find.byType(LiveScreen), findsOneWidget);
-    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(_inlineFinder(), findsOneWidget);
     expect(_mountedVideoCount(tester), 1);
     expect(tester.takeException(), isNull);
   });
@@ -314,7 +333,7 @@ void main() {
     }
     expect(find.byType(LivePlayerScreen), findsNothing);
     expect(find.byType(LiveScreen), findsOneWidget);
-    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(_inlineFinder(), findsOneWidget);
     expect(_mountedVideoCount(tester), 1);
     expect(playback.channel?.name, '频道一');
     expect(tester.takeException(), isNull);
@@ -362,7 +381,7 @@ void main() {
     await _settleToList(tester);
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.byType(LivePlayerScreen), findsNothing);
-    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(_inlineFinder(), findsOneWidget);
     expect(_mountedVideoCount(tester), 1);
     expect(orientationCalls, isNotEmpty);
     expect(orientationCalls.last, hasLength(4));

@@ -1,5 +1,6 @@
 // 女优库 whos m3u 分片索引（2026-11-19）：9 个女优合集 m3u（310,028 条）
-// 转 32 分片 gzip 索引 + manifest，随包进 assets/actress_json/whos_m3u/。
+// 转 32 分片 gzip 索引 + manifest。2026-11-21 内置分片已从包里删掉
+//（见文件末尾注释），下面只测假分片注入的读取逻辑。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -58,7 +59,7 @@ WhosM3uIndex _fakeIndex(Map<String, int> calls) {
 }
 
 void main() {
-  // 真实索引测试走 rootBundle 读随包 asset，纯 test() 需先初始化绑定。
+  // 下面用例走注入的假分片字节，不读真实资产；纯 test() 仍先初始化绑定。
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('假索引总数与按女优查：行转条目、播图地址由 hash 拼、直链可播', () async {

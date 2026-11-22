@@ -14,7 +14,6 @@ import (
 
 // sekuSlotPublicIDs 与 Dart 侧 models.dart 的 v_ 站点 id 逐字对齐。
 var sekuSlotPublicIDs = map[string]string{
-	"hongguo":        "v_missav",
 	"ikanbot":        "v_xvideos",
 	"a123":           "v_hsck",
 	"hanxiaoquan":    "v_javmap",

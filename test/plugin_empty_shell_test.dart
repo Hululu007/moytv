@@ -19,8 +19,9 @@ void main() {
     if (emptyShellBuild) {
       expect(plugins, isEmpty);
     } else {
-      // 3 个 jar 插件（zakatv + 一点播独立 jar + MissAV v30 独立 jar）+ 121 个 py 插件。
-      expect(plugins.length, 124);
+      // 2 个 jar 插件（zakatv + 一点播独立 jar；MissAV v30 独立 jar 已于
+      // 2026-11-22 摘除）+ 124 个 py 插件（含新内置 MissAV）。
+      expect(plugins.length, 126);
       expect(plugins.first.id, PluginManager.jarPluginId);
     }
   });

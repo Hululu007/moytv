@@ -8,6 +8,26 @@ import 'actress_generic_db.dart';
 import 'actress_models.dart';
 import 'actress_mytv_bind.dart';
 
+/// 没有外置数据库：女优库只读 MYTV/db/女优库.db（2026-11-22 用户令
+/// 最终口径），绑定不到它、或文件不存在/为空时开库抛这个错；
+/// 调用方（列表页/详情页）接住它显示空态提示，不回落任何内置库、
+/// 不建新库、不悄悄造数据。
+class ActressNoExternalDbException implements Exception {
+  const ActressNoExternalDbException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// 重读失败文案：没找到外置库时直说，没有“仍用旧库”（没有旧库可留）；
+/// 其它失败（新库打不开）才说留旧库继续用。
+String actressReloadErrorText(String error) =>
+    error.startsWith('未找到外置数据库')
+        ? error
+        : '数据库重读失败：$error（仍用旧库）';
+
 /// 同步断点：每源每阶段一条，记录下次接着跑的位置。
 class ActressSyncCheckpoint {
   const ActressSyncCheckpoint({
@@ -517,10 +537,10 @@ class SqfliteActressDatabase implements ActressDatabase {
 
   Database? _db;
 
-  /// 视频库模式（2026-11-21 用户令：女优库加载 MYTV/db/女优库.db，
-  /// 不是女优库应用.db）：当前打开的是用户视频库时为 true，读走
-  /// 视频库 SQL、写只走 videos / video_category 合并。由 _openDbAt
-  /// 按实际打开的文件定，close() 时清掉。
+  /// 视频库模式（2026-11-21 用户令：女优库加载 MYTV/db/女优库.db）：
+  /// 当前打开的是用户视频库时为 true，读走视频库 SQL、写只走
+  /// videos / video_category 合并。由 _openDbAt 按实际打开的
+  /// 文件定，close() 时清掉。
   bool _videoLibraryMode = false;
 
   @override
@@ -549,58 +569,48 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   Future<Database> _openNow() async {
-    // 2026-11-20 MYTV 绑定：库落点由绑定模块定。已绑定时是
-    // MYTV/db/女优库应用.db；没权限/外部存储不可用时降级回原来的
-    // documents/actress.db，表结构与 Schema 版本都不变。
+    // 2026-11-22 用户令最终口径：女优库只读外置数据库
+    // MYTV/db/女优库.db；绑定不到它（dbPath 为空）就抛
+    // ActressNoExternalDbException，界面显示空态提示；外置库
+    // 损坏/打不开也直接抛错，不回落任何内置库、不建新库。
     final bind = await ActressMytvBind.instance.ensureBound();
     final filePath = bind.dbPath;
     _openFallbackNote = null;
-    try {
-      final db = await _openDbAt(filePath);
-      _openedPath = filePath;
-      _openedSignature = _signatureOf(File(filePath));
-      _genericReaderCache = null;
-      _genericReaderKey = null;
-      return db;
-    } catch (e) {
-      // 2026-11-20 用户令“全部使用数据库兜底”：MYTV 库损坏/
-      // 打不开时回退 app 内置 actress.db，女优库照常能用，原因
-      // 记在 openFallbackNote 里供列表页显示。两条路都打不开
-      // 时抛原错（不在这里吞掉）。回退前先把视频库标志清掉，
-      // 免得主库开视频库失败后标志还挂在真值上、而回退库不是
-      // 视频库（_openDbAt 会按回退文件重算）。
-      _videoLibraryMode = false;
-      final legacyPath = bind.legacyDbPath;
-      if (legacyPath == filePath) rethrow;
-      final db = await _openDbAt(legacyPath);
-      _openFallbackNote = 'MYTV 库打不开（${_shortDbError(e)}），'
-          '已回退内部存储库';
-      _openedPath = legacyPath;
-      _openedSignature = _signatureOf(File(legacyPath));
-      _genericReaderCache = null;
-      _genericReaderKey = null;
-      return db;
+    if (filePath.isEmpty) {
+      throw const ActressNoExternalDbException(
+        '未找到外置数据库：MYTV/db/女优库.db',
+      );
     }
+    final db = await _openDbAt(filePath);
+    _openedPath = filePath;
+    _openedSignature = _signatureOf(File(filePath));
+    _genericReaderCache = null;
+    _genericReaderKey = null;
+    return db;
   }
 
   @override
   String? get openFallbackNote => _openFallbackNote;
 
-  /// 按文件探结构再开库（2026-11-20 通用读库）：不存在/空文件走
-  /// 女优库建库路径；是女优库结构走建库/迁移路径；是用户视频库
+  /// 按文件探结构再开库（2026-11-20 通用读库）：不存在/空文件
+  /// 直接抛没有外置数据库——绝不在用户文件位置新建 persons/works
+  /// 库（2026-11-22 用户令：没有外置库就是空库，不悄悄造数据）；
+  /// 是女优库结构走建库/迁移路径；是用户视频库
   /// （女优库.db）走读写打开、置视频库标志；外来库直接打开，
   /// 不跑女优库迁移、不动用户的文件结构，读走通用映射层。
   Future<Database> _openDbAt(String filePath) async {
     final file = File(filePath);
     if (!file.existsSync() || file.lengthSync() == 0) {
       _videoLibraryMode = false;
-      return _openActressDb(filePath);
+      throw ActressNoExternalDbException(
+        '数据库文件不存在或为空：$filePath',
+      );
     }
     if (await _looksLikeActressDb(filePath)) {
       _videoLibraryMode = false;
       final db = await _openActressDb(filePath);
       // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
-      // 才抛；这里验出来就关掉重抛，让 _openNow 走回退分支。
+      // 才抛；这里验出来就关掉重抛，不开坏库。
       try {
         await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
       } catch (_) {
@@ -634,7 +644,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     _videoLibraryMode = false;
     final db = await openDatabase(filePath);
     // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
-    // 才抛；这里验出来就关掉重抛，让 _openNow 走回退分支。
+    // 才抛；这里验出来就关掉重抛，不开坏库。
     try {
       await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
     } catch (_) {
@@ -693,6 +703,9 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// - video_actress(cate_id)：点开一个人时按人名取自己的作品；
   /// - video_actress(vod_id)：按番号查/播时反查。
   /// 建不出来（只读库/空间不足）就当没有，查询仍能跑，只是慢。
+  /// 汇总表重建不再这里同步等（2026-11-22 修复：重建 2.5~24 秒
+  /// 堵住首次开屏）：只排期后台跑，列表先用旧汇总表、没有就现算
+  /// 顶着，不堵首屏。
   Future<void> _ensureVideoIndexes(Database db) async {
     for (final sql in const [
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
@@ -710,7 +723,28 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 单个索引建不了不影响另一个，也不影响读。
       }
     }
-    await _ensureVideoRollup(db);
+    _scheduleVideoRollup(db);
+  }
+
+  /// 汇总表重建是否已排期（防重复排期）。
+  var _videoRollupScheduled = false;
+
+  /// 汇总表重建挪到后台：首次开库只建索引就放行，3 秒后再跑；
+  /// 库已关/已换时不再是当前连接，不跑。失败不影响读（读取侧
+  /// 回退现算）。
+  void _scheduleVideoRollup(Database db) {
+    if (_videoRollupScheduled) return;
+    _videoRollupScheduled = true;
+    Future.delayed(const Duration(seconds: 3), () async {
+      try {
+        if (!identical(_db, db)) return;
+        await _ensureVideoRollup(db);
+      } catch (_) {
+        // 后台重建失败不影响读。
+      } finally {
+        _videoRollupScheduled = false;
+      }
+    });
   }
 
   /// 名册汇总表（2026-11-21 用户令「名册要与 who's 女优数据库合并」）。
@@ -722,8 +756,13 @@ class SqfliteActressDatabase implements ActressDatabase {
   ///
   /// 现算一次要 0.8 秒（47 万条关联 join 排序），手机上点一下就是
   /// 转圈半天；所以落一张 `actress_rollup` 汇总表，源表行数变了才
-  /// 重建（一次 1~2 秒），之后每次查询几毫秒。库设成只读、写不进去
-  /// 时就不落表，读取侧回退到现算 SQL，功能不丢。
+  /// 重建，之后每次查询几毫秒。库设成只读、写不进去时就不落表，
+  /// 读取侧回退到现算 SQL，功能不丢。
+  ///
+  /// 重建只在后台跑（见 [_scheduleVideoRollup]）：先分批写进临时表
+  /// `actress_rollup_new`（每 2000 行让出一次事件循环，不卡界面），
+  /// 再一次短事务换表——读侧要么见旧汇总表、要么见新汇总表，绝不
+  /// 见半成品；中途被杀只剩临时表，下次重建先清掉它。
   Future<void> _ensureVideoRollup(Database db) async {
     try {
       final sourceCounts = await db.rawQuery(
@@ -747,23 +786,6 @@ class SqfliteActressDatabase implements ActressDatabase {
         'CREATE TABLE IF NOT EXISTS actress_rollup_meta ('
         'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
       );
-      // 老版本建的汇总表没有 sex 列：补上，否则重建时写不进去。
-      try {
-        final rollupCols = await db.rawQuery(
-          'PRAGMA table_info(actress_rollup)',
-        );
-        final hasSexCol = rollupCols.any(
-          (r) => (r['name']?.toString() ?? '') == 'sex',
-        );
-        if (!hasSexCol) {
-          await db.execute(
-            'ALTER TABLE actress_rollup ADD COLUMN sex TEXT '
-            "NOT NULL DEFAULT 'female'",
-          );
-        }
-      } catch (_) {
-        // 只读库/加列失败：重建会退回现算，功能不丢。
-      }
       final meta = await db.query(
         'actress_rollup_meta',
         columns: ['value'],
@@ -778,7 +800,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       final rollupCount = (rollupRows.first['c'] as num?)?.toInt() ?? 0;
       if (current == signature && rollupCount > 0) return;
 
-      // 重建（几十万行 insert-select，只在源数据变化时跑一次）。
+      // 按名字归并：每类作品数 + 最新日期先算出来，再按人名累加。
       final perCate = await db.rawQuery(
         'SELECT va.cate_id AS cate_id, COUNT(*) AS n, '
         'MAX(v.vod_pubdate) AS d '
@@ -817,11 +839,27 @@ class SqfliteActressDatabase implements ActressDatabase {
         final d = dates[cateId];
         if (d != null && d.compareTo(acc.lastDate) > 0) acc.lastDate = d;
       }
-      await db.transaction((txn) async {
-        await txn.delete('actress_rollup');
-        final batch = txn.batch();
-        byName.forEach((name, acc) {
-          batch.insert('actress_rollup', {
+
+      // 重建：分批写进临时表，再一次短事务换表（见本函数头注释）。
+      await db.execute('DROP TABLE IF EXISTS actress_rollup_new');
+      await db.execute(
+        'CREATE TABLE actress_rollup_new ('
+        'name TEXT PRIMARY KEY, '
+        'first_rowid INTEGER NOT NULL, '
+        'avatar TEXT NOT NULL DEFAULT \'\', '
+        'works INTEGER NOT NULL DEFAULT 0, '
+        'sex TEXT NOT NULL DEFAULT \'female\', '
+        'last_date TEXT NOT NULL DEFAULT \'\')',
+      );
+      const batchSize = 2000;
+      final names = byName.keys.toList();
+      for (var i = 0; i < names.length; i += batchSize) {
+        final end = (i + batchSize).clamp(0, names.length);
+        final batch = db.batch();
+        for (var j = i; j < end; j++) {
+          final name = names[j];
+          final acc = byName[name]!;
+          batch.insert('actress_rollup_new', {
             'name': name,
             'first_rowid': acc.firstRowid,
             'avatar': acc.avatar,
@@ -829,12 +867,20 @@ class SqfliteActressDatabase implements ActressDatabase {
             'sex': acc.sex,
             'last_date': acc.lastDate,
           });
-        });
-        batch.insert('actress_rollup_meta', {
+        }
+        await batch.commit(noResult: true);
+        // 每批让出一次事件循环：几万行一次写完会把界面卡住。
+        await Future<void>.delayed(Duration.zero);
+      }
+      await db.transaction((txn) async {
+        await txn.execute('DROP TABLE IF EXISTS actress_rollup');
+        await txn.execute(
+          'ALTER TABLE actress_rollup_new RENAME TO actress_rollup',
+        );
+        await txn.insert('actress_rollup_meta', {
           'key': 'signature',
           'value': signature,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
-        await batch.commit(noResult: true);
       });
     } catch (_) {
       // 只读库 / 空间不足：不落表，读取侧回退现算。
@@ -987,8 +1033,8 @@ class SqfliteActressDatabase implements ActressDatabase {
   String? _openedPath;
   ({int length, int modifiedMs})? _openedSignature;
 
-  /// 开库回退提示（见 openFallbackNote）：MYTV 库损坏/打不开时
-  /// 回退内置库的原因；正常打开时为 null。
+  /// 开库提示（见 openFallbackNote）：2026-11-22 起不再回退任何
+  /// 内置库，恒为 null（接口保留，列表页的显示分支不动）。
   String? _openFallbackNote;
 
   /// 通用读取器缓存：按（路径，文件指纹）缓存，文件变了自动重探，
@@ -1095,8 +1141,13 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<({bool reloaded, String? error})> reloadIfChanged({
     bool force = false,
   }) async {
-    final bind = await ActressMytvBind.instance.ensureBound();
+    // 重解析绑定：新放进 / 删掉的女优库.db 只有重解析才看得到
+    // （“重新加载数据库”与进页热换库都靠它）。
+    final bind = await ActressMytvBind.instance.ensureBound(refresh: true);
     final currentPath = bind.dbPath;
+    if (currentPath.isEmpty) {
+      return (reloaded: false, error: '未找到外置数据库：MYTV/db/女优库.db');
+    }
     final file = File(currentPath);
     FileStat? stat;
     try {

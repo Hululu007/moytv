@@ -42,34 +42,13 @@ const List<ZakatvBuiltinSite> oneBuiltinSites = [
 ];
 
 /// MissAV v30 独立 jar 的内置站点：2026-11-19 从 zakatv.jar 挪过来，
-/// key/显示名/类名/ext 一字不动，只换 jar 归属（jar:zakatv:<key> →
-/// jar:missav30:<key>）。jar 文件原样内置，里面代码一个字节不改。
-/// ZakaMirror 不在新 jar 里，仍留在 zakatv.jar 上。
-///
-/// 注意：本 jar 除下面 3 个蜘蛛外还带助手类 ZakaMissavFix（及内部类
-/// ZakaMissavFix$ProxyHandler），提供 hosts()/tHost() 域名池，是助手、
-/// 不是站点，绝不注册成站点（见 test/missav30_builtin_test.dart 的
-/// dex 类表断言：含 Fix 类、且登记表里无它）。
-const List<ZakatvBuiltinSite> missav30BuiltinSites = [
-  ZakatvBuiltinSite(
-    'ZakaMissav',
-    '🔞MissAV官方┃过盾',
-    'com.github.catvod.spider.ZakaMissavAmns',
-    '{"base":"https://tv506.ystv.top","miss":"https://missav.ws286.ystv.top"}',
-  ),
-  ZakatvBuiltinSite(
-    'ZakaMissavOff',
-    '🔞MissAV官方┃原生',
-    'com.github.catvod.spider.ZakaMissavOffAmns',
-    '{"host":"https://missav.live","relay":"https://tv506.ystv.top","flare":"http://192.168.31.2:8191/v1"}',
-  ),
-  ZakatvBuiltinSite(
-    'missavt',
-    '🔞MissAVt┃原生',
-    'com.github.catvod.spider.ZakaMissavtAmns',
-    '',
-  ),
-];
+/// 2026-11-22 用户令：MissAV 三个 jar 站（ZakaMissav / ZakaMissavOff /
+/// missavt）全部摘除登记，唯一 MissAV 站改为内置 py（key missav）。
+/// 本表留空：jar 文件原样内置在 assets/jars/missav30.jar（见
+/// test/missav30_builtin_test.dart 的 jar 原样断言），里面代码一个
+/// 字节不改，仅供以后恢复时复用；ZakaMirror 同日从 zakatvBuiltinSites
+/// 摘除。
+const List<ZakatvBuiltinSite> missav30BuiltinSites = [];
 const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
   ZakatvBuiltinSite(
     'ZakaMjv011',
@@ -541,12 +520,6 @@ const List<ZakatvBuiltinSite> zakatvBuiltinSites = [
     '🔞🖼八色套图┃1.4万套',
     'com.github.catvod.spider.ZakaSe8Amns',
     '{"host":"https://8se.me","cdn":"https://img.xchina.io","brand":"🖼 八色套图","relays":"https://tv506.ystv.top"}',
-  ),
-  ZakatvBuiltinSite(
-    'ZakaMirror',
-    '🔞MissAV镜像┃免代理',
-    'com.github.catvod.spider.ZakaMirrorAmns',
-    '{"host":"https://www.thisav.my"}',
   ),
   ZakatvBuiltinSite(
     'ZakaAdult',

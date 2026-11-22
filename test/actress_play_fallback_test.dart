@@ -146,9 +146,6 @@ Map<String, dynamic> _fakeFallbackRow({
   'vod_actress_pic': '',
 };
 
-const _emptyFallbackDoc =
-    '{"list":[],"parse":"","jx":"","last_update":"2026-11-20"}';
-
 /// 假影视库 db（第一档）：按番号回 DB 行；名字路回空。
 class _FakeFilmDb implements FilmDbFallbackProvider {
   _FakeFilmDb(this.rowsByCode);
@@ -838,27 +835,49 @@ void main() {
       }
     }
 
-    /// 假兜底：只有 whos.json 里有一条 SSIS-00123 的行（mjv 那份空），
-    /// 播放地址由调用方定。2026-11-22 只走数据库后，详情页不再读
-    /// 这些 json 行——这里只用来回归“给了 json 行也不进播放池”
-    /// （见“第一档本地 db 活的”）。localJsonDir 传空临时目录：
-    /// 不传时 load() 会调 getApplicationDocumentsDirectory()，
-    /// widget 测试里它永远不返回（见 testWidgets FakeAsync +
-    /// async dart:io 挂起）。
-    /// mjvPlayUrl 非空时 mjv.json 也补一条同番号行（vod_play_from
-    /// 须写 mjv：mjv011.json 是规范文件，站按 vod_play_from 认，
-    /// 写 whos 会与 whos 行同键被合并掉）。
-    ActressJsonFallback fakeFallbackWithRow({
+    /// 假兜底：本地 whos.json 里有一条 SSIS-00123 的行（mjv011.json
+    /// 那份空），播放地址由调用方定。2026-11-22 只走数据库后，
+    /// 详情页不再读这些 json 行——这里只用来回归“给了 json 行也
+    /// 不进播放池”（见“第一档本地 db 活的”）：先 load() 把行读进
+    /// 内存，再断言它们不进播放池。2026-11-22 前这份行靠假随包
+    /// asset 读入，随包已删，改写本地文件。
+    /// mjvPlayUrl 非空时 mjv011.json 也补一条同番号行
+    /// （vod_play_from 写 mjv：单文件里的行按来源认站，写 whos
+    /// 会与 whos 行同键被合并掉）。
+    Future<ActressJsonFallback> fakeFallbackWithRow({
       required String playUrl,
       String? mjvPlayUrl,
-    }) {
+    }) async {
       final temp = Directory.systemTemp.createTempSync();
       addTearDown(() {
         try {
           temp.deleteSync(recursive: true);
         } catch (_) {}
       });
-      return ActressJsonFallback(
+      File('${temp.path}/whos.json').writeAsStringSync(
+        _fakeFallbackDoc([
+          _fakeFallbackRow(
+            vodId: 'ssis-row-1',
+            vodCode: 'SSIS-00123',
+            vodName: 'SSIS-00123 存的标题',
+            playUrl: playUrl,
+          ),
+        ]),
+      );
+      if (mjvPlayUrl != null) {
+        File('${temp.path}/mjv011.json').writeAsStringSync(
+          _fakeFallbackDoc([
+            _fakeFallbackRow(
+              vodId: 'mjv-row-1',
+              vodCode: 'SSIS-00123',
+              vodName: 'SSIS-00123 MJV 死链标题',
+              playUrl: mjvPlayUrl,
+              vodPlayFrom: 'mjv',
+            ),
+          ]),
+        );
+      }
+      final fallback = ActressJsonFallback(
         localJsonDir: temp,
         // m3u 索引给空 manifest：只走数据库后 json/m3u 行都不进池，
         // 这里留空只是不让它干扰。
@@ -866,32 +885,9 @@ void main() {
           bytesReader: (_) async =>
               Uint8List.fromList(gzip.encode(utf8.encode('{}'))),
         ),
-        assetReader: (asset) async {
-          if (asset.endsWith('mjv011.json')) {
-            return mjvPlayUrl == null
-                ? _emptyFallbackDoc
-                : _fakeFallbackDoc([
-                    _fakeFallbackRow(
-                      vodId: 'mjv-row-1',
-                      vodCode: 'SSIS-00123',
-                      vodName: 'SSIS-00123 MJV 死链标题',
-                      playUrl: mjvPlayUrl,
-                      vodPlayFrom: 'mjv',
-                    ),
-                  ]);
-          }
-          return asset.endsWith('whos.json')
-              ? _fakeFallbackDoc([
-                  _fakeFallbackRow(
-                    vodId: 'ssis-row-1',
-                    vodCode: 'SSIS-00123',
-                    vodName: 'SSIS-00123 存的标题',
-                    playUrl: playUrl,
-                  ),
-                ])
-              : _emptyFallbackDoc;
-        },
       );
+      await fallback.load();
+      return fallback;
     }
 
     testWidgets('存的地址活的：直接播，不探链', (tester) async {
@@ -982,7 +978,7 @@ void main() {
         tester,
         // 2026-11-22 只走数据库：json 兜底行即使给了也不进播放池，
         // 下面断言“存的标题”不出现就是这条回归检查。
-        fallback: fakeFallbackWithRow(
+        fallback: await fakeFallbackWithRow(
           playUrl: '正片\$https://example.test/whos-ssis.mp4',
         ),
         filmDb: _FakeFilmDb({

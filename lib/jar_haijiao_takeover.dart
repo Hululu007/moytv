@@ -9,16 +9,6 @@ class JarHaijiaoTakeover {
     'com.github.catvod.spider.ZakaHj1Amns': 'v_haijiao_fanguo',
     'com.github.catvod.spider.ZakaHjwAmns': 'v_hjw',
     'com.github.catvod.spider.ZakaHjAppAmns': 'v_haijiao_fanguo',
-    // 2026-11-22：三个 MissAV jar 蜘蛛统一交给 Go 核的 MissAV 实现。
-    // jar 里的解析写死在 missav.ws 自家域上，CF 一挡就整站空；Go 核
-    // 带镜像降级（missav.fans / thisav.my），封面、女优一览、播放都能出。
-    'com.github.catvod.spider.ZakaMissavAmns': 'v_missav',
-    'com.github.catvod.spider.ZakaMissavOffAmns': 'v_missav',
-    'com.github.catvod.spider.ZakaMissavtAmns': 'v_missav',
-    // 2026-11-22:「MissAV镜像|免代理」走的是 ZakaMirrorAmns,jar 里只认
-    // thisav.my 的老版式,站点改版后详情页一片空白(女优卡点进去没作品)。
-    // 同样交给 Go 核,镜像降级和封面、播放都在那边。
-    'com.github.catvod.spider.ZakaMirrorAmns': 'v_missav',
     // 2026-11-22（v42）：用户点名的这批 jar 站，jar 里的类在 ART 上被
     // verifier 拒（ZakaJavmapAmns.resolve 声明返回 String[] 实际返回
     // String），整站直接崩：没分类、没图、点开不能播。Go 核里早就有
@@ -35,10 +25,6 @@ class JarHaijiaoTakeover {
     'ZakaHj1': 'v_haijiao_fanguo',
     'ZakaHjw': 'v_hjw',
     'ZakaHjApp': 'v_haijiao_fanguo',
-    'ZakaMissav': 'v_missav',
-    'ZakaMissavOff': 'v_missav',
-    'missavt': 'v_missav',
-    'ZakaMirror': 'v_missav',
     'ZakaJavrate': 'v_javrate',
     'zakajavmap': 'v_javmap',
     'zakapigav': 'v_pigav',

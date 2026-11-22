@@ -22,7 +22,7 @@ import '../whos_local_library.dart';
 /// 底部四个页签（首页 / 分类 / 女优 / 收藏）。数据两条腿：
 /// - 在线：nvku 内置源（32 万条、有码/无码/4K/其它），分类与条数取自
 ///   站点自己的 meta；
-/// - 本地：随包 whos 库 + 用户视频库（MYTV/db），分类/厂牌标签与
+/// - 本地：用户本地 whos 库 + 用户视频库（MYTV/db），分类/厂牌标签与
 ///   数据库同一口径，在线取不到内容时自动降级到本地，不留白屏。
 /// 「女优」页签就是原来的女优库列表页（本地库名册 + 站点筛选 +
 /// 同步/现爬都在那边），这里只换外壳，不重做数据层。
@@ -173,7 +173,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     } catch (_) {
       if (mounted && !_offline) setState(() => _offline = true);
     }
-    // 本地兜底：站被挡/取不到时用随包库与视频库顶上，分类照旧可用。
+    // 本地兜底：站被挡/取不到时用本地 whos 库与视频库顶上，分类照旧可用。
     final library = WhosLocalLibrary.shared;
     if (!await library.ensureLoaded()) return const [];
     final rows = library.page(

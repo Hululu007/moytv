@@ -135,8 +135,6 @@ class JarImport {
   static bool _builtinRegistered = false;
   static final Map<String, StandaloneJarSite> _oneSites = {};
   static bool _oneRegistered = false;
-  static final Map<String, StandaloneJarSite> _missav30Sites = {};
-  static bool _missav30Registered = false;
 
   static List<StandaloneJarSite> get sites =>
       List.unmodifiable(_sites.values);
@@ -146,9 +144,6 @@ class JarImport {
 
   static List<StandaloneJarSite> get oneSites =>
       List.unmodifiable(_oneSites.values);
-
-  static List<StandaloneJarSite> get missav30Sites =>
-      List.unmodifiable(_missav30Sites.values);
 
   static bool isBuiltinSite(String siteId) =>
       _builtinSites.containsKey(siteId);
@@ -348,66 +343,6 @@ class JarImport {
     }
     _oneSites.clear();
     _oneRegistered = false;
-  }
-
-  /// MissAV v30 独立 jar 内置：与 zakatv.jar、一点播 jar 分开的配置
-  /// id 与加载器，jar 文件原样落盘（用户原话“内置不要改里面的代码”，
-  /// 只做字节复制，不解包、不改 smali）。3 个蜘蛛原样从
-  /// zakatvBuiltinSites 挪到 missav30BuiltinSites，key/显示名/类名/
-  /// ext 一字不动，只换 jar 归属。生命周期与 ZakaTV/一点播插件分开，
-  /// 可独立安装/卸载。
-  static Future<bool> registerBuiltinMissav30() async {
-    if (_missav30Registered || !JarBridge.supported) {
-      return _missav30Registered;
-    }
-    try {
-      final bytes = await rootBundle.load(missav30JarAsset);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/missav30.jar');
-      await tempFile.writeAsBytes(bytes.buffer.asUint8List());
-      final jarPath = await JarBridge.ensureJarPath(
-        configId: missav30JarId,
-        url: tempFile.path,
-        md5: missav30JarMd5,
-      );
-      for (final builtin in missav30BuiltinSites) {
-        final site = StandaloneJarSite(
-          siteId: JarSiteSpec.siteIdFor(missav30JarId, builtin.key),
-          jarId: missav30JarId,
-          jarUrl: jarPath,
-          jarMd5: missav30JarMd5,
-          className: builtin.className,
-          name: builtin.name,
-          ext: builtin.ext,
-          section: builtin.section,
-        );
-        _missav30Sites[site.siteId] = site;
-        JarBridge.register(site.spec);
-        SourceSite.importedSites[site.siteId] = SourceSite(
-          site.siteId,
-          site.name,
-          'MissAV jar 内置 · ${site.className}',
-          section: site.section,
-          origin: SourceSite.originImport,
-          importType: 'jar',
-        );
-      }
-      _missav30Registered = true;
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// 卸载 MissAV v30 内置 jar：撤掉登记，下次 registerBuiltinMissav30
-  /// 可重新注册。jar 文件本身是 APK 内 asset，不删除。
-  static void unregisterBuiltinMissav30() {
-    for (final siteId in _missav30Sites.keys.toList()) {
-      JarBridge.unregister(siteId);
-      SourceSite.importedSites.remove(siteId);
-    }
-    _missav30Sites.clear();
-    _missav30Registered = false;
   }
 
   /// 已导入 jar 按 jarId 分组（插件管理界面用）。

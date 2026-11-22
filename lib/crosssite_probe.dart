@@ -172,10 +172,12 @@ const crossSitePrioritySiteIds = <String>[
   'memojav',
   'chaoliu',
   'jar:zakatv:zakav01',
-  'jar:missav30:ZakaMissav',
-  'jar:missav30:ZakaMissavOff',
+  // MissAV 唯一站改为内置 py（2026-11-22 用户令删全部旧站）：
+  // jar 三站（ZakaMissav / ZakaMissavOff / missavt）已摘登记，
+  // 优先序由新站 missav 继承。ZakaMirror 是另一站（同批已摘），
+  // 无替代站，条目留空位不动。
+  'missav',
   'jar:zakatv:ZakaMirror',
-  'jar:missav30:missavt',
   'jar:zakatv:ZakaJable',
 ];
 
@@ -202,11 +204,11 @@ const actressFallbackSiteIds = <String>[
 const actressMissavFirstSiteId = 'jar:missav30:ZakaMissav';
 
 /// 慢站/盾站：永远懒查，不占自动探活名额（旧模型同口径）。
+/// MissAV 唯一站改为内置 py（2026-11-22）：jar 三站已摘登记，
+/// 懒查口径由新站 missav 继承（跨站行显示口径不变）。
 const crossSiteLazySiteIds = <String>{
-  'jar:missav30:ZakaMissav',
-  'jar:missav30:ZakaMissavOff',
+  'missav',
   'jar:zakatv:ZakaMirror',
-  'jar:missav30:missavt',
   'jar:zakatv:ZakaJable',
 };
 

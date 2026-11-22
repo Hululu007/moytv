@@ -35,12 +35,11 @@ import '../player_picker.dart';
 
 /// 女优库浏览页：人物列表 + 搜索/性别筛选/排序 + 同步横幅。
 ///
-/// 打开只读本地库 + 内置 json/m3u 兜底，不自动爬取网站、不后台
-/// 自动续爬（2026-11-20 用户令：不自动爬取）；同步只在用户点了
-/// 刷新/重试、或检测到新版内置 json 到达时跑一次，跑完不自动再续。
-/// 例外只有库缺失/空库时自动生成一次（2026-11-20 MYTV 绑定令：
-/// 内置 json 种子灌入 + 走现有同步，见 _autoGenerateLibrary），
-/// 灌完库不再是空库，下次打开不再重复跑。排行榜入口在顶栏奖杯钮。
+/// 打开只读本地外置库（MYTV/db/女优库.db）+ 本地 json/m3u 兜底，
+/// 不自动爬取网站、不后台自动续爬、不自动生成（2026-11-20 用户令：
+/// 不自动爬取；2026-11-22 用户令最终口径：没有外置库就是空库，
+/// 不灌内置 json 种子、不走互联网同步）；同步只在用户点了刷新/
+/// 重试时跑一次，跑完不自动再续。排行榜入口在顶栏奖杯钮。
 /// 全站叠加入口在同步横幅下方：手动开始/继续，按番号把各站作品
 /// 叠加进库，断点续跑，不自动跑、不与名册同步抢着跑。
 /// 同步/现爬进行中、列表还空时，每 8 秒节流刷新一次列表（有人
@@ -192,39 +191,32 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 导出合并 JSON 进行中（防重复点）。
   var _exportingJson = false;
 
-  /// 2026-11-20 MYTV 绑定：绑定解析结果（库落点、是否已授权、
-  /// 迁移情况）。bootstrap 第一件事就是解析它——在第一次读库
-  /// 之前，库的落点（MYTV/db/女优库应用.db 或 documents/actress.db）
-  /// 与 json/m3u 目录都由它定。
+  /// 2026-11-20 MYTV 绑定：绑定解析结果（库落点、是否已授权）。
+  /// bootstrap 第一件事就是解析它——在第一次读库之前，库的落点
+  /// （MYTV/db/女优库.db，或未找到外置库）与 json/m3u 目录都由它定。
   MytvBindResult? _mytvBind;
 
-  /// 绑定行被用户点了“继续用内部存储”后隐藏（本页内有效）。
+  /// 绑定行被用户点了“隐藏提示”后隐藏（本页内有效）。
   var _mytvRowDismissed = false;
 
-  /// 空库自动生成进行中：内置 json 种子灌入 + 走现有同步。
-  /// 只在库缺失/空库时跑一次（见 _autoGenerateLibrary）。
-  var _mytvGenerating = false;
-
-  /// 自动生成本页内只跑一次（防 bootstrap 重入重复爬）。
-  var _mytvAutoSeeded = false;
-
-  /// 种子已灌入的条目数（生成横幅显示进度用）。
-  var _seededCount = 0;
+  /// 没有外置数据库：绑定不到 MYTV/db/女优库.db，列表显示空态
+  /// 提示（放库、重新加载），不回落任何内置库。
+  var _noExternalDb = false;
 
   /// 兜底加载器与现爬服务是不是本页自己建的：是才按绑定结果
   /// 改它们的本地目录；测试注入的实例不动（注入的假目录优先）。
   var _ownsFallback = true;
   var _ownsCrawl = true;
 
-  /// 2026-11-20 热换库：最近一次重读失败的原因（显示在绑定行上，
-  /// 留旧库继续用）；成功重读后清掉。
+  /// 2026-11-20 热换库：最近一次重读失败的原因（显示在绑定行上）；
+  /// 成功重读后清掉。没有外置数据库时这里就是“未找到外置数据库”。
   String? _mytvDbError;
 
   /// 手动“重新加载数据库”进行中（防重复点）。
   var _reloadingDb = false;
 
-  /// 2026-11-20 用户令“全部使用数据库兜底”：开库时 MYTV 库
-  /// 损坏/打不开回退内置库的原因（显示在绑定行上）。
+  /// 开库提示（见 openFallbackNote）：2026-11-22 起不再回退任何
+  /// 内置库，恒为 null（显示分支保留）。
   String? _mytvOpenNote;
 
   /// 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件的追加
@@ -291,7 +283,7 @@ class _ActressListPageState extends State<ActressListPage> {
     _fallback = widget.fallback ?? ActressJsonFallback();
     if (_ownsFallback) {
       // 2026-11-20 18:57 全部使用数据库兜底：兜底先查影视库 db
-      // （MYTV/db/女优库应用.db），读不到回退 json/m3u。测试注入的
+      // （MYTV/db/女优库.db），读不到回退 json/m3u。测试注入的
       // fallback 不接提供方，保持老行为。
       _fallback.filmDb = _multiDb = MultiDbFilmFallback(database: _db);
     }
@@ -387,15 +379,36 @@ class _ActressListPageState extends State<ActressListPage> {
     if (_ownsCrawl) _crawl.bindLocalDir(bind.jsonDir);
     // 2026-11-20 热换库：进模块先看库文件变了没有——变了就关旧连接
     // 重开再读（用户用文件管理器换了 db 不用重装）；重读失败留旧库
-    // 并把原因记下来显示在绑定行上，不崩。
+    // 并把原因记下来显示在绑定行上，不崩。没有外置库时这里就报
+    // “未找到外置数据库”，下面开库再抛一次也接住显示空态。
     final reload = await _db.reloadIfChanged();
     if (!mounted || generation != _generation) return;
     if (reload.error != null) {
       setState(() => _mytvDbError = reload.error);
     }
     // 2026-11-20 通用读库：当前库不是女优库结构时走通用模式
-    // （作品列表 + 点按直播），不走女优库的总览/同步/自动生成。
-    final generic = await _db.genericReader();
+    // （作品列表 + 点按直播），不走女优库的总览/同步。
+    // 没有外置数据库时开库抛 ActressNoExternalDbException：
+    // 接住显示空态提示（放库、重新加载），不崩、不回落。
+    GenericDbReader? generic;
+    try {
+      generic = await _db.genericReader();
+    } on ActressNoExternalDbException catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _noExternalDb = true;
+        _mytvDbError = e.message;
+        _loading = false;
+      });
+      return;
+    } catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _mytvDbError = '数据库打不开：${e.toString().split('\n').first}';
+        _loading = false;
+      });
+      return;
+    }
     if (!mounted || generation != _generation) return;
     if (generic != null) {
       setState(() {
@@ -413,35 +426,13 @@ class _ActressListPageState extends State<ActressListPage> {
       // genericReader() 已开过库，isVideoLibrary 的标志已算好。
       _videoLibraryMode = _db.isVideoLibrary;
     });
-    // 兜底后台读、不堵首屏：列表站点过滤与新版 json 检测都要用它，
-    // 但不能在首屏等它——widget 测试里 rootBundle 异步读在
-    // FakeAsync 下等不到返回（异步 dart:io 挂起是测试环境的老
-    // 毛病，真机上不影响）；新版检测挂在读完的回调里。
-    unawaited(
-      _fallback.load().then((_) async {
-        if (!mounted || generation != _generation) return;
-        await _maybeSyncOnNewJson();
-      }),
-    );
+    // 兜底后台读、不堵首屏：列表站点过滤要用它，但不能在首屏等它。
+    unawaited(_fallback.load());
     final overview = await _db.overview();
     if (!mounted || generation != _generation) return;
     setState(() => _overview = overview);
-    // 2026-11-20 用户令“全部使用数据库兜底”：开库时 MYTV 库
-    // 损坏回退内置库的原因，显示在绑定行上。
-    final openNote = _db.openFallbackNote;
-    if (openNote != null) {
-      setState(() => _mytvOpenNote = openNote);
-    }
-    // 2026-11-20 MYTV 绑定：库缺失/空库时自动生成（只跑一次，
-    // 正常打开不重复爬）：先把包里内置的 mjv011.json + whos.json
-    // 当种子灌进库（m3u 分片本来就是兜底索引，不用灌库），
-    // 再走现有的 actress_sync 从互联网同步（潮流 → whos，
-    // 复用现有逻辑与并发上限）。手动同步与“随包新版
-    // json 到达时跑一次”触发不变。
-    if (overview.persons == 0 && overview.works == 0 && !_mytvAutoSeeded) {
-      _mytvAutoSeeded = true;
-      unawaited(_autoGenerateLibrary());
-    }
+    // 2026-11-22 用户令最终口径：库缺失/空库不再自动生成（不灌
+    // 内置 json 种子、不走互联网同步），空态如实提示放库、重新加载。
     // 叠加只读一次断点作横幅状态，绝不自动跑。
     final stacking = await _stacking.snapshot();
     if (!mounted || generation != _generation) return;
@@ -452,10 +443,8 @@ class _ActressListPageState extends State<ActressListPage> {
     // 数据库里的分类读一次挂上行：同步跑完分类变了走
     // _refreshAfterSync 再刷。
     unawaited(_loadDbCategories());
-    // 不自动爬取（2026-11-20 用户令）：打开只读本地 + 内置
-    // json/m3u 兜底，不自动起爬、不后台自动续爬；只在检测到新版
-    // 内置 json 到达时跑一次同步，其余时候等用户手动点刷新/重试。
-    // 新版检测已挂在兜底读完的回调里，这里不再等。
+    // 不自动爬取（2026-11-20 用户令）：打开只读本地，不自动起爬、
+    // 不后台自动续爬、不自动生成；只等用户手动点刷新/重试/同步。
     // 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件有作品就
     // 递增追加进库（后台跑，列表数边涨边看）。
     unawaited(_maybeStartDbMirror());
@@ -624,52 +613,9 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 空库自动生成（2026-11-20 MYTV 绑定）：库不存在或 0 人
-  /// 0 作品时才跑，本页内只跑一次。先把包里内置的 mjv011.json
-  /// + whos.json 当种子灌进库（分 200 条一批灌，横幅显示进度；
-  /// m3u 分片本来就是兜底索引，不用灌库），再走现有的 _runSync
-  /// 从互联网同步（潮流 → whos，复用现有同步逻辑与
-  /// 并发上限，不另写爬虫）。种子是本地文件，离线也能灌上人，
-  /// 灌完库就不再是空库，下次打开不再重复跑；同步失败只记横幅，
-  /// 不抛错、不影响列表打开。
-  Future<void> _autoGenerateLibrary() async {
-    // 视频库模式不自动生成（种子灌的是 persons/works，视频库没有
-    // 那两张表；用户库本身已有 32 万条视频，不需种子）。
-    if (_videoLibraryMode) return;
-    if (_mytvGenerating) return;
-    _mytvGenerating = true;
-    if (mounted) setState(() {});
-    try {
-      await _fallback.load();
-      final entries = _fallback.entries;
-      const chunk = 200;
-      for (var i = 0; i < entries.length; i += chunk) {
-        final end = (i + chunk).clamp(0, entries.length);
-        await mirrorActressJsonEntriesToDb(_db, entries.sublist(i, end));
-        if (!mounted) return;
-        setState(() => _seededCount = end);
-      }
-    } catch (_) {
-      // 种子灌失败也不崩：后面同步还会从互联网补。
-    } finally {
-      if (mounted) {
-        setState(() => _mytvGenerating = false);
-      } else {
-        _mytvGenerating = false;
-      }
-    }
-    if (!mounted) return;
-    await _runSync();
-    if (mounted) unawaited(_refreshAfterSync());
-    // 自动生成跑完库安静了：主目录与补充目录里其他 .db 文件有作品就
-    // 递增追加进库（见 _maybeStartDbMirror）。
-    if (mounted) unawaited(_maybeStartDbMirror());
-  }
-
   /// 没拿到“所有文件访问权限”时打开系统授权页（走平台通道，
   /// 照树里悬浮窗去设置的路子）。用户在设置里授权后回 App，
-  /// 点绑定行上的“重新绑定”再切 MYTV；授权前女优库一直用
-  /// 内部存储，照常能用。
+  /// 点绑定行上的“重新绑定”再切 MYTV；授权前女优库显示空态。
   Future<void> _requestMytvPermission() async {
     await ActressMytvBind.instance.requestPermission();
     if (!mounted) return;
@@ -678,9 +624,9 @@ class _ActressListPageState extends State<ActressListPage> {
     ).showSnackBar(const SnackBar(content: Text('已打开系统设置，授权后点“重新绑定”')));
   }
 
-  /// 授权后重新绑定：先关库（迁移要拷老库文件，开着库拷不干净；
-  /// close 会清 _openFuture，下次开库重新走绑定路径），再重新
-  /// 解析绑定、给 json/m3u 重新指目录、重读总览与列表。
+  /// 授权后重新绑定：先关库（close 会清 _openFuture，下次开库
+  /// 重新走绑定路径），再重新解析绑定、给 json/m3u 重新指目录、
+  /// 重读总览与列表。重新绑定成功后清掉旧的重读报错。
   Future<void> _rebindMytv() async {
     await _db.close();
     final bind = await ActressMytvBind.instance.ensureBound(refresh: true);
@@ -688,6 +634,8 @@ class _ActressListPageState extends State<ActressListPage> {
     setState(() {
       _mytvBind = bind;
       _mytvRowDismissed = false;
+      _mytvDbError = null;
+      _noExternalDb = false;
     });
     if (_ownsFallback) {
       _fallback.bindLocalDirs(
@@ -700,9 +648,11 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 手动“重新加载数据库”（2026-11-20 热换库）：不管文件指纹变
-  /// 没变都重读一次当前文件。重读后重新探结构（不要沿用旧映射）：
-  /// 模式可能变了（女优库 ↔ 外来库），按新模式重读列表。重读
-  /// 失败留旧库并报原因，不崩、不丢数据。
+  /// 没变都重读一次当前文件（重解析绑定：新放进 MYTV/db 的
+  /// 女优库.db 只有重解析才看得到）。重读后重新探结构（不要沿用
+  /// 旧映射）：模式可能变了（女优库 ↔ 外来库），按新模式重读列表。
+  /// 重读失败留旧库并报原因，不崩、不丢数据；没有外置库时报
+  /// “未找到外置数据库”，不说“仍用旧库”（没有旧库可留）。
   Future<void> _manualReloadDb() async {
     if (_reloadingDb) return;
     _reloadingDb = true;
@@ -710,13 +660,25 @@ class _ActressListPageState extends State<ActressListPage> {
       final result = await _db.reloadIfChanged(force: true);
       if (!mounted) return;
       if (result.error != null) {
-        setState(() => _mytvDbError = result.error);
+        final noDb = result.error!.startsWith('未找到外置数据库');
+        setState(() {
+          _mytvDbError = result.error;
+          _noExternalDb = noDb;
+        });
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('数据库重读失败：${result.error}，仍用旧库')));
+        ).showSnackBar(
+          SnackBar(content: Text(actressReloadErrorText(result.error!))),
+        );
         return;
       }
-      setState(() => _mytvDbError = null);
+      // 重读成功：从单例重取绑定，显示行与实际落点一致；
+      // 之前没库、现在放进来了，空态也清掉。
+      setState(() {
+        _mytvDbError = null;
+        _noExternalDb = false;
+        _mytvBind = ActressMytvBind.instance.current ?? _mytvBind;
+      });
       final generic = await _db.genericReader();
       if (!mounted) return;
       setState(() {
@@ -751,20 +713,23 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 径）：扫主目录 MYTV/db（只扫一层）与补充目录（纯福利/db、
   /// 女优库、私藏视频、lz/db，递归扫）下除当前库文件外的 *.db，
   /// 逐个只读打开、分批（200 条）按合并规则追加进当前库。
-  /// 触发点：bootstrap 末尾、自动生成跑完、手动重读成功后。
-  /// 护栏：通用模式（当前库本身是外来库）不跑；库正在生成/
-  /// 同步时不跑（等下次安静时再试）；正在跑时不重复起；同一
-  /// 文件指纹未变时跳过（镜像记录在 镜像记录.json 里）。
-  /// 追加失败记错不崩，已有数据不受影响。
+  /// 触发点：bootstrap 末尾、手动重读成功后。
+  /// 护栏：通用模式（当前库本身是外来库）不跑；视频库模式不跑
+  /// （镜像写 persons/works，那两张表这个库里没有；视频靠现爬/
+  /// 名册同步补）；没有外置库不跑；同步时不跑（等下次安静时再试）；
+  /// 正在跑时不重复起；同一文件指纹未变时跳过（镜像记录在
+  /// 镜像记录.json 里）。追加失败记错不崩，已有数据不受影响。
   Future<void> _maybeStartDbMirror() async {
     if (_genericMode) return;
     // 视频库模式不跑数据库镜像（镜像写 persons/works，那两张表
     // 这个库里没有；视频靠现爬/名册同步补）。
     if (_videoLibraryMode) return;
     if (_mirrorRunning) return;
-    if (_mytvGenerating || _sync.isRunning) return;
+    if (_sync.isRunning) return;
     final bind = _mytvBind;
     if (bind == null || !bind.bound) return;
+    // 没有外置库：没有可追加进的库，不跑（否则逐人写库全抛错）。
+    if (bind.dbPath.isEmpty) return;
     // 补充目录（py 的 SikuEngine.DB_DIRS 同款）从外部存储根
     // 目录拼；没根目录时只扫主目录。
     final externalRoot = bind.externalRoot;
@@ -835,35 +800,6 @@ class _ActressListPageState extends State<ActressListPage> {
     if (mounted) {
       setState(() => _mirrorRunning = false);
     }
-  }
-
-  /// 新版内置 json 检测：随包 json 的 last_update 变新了才跑一次
-  /// 同步（新数据到了才更新）；本地影子文件的 last_update 不算
-  /// （现爬每页都写新时间，算它会在每次现爬后都触发同步）。
-  /// 首次打开只记版本戳，不触发（等用户手动点刷新）。
-  Future<void> _maybeSyncOnNewJson() async {
-    // 2026-11-20 通用读库：外来库不走女优库同步。
-    if (_genericMode) return;
-    // 视频库模式不走新 json 同步（它写 persons/works；视频靠
-    // 现爬/名册同步补）。
-    if (_videoLibraryMode) return;
-    // 2026-11-20 MYTV 绑定：本页已自动生成过（空库种子 + 同步）
-    // 就不再重复触发——种子刚读的就是这份随包 json，自动生成的
-    // 同步已覆盖“新版到了跑一次”。
-    if (_mytvAutoSeeded) return;
-    var current = '';
-    for (final value in _fallback.bundledLastUpdate.values) {
-      if (value.compareTo(current) > 0) current = value;
-    }
-    if (current.isEmpty) return;
-    final stored = await _db.jsonVersionStamp();
-    if (stored == null) {
-      await _db.saveJsonVersionStamp(current);
-      return;
-    }
-    if (current.compareTo(stored) <= 0) return;
-    await _db.saveJsonVersionStamp(current);
-    if (!_sync.isRunning) unawaited(_runSync());
   }
 
   void _onProgress(ActressSyncProgress progress) {
@@ -1054,9 +990,9 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 导出合并 JSON（写回内置用）：随包 + 本地全部行按更新规则合并
-  /// 后的全文（内置格式），走系统保存对话框存成 mjv011.json，
-  /// 拷进树里 assets/actress_json/mjv011.json，下次打包带走。
+  /// 导出合并 JSON：本地全部行按更新规则合并后的全文，走系统保存
+  /// 对话框存成 mjv011.json（已绑定时直接写 MYTV/mjv011.json），
+  /// 用户拷走即用。
   Future<void> _exportMergedJson() async {
     if (_exportingJson) return;
     setState(() => _exportingJson = true);
@@ -1482,14 +1418,13 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 有任一路在跑（名册同步、全站叠加、选站现爬、数据库镜像、
-  /// 空库自动生成）：齿轮图标换成小转圈，顶栏不占位也能看出在动。
+  /// 有任一路在跑（名册同步、全站叠加、选站现爬、数据库镜像）：
+  /// 齿轮图标换成小转圈，顶栏不占位也能看出在动。
   bool get _anyRunning =>
       _progress.running ||
       _stackingProgress.running ||
       _crawlProgress.running ||
-      _mirrorRunning ||
-      _mytvGenerating;
+      _mirrorRunning;
 
   /// 设置弹窗（2026-11-21 用户令）：把原来排在顶栏的同步横幅、全站
   /// 叠加横幅、选站现爬横幅、数据库镜像横幅全收进这一个 ⚙️ 弹窗；
@@ -1909,37 +1844,34 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 2026-11-20 MYTV 绑定：绑定路径行（用户一眼看到库落在哪）。
-  /// 已绑定：显示 `数据库：MYTV/db/女优库应用.db`，迁移成功时第二行
-  /// 显示迁移行数。没绑定：显示内部存储落点；没权限时给“去设置
-  /// 授权”与“重新绑定”两个按钮，用户点了“继续用内部存储”后
-  /// 本页内隐藏（绑定失败/降级时女优库照常能用，绝不挡路）。
+  /// 已绑定且有外置库：显示 `数据库：MYTV/db/女优库.db`。没找到
+  /// 外置库：显示“未找到外置数据库”与放库提示。没绑定：给“去设置
+  /// 授权”与“重新绑定”两个按钮，用户点了“隐藏提示”后本页内
+  /// 隐藏（绝不挡路）。
   Widget _buildMytvBindRow(ColorScheme colors) {
     final bind = _mytvBind;
     if (bind == null || _mytvRowDismissed) {
       return const SizedBox.shrink();
     }
     final noteLines = <String>[];
-    if (bind.bound && bind.migrated) {
-      noteLines.add(
-        '老数据已迁移：${bind.migratedPersons} 人 / ${bind.migratedWorks} 部（旧库留着当备份）',
-      );
-    }
-    if (!bind.bound && bind.note != null) {
+    // 未绑定 / 未找到外置库的原因（绑定解析时写进 note）：绑定成功
+    // 且库在时 note 为空，这行不出现。
+    if (bind.note != null) {
       noteLines.add(bind.note!);
     }
-    // 2026-11-20 热换库：最近一次重读失败的原因（留旧库继续用）。
+    // 2026-11-20 热换库：最近一次重读失败的原因。没有外置库时
+    // 不说“仍用旧库”（没有旧库可留），见 actressReloadErrorText。
     if (_mytvDbError != null) {
-      noteLines.add('数据库重读失败：$_mytvDbError（仍用旧库）');
+      noteLines.add(actressReloadErrorText(_mytvDbError!));
     }
-    // 2026-11-20 用户令“全部使用数据库兜底”：开库时 MYTV 库
-    // 损坏回退内置库的原因。
+    // 开库提示（2026-11-22 起恒为 null，分支保留）。
     if (_mytvOpenNote != null) {
       noteLines.add(_mytvOpenNote!);
     }
     // 内嵌进女优库外壳时（2026-11-21 用户令：顶部别叠一层又一层）：
-    // 一切正常（已绑定、无迁移提示、无错误）就把这整块收起来，
-    // 路径仍可从 ⚙️ 设置里看到；只有真出问题（未绑定/打不开/迁移）
-    // 才显示，免得把列表挤掉半屏。
+    // 一切正常（已绑定、有外置库、无错误）就把这整块收起来，
+    // 路径仍可从 ⚙️ 设置里看到；只有真出问题（未绑定/找不到库/
+    // 打不开）才显示，免得把列表挤掉半屏。
     if (!widget.showTitle && noteLines.isEmpty && bind.bound) {
       return const SizedBox.shrink();
     }
@@ -2024,7 +1956,7 @@ class _ActressListPageState extends State<ActressListPage> {
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   onPressed: () => setState(() => _mytvRowDismissed = true),
-                  child: const Text('继续用内部存储'),
+                  child: const Text('隐藏提示'),
                 ),
             ],
           ),
@@ -2070,7 +2002,11 @@ class _ActressListPageState extends State<ActressListPage> {
     crossAxisCount: 3,
     mainAxisSpacing: 16,
     crossAxisSpacing: 8,
-    childAspectRatio: 0.88,
+    // 人物卡内容高约 142（上下 padding 12 + 头像 84 + 间距 10 +
+    // 两行字约 36）：0.88 时格高约 132，底部“约 N 部”一行溢出，
+    // 预览图上能看到黄黑溢出条（真机 release 不画条但字会被裁）；
+    // 0.78 时格高约 150，刚好装下。
+    childAspectRatio: 0.78,
   );
 
   Widget _buildList(ColorScheme colors) {
@@ -2082,9 +2018,12 @@ class _ActressListPageState extends State<ActressListPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_persons.isEmpty) {
-      // 空态分流：搜不到就是搜不到；选了站、该站没匹配上的人就说
-      // 该站没有；确实一个人才是“暂无人物”——三种情况不混着说。
-      final emptyText = _query.isNotEmpty
+      // 空态分流：没有外置库就是没有库（放库、重新加载）；搜不到就是
+      // 搜不到；选了站、该站没匹配上的人就说该站没有；确实一个人
+      // 才是“暂无人物”——四种情况不混着说。
+      final emptyText = _noExternalDb
+          ? '未找到外置数据库：请把 女优库.db 放进 MYTV/db/，再点“重新加载数据库”'
+          : _query.isNotEmpty
           ? '没有找到“$_query”'
           : _source != ActressSiteFilter.all
           ? '该站暂无匹配人物'
@@ -2440,11 +2379,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
   /// 还没数据。与原来横幅同一口径，只是搬了位置。
   String _syncText() {
     final host = _host;
-    if (host._mytvGenerating) {
-      return host._seededCount > 0
-          ? '正在生成女优库…已灌入 ${host._seededCount} 条'
-          : '正在生成女优库…';
-    }
     final progress = host._progress;
     if (progress.running) {
       final detail = progress.detail.isNotEmpty
@@ -2500,7 +2434,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
     if (host._stackingProgress.running) running.add('叠加');
     if (host._crawlProgress.running) running.add('现爬');
     if (host._mirrorRunning) running.add('追加库');
-    if (host._mytvGenerating) running.add('生成库');
     final overview = host._overview;
     final tail = overview == null
         ? ''
@@ -2623,7 +2556,7 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                   host._worksGrowthText(),
                   _syncText(),
                 ].where((t) => t.isNotEmpty).join('\n'),
-                spinning: host._progress.running || host._mytvGenerating,
+                spinning: host._progress.running,
                 actions: [
                   if (host._progress.running)
                     button('取消', host._sync.cancel)
@@ -2634,7 +2567,7 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                           : (host._lastSyncFailed || !host._overview!.allDone
                                 ? '继续同步'
                                 : '再同步一次'),
-                      host._mytvGenerating || host._progress.running
+                      host._progress.running
                           ? null
                           : () => host._runSync(),
                     ),
@@ -2737,7 +2670,7 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                   title: '数据库',
                   body:
                       '${host._mytvBind!.displayPath}\n'
-                      '${host._mytvDbError != null ? '重读失败：${host._mytvDbError}（仍用旧库）\n' : ''}'
+                      '${host._mytvDbError != null ? '${actressReloadErrorText(host._mytvDbError!)}\n' : ''}'
                       '${host._mytvOpenNote ?? ''}',
                   actions: [
                     button(

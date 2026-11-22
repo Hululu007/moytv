@@ -141,7 +141,9 @@ void main() {
       SourceSite('cloud:pan115', '115网盘', '', section: video),
       SourceSite('plain1', '普通站', '', section: video),
       SourceSite('jar:zakatv:ZakaJable', 'Jable', '', section: video),
-      SourceSite('jar:missav30:ZakaMissav', 'MissAV', '', section: video),
+      // MissAV 唯一站改为内置 py（2026-11-22）：jar ZakaMissav 已摘，
+      // 优先序与懒查口径由新站 missav 继承。
+      SourceSite('missav', 'MissAV', '', section: video),
     ];
 
     test('video sites only, priority order, no unconnected rows', () {
@@ -149,7 +151,7 @@ void main() {
       expect(plans.map((plan) => plan.provider.id), [
         'javmenu',
         'jar:zakatv:zakav01',
-        'jar:missav30:ZakaMissav',
+        'missav',
         'jar:zakatv:ZakaJable',
         'other1',
         'plain1',
@@ -251,6 +253,14 @@ void main() {
             BuiltinPySites.chaoliuAssetPath,
             'assets/py_spiders/chaoliu.py',
           );
+        } else if (siteId == BuiltinPySites.missavSiteId) {
+          // MissAV 唯一站改为内置 py（2026-11-22）：jar 三站已摘，
+          // 优先序与懒查口径由新站 missav 继承。
+          expect(BuiltinPySites.missavSite.importType, 'py');
+          expect(
+            BuiltinPySites.missavAssetPath,
+            'assets/py_spiders/missav.py',
+          );
         } else {
           expect(
             siteId.startsWith('jar:zakatv:') ||
@@ -264,7 +274,7 @@ void main() {
       }
       expect(
         crossSiteLazySiteIds,
-        containsAll(['jar:missav30:ZakaMissav', 'jar:zakatv:ZakaJable']),
+        containsAll(['missav', 'jar:zakatv:ZakaJable']),
       );
     });
   });
@@ -655,7 +665,7 @@ void main() {
           section: SourceSite.sectionVideo,
         ),
         SourceSite(
-          'jar:missav30:ZakaMissav',
+          'missav',
           'MissAV',
           '',
           section: SourceSite.sectionVideo,

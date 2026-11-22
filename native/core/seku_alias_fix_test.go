@@ -43,7 +43,8 @@ func TestMigrateSekuAliasFixesCachedItems(t *testing.T) {
 		source, id, want string
 		ok               bool
 	}{
-		{"hongguo", "hongguo:https://missav.ws/cn/sdam-185", "v_missav", true},
+		// 2026-11-22：MissAV 已摘注册，hongguo 槽不存在，不再迁移。
+		{"hongguo", "hongguo:https://missav.ws/cn/sdam-185", "", false},
 		{"huangdou", "huangdou:https://x/y", "v_whos", true},
 		// 短剧自有源：id 是纯数字，绝不能动
 		{"hongguo", "hongguo:7189544077984009277", "", false},
@@ -61,16 +62,17 @@ func TestMigrateSekuAliasFixesCachedItems(t *testing.T) {
 	}
 }
 
-func TestMigrateNativeDramaRewritesIDPrefix(t *testing.T) {
+func TestMigrateNativeDramaLeavesRemovedMissAVUntouched(t *testing.T) {
+	// 2026-11-22 用户令删 MissAV 全部旧站：hongguo 槽已摘注册，旧缓存里
+	// 的 hongguo + MissAV 地址不再迁移到 v_missav（该 id 已不存在），
+	// 原样保留；唯一 MissAV 站改为内置 py（key missav），旧缓存条目
+	// 不自动改写，需要时由用户侧重新收藏。
 	in := nativeDrama{ID: "hongguo:https://missav.ws/cn/sdam-185", Source: "hongguo", SourceID: "https://missav.ws/cn/sdam-185"}
 	out := migrateNativeDrama(in)
-	if out.Source != "v_missav" {
-		t.Fatalf("source not migrated: %q", out.Source)
+	if out.Source != "hongguo" {
+		t.Fatalf("source must stay hongguo, got %q", out.Source)
 	}
-	if out.ID != "v_missav:https://missav.ws/cn/sdam-185" {
-		t.Fatalf("id prefix not migrated: %q", out.ID)
-	}
-	if _, _, valid := splitProviderDramaID(out.ID); !valid {
-		t.Fatalf("migrated id no longer splits: %q", out.ID)
+	if out.ID != "hongguo:https://missav.ws/cn/sdam-185" {
+		t.Fatalf("id must stay unmigrated: %q", out.ID)
 	}
 }

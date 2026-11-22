@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 /// whos 本地兜底库的一条作品。
@@ -112,10 +111,10 @@ String whosBrandLabel(String brand) {
 
 /// whos 本地兜底库。
 ///
-/// 数据来自两处，去重后按「内置在前、本地影子在后」合并：
-/// 1. `assets/actress_json/whos.json`（随包的 whos 条目）；
-/// 2. `documents/actress_json/whos.json` 与现爬落库的 `mjv011.json`
-///    里 `vod_play_from == whos` 的行（用户自己爬到的更新内容）。
+/// 数据只来自本地文件（2026-11-22 用户令最终口径：不内置任何
+/// JSON 种子，随包的 whos.json 已删）：
+/// `documents/actress_json/whos.json` 与现爬落库的 `mjv011.json`
+/// 里 `vod_play_from == whos` 的行（用户自己爬到的更新内容）。
 ///
 /// 目录维度全在本地算（最新 / 排行榜 / 厂牌 + 关键词），所以在线取不到
 /// 内容时，分类页、搜索、详情、直链播放都不至于空着。
@@ -134,7 +133,6 @@ class WhosLocalLibrary {
     sourceNote: 'shared',
   );
 
-  static const assetPath = 'assets/actress_json/whos.json';
   static const localDirName = 'actress_json';
 
   final List<WhosLocalWork> _works;
@@ -175,10 +173,6 @@ class WhosLocalLibrary {
         }
       }
     }
-
-    try {
-      absorb(await rootBundle.loadString(assetPath), origin: 'asset');
-    } catch (_) {}
 
     try {
       final docs = await getApplicationDocumentsDirectory();

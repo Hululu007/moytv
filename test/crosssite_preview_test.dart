@@ -12,7 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:moyi/app_theme_config.dart';
-import 'package:moyi/core_bridge.dart';
+import 'package:moyi/builtin_py_sites.dart';
 import 'package:moyi/detail_screen.dart';
 import 'package:moyi/jar_bridge.dart';
 import 'package:moyi/local_store.dart';
@@ -21,7 +21,6 @@ import 'package:moyi/ui_style.dart';
 import 'package:moyi/zakatv_builtin.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'fixtures.dart';
 import 'player_fixtures.dart';
 
 const _previewDir = '/home/hatch/workspace/moyi_previews';
@@ -125,17 +124,18 @@ Future<void> _dragSheetTo(WidgetTester tester, Finder target) async {
 /// 探活要用的三家站源，否则选线区一行站源都没有。只注 id 与
 /// 登记信息，不走平台通道；站源登记写法与 jar_import._registerBuiltin
 /// 保持一致（选线区从 store.visibleSources 取候选站）。
+/// MissAV 唯一站改为内置 py（2026-11-22）：jar ZakaMissav 已摘登记，
+/// 这里改注 py missav（BuiltinPySites.missavSite），行 id 为 missav。
 void _registerProbeSpecs() {
-  const wanted = {'zakav01', 'ZakaMissav', 'ZakaJable'};
+  const wanted = {'zakav01', 'ZakaJable'};
   const table = [
     (zakatvJarId, zakatvBuiltinSites),
-    (missav30JarId, missav30BuiltinSites),
   ];
   for (final (jarId, sites) in table) {
     for (final builtin in sites) {
       if (!wanted.contains(builtin.key)) continue;
       final siteId = JarSiteSpec.siteIdFor(jarId, builtin.key);
-      final jarMd5 = jarId == missav30JarId ? missav30JarMd5 : zakatvJarMd5;
+      final jarMd5 = zakatvJarMd5;
       JarBridge.register(
         JarSiteSpec(
           siteId: siteId,
@@ -157,18 +157,20 @@ void _registerProbeSpecs() {
       );
     }
   }
+  SourceSite.importedSites[BuiltinPySites.missavSiteId] =
+      BuiltinPySites.missavSite;
 }
 
 void _unregisterProbeSpecs() {
   for (final (jarId, key) in [
     (zakatvJarId, 'zakav01'),
-    (missav30JarId, 'ZakaMissav'),
     (zakatvJarId, 'ZakaJable'),
   ]) {
     final siteId = JarSiteSpec.siteIdFor(jarId, key);
     JarBridge.unregister(siteId);
     SourceSite.importedSites.remove(siteId);
   }
+  SourceSite.importedSites.remove(BuiltinPySites.missavSiteId);
 }
 
 DramaDetail _detailWithFlags(String id, List<String> flags) {
@@ -384,10 +386,10 @@ void main() {
   // 懒查后：MissAV/Jable 点过懒查后也探出版本与线路。
   testWidgets('预览 跨站选线 懒查后', (tester) async {
     final repository = _repositoryWithAv01()
-      ..searchResults['jar:missav30:ZakaMissav'] = [
+      ..searchResults['missav'] = [
         const Drama(
           id: 'hmn-927',
-          source: 'jar:missav30:ZakaMissav',
+          source: 'missav',
           title: 'hmn-927',
         ),
       ]
@@ -416,11 +418,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         await _dragSheetTo(
           tester,
-          find.byKey(const ValueKey('crosssite-rowtap-jar:missav30:ZakaMissav')),
+          find.byKey(const ValueKey('crosssite-rowtap-missav')),
         );
         await tester.pump();
         await tester.tap(
-          find.byKey(const ValueKey('crosssite-rowtap-jar:missav30:ZakaMissav')),
+          find.byKey(const ValueKey('crosssite-rowtap-missav')),
         );
         await tester.pump(const Duration(milliseconds: 100));
         await _dragSheetTo(

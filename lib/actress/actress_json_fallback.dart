@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
@@ -10,25 +9,26 @@ import 'actress_database.dart';
 import 'actress_m3u_index.dart';
 import 'actress_models.dart';
 
-/// 女优库 JSON 兜底：工作台爬取循环产出的 mjv011.json / whos.json。
+/// 女优库 JSON 兜底：用户自己在 MYTV/db 里放的 json 文件
+///（现爬落盘的 mjv011.json、旧版分站文件）与 MYTV/m3u 里的
+/// 用户 m3u 文件。
+///
+/// 2026-11-22 用户令最终口径：App 里不内置任何数据库与 JSON
+/// 种子——随包的 mjv011.json / whos.json 不再打包、也不再读，
+/// 这里只读用户本地文件；没有本地文件就是空兜底，不悄悄造数据。
 ///
 /// 格式照 UPDATE_RULES.md（~/workspace/mjv_whos_crawl_20261119/）：
 /// 13 个 hsck 字段同顺序 + 末尾 vod_code、vod_actress_pic；
 /// 顶层 list/parse/jx/last_update；indent=2；简介单段 <p>；
 /// 备注一律“高清”；值照实数。两站各管各，不跨站合并。
 ///
-/// 落法（2026-11-20 用户令：所有数据全部进内置的 mjv011.json
+/// 落法（2026-11-20 用户令：所有数据全部进本地的 mjv011.json
 /// 这一个文件，json 是唯一落地口径）：
-/// - 权威文件就是树里 assets/actress_json/mjv011.json（同名同格式
-///   15 字段）；App 写不进安装包里的 assets，所以手机侧写入口是
-///   同名同格式的本地影子文件 documents/actress_json/mjv011.json，
+/// - 权威文件就是本地 mjv011.json（同名同格式 15 字段）；
 ///   爬虫腿（任何站）拿到的视频行只追加进这一个文件，不分站另存；
-/// - 读时内置那份加本地这份合并（更新规则：番号+播放链接完全一样
-///   才跳过，任一处不同就替换；同番号不同站都留），列表看到的就
-///   是内置 json 的内容；
-/// - 写回内置：[mergedDocument] 产出合并后的全文（内置格式），
-///   导出后拷进树里 assets/actress_json/mjv011.json，下次打包带走；
-///   旧版分站本地文件（mjv.json、whos.json、各站 json）只读不写，
+/// - 读时本地各站文件按更新规则合并（番号+播放链接完全一样
+///   才跳过，任一处不同就替换；同番号不同站都留）；
+/// - 旧版分站本地文件（mjv.json、whos.json、各站 json）只读不写，
 ///   过渡期并存、数据不丢；
 /// - 单文件里多站的行按 vod_play_from 认站（mjv011 → mjv，
 ///   其余来源名即站 id）；去重键仍是各站内的（分类，番号），
@@ -310,13 +310,7 @@ class ActressJsonEntry {
   }
 }
 
-/// 读 asset 用：默认走 rootBundle；测试可注入假文本。
-typedef ActressJsonAssetReader = Future<String> Function(String assetPath);
-
-Future<String> _defaultAssetReader(String assetPath) =>
-    rootBundle.loadString(assetPath);
-
-/// 女优库 JSON 兜底加载器：随包 asset + 本地现爬文件叠加，
+/// 女优库 JSON 兜底加载器：只读本地 json 文件（MYTV/db），
 /// 再叠 whos m3u 分片索引（用户 2026-11-19 发来的 9 个女优合集 m3u）。
 /// JSON 行优先：同一播放地址 m3u 行不重复占位；m3u 行只补 JSON 没有的。
 /// 影视库 db 兜底提供方（2026-11-20 18:57 用户令“全部使用数据库兜底”）：
@@ -345,13 +339,11 @@ abstract class FilmDbFallbackProvider {
 
 class ActressJsonFallback {
   ActressJsonFallback({
-    ActressJsonAssetReader? assetReader,
     Directory? documentsDir,
     WhosM3uIndex? m3uIndex,
     Directory? localJsonDir,
     this.filmDb,
-  }) : _assetReader = assetReader ?? _defaultAssetReader,
-       _documentsDir = documentsDir,
+  }) : _documentsDir = documentsDir,
        _m3uIndex = m3uIndex,
        _localJsonDir = localJsonDir;
 
@@ -369,9 +361,6 @@ class ActressJsonFallback {
 
   WhosM3uIndex? _m3uIndex;
 
-  static const mjvAsset = 'assets/actress_json/mjv011.json';
-  static const whosAsset = 'assets/actress_json/whos.json';
-
   /// 兜底线路的解析通道：mjv/whos 走潮流蜘蛛（mjv 全站蜘蛛）；
   /// 片库站走本站蜘蛛自己的站 id。whos 条目暂无自己的蜘蛛，也走
   /// 这条原始分支（地址原样回 parse=0）；手机上 whos 直链若因头
@@ -387,7 +376,6 @@ class ActressJsonFallback {
   /// 本地现爬文件目录名（documents 下）。
   static const localDirName = 'actress_json';
 
-  final ActressJsonAssetReader _assetReader;
   final Directory? _documentsDir;
 
   /// 2026-11-20 MYTV 绑定：绑定后的本地 json 目录覆盖
@@ -400,30 +388,23 @@ class ActressJsonFallback {
   final _byActor = <String, List<ActressJsonEntry>>{};
   final _counts = <String, int>{};
   final _lastUpdate = <String, String>{};
-  final _bundledLastUpdate = <String, String>{};
 
   bool get loaded => _loaded;
 
   List<ActressJsonEntry> get entries => List.unmodifiable(_entries);
 
-  /// 每站条数（mjv/whos + 本地现爬过的片库站）。
+  /// 每站条数（本地现爬过的各站）。
   Map<String, int> get counts => Map.unmodifiable(_counts);
 
-  /// 每站 last_update（随包版与本地版取较新的那份）。
+  /// 每站 last_update（本地各站文件里最新的那份）。
   Map<String, String> get lastUpdate => Map.unmodifiable(_lastUpdate);
 
-  /// 每站随包版 last_update（只算 assets 里的两份，不算本地影子
-  /// 文件）：新版 json 检测只看这个——本地影子文件现爬每页都写
-  /// 新时间，算它会在每次现爬后都误触发同步。
-  Map<String, String> get bundledLastUpdate =>
-      Map.unmodifiable(_bundledLastUpdate);
-
-  /// 读随包两份 + 本地各站文件（有才读），按更新规则合并不去重。
+  /// 读本地各站文件（有才读），按更新规则合并不去重。
   /// 单文件模型（2026-11-20 用户令）：新写只进本地 mjv011.json
-  /// 这一个文件；读的时候内置 mjv011.json + 本地 mjv011.json
-  /// 合并，旧版分站本地文件（mjv.json、whos.json、各站 json）
-  /// 过渡期照常读、只读不写；随包 whos.json 也照常读，工作台
-  /// 下次快照把它并进 mjv011.json 后可去掉。
+  /// 这一个文件；读的时候旧版分站本地文件（mjv.json、whos.json、
+  /// 各站 json）先读、单文件 mjv011.json 最后读（它权威，同键
+  /// 不同内容时以后读的为准）。随包 json 已不再打包、不再读
+  /// （2026-11-22 用户令最终口径）。
   /// 站的认定：mjv011.json 这个单文件里的行按 vod_play_from 认站
   /// （多站同文件），其余文件按文件名认站（mjv011/mjv → mjv）。
   /// 同站内按更新规则合并：同 mergeKey 且同 vodPlayUrl 跳过、
@@ -457,21 +438,9 @@ class ActressJsonFallback {
       }
     }
 
-    // 随包两份：mjv011.json 与 whos.json，各站一行一个来源。
-    for (final asset in [mjvAsset, whosAsset]) {
-      final site = asset == mjvAsset ? 'mjv' : 'whos';
-      final bundled = await _readAsset(asset, site);
-      apply(bundled.entries, bundled.lastUpdate);
-      if (bundled.lastUpdate.isNotEmpty) {
-        lastUpdates[site] = bundled.lastUpdate;
-        final current = _bundledLastUpdate[site] ?? '';
-        if (bundled.lastUpdate.compareTo(current) > 0) {
-          _bundledLastUpdate[site] = bundled.lastUpdate;
-        }
-      }
-    }
     // 本地：旧版分站文件先读、单文件 mjv011.json 最后读（它权威，
-    // 同键不同内容时以后读的为准）。
+    // 同键不同内容时以后读的为准）。随包 json 已不再读
+    // （2026-11-22 用户令最终口径：不内置任何 JSON 种子）。
     for (final file in await _localJsonFiles()) {
       final isCanonical = path.basename(file.path) == localFileName;
       final fileSite = _siteIdForLocalFile(file);
@@ -501,10 +470,10 @@ class ActressJsonFallback {
     _loaded = true;
   }
 
-  /// 合并后的单文件文档（写回内置用）：随包 + 本地全部行按更新规则
-  /// 合并后的全文，15 字段同顺序、顶层四键，indent=2 序列化后可直
-  /// 接拷进树里 assets/actress_json/mjv011.json，下次打包带走。
-  /// last_update 取各站最新的那份。load() 之前调只会拿到空文档。
+  /// 合并后的单文件文档（导出用）：本地全部行按更新规则合并后
+  /// 的全文，15 字段同顺序、顶层四键，indent=2 序列化后可直接
+  /// 拷走当 mjv011.json 用。last_update 取各站最新的那份。
+  /// load() 之前调只会拿到空文档。
   Map<String, dynamic> mergedDocument() {
     var lastUpdate = '';
     for (final value in _lastUpdate.values) {
@@ -518,7 +487,7 @@ class ActressJsonFallback {
     };
   }
 
-  /// 本地单文件的文件名：与内置同名（mjv011.json），爬虫腿只写它。
+  /// 本地单文件的文件名：mjv011.json，爬虫腿只写它。
   static const localFileName = 'mjv011.json';
 
   /// 本地 json 文件列表：旧版分站文件在前、单文件 mjv011.json 在
@@ -570,37 +539,6 @@ class ActressJsonFallback {
     final playFrom = row['vod_play_from']?.toString() ?? '';
     if (playFrom.isEmpty) return fileSite;
     return siteForPlayFrom(playFrom);
-  }
-
-  Future<({List<ActressJsonEntry> entries, String lastUpdate})> _readAsset(
-    String asset,
-    String site,
-  ) async {
-    try {
-      final text = await _assetReader(asset);
-      final doc = jsonDecode(text);
-      if (doc is! Map<String, dynamic>) {
-        return (entries: <ActressJsonEntry>[], lastUpdate: '');
-      }
-      validateActressJsonDocument(doc, asset);
-      final rows = doc['list'] as List;
-      // 单文件 mjv011.json 里的行按 vod_play_from 认站（多站同文件，
-      // 工作台快照把 whos 并进来后也一样）；其余随包文件整文件一个站。
-      final canonical = asset.endsWith(localFileName);
-      return (
-        entries: [
-          for (final row in rows)
-            if (row is Map<String, dynamic>)
-              ActressJsonEntry.fromRow(
-                row,
-                canonical ? _rowSite(row, site, true) : site,
-              ),
-        ],
-        lastUpdate: doc['last_update']?.toString() ?? '',
-      );
-    } catch (_) {
-      return (entries: <ActressJsonEntry>[], lastUpdate: '');
-    }
   }
 
   /// 读一个本地 json 文件：单文件 mjv011.json 里的行按

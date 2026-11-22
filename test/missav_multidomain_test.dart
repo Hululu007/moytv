@@ -8,11 +8,10 @@ import 'package:moyi/miniapp/haikuo/haikuo_store.dart';
 import 'package:moyi/zakatv_builtin.dart';
 
 /// MissAV 多域名回落（2026-11-19）与取流验盾 v7（2026-11-19）回归测试。
-///
+/// 2026-11-22 用户令删 MissAV 全部旧站：海阔 🔞MissAV 规则已撤包
+/// （146 → 145 条，bundle 版本升到 16，已装设备重新播种时清掉旧副本）。
 /// 钉住：jar 的 md5 常量与实际文件一致、classes.dex 含新域名串与
-/// Mirror 的 tryHosts、规则包里 MissAV 为 v7 且模块带 hosts 回落表
-/// 与域名记忆、取流 lazyRule 先验播放列表、bundle 版本升到 15
-/// （已装设备重新播种）。
+/// Mirror 的 tryHosts。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -35,52 +34,19 @@ void main() {
     });
   });
 
-  group('海阔规则包回落', () {
-    late Map<String, dynamic> rule;
-
-    setUpAll(() {
+  group('海阔规则包：MissAV 规则已撤包', () {
+    test('🔞MissAV 不在规则包里，条数 145', () {
       final text = File('assets/haikuo_builtin_rules.json').readAsStringSync();
       final list = jsonDecode(text) as List<dynamic>;
-      expect(list.length, 146);
-      rule =
-          list.firstWhere(
-                (e) => (e as Map<String, dynamic>)['title'] == '🔞MissAV',
-              )
-              as Map<String, dynamic>;
+      expect(list.length, 145);
+      final titles = [
+        for (final e in list) (e as Map<String, dynamic>)['title'],
+      ];
+      expect(titles, isNot(contains('🔞MissAV')));
     });
 
-    test('MissAV 规则 version 7 且 fixlog 记本次改动', () {
-      expect(rule['version'], 7);
-      final fixlog = rule['fixlog'] as String;
-      expect(fixlog, contains('v7'));
-      expect(fixlog, contains('missav.fans'));
-    });
-
-    test('MissAV 模块含 hosts 回落表与域名记忆', () {
-      final pages = jsonDecode(rule['pages'] as String) as List<dynamic>;
-      final js = (pages.first as Map<String, dynamic>)['rule'] as String;
-      expect(js, contains("hosts: ['https://missav.live'"));
-      expect(js, contains('https://missav.fans'));
-      expect(js, contains('https://www.missav06.net'));
-      expect(js, contains('https://www.thisav.my'));
-      expect(js, contains('MissAV.bestHost'));
-      expect(js, contains('miss.get('));
-    });
-
-    test('MissAV 取流先验播放列表：盾页报提示、验不出照旧交播放器', () {
-      final pages = jsonDecode(rule['pages'] as String) as List<dynamic>;
-      final js = (pages.first as Map<String, dynamic>)['rule'] as String;
-      // 两处 lazyRule（海报卡与“播放正片”钮）都带验盾分支。
-      expect('fetch(playUrl'.allMatches(js).length, 2);
-      expect(js, contains("pls.indexOf('#EXTM3U')"));
-      expect(js, contains('片源被盾挡住了，换“MissAV官方┃过盾”站试试'));
-      // 三段提取先中者胜：后两段只在没取到时才赋值。
-      expect(js, contains('if (!playUrl) playUrl'));
-      expect(js, contains('if (u && !playUrl) playUrl'));
-    });
-
-    test('bundle 版本 15', () {
-      expect(HaikuoStore.builtinBundleVersion, 15);
+    test('bundle 版本 16', () {
+      expect(HaikuoStore.builtinBundleVersion, 16);
     });
   });
 }

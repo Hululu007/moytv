@@ -251,26 +251,26 @@ void main() {
       temp.deleteSync(recursive: true);
     });
 
+    /// 旧版分站文件（mjv.json）先读、单文件（mjv011.json）后读：
+    /// 后读的权威，同键不同内容时以后读的为准。2026-11-22 前
+    /// 这里用假随包行当“先读的那份”，随包已删，改用旧版本地文件。
     Future<ActressJsonFallback> loadWithLocal(
-      String bundledMjv,
-      String? localMjv,
+      String oldMjv,
+      String? canonicalMjv,
     ) async {
-      if (localMjv != null) {
-        final dir = Directory('${temp.path}/actress_json')
-          ..createSync(recursive: true);
-        File('${dir.path}/mjv.json').writeAsStringSync(localMjv);
+      final dir = Directory('${temp.path}/actress_json')
+        ..createSync(recursive: true);
+      File('${dir.path}/mjv.json').writeAsStringSync(oldMjv);
+      if (canonicalMjv != null) {
+        File('${dir.path}/mjv011.json').writeAsStringSync(canonicalMjv);
       }
-      final fallback = ActressJsonFallback(
-        assetReader: (asset) async =>
-            asset.endsWith('mjv011.json') ? bundledMjv : _doc([]),
-        documentsDir: temp,
-      );
+      final fallback = ActressJsonFallback(localJsonDir: dir);
       await fallback.load();
       return fallback;
     }
 
-    test('同 mergeKey 同链接：本地行被跳过，只留一条', () async {
-      final bundled = _doc([
+    test('同 mergeKey 同链接：后读的行被跳过，只留一条', () async {
+      final old = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -278,7 +278,7 @@ void main() {
           playUrl: '正片\$https://x/1.m3u8',
         ),
       ]);
-      final local = _doc([
+      final canonical = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -286,13 +286,13 @@ void main() {
           playUrl: '正片\$https://x/1.m3u8',
         ),
       ]);
-      final fallback = await loadWithLocal(bundled, local);
+      final fallback = await loadWithLocal(old, canonical);
       expect(fallback.counts['mjv'], 1);
       expect(fallback.entriesForCode('SSIS123'), hasLength(1));
     });
 
-    test('同 mergeKey 不同链接：本地行替换随包行，仍一条', () async {
-      final bundled = _doc([
+    test('同 mergeKey 不同链接：后读的行替换先读的行，仍一条', () async {
+      final old = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -300,7 +300,7 @@ void main() {
           playUrl: '正片\$https://x/old.m3u8',
         ),
       ]);
-      final local = _doc([
+      final canonical = _doc([
         _row(
           vodId: 'id-1',
           code: 'SSIS-123',
@@ -308,7 +308,7 @@ void main() {
           playUrl: '正片\$https://x/new.m3u8',
         ),
       ]);
-      final fallback = await loadWithLocal(bundled, local);
+      final fallback = await loadWithLocal(old, canonical);
       expect(fallback.counts['mjv'], 1);
       expect(
         fallback.entriesForCode('SSIS123').single.vodPlayUrl,
@@ -317,27 +317,29 @@ void main() {
     });
 
     test('两站同一番号各留一条（合并不跨站）', () async {
-      final bundled = _doc([
-        _row(
-          vodId: 'id-1',
-          code: 'SSIS-123',
-          actor: '测试演员',
-          playUrl: '正片\$https://x/1.m3u8',
-        ),
-      ]);
-      final fallback = ActressJsonFallback(
-        assetReader: (asset) async => asset.endsWith('mjv011.json')
-            ? bundled
-            : _doc([
-                _row(
-                  vodId: 'id-2',
-                  code: 'SSIS-123',
-                  actor: '测试演员',
-                  playUrl: '正片\$https://y/1.m3u8',
-                ),
-              ]),
-        documentsDir: temp,
+      final dir = Directory('${temp.path}/actress_json')
+        ..createSync(recursive: true);
+      File('${dir.path}/mjv.json').writeAsStringSync(
+        _doc([
+          _row(
+            vodId: 'id-1',
+            code: 'SSIS-123',
+            actor: '测试演员',
+            playUrl: '正片\$https://x/1.m3u8',
+          ),
+        ]),
       );
+      File('${dir.path}/whos.json').writeAsStringSync(
+        _doc([
+          _row(
+            vodId: 'id-2',
+            code: 'SSIS-123',
+            actor: '测试演员',
+            playUrl: '正片\$https://y/1.m3u8',
+          ),
+        ]),
+      );
+      final fallback = ActressJsonFallback(localJsonDir: dir);
       await fallback.load();
       final rows = fallback.entriesForCode('SSIS123');
       expect(rows, hasLength(2));

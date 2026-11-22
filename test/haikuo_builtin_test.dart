@@ -104,11 +104,11 @@ void main() {
     expect(await File('${temp.path}/builtin_seeded.json').exists(), isFalse);
   });
 
-  test('真实内置包能播种 146 条（读 asset 文件本身），23 条已删工具规则不在包里', () async {
+  test('真实内置包能播种 145 条（读 asset 文件本身），23 条已删工具规则不在包里', () async {
     final seeded = await store.ensureBuiltinRules();
-    expect(seeded, 146);
+    expect(seeded, 145);
     final programs = await store.list();
-    expect(programs, hasLength(146));
+    expect(programs, hasLength(145));
     expect(programs.map((p) => p.origin).toSet(), {'内置规则'});
     final names = programs.map((p) => p.name).toSet();
     expect(names, containsAll(['🔞鉴黄师', '🔞黄果短剧', '🔞4K.AI短剧', '🔞草榴视频']));
@@ -143,7 +143,7 @@ void main() {
     expect(names.intersection(removed23), isEmpty);
   });
 
-  test('播种标记写当前包版本 14', () async {
+  test('播种标记写当前包版本 16', () async {
     await store.ensureBuiltinRules(
       bundleText: jsonEncode([_builtinRule('甲', 'v1')]),
     );
@@ -151,7 +151,7 @@ void main() {
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
     expect(marker['version'], HaikuoStore.builtinBundleVersion);
-    expect(marker['version'], 15);
+    expect(marker['version'], 16);
     expect(marker['names'], ['甲']);
   });
 
@@ -190,7 +190,7 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 15);
+    expect(marker['version'], 16);
   });
 
   test('标记损坏时当没播种过：整包播种、不崩溃、标记重写', () async {
@@ -203,6 +203,6 @@ void main() {
     final marker = jsonDecode(
       await File('${temp.path}/builtin_seeded.json').readAsString(),
     );
-    expect(marker['version'], 15);
+    expect(marker['version'], 16);
   });
 }

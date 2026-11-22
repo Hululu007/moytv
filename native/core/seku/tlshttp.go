@@ -126,11 +126,11 @@ func tlsFetchLocation(rawurl string, headers map[string]string) (int, string) {
 
 // tlsEnabledFor reports whether a site's fetch paths use the
 // impersonated transport. Central switch for the v2 shield work:
-// missav and supjav are CF-fronted; every other site stays on the
+// supjav is CF-fronted; every other site stays on the
 // standard client (validated as working in the batch smoke).
 func tlsEnabledFor(key string) bool {
 	switch strings.ToLower(key) {
-	case "missav", "supjav":
+	case "supjav":
 		return true
 	}
 	return false

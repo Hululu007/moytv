@@ -2,6 +2,23 @@ package seku
 
 import "testing"
 
+// 2026-11-22 用户令删 MissAV 全部旧站：hongguo 槽已摘注册（slotOrder、
+// sites_mirror.go 注册、models.dart、主页一并摘除）。这里锁定
+// 「必须保持未注册」，实现函数留档在 sites_g2.go，仅供以后恢复时复用。
+func TestMissavSlotRegistered(t *testing.T) {
+	if implForSlot("hongguo") != nil {
+		t.Fatal("slot hongguo must stay unregistered (removed 2026-11-22)")
+	}
+	if _, ok := keyToSlot["hongguo"]; ok {
+		t.Fatal("key hongguo must not resolve to a slot")
+	}
+	for _, s := range allSlots() {
+		if s == "hongguo" {
+			t.Fatal("hongguo must not appear in allSlots")
+		}
+	}
+}
+
 // SupJav 免代兜底接线回归（离线确定性部分）：
 //   - CF 新版验证页签名 "Performing security verification" 须能被公共
 //     挑战识别命中（jinaFallback 的触发条件之一）；

@@ -83,11 +83,11 @@ void main() {
     'year_url',
   ];
 
-  test('内置规则总数 146、标题唯一、每条都有标题与 fixlog', () {
+  test('内置规则总数 145、标题唯一、每条都有标题与 fixlog', () {
     final rules = _rules();
-    expect(rules, hasLength(146));
+    expect(rules, hasLength(145));
     final titles = rules.map((rule) => '${rule['title']}').toList();
-    expect(titles.toSet(), hasLength(146));
+    expect(titles.toSet(), hasLength(145));
     for (final rule in rules) {
       expect('${rule['title']}'.isNotEmpty, isTrue);
       expect(rule.containsKey('fixlog'), isTrue, reason: '${rule['title']}');

@@ -651,9 +651,9 @@ func av123Search(slot, kw string) ([]interface{}, error) {
 	return g2WorksToItems(slot, works, "搜索"), nil
 }
 
-// v4 final mapping: hongguo carries the MissAV mirror (thisav.my,
-// sites_mirror.go) per the user's 17:48 order — the mirror passed the
-// full vetting and is the same MissAV catalogue; 123AV is the
+// v4 final mapping: hongguo carried the MissAV mirror (thisav.my,
+// sites_mirror.go) per the user's 17:48 order. 2026-11-22 the user
+// ordered all old MissAV sites removed: the hongguo registration is
+// gone, the mirror helpers stay in the tree for reuse; 123AV is the
 // documented second choice and this provider stays unregistered.
-// To restore 123AV, re-add its registerSite call here and remove the
-// mirror registration.
+// To restore 123AV, re-add its registerSite call here.

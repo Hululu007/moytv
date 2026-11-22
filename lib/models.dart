@@ -230,13 +230,6 @@ class SourceSite {
   ];
   static const videoValues = [
     SourceSite(
-      'v_missav',
-      'MissAV',
-      'MissAV 镜像 · 槽位 hongguo',
-      section: sectionVideo,
-      slotId: 'hongguo',
-    ),
-    SourceSite(
       'v_xvideos',
       'XVideos',
       'XVideos · 直连 · 槽位 xvideos',

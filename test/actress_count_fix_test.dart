@@ -190,9 +190,7 @@ void main() {
       db = MemoryActressDatabase();
       repository = FixtureRepository();
       store = await _makeStore();
-      fallback = ActressJsonFallback(
-        assetReader: (asset) async => File(asset).readAsString(),
-      );
+      fallback = ActressJsonFallback();
       await fallback.load();
       // MYTV 绑定预解析（与兜底预加载同理）：_bootstrap 开头 await
       // ensureBound()，它里面有异步文件 IO（探针写/删），在 widget

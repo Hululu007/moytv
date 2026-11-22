@@ -99,6 +99,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// （见 _playWork）。兜底区不渲染，只供点播用。
   var _fallbackEntries = <ActressJsonEntry>[];
 
+  /// 地址池正在建的 Future（_bootstrap 末尾起，不堵首屏）：
+  /// 点卡时先等它建好（15 秒超时兜底），池子没建好不急着报
+  /// “库里暂无播放地址”（2026-11-22 修复：点卡竞态）。
+  Future<void>? _fallbackLoad;
+
+  /// 没有外置数据库：详情页显示空态提示，不显示“人物不存在”。
+  var _noDatabase = false;
+
   /// DB 服务：只建一次，复用同一条 DB 连接（进详情页多次不重开）。
   /// 多 .db 合并（主库 + 其它 .db）：本页自己建的时候持有。
   /// 多 .db 合并仍是数据库，不是 json/m3u 兜底，保留。
@@ -123,15 +131,32 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   Future<void> _bootstrap() async {
     final generation = ++_generation;
     // 2026-11-20 热换库：进详情页先看库文件变了没有——变了就关旧
-    // 连接重开再读；重读失败留旧库并报原因，不崩。
+    // 连接重开再读；重读失败留旧库并报原因，不崩。没有外置库时
+    // 显示空态提示，不说“仍用旧库”（没有旧库可留）。
     final reload = await widget.database.reloadIfChanged();
     if (!mounted || generation != _generation) return;
     if (reload.error != null) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('数据库重读失败：${reload.error}，仍用旧库')));
+      ).showSnackBar(
+        SnackBar(content: Text(actressReloadErrorText(reload.error!))),
+      );
     }
-    final person = await widget.database.personById(widget.localId);
+    ActressPerson? person;
+    try {
+      person = await widget.database.personById(widget.localId);
+    } on ActressNoExternalDbException catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _person = null;
+        _loading = false;
+        _noDatabase = true;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    }
     if (!mounted || generation != _generation) return;
     if (person == null) {
       setState(() {
@@ -146,7 +171,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     // 作品到了就撤转圈出网格，分类 chips 到了再补。
     await Future.wait([_loadCategories(), _loadPage(reset: true)]);
     if (!mounted || generation != _generation) return;
-    await _loadFallback();
+    // 地址池后台建、不堵首屏；点卡时 _playWork 会等它建好。
+    _fallbackLoad = _loadFallback();
+    await _fallbackLoad;
   }
 
   /// 该女优作品里实际存在的分类（只含非空分类，按作品数排）：
@@ -197,7 +224,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// MultiDbFilmFallback）取行；同番号的条目必须留在池里——
   /// _playWork 按番号匹配存的地址播（2026-11-22 用户令：女优库
   /// 全部播放只走数据库里的数据，不读内置 json/m3u、不跨站现取）。
-  /// 不调 fallback.load()：那是读随包/本地 json 文件的，DB 行不
+  /// 不调 fallback.load()：那是读本地 json 文件的，DB 行不
   /// 依赖它（活树留了这行调用，这里是死负担，去掉）。
   Future<void> _loadFallback() async {
     final person = _person;
@@ -415,7 +442,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (reload.error != null && mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('数据库重读失败：${reload.error}，仍用旧库')));
+      ).showSnackBar(
+        SnackBar(content: Text(actressReloadErrorText(reload.error!))),
+      );
     }
     if (reload.reloaded && mounted) {
       final fresh = await _refetchWork(work);
@@ -428,8 +457,20 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         return;
       }
       currentWork = fresh;
-      await _loadFallback();
+      _fallbackLoad = _loadFallback();
+      await _fallbackLoad;
       if (!mounted) return;
+    }
+    // 2026-11-22 修复：地址池没建好就点卡，直接报“库里暂无播放
+    // 地址”是时序问题、不是库里没地址——先等池子建好（15 秒
+    // 超时兜底），等不到才按空池子走。
+    final poolLoad = _fallbackLoad;
+    if (poolLoad != null) {
+      try {
+        await poolLoad.timeout(const Duration(seconds: 15));
+      } catch (_) {
+        // 超时：按当前池子走，不在点播里卡住。
+      }
     }
     // 2026-11-22 用户令（只走数据库）：点卡只试库里存的地址，不再
     // 往下探内置 json/m3u、也不再跨站探活；库里没有这个番号、或库里
@@ -550,7 +591,13 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           _loading
               ? const Center(child: CircularProgressIndicator())
               : person == null
-              ? const Center(child: Text('人物不存在'))
+              ? Center(
+                  child: Text(
+                    _noDatabase
+                        ? '未找到外置数据库：请把 女优库.db 放进 MYTV/db/，再点“重新加载数据库”'
+                        : '人物不存在',
+                  ),
+                )
               : CustomScrollView(
                   controller: _scrollController,
                   slivers: [

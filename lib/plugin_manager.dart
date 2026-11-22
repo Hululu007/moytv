@@ -18,15 +18,11 @@ import 'zakatv_builtin.dart';
 /// 内置插件清单与安装状态。清单是代码内 const 表，不新增 asset 文件。
 ///
 /// 插件粒度（用户 2026-11-14 纠正：不拆 jar）：
-/// - jar 插件 1 个：整个 zakatv.jar，安装即注册全部 140 个站点配置
-///   （139 个可见站点 + 1 个纯音频配置），卸载即整个一起撤掉；
+/// - jar 插件 1 个：整个 zakatv.jar，安装即注册全部 137 个站点配置
+///   （136 个可见站点 + 1 个纯音频配置），卸载即整个一起撤掉；
 /// - jar 插件 1 个：一点播独立 jar（新蜘蛛重写版，无 Auth/SelfCheck，
 ///   独立加载器，独立安装/卸载），1 个站点配置；
-/// - jar 插件 1 个：MissAV v30 独立 jar（用户 2026-11-18 发来的新版
-///   jar 原样内置，里面代码一个字节不改），3 个站点配置（ZakaMissav /
-///   ZakaMissavOff / missavt，2026-11-19 从 zakatv.jar 挪过来，key/
-///   显示名/类名/ext 一字不动，只换 jar 归属），独立安装/卸载；
-/// - py 插件 44 个：一个 py 文件一个插件（jinguo.py 一文件两站，同装同卸）。
+/// - py 插件 45 个：一个 py 文件一个插件（jinguo.py 一文件两站，同装同卸）。
 ///
 /// 安装状态只记“用户卸载的内置插件 id 列表”：缺省全部已安装，
 /// 首次启动行为与插件化之前一致。
@@ -38,9 +34,6 @@ class PluginManager {
 
   /// 一点播独立 jar 插件 id。
   static const String oneJarPluginId = 'jar:one';
-
-  /// MissAV v30 独立 jar 插件 id。
-  static const String missav30JarPluginId = 'jar:missav30';
 
   /// 卸载列表的 SharedPreferences 键。
   static const String uninstalledPrefsKey = 'moyi_plugin_uninstalled';
@@ -105,18 +98,6 @@ class PluginManager {
         detail: '内置 jar · ${oneBuiltinSites.length} 个站点配置',
         md5: oneJarMd5,
       ),
-      BuiltinPluginInfo(
-        id: missav30JarPluginId,
-        name: 'MissAV v30',
-        kind: PluginIconKind.jar,
-        siteIds: [
-          for (final config in missav30BuiltinSites)
-            if (!config.audioOnly)
-              JarSiteSpec.siteIdFor(missav30JarId, config.key),
-        ],
-        detail: '内置 jar · ${missav30BuiltinSites.length} 个站点配置',
-        md5: missav30JarMd5,
-      ),
     ];
     final grouped = <String, List<BuiltinPyEntry>>{};
     for (final entry in BuiltinPySites.entries) {
@@ -153,9 +134,6 @@ class PluginManager {
     if (!uninstalled.contains(oneJarPluginId)) {
       await JarImport.registerBuiltinOne();
     }
-    if (!uninstalled.contains(missav30JarPluginId)) {
-      await JarImport.registerBuiltinMissav30();
-    }
     final skipSiteIds = <String>{};
     for (final entry in BuiltinPySites.entries) {
       if (uninstalled.contains(pyPluginIdForAsset(entry.assetPath))) {
@@ -175,9 +153,6 @@ class PluginManager {
       if (!ok) return false;
     } else if (pluginId == oneJarPluginId) {
       final ok = await JarImport.registerBuiltinOne();
-      if (!ok) return false;
-    } else if (pluginId == missav30JarPluginId) {
-      final ok = await JarImport.registerBuiltinMissav30();
       if (!ok) return false;
     } else {
       final entries = BuiltinPySites.entries
@@ -204,8 +179,6 @@ class PluginManager {
       JarImport.unregisterBuiltinZakatv();
     } else if (pluginId == oneJarPluginId) {
       JarImport.unregisterBuiltinOne();
-    } else if (pluginId == missav30JarPluginId) {
-      JarImport.unregisterBuiltinMissav30();
     } else {
       for (final entry in BuiltinPySites.entries) {
         if (pyPluginIdForAsset(entry.assetPath) == pluginId) {

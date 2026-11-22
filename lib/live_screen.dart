@@ -88,7 +88,6 @@ class _LiveScreenState extends State<LiveScreen> {
   String _group = '';
   ({String group, List<LiveChannel> channels})? _lastGood;
   bool _loading = true;
-  bool _detached = false;
   bool _more = false;
   bool _hasMore = false;
   String? _error;
@@ -786,39 +785,27 @@ class _LiveScreenState extends State<LiveScreen> {
     final source = _source;
     if (source == null) return;
     if (_playback.channel == null || _playback.channels.isEmpty) return;
-    setState(() => _detached = true);
-    final route = playerRoute(
-      LivePlayerScreen(
-        playback: _playback,
-        source: source,
-        store: widget.store,
-        videoBuilder: widget.videoBuilder,
+    // 画面层绝不卸载重挂：内嵌 Video 全程留在树里，全屏页另挂一个
+    // 同 controller 的 Video（同一纹理，两处同时显示）。
+    // v56 四处黑屏修的是同一条——全屏时把画面层从旧父级卸掉、挂到
+    // 新父级，表面重建后解码器照旧出声、画面全黑；直播全屏是剩下
+    // 的一处：以前进全屏先卸内嵌（_detached=true）、退全屏等动画
+    // 结束才复位，中间纹理无人持有，手机上直接黑屏。
+    // 两个 Video 同挂一个 controller 在安卓上是安全的（同一纹理
+    // id，两处 Texture 各自显示；内嵌那处被不透明全屏路由盖住，
+    // 不参与绘制）；只有 Web 端有“只显示最后挂载”的限制，本应用
+    // 不走 Web。
+    await Navigator.push<void>(
+      context,
+      playerRoute(
+        LivePlayerScreen(
+          playback: _playback,
+          source: source,
+          store: widget.store,
+          videoBuilder: widget.videoBuilder,
+        ),
       ),
     );
-    await Navigator.push<void>(context, route);
-    // push Future 在退场动画开始前就完成（Route.didComplete 在动画前调），
-    // 必须等动画彻底结束（路由卸载、全屏 Video 已卸）再复位，否则
-    // 退场过渡期间内嵌 Video 与全屏 Video 同挂一个 controller。
-    await _waitForRouteDismissed(route);
-    if (mounted) setState(() => _detached = false);
-  }
-
-  Future<void> _waitForRouteDismissed(Route<void> route) {
-    final transitionRoute = route is TransitionRoute<void> ? route : null;
-    final animation = transitionRoute?.animation;
-    if (animation == null || animation.status == AnimationStatus.dismissed) {
-      return Future<void>.value();
-    }
-    final completer = Completer<void>();
-    late final void Function(AnimationStatus) listener;
-    listener = (status) {
-      if (status == AnimationStatus.dismissed && !completer.isCompleted) {
-        animation.removeStatusListener(listener);
-        completer.complete();
-      }
-    };
-    animation.addStatusListener(listener);
-    return completer.future;
   }
 
   List<LiveSource> get _sources => LiveSource.visible(widget.greenMode);
@@ -903,16 +890,16 @@ class _LiveScreenState extends State<LiveScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (widget.videoBuilder != null && !_detached)
+          if (widget.videoBuilder != null)
             widget.videoBuilder!(_playback, false)
-          else if (controller != null && !_detached)
+          else if (controller != null)
             Video(
               controller: controller,
               fit: BoxFit.contain,
               wakelock: false,
               controls: (_) => const SizedBox.shrink(),
             )
-          else if (!_detached)
+          else
             const Center(
               child: Text(
                 '选择频道开始播放',

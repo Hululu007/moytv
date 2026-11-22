@@ -753,7 +753,9 @@ class HaikuoStore {
   /// v15：2026-11-19 MissAV 规则 v7 取流验盾（条数与顺序不变，其余
   /// 145 条一字未动；videoParse 两处 lazyRule 取流后先验播放列表，
   /// 盾页直接报提示、不再把死地址交给播放器转圈）。
-  static const builtinBundleVersion = 15;
+  /// v16：2026-11-22 用户令删 MissAV 全部旧站，🔞MissAV 规则撤包
+  /// （146 → 145 条；已装设备升版重播种时按 v7 机制清掉旧的内置副本）。
+  static const builtinBundleVersion = 16;
   static const builtinAssetPath = 'assets/haikuo_builtin_rules.json';
   static const _builtinMarkerFile = 'builtin_seeded.json';
 
