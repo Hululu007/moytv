@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"moyi/native/core/seku"
 )
 
 const nativeCatalogTTL = 15 * time.Minute
@@ -81,8 +83,44 @@ func migrateNativeDrama(drama nativeDrama) nativeDrama {
 	if drama.MetadataSchema == 0 && drama.Source == sourceHuangdou && drama.VIP != nil && !*drama.VIP {
 		drama.VIP = nil
 	}
+	// v56：v55 及以前的 seku 列表把内部槽名当 source 存进了缓存
+	// （hongguo / ikanbot / a123 / ... 这 8 个和短剧自有源同名），
+	// 点播放会被判成自有源，永远「站源无效」。这里就地改成对外站点 id，
+	// 卡片的 ID 前缀一起换掉，用户升级后旧缓存不用清也能正常播。
+	if aliased, ok := migrateSekuSourceAlias(drama.Source, drama.ID); ok {
+		oldSource := drama.Source
+		drama.Source = aliased
+		if rest, found := strings.CutPrefix(drama.ID, oldSource); found {
+			drama.ID = aliased + rest
+		}
+		if drama.SourceID == "" {
+			drama.SourceID = strings.TrimPrefix(drama.ID, aliased+":")
+		}
+	}
 	drama.MetadataSchema = 1
 	return drama
+}
+
+// migrateSekuSourceAlias 判断一条缓存条目的 source 是不是「seku 内部槽名
+// 被当成对外站点 id」的老写法，是就返回该槽的对外 id。
+// 只接管「该名字确有 seku 槽 + 卡片标识里带 http(s) 地址」的组合，
+// 短剧自有源的 id 一律不是 URL，不会被误改。
+func migrateSekuSourceAlias(source, dramaID string) (string, bool) {
+	slot := canonicalProviderSource(source)
+	if slot == "" || !seku.HasSlot(slot) {
+		return "", false
+	}
+	if _, ok := sekuSlotForSource(source); ok {
+		return "", false
+	}
+	raw := dramaID
+	if _, tail, found := strings.Cut(dramaID, ":"); found {
+		raw = tail
+	}
+	if !isProviderHTTPMediaURL(raw) {
+		return "", false
+	}
+	return sekuSourceID(slot), true
 }
 
 func (engine *nativeEngine) nativeCached(source string) nativeCatalogResult {

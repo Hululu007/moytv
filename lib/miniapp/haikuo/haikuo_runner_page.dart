@@ -2281,49 +2281,66 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
     final session = _x5RowSession!;
     final headers = <String, String>{};
     if (session.referer.isNotEmpty) headers['Referer'] = session.referer;
+    final fullscreen = _floatVideoFullscreen;
     final player = HaikuoPlayerView(
       key: ValueKey<String>(_floatVideoUrl),
       url: _floatVideoUrl,
       title: widget.program.name,
       headers: headers,
-      fullscreen: _floatVideoFullscreen,
+      fullscreen: fullscreen,
       onFullscreenChanged: (value) {
         if (mounted) setState(() => _floatVideoFullscreen = value);
       },
       onClose: _closeFloatVideo,
     );
-    if (_floatVideoFullscreen) {
-      return Positioned.fill(
-        child: Container(color: Colors.black, child: player),
-      );
-    }
+    // 悬浮层全屏切换不换父级：以前全屏 Positioned.fill>Container、
+    // 非全屏 Positioned>Material>Stack>AspectRatio，两套父链，
+    // HaikuoPlayerView 切全屏就被卸载重建，dispose 里 _player.dispose()
+    // 等于整台播放器重开（位置丢失、重新缓冲）。改成全程同一条
+    // Positioned → LayoutBuilder → Material → SizedBox → Stack →
+    // Positioned.fill 链，只改四条边、高度与关闭钮显隐。
     return Positioned(
-      left: 8,
-      right: 8,
-      bottom: 16,
-      child: Material(
-        elevation: 8,
-        borderRadius: BorderRadius.circular(8),
-        clipBehavior: Clip.antiAlias,
-        color: Colors.black,
-        child: Stack(
-          children: [
-            AspectRatio(aspectRatio: 16 / 9, child: player),
-            Positioned(
-              top: 4,
-              right: 4,
-              child: Material(
-                color: Colors.black54,
-                shape: const CircleBorder(),
-                child: IconButton(
-                  tooltip: '关闭悬浮播放',
-                  icon: const Icon(Icons.close_rounded, color: Colors.white),
-                  onPressed: _closeFloatVideo,
-                ),
+      left: fullscreen ? 0 : 8,
+      right: fullscreen ? 0 : 8,
+      top: fullscreen ? 0 : null,
+      bottom: fullscreen ? 0 : 16,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Material(
+            elevation: fullscreen ? 0 : 8,
+            borderRadius: fullscreen ? null : BorderRadius.circular(8),
+            clipBehavior: Clip.antiAlias,
+            color: Colors.black,
+            child: SizedBox(
+              height: fullscreen
+                  ? constraints.maxHeight
+                  : constraints.maxWidth * 9 / 16,
+              width: double.infinity,
+              child: Stack(
+                children: [
+                  Positioned.fill(child: player),
+                  if (!fullscreen)
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: Material(
+                        color: Colors.black54,
+                        shape: const CircleBorder(),
+                        child: IconButton(
+                          tooltip: '关闭悬浮播放',
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                          ),
+                          onPressed: _closeFloatVideo,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

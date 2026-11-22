@@ -27,6 +27,8 @@ import (
 //            不能预先缓存）。
 //   supjav   直接复用 sites_g2.go 里已成型的那套（页面是 Cloudflare 挑战，
 //            出口直连拿不到正文，靠 App 内隐藏浏览器解盾回填票据）。
+//            2026-11-22 恢复注册：v56 补丁把 tlsGet 接进票据/上报通路，
+//            supjavFetch 断链根因已修（用户 2026-11-22 18:06 点头恢复）。
 
 var (
 	xnxxCardRe = regexp.MustCompile(
@@ -196,6 +198,12 @@ func pornhubImpl() *siteImpl {
 		// 同 UA 是 200），这里走伪装指纹的客户端。
 		body, code, _, err := tlsGet(u, headers())
 		if err != nil {
+			// 首页首取常耗时 30 秒上下（本机出口实测 38.5 秒），撞上
+			// tlsGet 30 秒单次超时；连接预热后重试通常 1 秒内通，
+			// 只重试一次，仍失败即报出（Dart 侧 70 秒上限内）。
+			body, code, _, err = tlsGet(u, headers())
+		}
+		if err != nil {
 			return "", err
 		}
 		if code != 200 {
@@ -260,8 +268,11 @@ func pornhubImpl() *siteImpl {
 			name = "最新"
 		}
 		if page > 1 {
-			u = fmt.Sprintf("%s&page=%d", u, page)
-			if !strings.Contains(u, "?") {
+			// 2026-11-22 修：旧写法先拼 "&page=N" 再补 "?page=N"，最热
+			// 分页 URL 会畸形成 "/&page=2?page=2"；按有无问号分支拼。
+			if strings.Contains(u, "?") {
+				u = fmt.Sprintf("%s&page=%d", u, page)
+			} else {
 				u = fmt.Sprintf("%s?page=%d", u, page)
 			}
 		}

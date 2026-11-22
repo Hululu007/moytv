@@ -109,10 +109,26 @@ const _exactNames = <GenericDbRole, List<String>>{
     'artist',
     'actorname',
   ],
-  GenericDbRole.code: ['vodcode', 'code', '番号', 'avcode'],
+  GenericDbRole.code: [
+    'vodcode',
+    'code',
+    '番号',
+    'avcode',
+    // 2026-11-22 用户报「所有数据库」都认不出番号：外来库的主键就叫
+    // plain `id`（或 videoid/vid/vodid/movieid/workid），旧表里一个
+    // 都没有，整库的番号角色全灭。精确全名只认整列名，`vid` 不会
+    // 误伤 `video`（关键词里绝不加 `vid`，`video` 含 `vid`）。
+    'id',
+    'videoid',
+    'vid',
+    'vodid',
+    'movieid',
+    'workid',
+  ],
   GenericDbRole.category: [
     'typename',
     'category',
+    'categoryid',
     'type',
     '类别',
     '分类',
@@ -543,11 +559,15 @@ GenericDbSchema classifyGenericTables(
     );
   }
   // 人物表：有人名（标题角色）但没有播放地址；多张时同上排序。
+  // 分类字典表（`categories` / `category`：id + 名字）不是人物表：
+  // 它也有 `name`（→标题角色），不排除会被当成人物表读，分类名
+  // 全跑到人物列表里去（2026-11-22 截图：categories 被标成人物表）。
   final personsCandidates =
       mappings
           .where(
             (m) =>
                 m != worksTable &&
+                !_isCategoryDictionaryTable(m.table) &&
                 m.columns.containsKey(GenericDbRole.title) &&
                 !m.columns.containsKey(GenericDbRole.playUrl),
           )
@@ -675,32 +695,78 @@ String? _foreignKeyFor({
 /// 分类副表最多收几张（每张一个 chip，太多挤满一屏）。
 const _maxFacetTables = 3;
 
+/// 表名是不是分类字典表（`categories` / `category`：主键 + 名字）。
+bool _isCategoryDictionaryTable(String table) {
+  final normalized = normalizeDbFieldName(table);
+  return normalized == 'categories' || normalized == 'category';
+}
+
 /// 找「分类在副表」的维度：副表里有一列像分类（category 角色，或者
 /// 列名像分类/标签/类型），并且有一个能指回作品表的外键，才算一个
 /// 可筛选维度。女优库：video_category(vod_id → main_category)、
 /// video_tag(vod_id → tag_name) 都会命中。
+///
+/// 另有一类反方向的字典表（`categories`：id + name，作品表拿
+/// `category_id` 指过去）：副表里没有指回作品表的外键，`_foreignKeyFor`
+/// 明确不认裸 `id`（那是字典表自己的主键）。这里单独认：按
+/// [GenericDbRelation] 现成的字段装——`primaryKey` 放作品表里那列
+/// 外键（`category_id`）、`foreignKey` 放字典表的主键列（`id`）、
+/// category 放字典表的名字列——`_where` 与 `facets()` 拼出来的 SQL
+/// 正好就是 `works.category_id IN (SELECT id FROM categories
+/// WHERE name IN (...))`，读库层不用改。
 List<GenericDbRelation> _facetRelationsFor({
   required GenericDbTableMapping primary,
   required List<GenericDbTableMapping> mappings,
 }) {
-  if (primary.idColumn == null) return const [];
   final out = <GenericDbRelation>[];
   final ordered = List.of(mappings)..sort((a, b) => a.table.compareTo(b.table));
+  // 第一相（副表指回作品表）要作品表有主键列；没有就跳过这一相，
+  // 第二相（字典表反方向查表）不需要主键列，照做。
+  if (primary.idColumn != null) {
+    for (final sub in ordered) {
+      if (out.length >= _maxFacetTables) break;
+      if (sub.table == primary.table) continue;
+      // 自带播放地址的表是另一套作品表，不是分类副表。
+      if (sub.columns.containsKey(GenericDbRole.playUrl)) continue;
+      final column = _facetColumnOf(sub);
+      if (column == null) continue;
+      final foreignKey = _foreignKeyFor(primary: primary, sub: sub);
+      if (foreignKey == null) continue;
+      out.add(
+        GenericDbRelation(
+          table: sub.table,
+          foreignKey: foreignKey,
+          primaryKey: primary.idColumn!,
+          columns: {GenericDbRole.category: column},
+        ),
+      );
+    }
+  }
+  // 分类字典表（反方向查表）。
   for (final sub in ordered) {
     if (out.length >= _maxFacetTables) break;
     if (sub.table == primary.table) continue;
-    // 自带播放地址的表是另一套作品表，不是分类副表。
-    if (sub.columns.containsKey(GenericDbRole.playUrl)) continue;
-    final column = _facetColumnOf(sub);
-    if (column == null) continue;
-    final foreignKey = _foreignKeyFor(primary: primary, sub: sub);
-    if (foreignKey == null) continue;
+    if (!_isCategoryDictionaryTable(sub.table)) continue;
+    if (out.any((r) => r.table == sub.table)) continue;
+    final nameColumn = sub.columnFor(GenericDbRole.title);
+    final keyColumn = sub.idColumn;
+    if (nameColumn == null || keyColumn == null) continue;
+    // 作品表里指过去的那列：`category_id`（归一化后 `categoryid`）。
+    const wantFk = 'categoryid';
+    String? worksFk;
+    for (final column in primary.allColumns) {
+      if (normalizeDbFieldName(column) == wantFk) {
+        worksFk = column;
+        break;
+      }
+    }
+    if (worksFk == null) continue;
     out.add(
       GenericDbRelation(
         table: sub.table,
-        foreignKey: foreignKey,
-        primaryKey: primary.idColumn!,
-        columns: {GenericDbRole.category: column},
+        foreignKey: keyColumn,
+        primaryKey: worksFk,
+        columns: {GenericDbRole.category: nameColumn},
       ),
     );
   }

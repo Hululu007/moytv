@@ -25,19 +25,14 @@ func TestSupjavFallbackWiring(t *testing.T) {
 	}
 }
 
-// SupJav 已按用户 2026-10-24 二轮口径撤注册（fix1 接全壳免代兜底后真机
-// 仍打不开）；sites_g2.go 的实现与上面的兜底接线测试保留存档，本测试
-// 锁定槽位不得再被注册回来。
-func TestSupjavSlotsUnregistered(t *testing.T) {
-	if implForSlot("supjav") != nil {
-		t.Fatal("slot supjav must stay unregistered (removed in fix2)")
+// v55 起口径反转：iOS 包源表明文列着 supjav，sites_v54_ios8.go 用仓库里
+// 现成的成套实现把它注册了回来。这里锁定「必须注册且能按对外 id 路由回槽」，
+// 免得以后又被人当成废弃槽删掉，站表里少一格。
+func TestSupjavSlotRegistered(t *testing.T) {
+	if implForSlot("supjav") == nil {
+		t.Fatal("slot supjav must be registered (v55 iOS source set)")
 	}
-	if _, ok := keyToSlot["supjav"]; ok {
-		t.Fatal("key supjav must not resolve to a slot")
-	}
-	for _, s := range allSlots() {
-		if s == "supjav" {
-			t.Fatal("supjav must not appear in allSlots")
-		}
+	if impl := implForSlot("supjav"); impl.Key == "" {
+		t.Fatal("slot supjav registered without a provider key")
 	}
 }

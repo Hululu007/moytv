@@ -160,6 +160,19 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if chapter.Source == "" {
 		chapter.Source = sourceFromDramaID(task.DramaID)
 	}
+	// v56 老条目兜底：v55 及以前的 seku 列表把内部槽名当 source 回填
+	// （hongguo / ikanbot / a123 / hanxiaoquan / guipian / huangdou /
+	// huangju / yeguo），这 8 个名字和短剧自有源同名，isSekuSource 会把
+	// 它们判成自有源，于是升级前缓存的卡点进去永远「站源无效」。
+	// 判据收紧成两条同时成立才接管：①该 source 真有同名 seku 槽；
+	// ②集标识是 http(s) 地址。短剧自有源的 id 一律不是 URL，不会误抢。
+	if !isSekuSource(chapter.Source) && seku.HasSlot(chapter.Source) {
+		if _, rawID, valid := splitProviderDramaID(task.DramaID); valid && isProviderHTTPMediaURL(rawID) {
+			aliased := sekuSourceID(chapter.Source)
+			task.DramaID = aliased + ":" + rawID
+			chapter.Source = aliased
+		}
+	}
 	if isSekuSource(chapter.Source) {
 		return d.resolveSekuMedia(ctx, task)
 	}

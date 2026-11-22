@@ -274,15 +274,47 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       await db?.close();
     } catch (_) {}
 
+    // 备份：没有备份就删行，丢了找不回来。备份没做成直接停下，不修。
     var backupNote = '';
+    var backupOk = false;
     try {
       final file = File(widget.filePath);
       if (await file.exists()) {
-        await file.copy('${widget.filePath}.bak');
-        backupNote = '已备份到 ${path.basename(widget.filePath)}.bak';
+        // 已有一份 .bak：别用当前库覆盖它——当前库可能已经是上一轮
+        // 修坏的，覆盖就丢了最后一份好备份；另存一份带时间的。
+        var backupPath = '${widget.filePath}.bak';
+        if (await File(backupPath).exists()) {
+          backupPath =
+              '${widget.filePath}.bak.${DateTime.now().millisecondsSinceEpoch}';
+        }
+        await file.copy(backupPath);
+        backupNote = '已备份到 ${path.basename(backupPath)}';
+        backupOk = true;
       }
     } catch (_) {
-      backupNote = '备份没做成（可能空间不够），修复照常进行';
+      backupOk = false;
+    }
+    if (!backupOk) {
+      if (!mounted) return;
+      setState(() => _repairing = false);
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('备份没做成，修复已停下'),
+          content: const Text(
+            '备份文件没存下来（可能空间不够），库没动。\n\n'
+            '体检修复会删确认打不开的行，没有备份不能修：'
+            '先清出空间再点修复。',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
     }
 
     if (!mounted) return;

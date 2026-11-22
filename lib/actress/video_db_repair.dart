@@ -510,6 +510,8 @@ class VideoDbRepair {
   static const _foreignKeyNames = ['vodid', 'videoid', 'movieid', 'workid'];
 
   /// 找出哪些副表存着指回作品表的 id（删死链时一起清）。
+  ///
+  /// 纯函数版在 [linkTablesFor]：删死链时只有外键味的名字才算关联。
   static Future<List<({String table, String column})>> _linkTables(
     Database db,
     Set<String> tables,
@@ -517,14 +519,39 @@ class VideoDbRepair {
     String idColumn,
   ) async {
     if (idColumn.isEmpty) return const [];
-    final normalizedId = normalizeDbFieldName(idColumn);
-    final out = <({String table, String column})>[];
+    final tableColumns = <String, List<String>>{};
     for (final table in tables) {
       if (table == worksTable) continue;
-      final columns = await _columnsOf(db, table);
-      for (final column in columns) {
+      tableColumns[table] = await _columnsOf(db, table);
+    }
+    return linkTablesFor(tableColumns, worksTable, idColumn);
+  }
+
+  /// 删死链时要连带清哪些副表（纯函数，不碰数据库，测试直接验）。
+  ///
+  /// 只有外键味的名字才算关联：`vod_id` / `videoid` / `movieid` /
+  /// `workid` 这类，或与作品表主键同名、但主键本身不是裸 `id` 的列。
+  ///
+  /// 裸 `id` 绝不当外键——每张表都有自己的 `id` 主键。旧代码按名字
+  /// 一刀切：作品表主键是 plain `id` 的外来库，`categories.id` 也被
+  /// 当成关联列，删死链 `DELETE FROM categories WHERE id IN (死链的
+  /// 视频 id)`，分类表里同号的行全被连带删掉（2026-11-22 用户报
+  /// 「修复把数据库删坏了」的根因之一；读库层 `_foreignKeyFor` 早就
+  /// 写明「单列 `id` 不算外键」，这里是反的，现改成一致）。
+  static List<({String table, String column})> linkTablesFor(
+    Map<String, List<String>> tableColumns,
+    String worksTable,
+    String idColumn,
+  ) {
+    if (idColumn.isEmpty) return const [];
+    final normalizedId = normalizeDbFieldName(idColumn);
+    final out = <({String table, String column})>[];
+    for (final entry in tableColumns.entries) {
+      final table = entry.key;
+      if (table == worksTable) continue;
+      for (final column in entry.value) {
         final normalized = normalizeDbFieldName(column);
-        if (normalized.isEmpty) continue;
+        if (normalized.isEmpty || normalized == 'id') continue;
         if (normalized == normalizedId ||
             _foreignKeyNames.contains(normalized)) {
           out.add((table: table, column: column));

@@ -764,18 +764,35 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
-  Widget? _embeddedArea(List<Episode> episodes) {
+  /// 内嵌播区：播放器 widget 的父链全程恒定（Column → LayoutBuilder
+  /// → SizedBox → PlayerScreen），全屏切换只改 SizedBox 的高度，
+  /// 不换父级、不重建播放区。以前全屏分支返回另一套 Scaffold，
+  /// 播放器从 AspectRatio/SizedBox 挪到 Scaffold body 直下，
+  /// 原生画面跟着重挂 → 有声无画；GlobalKey 只保 Dart 侧
+  /// Element，不算保护。非全屏时视频按 16:9、非视频内容按 560
+  /// 高；全屏时占满详情页体区高度，下面的滚动区自然剩 0 高。
+  Widget? _embeddedArea(
+    List<Episode> episodes, {
+    required double fullscreenHeight,
+  }) {
     if (_embeddedIndex == null || _detail == null) return null;
     final index = _embeddedIndex!.clamp(0, episodes.length - 1);
-    if (nonVideoKindOfEpisode(episodes[index]) != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [SizedBox(height: 560, child: _embeddedPlayer())],
-      );
-    }
+    final nonVideo = nonVideoKindOfEpisode(episodes[index]) != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [AspectRatio(aspectRatio: 16 / 9, child: _embeddedPlayer())],
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) => SizedBox(
+            height: _embeddedFullscreen
+                ? fullscreenHeight
+                : nonVideo
+                ? 560
+                : constraints.maxWidth * 9 / 16,
+            width: double.infinity,
+            child: _embeddedPlayer(),
+          ),
+        ),
+      ],
     );
   }
 
@@ -918,15 +935,27 @@ class _DetailScreenState extends State<DetailScreen> {
     final allowed =
         widget.store.profileEpoch == _profileEpoch &&
         widget.store.allowsSource(drama.source);
-    if (_embeddedIndex != null && _detail != null && _embeddedFullscreen) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _toggleEmbeddedFullscreen();
-        },
-        child: Scaffold(backgroundColor: Colors.black, body: _embeddedPlayer()),
-      );
-    }
+    // 内嵌全屏时顶栏连占位一起藏掉：只改 Scaffold 的 appBar 槽位，
+    // body 的树位置不动，播区全程挂在同一条链上（见 _embeddedArea）。
+    // 以前全屏分支直接返回另一套 Scaffold，把播放器从 Column 里的
+    // AspectRatio 挪到 Scaffold body 直下，父级一变原生画面重挂 →
+    // 有声无画；GlobalKey 只保 Dart 侧 Element，不算保护。
+    final appBar = _embeddedFullscreen
+        ? null
+        : AppBar(
+            // 内嵌播放器打开时只留播放器左上角的常驻返回钮（关播放器
+            // 回海报），顶栏不重复画返回箭头；关闭后恢复顶栏返回。
+            automaticallyImplyLeading: _embeddedIndex == null,
+            toolbarHeight: television ? 64 : null,
+            title: Text(drama.title, overflow: TextOverflow.ellipsis),
+            actions: [
+              RefreshAction(
+                loading: _loading,
+                tooltip: '更新剧集信息',
+                onPressed: allowed ? _load : null,
+              ),
+            ],
+          );
     return PopScope(
       canPop: _embeddedIndex == null,
       onPopInvokedWithResult: (didPop, _) {
@@ -947,20 +976,8 @@ class _DetailScreenState extends State<DetailScreen> {
               Navigator.of(context).maybePop(),
         },
         child: Scaffold(
-          appBar: AppBar(
-            // 内嵌播放器打开时只留播放器左上角的常驻返回钮（关播放器
-            // 回海报），顶栏不重复画返回箭头；关闭后恢复顶栏返回。
-            automaticallyImplyLeading: _embeddedIndex == null,
-            toolbarHeight: television ? 64 : null,
-            title: Text(drama.title, overflow: TextOverflow.ellipsis),
-            actions: [
-              RefreshAction(
-                loading: _loading,
-                tooltip: '更新剧集信息',
-                onPressed: allowed ? _load : null,
-              ),
-            ],
-          ),
+          backgroundColor: _embeddedFullscreen ? Colors.black : null,
+          appBar: appBar,
           body: SafeArea(
             top: false,
             bottom: false,
@@ -980,10 +997,14 @@ class _DetailScreenState extends State<DetailScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           SizedBox(
-                            width: (constraints.maxWidth * .34).clamp(
-                              250.0,
-                              360.0,
-                            ),
+                            // 内嵌全屏时左栏宽置 0（只改尺寸，不摘树）：
+                            // 播区仍在右栏同一条链上，左栏内容不可见。
+                            width: _embeddedFullscreen
+                                ? 0
+                                : (constraints.maxWidth * .34).clamp(
+                                    250.0,
+                                    360.0,
+                                  ),
                             child: SingleChildScrollView(
                               padding: const EdgeInsets.all(20),
                               child: Column(
@@ -1000,7 +1021,8 @@ class _DetailScreenState extends State<DetailScreen> {
                               ),
                             ),
                           ),
-                          const VerticalDivider(width: 1),
+                          if (!_embeddedFullscreen)
+                            const VerticalDivider(width: 1),
                           Expanded(
                             child:
                                 _loading || _error != null || episodes.isEmpty
@@ -1024,21 +1046,36 @@ class _DetailScreenState extends State<DetailScreen> {
                                   )
                                 : Column(
                                     children: [
-                                      if (_embeddedArea(episodes) != null)
-                                        _embeddedArea(episodes)!,
-                                      if (_isFolderDrama(drama) &&
-                                          _folderFailed)
-                                        _folderErrorBanner(),
-                                      _seriesSelector(drama),
-                                      _lineSelector(),
-                                      Expanded(
-                                        child: EpisodeBrowser(
-                                          episodes: episodes,
-                                          currentNumber: watched?.episode,
-                                          autofocus: true,
-                                          onSelected: (index) => _play(index),
+                                      if (_embeddedArea(
+                                            episodes,
+                                            fullscreenHeight:
+                                                constraints.maxHeight,
+                                          ) !=
+                                          null)
+                                        _embeddedArea(
+                                          episodes,
+                                          fullscreenHeight:
+                                              constraints.maxHeight,
+                                        )!,
+                                      // 内嵌全屏时播区占满右栏高度，播区
+                                      // 下面的选集区不画（只藏兄弟项，
+                                      // 播区自己的父链不动）。
+                                      if (!_embeddedFullscreen) ...[
+                                        if (_isFolderDrama(drama) &&
+                                            _folderFailed)
+                                          _folderErrorBanner(),
+                                        _seriesSelector(drama),
+                                        _lineSelector(),
+                                        Expanded(
+                                          child: EpisodeBrowser(
+                                            episodes: episodes,
+                                            currentNumber: watched?.episode,
+                                            autofocus: true,
+                                            onSelected: (index) =>
+                                                _play(index),
+                                          ),
                                         ),
-                                      ),
+                                      ],
                                     ],
                                   ),
                           ),
@@ -1076,7 +1113,10 @@ class _DetailScreenState extends State<DetailScreen> {
                     // 滚动只动下面的 CustomScrollView，播放器 widget
                     // 与其 GlobalKey 不受滚动影响、不重建、不重播。
                     // 未开播时海报仍是滚动视图第一项，照常随内容滑走。
-                    final embedded = _embeddedArea(episodes);
+                    final embedded = _embeddedArea(
+                      episodes,
+                      fullscreenHeight: constraints.maxHeight,
+                    );
                     return Column(
                       children: [
                         ?embedded,

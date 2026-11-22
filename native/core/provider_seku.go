@@ -346,6 +346,11 @@ func (d *Downloader) fetchSekuCatalogPageFiltered(ctx context.Context, source st
 	if len(items) == 0 && page == 1 && category == seku.DefaultCategory(slot) {
 		return nil, false, fmt.Errorf("%s暂未返回内容，请稍后刷新", seku.SiteName(slot))
 	}
+	// v56：输出给 App 的 source 一律用对外站点 id（v_missav 这类），
+	// 不能用内部槽名。hongguo/ikanbot/a123 等 8 个槽名与短剧自有源同名，
+	// 回填槽名会让 App 播放时被判成「自有源」而进不了 seku，
+	// 表现就是列表能出、一点播放就「站源无效」。
+	source = sekuSourceID(slot)
 	out := []Drama{}
 	for _, item := range items {
 		if drama := sekuDramaFromMap(source, item); drama.ID != "" {
@@ -364,6 +369,7 @@ func (d *Downloader) searchSeku(ctx context.Context, source, query string) ([]Dr
 	if err != nil {
 		return nil, err
 	}
+	source = sekuSourceID(slot)
 	out := []Drama{}
 	for _, item := range items {
 		if drama := sekuDramaFromMap(source, item); drama.ID != "" {
@@ -373,8 +379,23 @@ func (d *Downloader) searchSeku(ctx context.Context, source, query string) ([]Dr
 	return out, nil
 }
 
+// sekuSlotForSourceCompat 给「详情 / 取流」用：除了正常的对外 id，
+// 还认 v55 及以前缓存在本地的内部槽名（hongguo / huangdou 等 8 个）。
+// 那些名字和短剧自有源撞名，sekuSlotForSource 会故意不认它们；
+// 但卡片的集标识是 http(s) 地址时只可能是 seku 站，可以安全接管。
+func sekuSlotForSourceCompat(source, sourceID string) (string, bool) {
+	if slot, ok := sekuSlotForSource(source); ok {
+		return slot, true
+	}
+	slot := canonicalProviderSource(source)
+	if slot != "" && seku.HasSlot(slot) && isProviderHTTPMediaURL(sourceID) {
+		return slot, true
+	}
+	return "", false
+}
+
 func (d *Downloader) fetchSekuDetail(ctx context.Context, source, sourceID string) (Drama, []Chapter, error) {
-	slot, ok := sekuSlotForSource(source)
+	slot, ok := sekuSlotForSourceCompat(source, sourceID)
 	if !ok {
 		return Drama{}, nil, errors.New("站源无效")
 	}
@@ -382,6 +403,7 @@ func (d *Downloader) fetchSekuDetail(ctx context.Context, source, sourceID strin
 	if err != nil {
 		return Drama{}, nil, err
 	}
+	source = sekuSourceID(slot)
 	drama := sekuDramaFromMap(source, m)
 	if drama.ID == "" {
 		drama = Drama{ID: providerDramaID(source, sourceID), Source: source, SourceID: sourceID}
@@ -394,7 +416,7 @@ func (d *Downloader) resolveSekuMedia(ctx context.Context, task Task) (providerM
 	if !valid {
 		return providerMedia{}, errors.New("剧集信息无效")
 	}
-	slot, ok := sekuSlotForSource(source)
+	slot, ok := sekuSlotForSourceCompat(source, dramaRaw)
 	if !ok {
 		return providerMedia{}, errors.New("站源无效")
 	}
@@ -455,10 +477,11 @@ func (d *Downloader) resolveSekuMedia(ctx context.Context, task Task) (providerM
 }
 
 func (engine *nativeEngine) nativeSekuDetail(ctx context.Context, drama nativeDrama, source, sourceID string) (any, error) {
-	slot, ok := sekuSlotForSource(source)
+	slot, ok := sekuSlotForSourceCompat(source, sourceID)
 	if !ok {
 		return nil, errors.New("站源无效")
 	}
+	source = sekuSourceID(slot)
 	seku.Init(engine.directory)
 	m, err := seku.Detail(slot, sourceID)
 	if err != nil {

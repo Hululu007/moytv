@@ -1755,24 +1755,35 @@ class _PlayerScreenState extends State<PlayerScreen>
         _plan = plan;
         installed = true;
         _acceptErrors = true;
-        if (useNativeForPlan) {
-          _tvboxPlan = plan;
-          _tvboxStartPosition = position;
-          _tvboxAutoplay = _foreground && _playIntent;
-        } else if (useIjkForPlan) {
-          _ijkPlan = plan;
-          _ijkStartPosition = position;
-          _ijkAutoplay = _foreground && _playIntent;
-        } else {
-          // 通用过盾：媒体 CDN 被 Cloudflare 挡时补齐通行证与 UA
-          // （没有需要就原样返回，零成本）。所有站走同一条路。
-          final shieldedHeaders = await MediaShield.headersFor(
+        // 通用过盾：媒体 CDN 被 Cloudflare 挡时补齐通行证与 UA
+        // （没有需要就原样返回，零成本）。三种内核都要走这一步——
+        // 以前只有 media_kit 那条分支补票，切成 EXO/IJK 之后带盾的
+        // 媒体 CDN 一律 403，表现就是「这个站点了播不了」。
+        // 补票本身出任何岔子都退回原样播，绝不让它挡住起播。
+        var shieldedHeaders = plan.headers;
+        try {
+          shieldedHeaders = await MediaShield.headersFor(
             plan.url,
             plan.headers,
           );
-          if (_closed || ticket != _generation) {
-            return;
-          }
+        } catch (_) {
+          shieldedHeaders = plan.headers;
+        }
+        if (_closed || ticket != _generation) {
+          return;
+        }
+        final shieldedPlan = identical(shieldedHeaders, plan.headers)
+            ? plan
+            : plan.withHeaders(shieldedHeaders);
+        if (useNativeForPlan) {
+          _tvboxPlan = shieldedPlan;
+          _tvboxStartPosition = position;
+          _tvboxAutoplay = _foreground && _playIntent;
+        } else if (useIjkForPlan) {
+          _ijkPlan = shieldedPlan;
+          _ijkStartPosition = position;
+          _ijkAutoplay = _foreground && _playIntent;
+        } else {
           await _player.open(
             Media(
               plan.url,
@@ -3035,73 +3046,82 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     ],
                   ),
-            body: pictureInPicture
-                ? _videoPane(context)
-                : SafeArea(
-                    top: !_television && (fullscreen || _mobile),
-                    bottom: !fullscreen,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final desktop = constraints.maxWidth >= 840;
-                        final wide =
-                            desktop ||
-                            constraints.maxWidth > constraints.maxHeight * 1.3;
-                        // 画面层绝不换父级：全屏/非全屏都挂在同一条
-                        // Stack → Positioned 链上，只改四条边。
-                        // 短剧走的是原生画面层（AndroidView），早先全屏时
-                        // 把 _videoPane 从 SizedBox/Row 里搬到 LayoutBuilder
-                        // 直下，平台视图被重建 → 解码器照旧出声、画面全黑
-                        // （v45 修的是观看房那台播放器，这条路径没吃到）。
-                        // 改成尺寸变化后，Element 不搬，表面也不重建。
-                        final panelSide =
-                            !fullscreen && wide && _episodePanelVisible;
-                        final sideWidth = panelSide
-                            ? (desktop ? 312.0 : 210.0)
-                            : 0.0;
-                        double videoHeight = 0; // 0 = 视频占满剩余高度
-                        if (!fullscreen && !wide) {
-                          final maxRatio = _mobile ? .56 : .64;
-                          videoHeight = (constraints.maxWidth / _aspectRatio)
-                              .clamp(0.0, constraints.maxHeight * maxRatio);
-                        }
-                        final filler = videoHeight > 0
-                            ? (constraints.maxHeight - videoHeight).clamp(
-                                0.0,
-                                constraints.maxHeight,
-                              )
-                            : 0.0;
-                        return Stack(
-                          children: [
-                            Positioned(
-                              left: 0,
-                              top: 0,
-                              right: sideWidth,
-                              bottom: filler,
-                              child: _videoPane(context),
-                            ),
-                            if (!fullscreen && !wide)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                top: filler,
-                                bottom: 0,
-                                child: _mobilePlaybackPanel(),
-                              ),
-                            if (panelSide)
-                              Positioned(
-                                top: 0,
-                                right: 0,
-                                bottom: 0,
-                                width: sideWidth,
-                                child: _episodePanel(
-                                  onClose: _toggleEpisodePanel,
-                                ),
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
+            // 画中画也走同一条链：以前画中画时 body 直接挂 _videoPane，
+            // 进出系统画中画等于把播放区从 Stack 里的 Positioned 挪到
+            // Scaffold body 直下，父级一变原生画面重挂。改成全程
+            // SafeArea → LayoutBuilder → Stack → Positioned，只改
+            // 四条边与面板显隐（画中画里视频占满、面板全藏）。
+            body: SafeArea(
+              top: !_television && (fullscreen || _mobile),
+              bottom: !fullscreen,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final desktop = constraints.maxWidth >= 840;
+                  final wide =
+                      desktop ||
+                      constraints.maxWidth > constraints.maxHeight * 1.3;
+                  // 画面层绝不换父级：全屏/非全屏/画中画都挂在同一条
+                  // Stack → Positioned 链上，只改四条边。
+                  // 短剧走的是原生画面层（AndroidView），早先全屏时
+                  // 把 _videoPane 从 SizedBox/Row 里搬到 LayoutBuilder
+                  // 直下，平台视图被重建 → 解码器照旧出声、画面全黑
+                  // （v45 修的是观看房那台播放器，这条路径没吃到）。
+                  // 改成尺寸变化后，Element 不搬，表面也不重建。
+                  // 画中画同理：以前画中画时 body 直接挂 _videoPane，
+                  // 进出画中画也换了父级，一并收进同一条链（视频占满、
+                  // 面板全藏）。
+                  final panelSide =
+                      !fullscreen &&
+                      !pictureInPicture &&
+                      wide &&
+                      _episodePanelVisible;
+                  final sideWidth = panelSide
+                      ? (desktop ? 312.0 : 210.0)
+                      : 0.0;
+                  double videoHeight = 0; // 0 = 视频占满剩余高度
+                  if (!fullscreen && !pictureInPicture && !wide) {
+                    final maxRatio = _mobile ? .56 : .64;
+                    videoHeight = (constraints.maxWidth / _aspectRatio)
+                        .clamp(0.0, constraints.maxHeight * maxRatio);
+                  }
+                  final filler = videoHeight > 0
+                      ? (constraints.maxHeight - videoHeight).clamp(
+                          0.0,
+                          constraints.maxHeight,
+                        )
+                      : 0.0;
+                  return Stack(
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        right: sideWidth,
+                        bottom: filler,
+                        child: _videoPane(context),
+                      ),
+                      if (!fullscreen && !wide && !pictureInPicture)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: filler,
+                          bottom: 0,
+                          child: _mobilePlaybackPanel(),
+                        ),
+                      if (panelSide)
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          bottom: 0,
+                          width: sideWidth,
+                          child: _episodePanel(
+                            onClose: _toggleEpisodePanel,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),

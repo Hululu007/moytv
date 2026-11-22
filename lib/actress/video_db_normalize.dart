@@ -370,10 +370,15 @@ class VideoDbNormalizer {
     final columns = await _columns(db, 'videos');
     final lower = {for (final c in columns) c.toLowerCase(): c};
     final targets = <String, List<String>>{
+      // 主键：外来库的主键常常就叫 plain `id`（2026-11-22 截图库），
+      // 不搬过来标准列 `vod_id` 全空，后面重建表会因主键空整批跳过。
+      'vod_id': ['vod_id', 'id', 'video_id', 'videoid', 'vid', 'movie_id'],
       'title': ['title', 'vod_name', 'name', 'moviename', 'videoname', '片名', '标题'],
       'pic_url': ['pic_url', 'vod_pic', 'cover', 'pic', 'img', 'image', '封面'],
       'vod_play_url': ['vod_play_url', 'play_url', 'url', 'playurl', 'm3u8_url', 'm3u8', '播放地址'],
-      'type_name': ['type_name', 'category', 'class', 'type', '分类'],
+      // `category_id` 是外来库最常见的分类列名：旧表只有 `category` /
+      // `class` / `type`，`category_id` 对不上，分类搬不过来。
+      'type_name': ['type_name', 'category', 'category_id', 'categoryid', 'class', 'type', '分类'],
       'vod_pubdate': ['vod_pubdate', 'date', 'pubdate', 'update_time', '时间'],
     };
     // 探测/手动映射到的列优先（那才是用户确认过的口径）。
@@ -424,6 +429,16 @@ class VideoDbNormalizer {
   ///
   /// 大库（几十万行）也照这个走，只是批小一点；拷完才删旧表，中途失败
   /// 旧表还在，不会把库弄没。
+  ///
+  /// 三道守卫（2026-11-22 用户报「修复把数据库删坏了」后加）：
+  /// 1. 共有列是空的——外来库的列名跟标准列一个都对不上（截图库的
+  ///    videos：id/category_id/name/image/… 对标准列全是空交集），
+  ///    这时重建等于把整表换成空表：直接拦下，原表不动；
+  /// 2. 主键列不在共有列里——拷过去的行会因主键空被整批跳过，同样
+  ///    等于清空：直接拦下，原表不动；
+  /// 3. 行数校验——临时表行数 + 因主键空跳过的行数必须等于原表行数，
+  ///    对不上就删临时表、抛错，原表不动；
+  /// 换表（删旧表 + 改名）放进同一个事务里，中途失败原表还在。
   static Future<void> _rebuild(
     Database db,
     String table,
@@ -433,52 +448,84 @@ class VideoDbNormalizer {
     final quoted = VideoDbStandards._quote(table);
     final tmp = '${table}__norm_tmp';
     final tmpQuoted = VideoDbStandards._quote(tmp);
-    await db.execute('DROP TABLE IF EXISTS $tmpQuoted');
-    await db.execute(VideoDbStandards.createSql(table, name: tmp));
 
     final current = await _columns(db, table);
     final shared = [
       for (final column in standard.keys)
         if (current.any((name) => name.toLowerCase() == column)) column,
     ];
-
-    if (shared.isNotEmpty) {
-      final columnList = shared.map(VideoDbStandards._quote).join(', ');
-      final total =
-          Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM $quoted'),
-          ) ??
-          0;
-      const batch = 2000;
-      var done = 0;
-      while (done < total) {
-        final rows = await db.rawQuery(
-          'SELECT $columnList FROM $quoted LIMIT $batch OFFSET $done',
-        );
-        if (rows.isEmpty) break;
-        final insert = db.batch();
-        for (final row in rows) {
-          final values = <String, Object?>{
-            for (final column in shared) column: row[column],
-          };
-          // 主键列空的行没法进标准表（主键非空），跳过。
-          final keys = VideoDbStandards.primaryKeys[table] ?? const <String>[];
-          if (keys.any((key) => values[key] == null || '${values[key]}'.isEmpty)) {
-            continue;
-          }
-          insert.insert(
-            tmp,
-            values,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
-        await insert.commit(noResult: true);
-        done += rows.length;
-      }
+    if (shared.isEmpty) {
+      throw StateError(
+        '重建 $table 被拦下：没有一列能对上标准列，重建会清空整表，原表未动',
+      );
+    }
+    final keys = VideoDbStandards.primaryKeys[table] ?? const <String>[];
+    final missingKeys = [
+      for (final key in keys)
+        if (!shared.any((c) => c.toLowerCase() == key)) key,
+    ];
+    if (missingKeys.isNotEmpty) {
+      throw StateError(
+        '重建 $table 被拦下：主键列 ${missingKeys.join('、')} 不在原表里，'
+        '重建会丢全部行，原表未动',
+      );
     }
 
-    await db.execute('DROP TABLE $quoted');
-    await db.execute('ALTER TABLE $tmpQuoted RENAME TO $quoted');
+    await db.execute('DROP TABLE IF EXISTS $tmpQuoted');
+    await db.execute(VideoDbStandards.createSql(table, name: tmp));
+
+    final total =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM $quoted'),
+        ) ??
+        0;
+    final columnList = shared.map(VideoDbStandards._quote).join(', ');
+    const batch = 2000;
+    var done = 0;
+    var skipped = 0;
+    while (done < total) {
+      final rows = await db.rawQuery(
+        'SELECT $columnList FROM $quoted LIMIT $batch OFFSET $done',
+      );
+      if (rows.isEmpty) break;
+      final insert = db.batch();
+      for (final row in rows) {
+        final values = <String, Object?>{
+          for (final column in shared) column: row[column],
+        };
+        // 主键列空的行没法进标准表（主键非空），跳过。
+        if (keys.any((key) => values[key] == null || '${values[key]}'.isEmpty)) {
+          skipped++;
+          continue;
+        }
+        insert.insert(
+          tmp,
+          values,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await insert.commit(noResult: true);
+      done += rows.length;
+    }
+
+    // 行数校验：主键冲突去重也会让行数对不上，对不上就是数据丢了。
+    final copied =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM $tmpQuoted'),
+        ) ??
+        0;
+    if (copied + skipped != total) {
+      await db.execute('DROP TABLE $tmpQuoted');
+      throw StateError(
+        '重建 $table 被拦下：拷过去 $copied 行、跳过 $skipped 行，'
+        '对不上原表 $total 行，临时表已删、原表未动',
+      );
+    }
+
+    await db.transaction((txn) async {
+      await txn.execute('DROP TABLE $quoted');
+      await txn.execute('ALTER TABLE $tmpQuoted RENAME TO $quoted');
+    });
   }
 
   // ── 2. 播放地址两列互填 ────────────────────────────────────────

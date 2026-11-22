@@ -378,4 +378,90 @@ void main() {
     expect(tester.takeException(), isNull);
     resetPlatform();
   });
+
+  testWidgets('embedded fullscreen keeps the player on the same parent', (
+    tester,
+  ) async {
+    useAndroidPlatform();
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = EmbeddedRouteRepository();
+    final store = LocalStore(await SharedPreferences.getInstance());
+    final created = <ScriptedPlayer>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: DetailScreen(
+          drama: FixtureRepository.free,
+          repository: repository,
+          store: store,
+          playerFactory: () {
+            final platform = ScriptedPlayer();
+            created.add(platform);
+            return Player(platformPlayer: platform);
+          },
+          videoBuilder: (controls) => controls,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('detail-poster-play')));
+    await settleOperations(tester);
+    await tester.pump(const Duration(milliseconds: 300));
+    await waitForPlayerReady(tester);
+    expect(find.byType(PlayerScreen), findsOneWidget);
+
+    // 播区父链：PlayerScreen 最近的 SizedBox 祖先就是内嵌播区槽位。
+    Finder playerSlot() => find.ancestor(
+      of: find.byType(PlayerScreen),
+      matching: find.byType(SizedBox),
+    );
+    final playerElement = tester.element(find.byType(PlayerScreen));
+    expect(playerSlot(), findsOneWidget);
+    final slotHeight = tester.getSize(playerSlot()).height;
+    expect(slotHeight, greaterThan(0));
+    expect(slotHeight, lessThan(844));
+
+    // 进全屏：播区只改高度、不换父级——同一个 Element、同一个
+    // SizedBox 槽位、同一个底层播放器。旧实现这里返回另一套
+    // Scaffold，播放器被挪到 Scaffold body 直下、槽位消失，
+    // 原生画面跟着重挂 → 有声无画。
+    await tapPlayerControl(
+      tester,
+      find.descendant(
+        of: find.byType(PlayerScreen),
+        matching: find.byTooltip('全屏'),
+      ),
+    );
+    expect(find.byType(PlayerScreen), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    expect(tester.element(find.byType(PlayerScreen)), same(playerElement));
+    expect(playerSlot(), findsOneWidget);
+    expect(tester.getSize(playerSlot()).height, greaterThan(800));
+    expect(created, hasLength(1));
+
+    // 退全屏：父链仍是同一条，高度回到 16:9。
+    await tapPlayerControl(
+      tester,
+      find.descendant(
+        of: find.byType(PlayerScreen),
+        matching: find.byTooltip('退出全屏'),
+      ),
+    );
+    expect(find.byType(PlayerScreen), findsOneWidget);
+    expect(find.byType(AppBar), findsOneWidget);
+    expect(tester.element(find.byType(PlayerScreen)), same(playerElement));
+    expect(playerSlot(), findsOneWidget);
+    expect(tester.getSize(playerSlot()).height, slotHeight);
+    expect(created, hasLength(1));
+
+    await tester.tap(find.byKey(const ValueKey('player-permanent-back')));
+    await settleOperations(tester);
+    await settleDispose(tester);
+    expect(tester.takeException(), isNull);
+    resetPlatform();
+  });
 }

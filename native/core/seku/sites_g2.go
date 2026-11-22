@@ -721,17 +721,35 @@ func missavPlaylistFromJS(text string) string {
 	return ""
 }
 
-// missavExtractM3u8 ports py extract_m3u8() verbatim (three tiers).
+// missavCollectStreams 收集页面上出现过的所有播放地址候选（去重保序）。
 //
-// Tier 0 is the current site shape (2026-11-21): the address sits inside a
-// packed eval block, so unpack first and only then pattern-match. Tiers 1-3
-// stay for the older reversed-fragment page and the surrit-only layouts.
-func missavExtractM3u8(page string) string {
+// 为什么要收集而不是取第一个：MissAV 每个番号的播放地址散在打包 JS 里，
+// 同一个页面经常同时留着一旧一新两条 CDN（实测 huntc-692 同时有
+// c.surrit.mrstcdn.store 和 vz-xxxx.b-cdn.net，前者 TLS 握手直接失败，
+// 后者 200 正常）。旧逻辑只认「第一个匹配」，取到哪个纯看页面顺序，
+// 于是同一个站一半片子能播一半不能播——这正是「missav 播不了」的表象。
+func missavCollectStreams(page string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	add := func(u string) {
+		u = strings.TrimSpace(strings.ReplaceAll(u, `\/`, `/`))
+		if u == "" || seen[u] {
+			return
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	var anyRe = regexp.MustCompile(`https?://[^\s"'\\` + "`" + `]+\.m3u8[^\s"'\\` + "`" + `]*`)
+
 	if unpacked := missavUnpackPage(page); unpacked != "" {
-		if found := missavPlaylistFromJS(unpacked); found != "" {
-			return found
+		for _, m := range anyRe.FindAllString(unpacked, -1) {
+			add(m)
 		}
 	}
+	for _, m := range anyRe.FindAllString(page, -1) {
+		add(m)
+	}
+	// 老版式：token 串反拼。串可能已经被 anyRe 抓到，这里只补没抓到的。
 	re1 := regexp.MustCompile(`(?s)'m3u8(.*?)video`)
 	if m := re1.FindStringSubmatch(page); m != nil {
 		parts := strings.Split(m[1], "|")
@@ -739,21 +757,130 @@ func missavExtractM3u8(page string) string {
 			parts[i], parts[j] = parts[j], parts[i]
 		}
 		if len(parts) >= 9 && parts[2] != "" && parts[3] != "" {
-			return fmt.Sprintf("%s://%s.%s/%s-%s-%s-%s-%s/playlist.m3u8",
-				parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8])
+			add(fmt.Sprintf("%s://%s.%s/%s-%s-%s-%s-%s/playlist.m3u8",
+				parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8]))
 		}
-	}
-	if m := regexp.MustCompile(`https?://[^\s"']+/playlist\.m3u8`).FindString(page); m != "" {
-		return m
 	}
 	re3 := regexp.MustCompile(`https?:[\\/]+surrit\.com[\\/]+([a-f0-9\-]+)[\\/]+`)
 	if m := re3.FindStringSubmatch(page); m != nil {
-		return "https://surrit.com/" + m[1] + "/playlist.m3u8"
+		add("https://surrit.com/" + m[1] + "/playlist.m3u8")
 	}
-	if m := regexp.MustCompile(`https?://[^\s"']+\.m3u8[^\s"']*`).FindString(page); m != "" {
-		return m
+	return out
+}
+
+// missavProbeStream 判断一条候选是不是真能播：200 + 正文以 #EXTM3U 开头。
+func missavProbeStream(u string) bool {
+	body, code, _, err := tlsGet(u, map[string]string{
+		"User-Agent": missavUA,
+		"Referer":    "https://missav.ws/",
+	})
+	if err == nil && code == 200 && strings.HasPrefix(strings.TrimSpace(string(body)), "#EXTM3U") {
+		return true
 	}
-	return ""
+	// TLS 指纹层不认的 CDN 再用标准库试一次（部分 bunny/自建 CDN 反过来）。
+	if b, c, _, e := httpGet(u, map[string]string{
+		"User-Agent": missavUA,
+		"Referer":    "https://missav.ws/",
+	}); e == nil && c == 200 && strings.HasPrefix(strings.TrimSpace(string(b)), "#EXTM3U") {
+		return true
+	}
+	return false
+}
+
+// missavStreamFamily 取 CDN 家族（去掉 c./vz-xxx 这类前缀后的注册域）。
+// 目的是把「同一个 CDN 的不同入口」认成一伙：同一伙里挑哪个都一样，
+// 没必要为它们逐个发起网络探活。
+func missavStreamFamily(u string) string {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" {
+		return u
+	}
+	host := strings.ToLower(parsed.Hostname())
+	parts := strings.Split(host, ".")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	}
+	return host
+}
+
+// missavPickStream picks the playable candidate.
+//
+// 策略（延迟优先，不拿播放当探针）：
+//  1. master playlist 永远排在 /720p/video.m3u8 这类变体前面；
+//  2. 候选**都属于同一个 CDN 家族**时，直接返回第一条——不探活。
+//     同家族换入口没有意义，探了也白探，还要白白拖住起播；
+//  3. 候选跨家族（页面里新旧 CDN 混着，实测 huntc 那类）才并发探活，
+//     单条 4 秒、总共 5 秒封顶，谁先响应 #EXTM3U 用谁；
+//  4. 一条都探不通就退回第一条。机房出口被 CDN 挡很常见，
+//     探不通不代表真机播不了，绝不能因此把地址丢掉。
+func missavPickStream(candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	ordered := make([]string, 0, len(candidates))
+	rest := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if strings.Contains(strings.ToLower(c), "/playlist.m3u8") {
+			ordered = append(ordered, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+	ordered = append(ordered, rest...)
+	if len(ordered) == 1 {
+		return ordered[0]
+	}
+
+	first := map[string]string{}
+	for _, c := range ordered {
+		fam := missavStreamFamily(c)
+		if _, ok := first[fam]; !ok {
+			first[fam] = c
+		}
+	}
+	if len(first) <= 1 {
+		return ordered[0]
+	}
+
+	type result struct {
+		fam string
+		ok  bool
+	}
+	ch := make(chan result, len(first))
+	for fam, u := range first {
+		go func(f, target string) {
+			ch <- result{fam: f, ok: missavProbeStream(target)}
+		}(fam, u)
+	}
+	alive := map[string]bool{}
+	deadline := time.After(5 * time.Second)
+	for i := 0; i < len(first); i++ {
+		select {
+		case r := <-ch:
+			if r.ok {
+				alive[r.fam] = true
+			}
+		case <-deadline:
+			i = len(first)
+		}
+	}
+	for _, c := range ordered {
+		if alive[missavStreamFamily(c)] {
+			return c
+		}
+	}
+	return ordered[0]
+}
+
+// missavExtractM3u8 取该番号可播的播放地址。
+//
+// 顺序：先把页面上所有候选收集齐（打包 JS / 老版式 token 串 / surrit 兜底），
+// 再探活择一。探不通就退回第一候选，不返回空。
+func missavExtractM3u8(page string) string {
+	if page == "" {
+		return ""
+	}
+	return missavPickStream(missavCollectStreams(page))
 }
 
 func missavCatName(id string) string {

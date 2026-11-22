@@ -2231,65 +2231,75 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
                       ),
                     ],
                   ),
-            body: pictureInPicture
-                ? _videoPane(context)
-                : SafeArea(
-                    top: false,
-                    bottom: !fullscreen,
-                    maintainBottomViewPadding: true,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final desktop = constraints.maxWidth >= 840;
-                        if (fullscreen) {
-                          return _videoPane(context);
-                        }
-                        if (desktop ||
-                            constraints.maxWidth >
-                                constraints.maxHeight * 1.3) {
-                          return Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  children: [
-                                    Expanded(child: _videoPane(context)),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                width: desktop ? 312 : 210,
-                                child: _episodePanel(),
-                              ),
-                            ],
-                          );
-                        }
-                        if (_mobile) {
-                          final height = constraints.maxHeight * .56;
-                          return Column(
-                            children: [
-                              SizedBox(
-                                height: height,
-                                width: double.infinity,
-                                child: _videoPane(context),
-                              ),
-                              Expanded(child: _mobilePlaybackPanel()),
-                            ],
-                          );
-                        }
-                        final height = (constraints.maxWidth / _aspectRatio)
-                            .clamp(0.0, constraints.maxHeight * .64);
-                        return Column(
-                          children: [
-                            SizedBox(
-                              height: height,
-                              width: double.infinity,
-                              child: _videoPane(context),
-                            ),
-                            Expanded(child: _episodePanel()),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
+            // 画面层绝不换父级：全屏/非全屏/画中画都挂在同一条
+            // SafeArea → LayoutBuilder → Stack → Positioned 链上，只改
+            // 四条边与面板显隐（v53 在 player_screen 的同款修法，这里
+            // 原样照搬）。以前全屏 LayoutBuilder 直挂、宽屏 Row、窄屏
+            // Column>SizedBox、画中画 body 直挂，四种父级来回换，
+            // TvboxVideoPane/IjkVideoPane 是 AndroidView，表面重挂
+            // → 解码器照旧出声、画面全黑。
+            body: SafeArea(
+              top: false,
+              bottom: !fullscreen,
+              maintainBottomViewPadding: true,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final desktop = constraints.maxWidth >= 840;
+                  final wide =
+                      desktop ||
+                      constraints.maxWidth > constraints.maxHeight * 1.3;
+                  final panelSide =
+                      !fullscreen && !pictureInPicture && wide;
+                  final sideWidth = panelSide
+                      ? (desktop ? 312.0 : 210.0)
+                      : 0.0;
+                  double videoHeight = 0; // 0 = 视频占满剩余高度
+                  if (!fullscreen && !pictureInPicture && !wide) {
+                    if (_mobile) {
+                      videoHeight = constraints.maxHeight * .56;
+                    } else {
+                      videoHeight = (constraints.maxWidth / _aspectRatio)
+                          .clamp(0.0, constraints.maxHeight * .64);
+                    }
+                  }
+                  final filler = videoHeight > 0
+                      ? (constraints.maxHeight - videoHeight).clamp(
+                          0.0,
+                          constraints.maxHeight,
+                        )
+                      : 0.0;
+                  return Stack(
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        right: sideWidth,
+                        bottom: filler,
+                        child: _videoPane(context),
+                      ),
+                      if (!fullscreen && !wide && !pictureInPicture)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: filler,
+                          bottom: 0,
+                          child: _mobile
+                              ? _mobilePlaybackPanel()
+                              : _episodePanel(),
+                        ),
+                      if (panelSide)
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          bottom: 0,
+                          width: sideWidth,
+                          child: _episodePanel(),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),
