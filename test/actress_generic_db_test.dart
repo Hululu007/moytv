@@ -419,6 +419,89 @@ void main() {
       expect(rows.map((w) => w.id), [2]);
     });
   });
+
+  group('分类副表维度（2026-11-22 点进数据库读不到分类）', () {
+    // 女优库真结构：videos 里只有 type_name（值全是「成人影片」），
+    // 真正的有码/无码/4K 在 video_category(vod_id, main_category)，
+    // 标签在 video_tag(vod_id, tag_name)。
+    Map<String, List<String>> nvkuTables() => {
+      'videos': [
+        'vod_id',
+        'title',
+        'pic_url',
+        'm3u8_url',
+        'vod_remarks',
+        'vod_pubdate',
+        'vod_area',
+        'vod_year',
+        'vod_content',
+        'vod_play_from',
+        'vod_play_url',
+        'type_name',
+        'created_at',
+      ],
+      'video_category': ['vod_id', 'main_category'],
+      'video_tag': ['vod_id', 'tag_name'],
+      'actresses': ['cate_id', 'name', 'avatar', 'created_at'],
+      'video_actress': ['vod_id', 'cate_id'],
+      'tags': ['tag_name', 'created_at'],
+    };
+
+    test('作品表仍是 videos，且识别出分类副表与外键', () {
+      final schema = classifyGenericTables(nvkuTables());
+      expect(schema.worksTable?.table, 'videos');
+      final keys = [
+        for (final relation in schema.facetRelations)
+          '${relation.table}.${relation.columnFor(GenericDbRole.category)}',
+      ];
+      expect(keys, contains('video_category.main_category'));
+      expect(keys, contains('video_tag.tag_name'));
+      final category = schema.facetRelations.firstWhere(
+        (relation) => relation.table == 'video_category',
+      );
+      expect(category.foreignKey, 'vod_id');
+      expect(category.primaryKey, 'vod_id');
+    });
+
+    test('key 带表名（不与作品表列撞名），外键指向作品表主键', () {
+      final schema = classifyGenericTables(nvkuTables());
+      for (final relation in schema.facetRelations) {
+        final column = relation.columnFor(GenericDbRole.category)!;
+        expect('${relation.table}.$column', contains('.'));
+        expect(relation.primaryKey, 'vod_id');
+      }
+    });
+
+    test('自带播放地址的表不算分类副表（那是另一套作品表）', () {
+      final schema = classifyGenericTables({
+        'movies': ['id', 'title', 'play_url', 'type_name'],
+        'files': ['id', 'movie_id', 'url'],
+      });
+      expect(schema.worksTable?.table, 'movies');
+      expect(schema.facetRelations, isEmpty);
+    });
+
+    test('没有分类副表的库不硬凑维度', () {
+      final schema = classifyGenericTables({
+        'works': ['id', 'title', 'play_url', 'category'],
+        'tags': ['tag_name'],
+      });
+      expect(schema.worksTable?.table, 'works');
+      expect(schema.facetRelations, isEmpty);
+    });
+
+    test('手动映射不丢分类副表', () {
+      final schema = classifyGenericTables(nvkuTables());
+      final manual = schema.withManualMapping(
+        table: 'videos',
+        columns: {
+          GenericDbRole.title: 'title',
+          GenericDbRole.playUrl: 'm3u8_url',
+        },
+      );
+      expect(manual.facetRelations.length, schema.facetRelations.length);
+    });
+  });
 }
 
 // 2026-11-28 v28 追加：多级分类筛选、跨表关系、按人名/番号查。

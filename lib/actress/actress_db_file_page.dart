@@ -208,21 +208,14 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     final reader = _reader;
     if (reader == null) return;
     setState(() => _loadingFacets = true);
+    // 分类先查：大库 COUNT 可能慢几十秒，等它会把分类条一起拖住，
+    // 用户看到的就是「点进来没有分类」。
     try {
-      final total = await reader.countWorks(
-        query: _query,
-        filters: _filters,
-      ).timeout(const Duration(seconds: 60));
-      if (!mounted || generation != _generation) return;
-      setState(() => _total = total);
-    } catch (_) {
-      if (!mounted || generation != _generation) return;
-      setState(() => _total = _works.length);
-    }
-    try {
+      // 分类维度逐列查（副表维度在前），大库上可能几秒到十几秒；
+      // 给足时间，别一超时就把整批分类丢掉（那正是「读不到分类」）。
       final facets = await reader
           .facets()
-          .timeout(const Duration(seconds: 45));
+          .timeout(const Duration(seconds: 90));
       if (!mounted || generation != _generation) return;
       setState(() {
         _facets
@@ -233,6 +226,17 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     } catch (_) {
       if (!mounted || generation != _generation) return;
       setState(() => _loadingFacets = false);
+    }
+    try {
+      final total = await reader.countWorks(
+        query: _query,
+        filters: _filters,
+      ).timeout(const Duration(seconds: 60));
+      if (!mounted || generation != _generation) return;
+      setState(() => _total = total);
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _total = _works.length);
     }
   }
 
@@ -392,6 +396,12 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
             ),
           ),
           if (_facets.isNotEmpty || _selectedCount > 0) _buildFacetBar(colors),
+          if (_facets.isEmpty &&
+              !_loadingFacets &&
+              !_loadingFirst &&
+              _error.isEmpty &&
+              _works.isNotEmpty)
+            _buildNoFacetHint(colors),
           Expanded(child: _body(colors)),
         ],
       ),
@@ -460,27 +470,31 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     );
   }
 
-  /// 列名转人话（库里字段名多是英文）。
-  String _facetLabel(String column) {
-    final lower = column.toLowerCase();
-    const map = {
-      'category': '分类',
-      'type': '类型',
-      'class': '分类',
-      'genre': '题材',
-      'tag': '标签',
-      'tags': '标签',
-      'series': '系列',
-      'area': '地区',
-      'kind': '种类',
-      'group': '分组',
-      'theme': '主题',
-      'studio': '片商',
-    };
-    for (final entry in map.entries) {
-      if (lower.contains(entry.key)) return entry.value;
-    }
-    return column;
+  /// 列名转人话（库里字段名多是英文）。副表维度的 key 是
+  /// `表.列`（如 video_category.main_category），只拿列名去转，
+  /// 给用户看库表名没意义。
+  String _facetLabel(String column) => facetDisplayLabel(column);
+
+  /// 一个分类维度都没认出来时的提示条（不静默空白：告诉用户在哪儿
+  /// 手动指定，或者这个库本身就没有分类列）。
+  Widget _buildNoFacetHint(ColorScheme colors) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      child: Row(
+        children: [
+          Icon(Icons.filter_alt_off_outlined, size: 15,
+              color: colors.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '这个库里没认出分类列，点右上角「数据库字段」指定一下',
+              style: TextStyle(fontSize: 11.5, color: colors.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _body(ColorScheme colors) {
@@ -610,6 +624,33 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   }
 }
 
+/// 分类维度 key 转人话：`video_category.main_category` 这种带表名的
+/// key 只取最后一段列名；列名里的英文按常见对应关系翻译。
+String facetDisplayLabel(String column) {
+  final dot = column.lastIndexOf('.');
+  final name = dot >= 0 ? column.substring(dot + 1) : column;
+  final lower = name.toLowerCase();
+  const map = {
+    'category': '分类',
+    'main_category': '分类',
+    'type': '类型',
+    'class': '分类',
+    'genre': '题材',
+    'tag': '标签',
+    'tags': '标签',
+    'series': '系列',
+    'area': '地区',
+    'kind': '种类',
+    'group': '分组',
+    'theme': '主题',
+    'studio': '片商',
+  };
+  for (final entry in map.entries) {
+    if (lower.contains(entry.key)) return entry.value;
+  }
+  return name;
+}
+
 /// 一个分类维度的多选面板：组内多选取并（勾几个都算）。
 class _FacetSheet extends StatefulWidget {
   const _FacetSheet({required this.facet, required this.selected});
@@ -641,7 +682,7 @@ class _FacetSheetState extends State<_FacetSheet> {
                 children: [
                   Expanded(
                     child: Text(
-                      widget.facet.column,
+                      facetDisplayLabel(widget.facet.column),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,

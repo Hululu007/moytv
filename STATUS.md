@@ -134,3 +134,29 @@ v33（未发布），基线 v32。
 - `go build ./...` 通过；`go test ./seku/` 与改动前基线一致（HjwParseFixtures /
   JrMkURL / JrParseExpires / Av321B64AndSlug / Av321OrderCandidates 五条为历史红线，
   改动前后同样失败；TestZ2Smoke 内 z2_thdh 未注册亦为原有）。
+
+## v44（2026-11-22 早）点进数据库读不到分类
+### 根因
+- 分类不在作品表：`videos.type_name` 341,879 行里 340,601 行是「成人影片」；
+  真正的有码/无码/4K 在 `video_category(vod_id, main_category)`，
+  标签在 `video_tag(vod_id, tag_name)`（288 万行）。
+- `GenericDbReader.facets()` 只扫作品表自己的列 → 副表分类一个都读不到，分类条空白。
+
+### 改法
+1. `GenericDbSchema.facetRelations` + `_facetRelationsFor`：认出「有分类列 + 能按外键
+   指回作品表」的副表（最多 3 张），外键判定抽成 `_foreignKeyFor` 复用。
+2. `facets()`：副表维度先出，主表列随后；每维单独 try/catch；只有单一取值的列跳过
+   （`type_name` 那种）。text 空串判断修正（原 `<> ' '`）。
+3. `_where()`：filters 支持 `表.列` → 主键 IN (SELECT 外键 FROM 副表 WHERE 列 IN ...)；
+   关键词搜索同样覆盖副表分类值（用 IN 半连接，EXISTS 实测超时 300s 不可用）。
+4. `actress_db_file_page`：分类先查、总数后补（原顺序让大库 COUNT 拖住分类条）；
+   facets 超时 45s→90s；认不出分类时给提示条；facet 标签 `表.列` 只显示列名。
+
+### 真库实测（merge/女优库-merged.db 801MB / 341,879 行）
+- 分类维度：有码/无码/4K（0.05s）；标签维度 30 个（0.62s）
+- 选 4K 第一页 0.02s；搜「有码」223,047 条 0.53s
+- 测试：actress_generic_db 40 条全过（新增 5）；film_library/video_library_db/db_mirror/db_play_code 73 条全过
+
+### 未验
+- 真机：分类条显示、筛选、起播
+- `video_category.main_category` 有 1,278 行 NULL（数据本身缺）

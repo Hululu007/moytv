@@ -365,6 +365,7 @@ class GenericDbSchema {
     this.manualTable,
     this.manualColumns,
     this.relations = const [],
+    this.facetRelations = const [],
   });
 
   /// 全部表（每张表的字段角色映射）。
@@ -388,6 +389,14 @@ class GenericDbSchema {
 
   /// 跨表关联：作品表本身没有播放地址/封面时，从副表按外键补。
   final List<GenericDbRelation> relations;
+
+  /// 跨表分类维度：作品表本身没有分类列（或分类在另一张表里）时，
+  /// 按外键把副表的分类列做成筛选维度。女优库就是这样——videos
+  /// 只有 type_name（值全是「成人影片」），真正的「有码/无码/4K」
+  /// 在 video_category(vod_id, main_category) 里，不跨表就一个都读不到。
+  ///
+  /// 每项的 [GenericDbRelation.columns] 里只放 category 一条角色映射。
+  final List<GenericDbRelation> facetRelations;
 
   GenericDbRelation? relationFor(GenericDbRole role) {
     for (final relation in relations) {
@@ -437,6 +446,7 @@ class GenericDbSchema {
       manualTable: table,
       manualColumns: Map.of(columns),
       relations: relations,
+      facetRelations: facetRelations,
     );
   }
 }
@@ -546,12 +556,18 @@ GenericDbSchema classifyGenericTables(
   final fingerprint =
       tableColumns.entries.map((e) => '${e.key}(${e.value.join(',')})').toList()
         ..sort();
+  // 分类副表（2026-11-22）：主表没有分类列时分类常常在副表里
+  // （video_category / video_tag 这种两列表），不跨表就一个维度都读不到。
+  final facetRelations = worksTable == null
+      ? const <GenericDbRelation>[]
+      : _facetRelationsFor(primary: worksTable, mappings: mappings);
   return GenericDbSchema(
     tables: mappings,
     fingerprint: fingerprint.join(';'),
     worksTable: worksTable,
     personsTable: personsTable,
     relations: relations,
+    facetRelations: facetRelations,
   );
 }
 
@@ -587,8 +603,41 @@ List<GenericDbRelation> _relationsFor({
   required List<GenericDbTableMapping> mappings,
   required List<GenericDbRole> roles,
 }) {
+  final out = <GenericDbRelation>[];
+  final ordered = List.of(mappings)..sort((a, b) => a.table.compareTo(b.table));
+  for (final role in roles) {
+    GenericDbRelation? found;
+    for (final sub in ordered) {
+      if (sub.table == primary.table) continue;
+      final column = sub.columnFor(role);
+      if (column == null) continue;
+      final foreignKey = _foreignKeyFor(primary: primary, sub: sub);
+      if (foreignKey == null) continue;
+      found = GenericDbRelation(
+        table: sub.table,
+        foreignKey: foreignKey,
+        primaryKey: primary.idColumn!,
+        columns: sub.columns,
+      );
+      break;
+    }
+    if (found != null) out.add(found);
+  }
+  return out;
+}
+
+/// 副表里哪一个列能指回作品表（外键）。判定不认死名字：
+/// - `movie_id`/`videoid` 这类「主表名 + id」；
+/// - 与主表主键同名的列（`movie_id` 对 `movie_id`）；
+/// - `vid/mid/pid/workid/itemid/filmid/vodid/subjectid/parentid` 这类
+///   通用短外键。
+/// 单列 `id` 不算外键（那是副表自己的主键，会自连接拿错行）。
+String? _foreignKeyFor({
+  required GenericDbTableMapping primary,
+  required GenericDbTableMapping sub,
+}) {
   final pk = primary.idColumn;
-  if (pk == null) return const [];
+  if (pk == null) return null;
   final pkNormalized = normalizeDbFieldName(pk);
   final tableNormalized = normalizeDbFieldName(primary.table);
   const genericForeignKeys = {
@@ -604,37 +653,61 @@ List<GenericDbRelation> _relationsFor({
     'mid',
     'pid',
   };
+  for (final candidate in sub.allColumns) {
+    final normalized = normalizeDbFieldName(candidate);
+    if (normalized.isEmpty || normalized == 'id') continue;
+    if (normalized == '${tableNormalized}id' ||
+        normalized == pkNormalized ||
+        genericForeignKeys.contains(normalized)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/// 分类副表最多收几张（每张一个 chip，太多挤满一屏）。
+const _maxFacetTables = 3;
+
+/// 找「分类在副表」的维度：副表里有一列像分类（category 角色，或者
+/// 列名像分类/标签/类型），并且有一个能指回作品表的外键，才算一个
+/// 可筛选维度。女优库：video_category(vod_id → main_category)、
+/// video_tag(vod_id → tag_name) 都会命中。
+List<GenericDbRelation> _facetRelationsFor({
+  required GenericDbTableMapping primary,
+  required List<GenericDbTableMapping> mappings,
+}) {
+  if (primary.idColumn == null) return const [];
   final out = <GenericDbRelation>[];
   final ordered = List.of(mappings)..sort((a, b) => a.table.compareTo(b.table));
-  for (final role in roles) {
-    GenericDbRelation? found;
-    for (final sub in ordered) {
-      if (sub.table == primary.table) continue;
-      final column = sub.columnFor(role);
-      if (column == null) continue;
-      String? foreignKey;
-      for (final candidate in sub.allColumns) {
-        final normalized = normalizeDbFieldName(candidate);
-        if (normalized.isEmpty || normalized == 'id') continue;
-        if (normalized == '${tableNormalized}id' ||
-            normalized == pkNormalized ||
-            genericForeignKeys.contains(normalized)) {
-          foreignKey = candidate;
-          break;
-        }
-      }
-      if (foreignKey == null) continue;
-      found = GenericDbRelation(
+  for (final sub in ordered) {
+    if (out.length >= _maxFacetTables) break;
+    if (sub.table == primary.table) continue;
+    // 自带播放地址的表是另一套作品表，不是分类副表。
+    if (sub.columns.containsKey(GenericDbRole.playUrl)) continue;
+    final column = _facetColumnOf(sub);
+    if (column == null) continue;
+    final foreignKey = _foreignKeyFor(primary: primary, sub: sub);
+    if (foreignKey == null) continue;
+    out.add(
+      GenericDbRelation(
         table: sub.table,
         foreignKey: foreignKey,
-        primaryKey: pk,
-        columns: sub.columns,
-      );
-      break;
-    }
-    if (found != null) out.add(found);
+        primaryKey: primary.idColumn!,
+        columns: {GenericDbRole.category: column},
+      ),
+    );
   }
   return out;
+}
+
+/// 副表里当分类维度的那一列：先用自动映射出来的 category 列，
+/// 没有再看列名像不像分类/标签/类型（tag_name 这类映射会给到标题，
+/// 但它本质是分类维度）。
+String? _facetColumnOf(GenericDbTableMapping mapping) {
+  final category = mapping.columnFor(GenericDbRole.category);
+  if (category != null) return category;
+  final facets = categoryFacetColumns(mapping);
+  return facets.isEmpty ? null : facets.first;
 }
 
 /// 给一个已打开的 [Database] 探结构：sqlite_master 列所有表，
@@ -988,9 +1061,25 @@ class GenericDbReader {
         ])
           if (mapping.columnFor(role) != null) _quote(mapping.columnFor(role)!),
       ];
-      if (searchable.isNotEmpty) {
-        clauses.add('(${searchable.map((c) => '$c LIKE ?').join(' OR ')})');
-        args.addAll([for (final _ in searchable) like]);
+      // 副表里的分类值也一起搜：女优库搜「有码」得搜得出来（值不在
+      // 作品表，在 video_category 里）。用 IN 半连接而不是 EXISTS ——
+      // EXISTS 是逐行子查询，30 万行上会跑成几分钟（实测超时）。
+      final facetSearch = <String>[
+        for (final relation in schema.facetRelations)
+          if (relation.columnFor(GenericDbRole.category) != null)
+            'CAST(${_quote(mapping.table)}.${_quote(relation.primaryKey)} '
+                'AS TEXT) IN (SELECT CAST(${_quote(relation.foreignKey)} AS TEXT) '
+                'FROM ${_quote(relation.table)} '
+                'WHERE CAST(${_quote(relation.columnFor(GenericDbRole.category)!)} '
+                'AS TEXT) LIKE ?)',
+      ];
+      final tokens = [
+        for (final column in searchable) '$column LIKE ?',
+        ...facetSearch,
+      ];
+      if (tokens.isNotEmpty) {
+        clauses.add('(${tokens.join(' OR ')})');
+        args.addAll([for (final _ in tokens) like]);
       }
     }
     for (final entry in filters.entries) {
@@ -999,6 +1088,33 @@ class GenericDbReader {
           if (value.trim().isNotEmpty) value,
       ];
       if (values.isEmpty) continue;
+      // 副表分类维度：key 是 `表.列`（video_category.main_category）。
+      // 作品表里没有这一列，按外键反查：主表 id IN (SELECT fk FROM 副表
+      // WHERE 列 IN (...))。
+      final dot = entry.key.indexOf('.');
+      if (dot > 0) {
+        final table = entry.key.substring(0, dot);
+        final column = entry.key.substring(dot + 1);
+        GenericDbRelation? relation;
+        for (final item in schema.facetRelations) {
+          if (item.table == table &&
+              item.columnFor(GenericDbRole.category) == column) {
+            relation = item;
+            break;
+          }
+        }
+        if (relation == null) continue;
+        clauses.add(
+          'CAST(${_quote(mapping.table)}.${_quote(relation.primaryKey)} '
+          'AS TEXT) IN ('
+          'SELECT CAST(${_quote(relation.foreignKey)} AS TEXT) '
+          'FROM ${_quote(relation.table)} '
+          'WHERE CAST(${_quote(column)} AS TEXT) IN '
+          '(${List.filled(values.length, '?').join(',')}))',
+        );
+        args.addAll(values);
+        continue;
+      }
       if (!mapping.allColumns.contains(entry.key)) continue;
       // CAST 成文本比较：库里的分类列可能是 INTEGER 型 id，而筛选
       // 值是从列表里点出来的字符串，不 CAST 会一个都匹配不上。
@@ -1220,38 +1336,82 @@ class GenericDbReader {
   /// 分类维度：作品表里像分类/分类名/标签/系列/地区的列，每列出
   /// 现过的值 + 每个值下的作品数（按作品数从多到少，[maxValues] 封顶）。
   /// 这就是「点进库以后按库内部的多级分类筛选」的数据来源。
+  ///
+  /// 2026-11-22 用户令「点进数据库读不到数据库里面的分类」：分类常常
+  /// 不在作品表本身，而在副表（女优库的 videos 只有 type_name，真正的
+  /// 有码/无码/4K 在 video_category(vod_id, main_category)）。副表维度
+  /// 排在前面先出，主表列随后补上；每列单独查、单独容错，一列慢/坏
+  /// 不影响其它列。
   Future<List<GenericDbFacet>> facets({int maxValues = 30}) async {
     final mapping = schema.worksTable;
     final db = _db;
     if (mapping == null || db == null || _testWorks != null) return const [];
-    final columns = categoryFacetColumns(mapping).take(6);
     final out = <GenericDbFacet>[];
-    for (final column in columns) {
+    // 1) 副表分类维度（带表名做 key：`video_category.main_category`）
+    for (final relation in schema.facetRelations) {
+      final column = relation.columnFor(GenericDbRole.category);
+      if (column == null) continue;
       final quoted = _quote(column);
-      final rows = await db.rawQuery(
-        'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c '
-        'FROM ${_quote(mapping.table)} '
-        'WHERE $quoted IS NOT NULL AND TRIM(CAST($quoted AS TEXT)) <> '
-        ' '
-        'GROUP BY CAST($quoted AS TEXT) '
-        'ORDER BY c DESC, v ASC LIMIT ?',
-        [maxValues],
-      );
-      final values = <GenericDbFacetValue>[];
-      for (final row in rows) {
-        final value = row['v']?.toString().trim() ?? '';
-        if (value.isEmpty) continue;
-        values.add(
-          GenericDbFacetValue(
-            value: value,
-            count: (row['c'] as num?)?.toInt() ?? 0,
+      try {
+        final rows = await db.rawQuery(
+          'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c '
+          'FROM ${_quote(relation.table)} '
+          'WHERE $quoted IS NOT NULL AND TRIM(CAST($quoted AS TEXT)) <> \'\' '
+          'GROUP BY CAST($quoted AS TEXT) '
+          'ORDER BY c DESC, v ASC LIMIT ?',
+          [maxValues],
+        );
+        final values = _facetValues(rows);
+        if (values.isEmpty) continue;
+        out.add(
+          GenericDbFacet(
+            column: '${relation.table}.$column',
+            values: values,
           ),
         );
+      } catch (_) {
+        // 副表结构跟探测时不一致（视图/脏库）：跳过这一维，不影响其它。
       }
-      if (values.isEmpty) continue;
-      out.add(GenericDbFacet(column: column, values: values));
+    }
+    // 2) 作品表自己的分类列
+    for (final column in categoryFacetColumns(mapping).take(6)) {
+      if (out.any((facet) => facet.column == column)) continue;
+      final quoted = _quote(column);
+      try {
+        final rows = await db.rawQuery(
+          'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c '
+          'FROM ${_quote(mapping.table)} '
+          'WHERE $quoted IS NOT NULL AND TRIM(CAST($quoted AS TEXT)) <> \'\' '
+          'GROUP BY CAST($quoted AS TEXT) '
+          'ORDER BY c DESC, v ASC LIMIT ?',
+          [maxValues],
+        );
+        final values = _facetValues(rows);
+        // 只有一种取值、还覆盖全库的列不是分类维度（女优库的
+        // type_name 全是「成人影片」那种），摆出来只会误导。
+        if (values.length <= 1) continue;
+        out.add(GenericDbFacet(column: column, values: values));
+      } catch (_) {
+        // 这一列查不动（没索引的大表/脏数据）：跳过，接着查下一维。
+      }
     }
     return out;
+  }
+
+  /// 把 `SELECT ... AS v, COUNT(*) AS c` 的行转成取值列表。
+  List<GenericDbFacetValue> _facetValues(List<Map<String, Object?>> rows) {
+    final values = <GenericDbFacetValue>[];
+    for (final row in rows) {
+      final value = row['v']?.toString().trim() ?? '';
+      if (value.isEmpty) continue;
+      values.add(
+        GenericDbFacetValue(
+          value: value,
+          count: (row['c'] as num?)?.toInt() ?? 0,
+        ),
+      );
+    }
+    return values;
   }
 
   /// 主表行缺地址/封面时，按关联副表一次性补上（每个主表 id 取副表
