@@ -259,9 +259,9 @@ class SourceSite {
     SourceSite(
       'v_xvideos',
       'XVideos',
-      'XVideos · 需梯子',
+      'XVideos · 直连 · 槽位 xvideos',
       section: sectionVideo,
-      slotId: 'ikanbot',
+      slotId: 'xvideos',
     ),
     SourceSite(
       'v_hsck',
@@ -739,6 +739,34 @@ class SourceSite {
       'ririlu.cc · 中文字幕/无码 · 槽位 ririlu',
       section: sectionVideo,
       slotId: 'ririlu',
+    ),
+    SourceSite(
+      'v_xnxx',
+      '🔞XNXX',
+      'xnxx.com · 最佳/最热 · 槽位 xnxx',
+      section: sectionVideo,
+      slotId: 'xnxx',
+    ),
+    SourceSite(
+      'v_pornhub',
+      '🔞Pornhub',
+      'pornhub.com · 最热/最新 · 槽位 pornhub',
+      section: sectionVideo,
+      slotId: 'pornhub',
+    ),
+    SourceSite(
+      'v_eporner',
+      '🔞EPorner',
+      'eporner.com · 10类 · 槽位 eporner',
+      section: sectionVideo,
+      slotId: 'eporner',
+    ),
+    SourceSite(
+      'v_supjav',
+      '🔞SupJav',
+      'supjav.com · 有码/无码/中字 · 槽位 supjav',
+      section: sectionVideo,
+      slotId: 'supjav',
     ),
   ];
   static const knownValues = [

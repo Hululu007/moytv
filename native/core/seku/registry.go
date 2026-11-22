@@ -68,6 +68,8 @@ var slotOrder = []string{
 	"mjv011",
 	// v52 第一批移植源（真果鉴 → 魔蚁片库）
 	"youguo", "llsp", "ririlu",
+	// v54 苹果版（i短剧 iOS）内置源移植
+	"xvideos", "xnxx", "pornhub", "eporner", "supjav",
 }
 
 // keyToSlot resolves internal keys and display aliases to slot ids.
