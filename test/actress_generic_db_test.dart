@@ -502,6 +502,50 @@ void main() {
       expect(manual.facetRelations.length, schema.facetRelations.length);
     });
   });
+
+  group('分类（2026-11-22：外来库视频列表页顶部 chips）', () {
+    GenericDbReader readerWithCategories() => GenericDbReader.test(
+      works: const [
+        GenericDbWork(id: 1, title: '有码一', code: 'A-1', category: '有码'),
+        GenericDbWork(id: 2, title: '有码二', code: 'A-2', category: '有码'),
+        GenericDbWork(id: 3, title: '无码一', code: 'B-1', category: '无码'),
+        GenericDbWork(id: 4, title: '没分类', code: 'C-1', category: ''),
+      ],
+    );
+
+    test('categories() 按分类分组、按数量倒序、空分类不进', () async {
+      final reader = readerWithCategories();
+      expect(await reader.categories(), [
+        ('有码', 2),
+        ('无码', 1),
+      ]);
+    });
+
+    test('works()/countWorks() 按 category 筛，只留当前这个库该分类的行', () async {
+      final reader = readerWithCategories();
+      expect(await reader.countWorks(category: '有码'), 2);
+      expect(await reader.countWorks(category: '无码'), 1);
+      expect(await reader.countWorks(category: '欧美'), 0);
+      final works = await reader.works(
+        offset: 0,
+        limit: 10,
+        category: '有码',
+      );
+      expect(works.map((w) => w.title), ['有码一', '有码二']);
+      // 分类筛与标题搜可叠加。
+      expect(await reader.countWorks(category: '有码', query: '二'), 1);
+    });
+
+    test('没有分类的作品：categories() 回空，不编', () async {
+      final reader = GenericDbReader.test(
+        works: const [
+          GenericDbWork(id: 1, title: '没分类', code: 'C-1'),
+        ],
+      );
+      expect(await reader.categories(), isEmpty);
+      expect(await reader.countWorks(), 1);
+    });
+  });
 }
 
 // 2026-11-28 v28 追加：多级分类筛选、跨表关系、按人名/番号查。

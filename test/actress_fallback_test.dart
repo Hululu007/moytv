@@ -76,6 +76,7 @@ void main() {
       final persons = parseWhosRoster(fixture);
       expect(persons.map((p) => p.sourceId), [
         'aoi-tsubasa',
+        'suren',
         'amber-girl',
         'bad-rating',
       ]);
@@ -87,17 +88,21 @@ void main() {
       expect(aoi.aliases, ['翼酱']);
     });
 
-    test('drops the 素人 pseudo-actor and pagination links', () {
+    test('keeps the 素人 actor and drops pagination links', () {
+      // 2026-11-21 用户纠正：素人是有番号的正常演员，不再过滤；
+      // 分页链接仍丢弃。
       final persons = parseWhosRoster(fixture);
-      expect(persons.any((p) => p.name == '素人'), isFalse);
+      expect(persons.any((p) => p.name == '素人'), isTrue);
       expect(persons.any((p) => p.sourceId.startsWith('page-')), isFalse);
     });
 
     test('amber-class rating is a fallback, out-of-range is null', () {
       final persons = parseWhosRoster(fixture);
-      expect(persons[1].rating, 9.1);
-      expect(persons[1].exactWorks, 56);
-      expect(persons[2].rating, isNull);
+      // 素人保留后下标后移一位：[1] 是素人（无评分），[2] 是琥珀。
+      expect(persons[1].name, '素人');
+      expect(persons[2].rating, 9.1);
+      expect(persons[2].exactWorks, 56);
+      expect(persons[3].rating, isNull);
     });
   });
 

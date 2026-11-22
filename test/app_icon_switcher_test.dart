@@ -239,4 +239,71 @@ void main() {
       expect(calls, isEmpty);
     });
   });
+
+  group('桌面快捷方式兜底', () {
+    const channel = MethodChannel('moyi/icon_switch');
+
+    void installHandler(Future<Object?> Function(MethodCall call) handler) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, handler);
+    }
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    test('pinShortcut 发 id，桥返回 true 即成功', () async {
+      final calls = <MethodCall>[];
+      installHandler((call) async {
+        calls.add(call);
+        return true;
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.pinShortcut('ant_storm');
+      expect(result.ok, isTrue);
+      expect(calls.single.method, 'pinShortcut');
+      expect((calls.single.arguments as Map)['id'], 'ant_storm');
+    });
+
+    test('桥返回 false：桌面不支持，归类为 unsupported', () async {
+      installHandler((call) async => false);
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.pinShortcut('ant_flame');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.unsupported);
+    });
+
+    test('桥抛错：归类为未知并带回详情', () async {
+      installHandler((call) async {
+        throw PlatformException(
+          code: 'pin_failed',
+          message: 'no shortcut manager',
+          details: 'IllegalStateException',
+        );
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      final result = await switcher.pinShortcut('ant_lens');
+      expect(result.ok, isFalse);
+      expect(result.failure, AppIconSwitchFailure.unknown);
+      expect(result.detail, 'IllegalStateException');
+    });
+
+    test('非法 id 与非安卓：不发通道', () async {
+      final calls = <MethodCall>[];
+      installHandler((call) async {
+        calls.add(call);
+        return true;
+      });
+      final switcher = AppIconSwitcher(supportedOverride: true);
+      expect((await switcher.pinShortcut('nope')).ok, isFalse);
+      final nonAndroid = AppIconSwitcher(supportedOverride: false);
+      expect((await nonAndroid.pinShortcut('ant_flame')).ok, isFalse);
+      expect(calls, isEmpty);
+    });
+  });
 }

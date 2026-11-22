@@ -12,6 +12,7 @@ import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/actress/actress_widgets.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/crosssite_probe.dart';
+import 'package:moyi/detail_screen.dart';
 import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
@@ -1555,7 +1556,7 @@ void main() {
       expect(find.text('无番号作品标题'), findsOneWidget);
     });
 
-    testWidgets('详情页点卡无源可播报已试过站数', (tester) async {
+    testWidgets('详情页点卡库里无地址报库里暂无播放地址', (tester) async {
       final person = await seedPerson('女演员甲', works: 1);
       await db.upsertWorks(person.localId, const [
         RosterFilm(code: 'SSIS-00123'),
@@ -1567,28 +1568,16 @@ void main() {
             repository: repository,
             store: store,
             database: db,
-            playChainFactory: ({required avId, required titleQuery}) =>
-                ActressPlayChain(
-                  repository: repository,
-                  store: store,
-                  avId: avId,
-                  titleQuery: titleQuery,
-                  candidateSites: [_testSiteA, _testSiteB],
-                  probeService: _ScriptedProbeService(
-                    repository: repository,
-                    results: const {},
-                  ),
-                  verifyFetch: _alwaysPlayable,
-                ),
           ),
         ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byType(DramaTile).first);
       await tester.pumpAndSettle();
-      // 2026-11-20 兜底播放修：两站都探过，报试过的站数，不再只报
-      // “暂无可播片源”（一个没试过时才报那句）。
-      expect(find.text('这条播不了，已试过 2 个站'), findsOneWidget);
+      // 2026-11-22 只走数据库：这部只有番号、库里没有播放地址，
+      // 不跨站探活、不报站数，只报库里暂无播放地址、不进详情页。
+      expect(find.text('库里暂无播放地址'), findsOneWidget);
+      expect(find.byType(DetailScreen), findsNothing);
     });
 
     testWidgets('排行榜按综合分排序', (tester) async {

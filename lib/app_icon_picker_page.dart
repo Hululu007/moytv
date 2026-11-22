@@ -5,6 +5,9 @@ import 'app_icon_switcher.dart';
 /// 应用图标选择页：默认图标 + 5 张内置机械蚂蚁图，点选立即切换。
 /// 切换走安卓 activity-alias 机制（见 IconSwitchBridge），桌面图标
 /// 刷新速度取决于启动器，部分启动器需稍等或重进桌面才刷新。
+/// 鸿蒙 NEXT 的卓易通里桌面图标不跟随 alias 变化（见桥侧注释），
+/// 点选成功也可能桌面不变，页底另有“桌面快捷方式”兜底：把当前图标
+/// 以快捷方式放到桌面，点它一样进应用。
 class AppIconPickerPage extends StatefulWidget {
   const AppIconPickerPage({super.key, AppIconSwitcher? switcher})
     : switcher = switcher ?? const AppIconSwitcher();
@@ -58,7 +61,31 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          result.ok ? '已切换为「${option.name}」，桌面图标稍后刷新' : _failureText(result),
+          result.ok
+              ? '已切换为「${option.name}」，回桌面查看；鸿蒙卓易通里桌面图标可能不跟随，没变就用下面的快捷方式'
+              : _failureText(result),
+        ),
+      ),
+    );
+  }
+
+  /// 把当前选中的图标以桌面快捷方式放出去（alias 不生效时的兜底）。
+  /// 与 alias 切换是两条路：即使上次切换被系统拒绝，这里照样能点。
+  Future<void> _pinShortcut() async {
+    final currentId = _currentId;
+    if (_busy || currentId == null) return;
+    setState(() => _busy = true);
+    final result = await widget.switcher.pinShortcut(currentId);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.ok
+              ? '已请求添加快捷方式，请在系统弹窗里点确认'
+              : result.failure == AppIconSwitchFailure.unsupported
+                  ? '当前桌面不支持添加快捷方式'
+                  : _failureText(result),
         ),
       ),
     );
@@ -75,6 +102,7 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
     final suffix = detail == null ? '' : '（$detail）';
     return switch (result.failure) {
       AppIconSwitchFailure.denied => '切换失败：系统拒绝了换图标，当前桌面或容器不允许$suffix',
+      AppIconSwitchFailure.unsupported => '当前桌面不支持添加快捷方式',
       AppIconSwitchFailure.missing => '切换失败：图标组件未找到$suffix',
       _ => '切换失败，当前桌面可能不支持换图标$suffix',
     };
@@ -117,7 +145,8 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
                     Expanded(
                       child: Text(
                         '上次切换被系统拒绝了：当前桌面或容器不允许换图标，'
-                        '点选不会生效。换个桌面启动器再试，或点“再试一次”重测。',
+                        '点选不会生效。可以改用下面的桌面快捷方式，'
+                        '或点“再试一次”重测。',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onErrorContainer,
                         ),
@@ -151,6 +180,29 @@ class _AppIconPickerPageState extends State<AppIconPickerPage> {
                 theme: theme,
               );
             },
+          ),
+        ),
+        // 桌面快捷方式兜底：鸿蒙卓易通里桌面图标不跟随 alias 变化，
+        // 点选成功也可能桌面不变。把当前图标以快捷方式放到桌面，
+        // 点它一样进应用；原图标还在，不用删。alias 被拒时这里照样能点。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('桌面图标没变？把当前图标以快捷方式放到桌面，点它一样进应用。'),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    key: const ValueKey('app-icon-pin-shortcut'),
+                    onPressed: _busy ? null : _pinShortcut,
+                    child: const Text('把当前图标添加到桌面'),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ],

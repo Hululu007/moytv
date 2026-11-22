@@ -805,8 +805,7 @@ void main() {
     }
 
     Future<void> pumpDetailPage(
-      WidgetTester tester,
-      Map<String, CrossSiteProbeResult> results, {
+      WidgetTester tester, {
       ActressJsonFallback? fallback,
       FilmDbFallbackProvider? filmDb,
       FeedProbeFetch? verifyFetch,
@@ -822,20 +821,6 @@ void main() {
             fallback: fallback,
             filmDb: filmDb,
             verifyFetch: verifyFetch ?? _alwaysPlayable,
-            playChainFactory: ({required avId, required titleQuery}) =>
-                ActressPlayChain(
-                  repository: repository,
-                  store: store,
-                  avId: avId,
-                  titleQuery: titleQuery,
-                  candidateSites: _allFallbackTestSites,
-                  probeService: _RecordingProbeService(
-                    repository: repository,
-                    results: results,
-                  ),
-                  probeConcurrency: 1,
-                  verifyFetch: verifyFetch ?? _alwaysPlayable,
-                ),
           ),
         ),
       );
@@ -853,80 +838,13 @@ void main() {
       }
     }
 
-    testWidgets('MJV 命中：点卡进详情页并尝试起播', (tester) async {
-      suppressKnownListTileAssertion();
-      repository.detailsById['mjv-drama'] = _fallbackDetailFor(
-        'mjv-drama',
-        'jar:zakatv:ZakaMjv011',
-        'SSIS-00123 MJV 标题',
-      );
-      // 链预检成功一次；播放器起播再解时失败进错误态，不建真播放器。
-      repository.resolveSuccessBudget = 1;
-      await pumpDetailPage(tester, {
-        'jar:zakatv:ZakaMjv011': _fallbackFoundResult(
-          const CrossSiteProvider(
-            id: 'jar:zakatv:ZakaMjv011',
-            name: '🔞mjv011',
-            siteIds: ['jar:zakatv:ZakaMjv011'],
-            lazy: false,
-          ),
-          'jar:zakatv:ZakaMjv011',
-          'mjv-drama',
-          'SSIS-00123 MJV 标题',
-        ),
-      });
-      await tester.tap(find.byType(DramaTile).first);
-      await pumpUntilDetail(tester);
-      expect(find.byType(DetailScreen), findsOneWidget);
-      expect(find.text('SSIS-00123 MJV 标题'), findsWidgets);
-      expect(find.text('暂无可播片源'), findsNothing);
-      expect(find.text('正在找可播片源…'), findsNothing);
-      // 详情页进页即播：播放器向仓库要过 MJV 这集的流。
-      expect(repository.resolveCalls, contains('mjv-drama'));
-    });
-
-    testWidgets('MJV 未命中：回落其他站进详情页', (tester) async {
-      suppressKnownListTileAssertion();
-      repository.detailsById['other-drama'] = _fallbackDetailFor(
-        'other-drama',
-        'test-site-other',
-        'SSIS-00123 其他标题',
-      );
-      repository.resolveSuccessBudget = 1;
-      await pumpDetailPage(tester, {
-        'test-site-other': _fallbackFoundResult(
-          const CrossSiteProvider(
-            id: 'test-site-other',
-            name: '🔞其他站',
-            siteIds: ['test-site-other'],
-            lazy: false,
-          ),
-          'test-site-other',
-          'other-drama',
-          'SSIS-00123 其他标题',
-        ),
-      });
-      await tester.tap(find.byType(DramaTile).first);
-      await pumpUntilDetail(tester);
-      expect(find.byType(DetailScreen), findsOneWidget);
-      expect(find.text('SSIS-00123 其他标题'), findsWidgets);
-      expect(find.text('暂无可播片源'), findsNothing);
-      expect(repository.resolveCalls, contains('other-drama'));
-    });
-
-    testWidgets('全部无源：报已试过 6 个站，不进详情页', (tester) async {
-      await pumpDetailPage(tester, const {});
-      await tester.tap(find.byType(DramaTile).first);
-      await tester.pumpAndSettle();
-      expect(find.text('这条播不了，已试过 6 个站'), findsOneWidget);
-      expect(find.byType(DetailScreen), findsNothing);
-    });
-
     /// 假兜底：只有 whos.json 里有一条 SSIS-00123 的行（mjv 那份空），
-    /// 播放地址由调用方定。localJsonDir 传空临时目录：不传时 load()
-    /// 会调 getApplicationDocumentsDirectory()，widget 测试里它
-    /// 永远不返回（见 testWidgets FakeAsync + async dart:io 挂起），
-    /// _loadFallback 卡住、兜底池一直是空的，存地址扫描无行可试。
+    /// 播放地址由调用方定。2026-11-22 只走数据库后，详情页不再读
+    /// 这些 json 行——这里只用来回归“给了 json 行也不进播放池”
+    /// （见“第一档本地 db 活的”）。localJsonDir 传空临时目录：
+    /// 不传时 load() 会调 getApplicationDocumentsDirectory()，
+    /// widget 测试里它永远不返回（见 testWidgets FakeAsync +
+    /// async dart:io 挂起）。
     /// mjvPlayUrl 非空时 mjv.json 也补一条同番号行（vod_play_from
     /// 须写 mjv：mjv011.json 是规范文件，站按 vod_play_from 认，
     /// 写 whos 会与 whos 行同键被合并掉）。
@@ -942,9 +860,8 @@ void main() {
       });
       return ActressJsonFallback(
         localJsonDir: temp,
-        // m3u 索引给空 manifest：真 m3u 库里 SSIS-00123 也有行，
-        // 不掏空它，池子里会多一条活的 m3u 行，测“存的死了落
-        // 回探活链”时它先赢、链跑不起来。
+        // m3u 索引给空 manifest：只走数据库后 json/m3u 行都不进池，
+        // 这里留空只是不让它干扰。
         m3uIndex: WhosM3uIndex(
           bytesReader: (_) async =>
               Uint8List.fromList(gzip.encode(utf8.encode('{}'))),
@@ -979,15 +896,22 @@ void main() {
 
     testWidgets('存的地址活的：直接播，不探链', (tester) async {
       suppressKnownListTileAssertion();
-      // 链预检 1 次（存的地址 resolve）成功；播放器起播再解时
-      // 失败进错误态，不建真播放器。
+      // 库里地址 resolve 1 次成功；播放器起播再解时失败进错误态，
+      // 不建真播放器。
       repository.resolveSuccessBudget = 1;
       await pumpDetailPage(
         tester,
-        const {},
-        fallback: fakeFallbackWithRow(
-          playUrl: '正片\$https://example.test/whos-ssis.mp4',
-        ),
+        // 2026-11-22 只走数据库：存的地址现在指库里（filmDb）的行，
+        // 不再是注入的 json 兜底行——_loadFallback 只读 db 行。
+        filmDb: _FakeFilmDb({
+          'SSIS123': [
+            _dbEntry(
+              vodId: 'db-row-1',
+              playUrl: 'https://example.test/whos-ssis.mp4',
+              vodName: 'SSIS-00123 存的标题',
+            ),
+          ],
+        }),
       );
       await tester.tap(find.byType(DramaTile).first);
       await pumpUntilDetail(tester);
@@ -995,10 +919,10 @@ void main() {
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
       expect(find.text('暂无可播片源'), findsNothing);
       expect(find.text('这条播不了，已试过 6 个站'), findsNothing);
-      // 只解过存的地址（链没跑、没多解别的站）。
-      expect(repository.resolveCalls, contains('json:whos:ssis-row-1'));
+      // 只解过存的地址（链已删、没多解别的站）。
+      expect(repository.resolveCalls, contains('json:mjv:db-row-1'));
       expect(
-        repository.resolveCalls.every((id) => id == 'json:whos:ssis-row-1'),
+        repository.resolveCalls.every((id) => id == 'json:mjv:db-row-1'),
         isTrue,
       );
     });
@@ -1007,7 +931,7 @@ void main() {
       suppressKnownListTileAssertion();
       // 主会话 2026-11-20 20:27 查实：mjv011.json 里存的 m3u8
       // 已系统性死亡（7 个 streamfastpro 域名抽验全 404），
-      // whos.json 5 条全 200——二档里 mjv 死、whos 活是常态，
+      // whos.json 5 条全 200——库里 mjv 死、whos 活是常态，
       // 不是偶然。存的地址要按站逐条验活、死的跳过、活的播。
       repository.resolveUrls = {
         'json:mjv:mjv-row-1': 'https://example.test/dead-mjv.mp4',
@@ -1018,11 +942,23 @@ void main() {
       repository.resolveSuccessBudget = 2;
       await pumpDetailPage(
         tester,
-        const {},
-        fallback: fakeFallbackWithRow(
-          playUrl: '正片\$https://example.test/whos-ssis.mp4',
-          mjvPlayUrl: '正片\$https://example.test/dead-mjv.mp4',
-        ),
+        // 2026-11-22 只走数据库：两条存的地址都改由库里（filmDb）
+        // 给，不再走注入的 json 兜底行；顺序即 filmDb 回的行序。
+        filmDb: _FakeFilmDb({
+          'SSIS123': [
+            _dbEntry(
+              vodId: 'mjv-row-1',
+              playUrl: 'https://example.test/dead-mjv.mp4',
+              vodName: 'SSIS-00123 MJV 死链标题',
+            ),
+            _dbEntry(
+              vodId: 'ssis-row-1',
+              playUrl: 'https://example.test/whos-ssis.mp4',
+              site: 'whos',
+              vodName: 'SSIS-00123 存的标题',
+            ),
+          ],
+        }),
         verifyFetch: _playableUnlessDead,
       );
       await tester.tap(find.byType(DramaTile).first);
@@ -1030,65 +966,22 @@ void main() {
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
       expect(find.text('SSIS-00123 MJV 死链标题'), findsNothing);
-      // 先解 mjv（死了）、再解 whos（活了播它），链没跑。
+      // 先解 mjv（死了）、再解 whos（活了播它），不探链。
       expect(
         repository.resolveCalls,
         ['json:mjv:mjv-row-1', 'json:whos:ssis-row-1'],
       );
     });
 
-    testWidgets('存的地址死了落回探活链', (tester) async {
-      suppressKnownListTileAssertion();
-      repository.resolveUrls = {
-        'json:whos:ssis-row-1': 'https://example.test/dead-ssis.mp4',
-        'other-drama': 'https://example.test/other.mp4',
-      };
-      repository.detailsById['other-drama'] = _fallbackDetailFor(
-        'other-drama',
-        'test-site-other',
-        'SSIS-00123 其他标题',
-      );
-      // 存的地址 resolve 1 次 + 链 resolve 1 次成功；播放器起播
-      // 再解时失败进错误态。
-      repository.resolveSuccessBudget = 2;
-      await pumpDetailPage(
-        tester,
-        {
-          'test-site-other': _fallbackFoundResult(
-            const CrossSiteProvider(
-              id: 'test-site-other',
-              name: '🔞其他站',
-              siteIds: ['test-site-other'],
-              lazy: false,
-            ),
-            'test-site-other',
-            'other-drama',
-            'SSIS-00123 其他标题',
-          ),
-        },
-        fallback: fakeFallbackWithRow(
-          playUrl: '正片\$https://example.test/dead-ssis.mp4',
-        ),
-        verifyFetch: _playableUnlessDead,
-      );
-      await tester.tap(find.byType(DramaTile).first);
-      await pumpUntilDetail(tester);
-      expect(find.byType(DetailScreen), findsOneWidget);
-      expect(find.text('SSIS-00123 其他标题'), findsWidgets);
-      expect(
-        repository.resolveCalls,
-        containsAll(['json:whos:ssis-row-1', 'other-drama']),
-      );
-    });
-
     testWidgets('第一档本地 db 活的：播库里的地址，不探链、不走内置', (tester) async {
       suppressKnownListTileAssertion();
-      // 链预检 1 次（库里地址 resolve）成功；播放器起播再解时
-      // 失败进错误态。
+      // 库里地址 resolve 1 次成功；播放器起播再解时失败进错误态，
+      // 不建真播放器。
       repository.resolveSuccessBudget = 1;
       await pumpDetailPage(
         tester,
-        const {},
+        // 2026-11-22 只走数据库：json 兜底行即使给了也不进播放池，
+        // 下面断言“存的标题”不出现就是这条回归检查。
         fallback: fakeFallbackWithRow(
           playUrl: '正片\$https://example.test/whos-ssis.mp4',
         ),
@@ -1106,7 +999,7 @@ void main() {
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 库里标题'), findsWidgets);
       expect(find.text('SSIS-00123 存的标题'), findsNothing);
-      // 只解过库里的地址（内置行没解、链没跑）。
+      // 只解过库里的地址（内置行没解、不探链）。
       expect(repository.resolveCalls, contains('json:mjv:db-row-1'));
       expect(
         repository.resolveCalls.every((id) => id == 'json:mjv:db-row-1'),
@@ -1114,103 +1007,6 @@ void main() {
       );
     });
 
-    testWidgets('第一档库里地址死了落到第二档内置', (tester) async {
-      suppressKnownListTileAssertion();
-      repository.resolveUrls = {
-        'json:mjv:db-row-1': 'https://example.test/dead-db.mp4',
-        'json:whos:ssis-row-1': 'https://example.test/whos-ssis.mp4',
-      };
-      // 库里地址 resolve 1 次 + 内置 resolve 1 次成功；播放器起播
-      // 再解时失败进错误态。
-      repository.resolveSuccessBudget = 2;
-      await pumpDetailPage(
-        tester,
-        const {},
-        fallback: fakeFallbackWithRow(
-          playUrl: '正片\$https://example.test/whos-ssis.mp4',
-        ),
-        filmDb: _FakeFilmDb({
-          'SSIS123': [
-            _dbEntry(
-              vodId: 'db-row-1',
-              playUrl: 'https://example.test/dead-db.mp4',
-            ),
-          ],
-        }),
-        verifyFetch: _playableUnlessDead,
-      );
-      await tester.tap(find.byType(DramaTile).first);
-      await pumpUntilDetail(tester);
-      expect(find.byType(DetailScreen), findsOneWidget);
-      expect(find.text('SSIS-00123 存的标题'), findsWidgets);
-      expect(find.text('SSIS-00123 库里标题'), findsNothing);
-      // 先解库里的、再解内置的，顺序不能反。
-      expect(
-        repository.resolveCalls.indexOf('json:mjv:db-row-1'),
-        lessThan(repository.resolveCalls.indexOf('json:whos:ssis-row-1')),
-      );
-    });
-
-    testWidgets('m3u hash 图兜底：无封面作品贴上 hash 图', (tester) async {
-      final person = (await db.upsertRosterPerson(
-        const RosterPerson(
-          source: ActressRosterSourceId.chaoliu,
-          sourceId: 'X2',
-          name: '女演员乙',
-          sex: 'female',
-        ),
-      ))!;
-      await db.upsertWorks(person.localId, const [
-        // SDAM-115 是包内 whos m3u 索引里真实有的一行
-        // （hash 2d00ea11a0158eebf1a91ebbc8e6c254）；别用 sdam-186，
-        // 它只在用户发的 m3u 文件里有，包内索引 32 个分片里一行
-        // 都没有，贴不上图不是 bug。
-        RosterFilm(code: 'sdam-115', date: '2024-01-01'),
-      ]);
-      final seeded = (await db.personById(person.localId))!;
-      // 默认 fallback 不传 localJsonDir 时 load() 会调
-      // getApplicationDocumentsDirectory()，widget 测试里它永远
-      // 不返回，_loadFallback 卡住、_attachM3uCovers 跑不到；
-      // 传空临时目录让 load() 走完。包内资源用 File 同步读：
-      // rootBundle 在 testWidgets 里 await 会挂住（FakeAsync
-      // 计时器不走），m3u_index_test 也是这么读 manifest 的。
-      final temp = Directory.systemTemp.createTempSync();
-      addTearDown(() {
-        try {
-          temp.deleteSync(recursive: true);
-        } catch (_) {}
-      });
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ActressDetailPage(
-            localId: seeded.localId,
-            repository: repository,
-            store: store,
-            database: db,
-            fallback: ActressJsonFallback(
-              localJsonDir: temp,
-              assetReader: (asset) async => File(asset).readAsStringSync(),
-              m3uIndex: WhosM3uIndex(
-                bytesReader: (asset) async =>
-                    Uint8List.fromList(File(asset).readAsBytesSync()),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final works = await db.worksForPerson(
-        seeded.localId,
-        offset: 0,
-        limit: 10,
-      );
-      expect(works, hasLength(1));
-      expect(
-        works.first.coverUrl,
-        'https://v.hersav.me/images/av/2d00ea11a0158eebf1a91ebbc8e6c254.jpg',
-      );
-      expect(works.first.coverSource, 'whos');
-    });
   });
 
   testWidgets('嗅探页接受加载失败回调', (tester) async {

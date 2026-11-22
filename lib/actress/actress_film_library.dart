@@ -12,6 +12,7 @@ import 'actress_generic_db.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_mytv_bind.dart';
+import 'actress_neon.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../models.dart';
@@ -1921,7 +1922,7 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
   Widget build(BuildContext context) {
     final open = _open;
     return Scaffold(
-      appBar: AppBar(
+      appBar: actressNeonAppBar(
         title: const Text('影视库'),
         actions: [
           IconButton(
@@ -2121,10 +2122,10 @@ class _CategoryChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-      child: ChoiceChip(
-        label: Text(label),
+      child: ActressNeonPill(
+        label: label,
         selected: selected,
-        onSelected: (_) => onTap(),
+        onTap: onTap,
       ),
     );
   }
@@ -2139,67 +2140,85 @@ class _FilmCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 96,
-              height: 128,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: film.coverUrl.isEmpty
-                    ? Container(
-                      color: colors.surfaceContainerHighest,
-                      child: const Icon(Icons.movie_outlined),
-                    )
-                    : Image.network(
-                      film.coverUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
-                        color: colors.surfaceContainerHighest,
-                        child: const Icon(Icons.movie_outlined),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Container(
+        decoration: actressNeonCardDecoration(),
+        clipBehavior: Clip.antiAlias,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 96,
+                    height: 128,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: film.coverUrl.isEmpty
+                          ? Container(
+                            color: Neon.surfaceHigh,
+                            child: const Icon(
+                              Icons.movie_outlined,
+                              color: Neon.textDim,
+                            ),
+                          )
+                          : Image.network(
+                            film.coverUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: Neon.surfaceHigh,
+                              child: const Icon(
+                                Icons.movie_outlined,
+                                color: Neon.textDim,
+                              ),
+                            ),
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            film.displayTitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(color: Neon.text),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            film.displaySubtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: Neon.textDim),
+                          ),
+                          if (!film.playable)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                '暂无可播地址',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: colors.error),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      film.displayTitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      film.displaySubtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    if (!film.playable)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '暂无可播地址',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: colors.error),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

@@ -327,8 +327,9 @@ class WhosRosterSource extends ActressRosterSource {
 /// 解析 whos 列表页：按 `<a href="/actresses/<slug>">` 切块（排除
 /// `page-` 开头的分页链接），名取 `<img alt>`，回落为 slug 解码，
 /// 头像取 `<img src>`（优先 hersav 演员图）。性别未知，记空（不臆断）。
-/// 卡片另取评分/作品数/别名（防御性解析，取不到即空值）；名为
-/// “素人”的伪演员条目（分类入口，不是真人）整条排除。
+/// 卡片另取评分/作品数/别名（防御性解析，取不到即空值）；“素人”
+/// 不排除——2026-11-21 用户纠正：素人是有番号的正常演员，界面上
+/// 不要把素人过滤掉（旧口径称其为分类伪演员，已废）。
 List<RosterPerson> parseWhosRoster(String body) {
   final document = html_parser.parse(body);
   final out = <RosterPerson>[];
@@ -358,7 +359,7 @@ List<RosterPerson> parseWhosRoster(String body) {
     if (name.isEmpty) {
       name = Uri.decodeComponent(slug).replaceAll(RegExp(r'[-_]'), ' ').trim();
     }
-    if (name.isEmpty || name == '素人') continue;
+    if (name.isEmpty) continue;
     final avatar = _resolveUrl(WhosRosterSource.base, avatarImg?.attributes['src']);
     out.add(
       RosterPerson(

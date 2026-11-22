@@ -1053,11 +1053,13 @@ class GenericDbReader {
   }
 
   /// 统一的 WHERE 组装：关键词搜（标题/番号 LIKE）+ 分类筛选
-  /// （每列 IN 一组值，跨列 AND、同列 OR）。
+  /// （每列 IN 一组值，跨列 AND、同列 OR）+ 单分类 [category]
+  /// （非空时只留该分类的作品，见 [_videoCategoryTable]）。
   (String?, List<Object?>) _where(
     String query,
-    Map<String, List<String>> filters,
-  ) {
+    Map<String, List<String>> filters, {
+    String category = '',
+  }) {
     final mapping = schema.worksTable;
     if (mapping == null) return (null, const []);
     final clauses = <String>[];
@@ -1139,22 +1141,120 @@ class GenericDbReader {
       );
       args.addAll(values);
     }
+    final wanted = category.trim();
+    if (wanted.isNotEmpty) {
+      final vodIdCol = _worksVodIdColumn();
+      final categoryCol = mapping.columnFor(GenericDbRole.category);
+      if (_videoCategoryTable() != null && vodIdCol != null) {
+        clauses.add(
+          '${_quote(vodIdCol)} IN (SELECT vod_id FROM "video_category" '
+          'WHERE main_category = ?)',
+        );
+        args.add(wanted);
+      } else if (categoryCol != null) {
+        // 与上面 filters 的 CAST 写法一致：分类列可能是 INTEGER 型。
+        clauses.add('CAST(${_quote(categoryCol)} AS TEXT) = ?');
+        args.add(wanted);
+      } else {
+        // 分类要筛、两条路都没有：筛不出而不是错筛出未过滤的行。
+        clauses.add('1 = 0');
+      }
+    }
     if (clauses.isEmpty) return (null, const []);
     return (clauses.join(' AND '), args);
   }
 
+  /// 本库自带的分类表（video_category：vod_id + main_category）：
+  /// 有这张表才按它取分类、按它筛作品；没有就不认、不编。
+  GenericDbTableMapping? _videoCategoryTable() {
+    for (final table in schema.tables) {
+      if (table.table != 'video_category') continue;
+      if (table.allColumns.contains('vod_id') &&
+          table.allColumns.contains('main_category')) {
+        return table;
+      }
+    }
+    return null;
+  }
+
+  /// 作品表里连分类表的键：只有作品表本身有 vod_id 列时才连得上。
+  String? _worksVodIdColumn() {
+    final mapping = schema.worksTable;
+    if (mapping == null) return null;
+    for (final column in mapping.allColumns) {
+      if (column == 'vod_id') return column;
+    }
+    return null;
+  }
+
+  /// 分类列表（2026-11-22：数据库视频列表页顶部的分类 chips）：
+  /// 优先读本库自带的 video_category 表（main_category + 作品数，
+  /// 按数量倒序）；没有这张表时退到作品表自己的分类列去重计数；
+  /// 都没有时回空——界面如实显示无分类，不编。分类取自数据库
+  /// 本身，不写死。测试构造器按给定作品的 category 字段算。
+  Future<List<(String, int)>> categories() async {
+    final testWorks = _testWorks;
+    if (testWorks != null) {
+      final counts = <String, int>{};
+      for (final work in testWorks) {
+        if (work.category.isEmpty) continue;
+        counts[work.category] = (counts[work.category] ?? 0) + 1;
+      }
+      final list = counts.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      return [for (final e in list) (e.key, e.value)];
+    }
+    final mapping = schema.worksTable;
+    final db = _db;
+    if (mapping == null || db == null) return const [];
+    if (_videoCategoryTable() != null) {
+      final rows = await db.rawQuery(
+        'SELECT main_category, COUNT(*) AS c FROM "video_category" '
+        "WHERE main_category IS NOT NULL AND main_category <> '' "
+        'GROUP BY main_category ORDER BY c DESC',
+      );
+      return [
+        for (final row in rows)
+          (
+            row['main_category'].toString(),
+            (row['c'] as num).toInt(),
+          ),
+      ];
+    }
+    final categoryCol = mapping.columnFor(GenericDbRole.category);
+    if (categoryCol == null) return const [];
+    // 与 facets() 的写法一致：CAST 成文本再分组，分类列是
+    // INTEGER 型时也能按字符串值去重计数。
+    final quoted = _quote(categoryCol);
+    final rows = await db.rawQuery(
+      'SELECT CAST($quoted AS TEXT) AS name, COUNT(*) AS c '
+      'FROM ${_quote(mapping.table)} '
+      'WHERE $quoted IS NOT NULL '
+      'AND TRIM(CAST($quoted AS TEXT)) <> \'\' '
+      'GROUP BY CAST($quoted AS TEXT) ORDER BY c DESC',
+    );
+    return [
+      for (final row in rows)
+        (row['name'].toString(), (row['c'] as num).toInt()),
+    ];
+  }
+
   /// 读一页作品（关键词搜 + 分类筛选；rowid 顺序翻页）。
+  /// [category] 非空时只留该分类的作品，只筛当前这个库。
   /// 主表没存播放地址/封面时，自动从关联副表补（见 [GenericDbRelation]）。
   Future<List<GenericDbWork>> works({
     required int offset,
     required int limit,
     String query = '',
     Map<String, List<String>> filters = const {},
+    String category = '',
   }) async {
     final testWorks = _testWorks;
     if (testWorks != null) {
       final q = query.trim().toLowerCase();
+      final wanted = category.trim();
       var filtered = testWorks.where((w) {
+        if (wanted.isNotEmpty && w.category != wanted) return false;
         if (q.isNotEmpty &&
             !w.title.toLowerCase().contains(q) &&
             !w.code.toLowerCase().contains(q) &&
@@ -1172,7 +1272,7 @@ class GenericDbReader {
     final mapping = schema.worksTable;
     final db = _db;
     if (mapping == null || db == null) return const [];
-    final (where, args) = _where(query, filters);
+    final (where, args) = _where(query, filters, category: category);
     final rows = await db.query(
       mapping.table,
       columns: _selectColumns(mapping),
@@ -1194,10 +1294,11 @@ class GenericDbReader {
     return true;
   }
 
-  /// 作品总数（与 [works] 同一过滤条件）。
+  /// 作品总数（与 [works] 同一过滤条件，含分类筛）。
   Future<int> countWorks({
     String query = '',
     Map<String, List<String>> filters = const {},
+    String category = '',
   }) async {
     final testWorks = _testWorks;
     if (testWorks != null) {
@@ -1206,13 +1307,14 @@ class GenericDbReader {
         limit: testWorks.length + 1,
         query: query,
         filters: filters,
+        category: category,
       );
       return list.length;
     }
     final mapping = schema.worksTable;
     final db = _db;
     if (mapping == null || db == null) return 0;
-    final (where, args) = _where(query, filters);
+    final (where, args) = _where(query, filters, category: category);
     final rows = await db.rawQuery(
       'SELECT COUNT(*) AS c FROM ${_quote(mapping.table)}'
       '${where == null ? '' : ' WHERE $where'}',

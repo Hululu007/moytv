@@ -18,6 +18,7 @@ import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_multi_db_fallback.dart';
 import 'actress_mytv_bind.dart';
+import 'actress_neon.dart';
 import 'actress_ranking_page.dart';
 import 'actress_roster_sources.dart';
 import 'actress_search.dart';
@@ -261,6 +262,14 @@ class _ActressListPageState extends State<ActressListPage> {
   var _genericWorks = <GenericDbWork>[];
   var _genericTotal = 0;
 
+  /// 通用模式分类（2026-11-22：外来库视频列表页顶部的分类行，
+  /// 照活树改版）：从当前库自身的 video_category 表取
+  /// （见 GenericDbReader.categories，按数量倒序）；没读完时
+  /// 不占位，读完为空才如实显示“暂无分类”。
+  var _genericCategories = <(String, int)>[];
+  var _genericCategory = '';
+  var _genericCategoriesLoaded = false;
+
   /// 只出作品的站源（nvku）：站上只有作品没有人物名册，选了它就切
   /// 到作品网格按站点分类翻页，不再按人物过滤（否则永远是「该站
   /// 暂无匹配人物」）。
@@ -394,6 +403,7 @@ class _ActressListPageState extends State<ActressListPage> {
         _genericMode = true;
         _videoLibraryMode = false;
       });
+      await _loadGenericCategories();
       await _loadPage(reset: true);
       return;
     }
@@ -714,8 +724,13 @@ class _ActressListPageState extends State<ActressListPage> {
         _genericMode = generic != null;
         // genericReader() 已开过库，isVideoLibrary 的标志已算好。
         _videoLibraryMode = generic == null && _db.isVideoLibrary;
+        // 重读可能换了库：旧分类作废，先清掉再按新库重读。
+        _genericCategory = '';
+        _genericCategories = [];
+        _genericCategoriesLoaded = false;
       });
       if (_genericMode) {
+        await _loadGenericCategories();
         await _loadPage(reset: true);
       } else {
         await _refreshAfterSync();
@@ -1370,11 +1385,15 @@ class _ActressListPageState extends State<ActressListPage> {
         _genericWorks = [];
         _hasMore = true;
       });
-      final total = await reader.countWorks(query: _query);
+      final total = await reader.countWorks(
+        query: _query,
+        category: _genericCategory,
+      );
       final works = await reader.works(
         offset: 0,
         limit: _pageSize,
         query: _query,
+        category: _genericCategory,
       );
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -1392,6 +1411,7 @@ class _ActressListPageState extends State<ActressListPage> {
       offset: _genericWorks.length,
       limit: _pageSize,
       query: _query,
+      category: _genericCategory,
     );
     if (!mounted || generation != _generation) return;
     setState(() {
@@ -1486,31 +1506,31 @@ class _ActressListPageState extends State<ActressListPage> {
 
   /// 演员筛选条（全部 / 女优 / 男优 + 排序）。
   /// 2026-11-22 用户令：这一排放页面最顶部，紧跟工具栏，演员列表
-  /// 直接接在它下面。
+  /// 直接接在它下面。三枚 chips 照活树改版换成霓虹药丸钮。
   Widget _buildSexFilterRow() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
       child: Row(
         children: [
-          ChoiceChip(
+          ActressNeonPill(
             key: const ValueKey('actress-sex-all'),
-            label: const Text('全部'),
+            label: '全部',
             selected: _sex == ActressSexFilter.all,
-            onSelected: (_) => _setSex(ActressSexFilter.all),
+            onTap: () => _setSex(ActressSexFilter.all),
           ),
           const SizedBox(width: 8),
-          ChoiceChip(
+          ActressNeonPill(
             key: const ValueKey('actress-sex-female'),
-            label: const Text('女优'),
+            label: '女优',
             selected: _sex == ActressSexFilter.female,
-            onSelected: (_) => _setSex(ActressSexFilter.female),
+            onTap: () => _setSex(ActressSexFilter.female),
           ),
           const SizedBox(width: 8),
-          ChoiceChip(
+          ActressNeonPill(
             key: const ValueKey('actress-sex-male'),
-            label: const Text('男优'),
+            label: '男优',
             selected: _sex == ActressSexFilter.male,
-            onSelected: (_) => _setSex(ActressSexFilter.male),
+            onTap: () => _setSex(ActressSexFilter.male),
           ),
           const Spacer(),
           PopupMenuButton<ActressSort>(
@@ -1558,9 +1578,10 @@ class _ActressListPageState extends State<ActressListPage> {
       // 2026-11-21 用户令：内嵌进女优库区域时宿主已有自己的顶栏，
       // 这里再渲染一个 AppBar 就是两条栏叠在一起（搜索框看着像压住了顶栏）。
       // 内嵌时改由 _buildEmbeddedToolbar 提供一条置顶工具栏。
+      // 顶栏照活树改版走霓虹 AppBar（actressNeonAppBar）。
       appBar: !widget.showTitle
           ? null
-          : AppBar(
+          : actressNeonAppBar(
         toolbarHeight: 40,
         title: _genericMode
             ? const Text('演员库 · 外来数据库')
@@ -1613,6 +1634,7 @@ class _ActressListPageState extends State<ActressListPage> {
           ),
           // 数据库里的分类（video_category 主分类）：横向滑，点分类
           // 只留该分类里有作品的人；无分类时不占地方。
+          // chips 照活树改版换成霓虹药丸钮。
           if (_dbCategories.isNotEmpty && !_genericMode)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -1620,25 +1642,70 @@ class _ActressListPageState extends State<ActressListPage> {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    ChoiceChip(
+                    ActressNeonPill(
                       key: const ValueKey('actress-category-all'),
-                      label: const Text('全部'),
+                      label: '全部',
                       selected: _category.isEmpty,
-                      onSelected: (_) => _setCategory(''),
+                      onTap: () => _setCategory(''),
                     ),
                     const SizedBox(width: 8),
                     for (final category in _dbCategories) ...[
-                      ChoiceChip(
+                      ActressNeonPill(
                         key: ValueKey('actress-category-${category.$1}'),
-                        label: Text('${category.$1}（${category.$2}）'),
+                        label: '${category.$1}（${category.$2}）',
                         selected: _category == category.$1,
-                        onSelected: (_) => _setCategory(category.$1),
+                        onTap: () => _setCategory(category.$1),
                       ),
                       const SizedBox(width: 8),
                     ],
                   ],
                 ),
               ),
+            ),
+          // 通用模式分类（2026-11-22：外来库视频列表页顶部的分类行，
+          // 照活树改版）：从当前库自身的 video_category 表取分类
+          // （见 GenericDbReader.categories），点分类只筛当前这个
+          // 库的视频；库里没有分类表 / 分类为空时如实显示“暂无分类”，
+          // 不编。样式照本页分类行（霓虹药丸钮）。
+          if (_genericMode && _genericCategoriesLoaded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+              child: _genericCategories.isEmpty
+                  ? Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '暂无分类',
+                        style: TextStyle(color: colors.onSurfaceVariant),
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ActressNeonPill(
+                            key: const ValueKey(
+                              'actress-generic-category-all',
+                            ),
+                            label: '全部',
+                            selected: _genericCategory.isEmpty,
+                            onTap: () => _setGenericCategory(''),
+                          ),
+                          const SizedBox(width: 8),
+                          for (final category in _genericCategories) ...[
+                            ActressNeonPill(
+                              key: ValueKey(
+                                'actress-generic-category-${category.$1}',
+                              ),
+                              label: '${category.$1}（${category.$2}）',
+                              selected: _genericCategory == category.$1,
+                              onTap: () =>
+                                  _setGenericCategory(category.$1),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                        ],
+                      ),
+                    ),
             ),
           if (_siteWorksMode && _siteCategories.isNotEmpty)
             Padding(
@@ -1648,11 +1715,12 @@ class _ActressListPageState extends State<ActressListPage> {
                 child: Row(
                   children: [
                     for (final category in _siteCategories) ...[
-                      ChoiceChip(
+                      ActressNeonPill(
                         key: ValueKey('site-category-${category.id}'),
-                        label: Text(category.name),
+                        label: category.name,
                         selected: _siteWorksCategory == category.id,
-                        onSelected: (_) => _setSiteWorksCategory(category.id),
+                        onTap: () =>
+                            _setSiteWorksCategory(category.id),
                       ),
                       const SizedBox(width: 8),
                     ],
@@ -1795,6 +1863,31 @@ class _ActressListPageState extends State<ActressListPage> {
     } catch (_) {
       // 读不到分类就不显示这行，不影响列表。
     }
+  }
+
+  /// 通用模式分类：从当前库自身的 video_category 表读（见
+  /// [GenericDbReader.categories]）；读失败也不崩、不影响列表，
+  /// 只按“暂无分类”显示。切库/重读时由调用方先清掉旧分类再调。
+  Future<void> _loadGenericCategories() async {
+    final reader = _genericReader;
+    if (reader == null) return;
+    try {
+      final categories = await reader.categories();
+      if (!mounted) return;
+      setState(() {
+        _genericCategories = categories;
+        _genericCategoriesLoaded = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _genericCategoriesLoaded = true);
+    }
+  }
+
+  void _setGenericCategory(String category) {
+    if (category == _genericCategory) return;
+    setState(() => _genericCategory = category);
+    unawaited(_loadPage(reset: true));
   }
 
   void _setCategory(String category) {
@@ -2172,35 +2265,42 @@ class _ActressGridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          ActressAvatar(
-            avatarUrl: person.avatarUrl,
-            name: person.displayName,
-            radius: 42,
+    return Container(
+      decoration: actressNeonCardDecoration(),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(15),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              ActressAvatar(
+                avatarUrl: person.avatarUrl,
+                name: person.displayName,
+                radius: 42,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                person.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(color: Neon.text),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '约 ${person.displayWorks} 部',
+                maxLines: 1,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Neon.textDim),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            person.displayName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '约 ${person.displayWorks} 部',
-            maxLines: 1,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -2218,73 +2318,83 @@ class _GenericWorkCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final subtitle = [
       if (work.displaySubtitle.isNotEmpty) work.displaySubtitle,
       if (work.actress.isNotEmpty) work.actress,
     ].join(' · ');
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: ColoredBox(
-                color: colors.surfaceContainerHighest,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    if (work.coverUrl.isEmpty)
-                      Center(
-                        child: Icon(
-                          Icons.movie_outlined,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      )
-                    else
-                      Image.network(
-                        work.coverUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Center(
-                          child: Icon(
-                            Icons.movie_outlined,
-                            color: colors.onSurfaceVariant,
+    return Container(
+      decoration: actressNeonCardDecoration(radius: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: ColoredBox(
+                    color: Neon.surfaceHigh,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (work.coverUrl.isEmpty)
+                          const Center(
+                            child: Icon(
+                              Icons.movie_outlined,
+                              color: Neon.textDim,
+                            ),
+                          )
+                        else
+                          Image.network(
+                            work.coverUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => const Center(
+                              child: Icon(
+                                Icons.movie_outlined,
+                                color: Neon.textDim,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    if (work.playable)
-                      const Positioned(
-                        right: 4,
-                        bottom: 4,
-                        child: Icon(
-                          Icons.play_circle_fill,
-                          size: 18,
-                          color: Colors.white70,
-                        ),
-                      ),
-                  ],
+                        if (work.playable)
+                          const Positioned(
+                            right: 4,
+                            bottom: 4,
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              size: 18,
+                              color: Neon.cyan,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(height: 4),
+              Text(
+                work.displayTitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.25,
+                  color: Neon.text,
+                ),
+              ),
+              if (subtitle.isNotEmpty)
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10, color: Neon.textDim),
+                ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            work.displayTitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, height: 1.25),
-          ),
-          if (subtitle.isNotEmpty)
-            Text(
-              subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 10, color: colors.onSurfaceVariant),
-            ),
-        ],
+        ),
       ),
     );
   }

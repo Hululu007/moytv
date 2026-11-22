@@ -39,6 +39,9 @@ enum AppIconSwitchFailure {
   /// 容器不允许改组件状态。
   denied,
 
+  /// 当前桌面不支持固定快捷方式（pinShortcut 桥返回 false）。
+  unsupported,
+
   /// 图标组件未找到（IllegalArgumentException）。
   missing,
 
@@ -187,6 +190,51 @@ class AppIconSwitcher {
   /// 兼容旧调用：只关心成败。选择页已改走 [switchIcon]，失败要给
   /// 用户一句准话。
   Future<bool> setIcon(String id) async => (await switchIcon(id)).ok;
+
+  /// 把选中图标以桌面快捷方式放出去：activity-alias 换图标在鸿蒙
+  /// NEXT 的卓易通里不生效时的兜底（鸿蒙桌面不跟随容器内 alias 变化，
+  /// App 侧逼不了它重读）。成功只表示系统受理了请求、会弹确认框，
+  /// 用户点了确认快捷方式才落桌面；桌面不支持固定快捷方式时失败
+  /// 原因是 [AppIconSwitchFailure.unsupported]。
+  Future<AppIconSwitchResult> pinShortcut(String id) async {
+    if (!appIconOptions.any((o) => o.id == id)) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
+    }
+    if (!supported) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
+    }
+    try {
+      final ok = await _channel.invokeMethod<bool>('pinShortcut', {'id': id});
+      if (ok != true) {
+        return const AppIconSwitchResult(
+          ok: false,
+          failure: AppIconSwitchFailure.unsupported,
+        );
+      }
+    } on PlatformException catch (e) {
+      final detail = e.details?.toString();
+      debugPrint(
+        'AppIconSwitcher: pin $id failed code=${e.code} detail=$detail message=${e.message}',
+      );
+      return AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+        detail: detail ?? e.message,
+      );
+    } catch (_) {
+      return const AppIconSwitchResult(
+        ok: false,
+        failure: AppIconSwitchFailure.unknown,
+      );
+    }
+    return const AppIconSwitchResult(ok: true);
+  }
 
   /// 之前是否被系统拒绝过（见 [appIconSwitchDeniedKey]）。
   Future<bool> isSwitchDenied() async {

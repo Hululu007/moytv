@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
+import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_play.dart';
 import 'package:moyi/actress/actress_roster_sources.dart';
@@ -155,6 +156,26 @@ DramaDetail _cardsDetailFor(String dramaId, String source, String title) =>
     DramaDetail(Drama(id: dramaId, source: source, title: title), [
       Episode({'id': '1', 'title': 'Full', 'flag': '线路1'}, 1),
     ]);
+
+/// 假影视库 db：按番号回库里行（2026-11-22 只走数据库：点卡只试
+/// 这些行，不再走封面站记下的详情 id、也不跨站探活）。
+class _CardsFilmDb implements FilmDbFallbackProvider {
+  _CardsFilmDb(this.rowsByCode);
+
+  final Map<String, List<ActressJsonEntry>> rowsByCode;
+
+  @override
+  Future<List<ActressJsonEntry>> entriesForActress(
+    String name, {
+    String? site,
+  }) async => const [];
+
+  @override
+  Future<List<ActressJsonEntry>> entriesForCode(
+    String codeKey, {
+    String? site,
+  }) async => rowsByCode[codeKey] ?? const [];
+}
 
 void main() {
   group('同步时取 MissAV 封面', () {
@@ -368,7 +389,7 @@ void main() {
       store = await _makeCardsStore();
     });
 
-    testWidgets('有封面的作品点卡直取详情进页，不建探活链、不弹找片遮罩', (tester) async {
+    testWidgets('有封面的作品点卡走库里地址进详情页播，不弹找片遮罩', (tester) async {
       final person = (await db.upsertRosterPerson(
         const RosterPerson(
           source: ActressRosterSourceId.chaoliu,
@@ -384,12 +405,16 @@ void main() {
           detailUrl: 'other-drama',
         ),
       ], coverSource: 'test-site-other');
-      repository.detailsById['other-drama'] = _cardsDetailFor(
-        'other-drama',
-        'test-site-other',
-        'SSIS-00123 其他标题',
-      );
-      var chainBuilt = false;
+      // 2026-11-22 只走数据库：点卡只试库里这行（番号 SSIS-00123
+      // 的直链），不再走封面站记下的详情 id、也不建探活链；库里
+      // 行的剧 id 是 toDramaDetail 拼出的 'json:站:vodId'，详情
+      // 仓按这个 id 备好详情。
+      repository.detailsById['json:test-site-other:other-drama'] =
+          _cardsDetailFor(
+            'json:test-site-other:other-drama',
+            'test-site-other',
+            'SSIS-00123 其他标题',
+          );
       await tester.pumpWidget(
         MaterialApp(
           home: ActressDetailPage(
@@ -397,16 +422,29 @@ void main() {
             repository: repository,
             store: store,
             database: db,
-            playChainFactory: ({required avId, required titleQuery}) {
-              chainBuilt = true;
-              return ActressPlayChain(
-                repository: repository,
-                store: store,
-                avId: avId,
-                titleQuery: titleQuery,
-                candidateSites: const [],
-              );
-            },
+            filmDb: _CardsFilmDb({
+              'SSIS123': [
+                ActressJsonEntry(
+                  site: 'test-site-other',
+                  vodId: 'other-drama',
+                  vodName: 'SSIS-00123 其他标题',
+                  vodPic: '',
+                  vodActor: '女演员甲',
+                  vodDirector: '',
+                  vodRemarks: '',
+                  vodPubdate: '',
+                  vodArea: '',
+                  vodYear: '',
+                  vodContent: '',
+                  vodPlayFrom: 'test-site-other',
+                  vodPlayUrl: '正片\$https://example.test/other.mp4',
+                  typeName: '',
+                  vodCode: 'SSIS-00123',
+                  vodActressPic: '',
+                ),
+              ],
+            }),
+            verifyFetch: _alwaysPlayable,
           ),
         ),
       );
@@ -418,11 +456,13 @@ void main() {
       }
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 其他标题'), findsWidgets);
-      expect(chainBuilt, isFalse);
       expect(find.text('正在找可播片源…'), findsNothing);
       expect(find.text('暂无可播片源'), findsNothing);
-      // 快路径直取的是封面站记下的详情 id。
-      expect(repository.detailIds, contains('other-drama'));
+      // 点卡走的是库里那行：详情页向仓库要过库里行的剧。
+      expect(
+        repository.detailIds,
+        contains('json:test-site-other:other-drama'),
+      );
     });
   });
 

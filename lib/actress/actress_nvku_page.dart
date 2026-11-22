@@ -9,7 +9,9 @@ import '../local_store.dart';
 import '../models.dart';
 import '../player_picker.dart';
 import 'actress_database.dart';
+import 'actress_film_library.dart';
 import 'actress_list_page.dart';
+import 'actress_neon.dart';
 import '../whos_fallback.dart';
 import '../whos_local_library.dart';
 
@@ -42,12 +44,8 @@ class ActressNvkuPage extends StatefulWidget {
   State<ActressNvkuPage> createState() => _ActressNvkuPageState();
 }
 
-// nvku 网页配色（style.css 的 :root）。
-const _bg = Color(0xFF0B0B10);
-const _card = Color(0xFF171722);
-const _line = Color(0xFF242433);
-const _tx = Color(0xFFEEEEF5);
-const _dim = Color(0xFF8B8B9E);
+// nvku 网页配色（style.css 的 :root）：霓虹化后正文/卡面/线条
+// 走 Neon 常量，只剩品牌粉 _pk 还用在加载圈上。
 const _pk = Color(0xFFFF2F6D);
 
 const _favKey = 'actress_nvku_fav';
@@ -292,10 +290,29 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     unawaited(_loadWorks(reset: true));
   }
 
+  /// 影片库入口（2026-11-22：主树此前没有通往 FilmLibraryPage 的
+  /// 入口——列表页右上角的按钮 2026-11-21 按用户令删掉了；活树是靠
+  /// 底部五页签胶囊栏进，本页保留四页签不接五页签，入口改放在
+  /// 顶栏搜索框旁的霓虹药丸钮上，独立/内嵌两种模式都看得见。
+  /// 排行榜入口不动：女优页签内嵌工具栏里的奖杯钮（列表页
+  /// _toolbarActions 的 open-actress-ranking）。
+  void _openFilmLibrary() {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FilmLibraryPage(
+          database: widget.database ?? SqfliteActressDatabase.instance,
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: Neon.bg,
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -316,12 +333,18 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
+  /// 顶栏（2026-11-22 霓虹化：照活树改版走霓虹配色——深紫底 +
+  /// 紫底边，与 actressNeonAppBar 同一套色；不改成真 AppBar，
+  /// 搜索框本来就嵌在顶栏里、showTitle=false 内嵌时宿主已有
+  /// 自己的顶栏，再套一层 AppBar 会叠两条栏）。
   Widget _topBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
-      decoration: const BoxDecoration(
-        color: Color(0xEB0B0B10),
-        border: Border(bottom: BorderSide(color: _line)),
+      decoration: BoxDecoration(
+        color: Neon.bg,
+        border: Border(
+          bottom: BorderSide(color: Neon.violet.withValues(alpha: .55)),
+        ),
       ),
       child: Column(
         children: [
@@ -334,7 +357,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               Text(
                 widget.showTitle ? '女优库' : '女优库',
                 style: const TextStyle(
-                  color: _tx,
+                  color: Neon.text,
                   fontSize: 17,
                   fontWeight: FontWeight.w800,
                   letterSpacing: .5,
@@ -344,13 +367,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1D1D29),
+                  color: Neon.surface,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
                   _offline ? '本地库' : '在线 + 本地',
                   style: const TextStyle(
-                    color: _dim,
+                    color: Neon.textDim,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -360,55 +383,74 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               IconButton(
                 tooltip: '刷新',
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.refresh_rounded, color: _dim, size: 20),
+                icon: const Icon(Icons.refresh_rounded, color: Neon.textDim, size: 20),
                 onPressed: () => unawaited(_boot()),
               ),
             ],
           ),
             const SizedBox(height: 8),
           ],
-          TextField(
-            key: const ValueKey('nvku-search'),
-            controller: _search,
-            onSubmitted: _submitSearch,
-            textInputAction: TextInputAction.search,
-            style: const TextStyle(color: _tx, fontSize: 15),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: _tab == 2 ? '搜女优名 / 番号' : '搜番号 / 片名 / 女优',
-              hintStyle: const TextStyle(color: _dim, fontSize: 14),
-              prefixIcon: const Icon(Icons.search, color: _dim, size: 20),
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.close, color: _dim, size: 18),
-                      onPressed: () {
-                        _search.clear();
-                        if (_tab == 2) {
-                          setState(() {});
-                        } else {
-                          _submitSearch('');
-                        }
-                      },
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('nvku-search'),
+                  controller: _search,
+                  onSubmitted: _submitSearch,
+                  textInputAction: TextInputAction.search,
+                  style: const TextStyle(color: Neon.text, fontSize: 15),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: _tab == 2 ? '搜女优名 / 番号' : '搜番号 / 片名 / 女优',
+                    hintStyle: const TextStyle(color: Neon.textDim, fontSize: 14),
+                    prefixIcon: const Icon(Icons.search, color: Neon.textDim, size: 20),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, color: Neon.textDim, size: 18),
+                            onPressed: () {
+                              _search.clear();
+                              if (_tab == 2) {
+                                setState(() {});
+                              } else {
+                                _submitSearch('');
+                              }
+                            },
+                          ),
+                    filled: true,
+                    fillColor: Neon.surface,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                        color: Neon.violet.withValues(alpha: .55),
+                      ),
                     ),
-              filled: true,
-              fillColor: const Color(0xFF15151E),
-              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _line),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Neon.cyan),
+                    ),
+                  ),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFF3A3A52)),
+              const SizedBox(width: 8),
+              ActressNeonPill(
+                key: const ValueKey('nvku-open-film-library'),
+                label: '影片库',
+                selected: false,
+                compact: true,
+                onTap: _openFilmLibrary,
               ),
-            ),
+            ],
           ),
         ],
       ),
     );
   }
 
+  /// 底部四页签（2026-11-22：保留主树首页 / 分类 / 女优 / 收藏
+  /// 四页签，不换成活树的五页签胶囊栏；只做霓虹样式适配——深紫底
+  /// + 紫顶边，选中态走霓虹青、未选中走次字色）。
   Widget _bottomTabs() {
     const items = [
       (Icons.grid_view_rounded, '首页'),
@@ -417,9 +459,11 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       (Icons.star_border_rounded, '收藏'),
     ];
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xF20B0B10),
-        border: Border(top: BorderSide(color: _line)),
+      decoration: BoxDecoration(
+        color: Neon.bg.withValues(alpha: .95),
+        border: Border(
+          top: BorderSide(color: Neon.violet.withValues(alpha: .5)),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -437,7 +481,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                         Icon(
                           items[i].$1,
                           size: 21,
-                          color: _tab == i ? _pk : _dim,
+                          color: _tab == i ? Neon.cyan : Neon.textDim,
                         ),
                         const SizedBox(height: 2),
                         Text(
@@ -447,7 +491,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                             fontWeight: _tab == i
                                 ? FontWeight.w700
                                 : FontWeight.w500,
-                            color: _tab == i ? _pk : _dim,
+                            color: _tab == i ? Neon.cyan : Neon.textDim,
                           ),
                         ),
                       ],
@@ -471,13 +515,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           Text(
             title,
             style: const TextStyle(
-              color: _tx,
+              color: Neon.text,
               fontSize: 15,
               fontWeight: FontWeight.w700,
             ),
           ),
           const Spacer(),
-          Text(note, style: const TextStyle(color: _dim, fontSize: 12)),
+          Text(note, style: const TextStyle(color: Neon.textDim, fontSize: 12)),
         ],
       ),
     );
@@ -492,7 +536,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     ];
     return RefreshIndicator(
       color: _pk,
-      backgroundColor: _card,
+      backgroundColor: Neon.surface,
       onRefresh: _boot,
       child: ListView(
         controller: _scroll,
@@ -521,7 +565,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               child: Center(
                 child: Text(
                   _query.isEmpty ? '暂时取不到作品' : '没有找到“$_query”',
-                  style: const TextStyle(color: _dim),
+                  style: const TextStyle(color: Neon.textDim),
                 ),
               ),
             )
@@ -537,8 +581,10 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
-  /// 分类胶囊条（首页与分类页共用）：横向滚动的一排标签，选中项用
-  /// 主题粉色实心，不占版面、不像卡片。
+  /// 分类胶囊条（首页与分类页共用）：横向滚动的一排霓虹药丸钮，
+  /// 选中项用紫→青渐变 + 辉光，不占版面、不像卡片。
+  /// （2026-11-22 照活树改版：ChoiceChip 换成 ActressNeonPill；
+  /// 横向 ListView 里药丸钮会被拉满 46 高，外面套 Center 定高。）
   Widget _categoryChips(
     List<CatalogCategory> cats, {
     EdgeInsets padding = const EdgeInsets.fromLTRB(12, 8, 12, 6),
@@ -553,19 +599,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
         itemBuilder: (context, index) {
           final cat = cats[index];
           final on = _category == cat.id;
-          return ChoiceChip(
-            key: ValueKey('nvku-chip-${cat.id}'),
-            selected: on,
-            onSelected: (_) => _pickCategory(cat.id),
-            label: Text(cat.name),
-            labelStyle: TextStyle(
-              color: on ? Colors.white : _dim,
-              fontSize: 13,
+          return Center(
+            child: ActressNeonPill(
+              key: ValueKey('nvku-chip-${cat.id}'),
+              label: cat.name,
+              selected: on,
+              onTap: () => _pickCategory(cat.id),
             ),
-            backgroundColor: _card,
-            selectedColor: _pk,
-            side: const BorderSide(color: _line),
-            showCheckmark: false,
           );
         },
       ),
@@ -589,7 +629,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               ? Center(
                   child: Text(
                     _query.isEmpty ? '这个分类暂时取不到作品' : '没有找到“$_query”',
-                    style: const TextStyle(color: _dim),
+                    style: const TextStyle(color: Neon.textDim),
                   ),
                 )
               : GridView.builder(
@@ -642,67 +682,78 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: Stack(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
-                    color: _card,
-                    width: double.infinity,
-                    height: double.infinity,
-                    child: drama.cover.isEmpty
-                        ? Center(
-                            child: Text(
-                              code.isEmpty ? 'NV' : code,
-                              style: const TextStyle(color: _dim, fontSize: 12),
+            child: Container(
+              decoration: actressNeonCardDecoration(radius: 10),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      color: Neon.surface,
+                      width: double.infinity,
+                      height: double.infinity,
+                      child: drama.cover.isEmpty
+                          ? Center(
+                              child: Text(
+                                code.isEmpty ? 'NV' : code,
+                                style: const TextStyle(
+                                  color: Neon.textDim,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            )
+                          : Image.network(
+                              drama.cover,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const SizedBox.shrink(),
                             ),
-                          )
-                        : Image.network(
-                            drama.cover,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                          ),
-                  ),
-                ),
-                Positioned(
-                  right: 2,
-                  top: 2,
-                  child: GestureDetector(
-                    onTap: () => unawaited(_toggleFavorite(drama)),
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(
-                        color: Color(0xCC000000),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        fav ? Icons.star : Icons.star_border,
-                        size: 15,
-                        color: fav ? _pk : _dim,
-                      ),
                     ),
                   ),
-                ),
-                if (drama.onlineDate.isNotEmpty)
                   Positioned(
-                    left: 4,
-                    bottom: 4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xB3000000),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        drama.onlineDate,
-                        style: const TextStyle(color: _tx, fontSize: 10),
+                    right: 2,
+                    top: 2,
+                    child: GestureDetector(
+                      onTap: () => unawaited(_toggleFavorite(drama)),
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Color(0xCC000000),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          fav ? Icons.star : Icons.star_border,
+                          size: 15,
+                          color: fav ? Neon.pink : Neon.textDim,
+                        ),
                       ),
                     ),
                   ),
-              ],
+                  if (drama.onlineDate.isNotEmpty)
+                    Positioned(
+                      left: 4,
+                      bottom: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xB3000000),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          drama.onlineDate,
+                          style: const TextStyle(
+                            color: Neon.text,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 5),
@@ -710,7 +761,11 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
             drama.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: _tx, fontSize: 12, height: 1.3),
+            style: const TextStyle(
+              color: Neon.text,
+              fontSize: 12,
+              height: 1.3,
+            ),
           ),
         ],
       ),
@@ -733,7 +788,10 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   Widget _favoriteTab() {
     if (_favorites.isEmpty) {
       return const Center(
-        child: Text('还没有收藏，点卡片右上角的星', style: TextStyle(color: _dim)),
+        child: Text(
+          '还没有收藏，点卡片右上角的星',
+          style: TextStyle(color: Neon.textDim),
+        ),
       );
     }
     return GridView.builder(

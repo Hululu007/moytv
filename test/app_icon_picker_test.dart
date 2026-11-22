@@ -46,7 +46,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('app-icon-ant_flame')));
     await tester.pumpAndSettle();
     expect(current, 'ant_flame');
-    expect(find.text('已切换为「烈焰」，桌面图标稍后刷新'), findsOneWidget);
+    expect(find.text('已切换为「烈焰」，回桌面查看；鸿蒙卓易通里桌面图标可能不跟随，没变就用下面的快捷方式'), findsOneWidget);
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString(appIconSelectionKey), 'ant_flame');
   });
@@ -113,5 +113,54 @@ void main() {
     expect(find.textContaining('上次切换被系统拒绝了'), findsNothing);
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getBool(appIconSwitchDeniedKey), isNull);
+  });
+
+  testWidgets('桌面快捷方式兜底：点按钮固定当前图标并提示确认', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'currentIcon') return 'default';
+          if (call.method == 'pinShortcut') return true;
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    await pumpPage(tester, switcher: AppIconSwitcher(supportedOverride: true));
+    expect(find.text('把当前图标添加到桌面'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('app-icon-pin-shortcut')));
+    await tester.pumpAndSettle();
+    expect(
+      calls.any(
+        (c) =>
+            c.method == 'pinShortcut' &&
+            (c.arguments as Map)['id'] == 'default',
+      ),
+      isTrue,
+    );
+    expect(find.text('已请求添加快捷方式，请在系统弹窗里点确认'), findsOneWidget);
+  });
+
+  testWidgets('桌面不支持固定快捷方式时给准话', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'currentIcon') return 'default';
+          if (call.method == 'pinShortcut') return false;
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    await pumpPage(tester, switcher: AppIconSwitcher(supportedOverride: true));
+    await tester.tap(find.byKey(const ValueKey('app-icon-pin-shortcut')));
+    await tester.pumpAndSettle();
+    expect(find.text('当前桌面不支持添加快捷方式'), findsOneWidget);
   });
 }

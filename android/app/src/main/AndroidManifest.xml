@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- 换图标兜底：桌面快捷方式。ShortcutManagerCompat 在老版本安卓上
+         走传统广播固定快捷方式，需要这个普通权限（无需动态申请）；
+         新版本走系统固定快捷方式流程，不用它。 -->
+    <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT"/>
     <!-- 2026-11-20 MYTV 绑定：女优库绑定手机根目录 MYTV 文件夹，根目录读写要
          “所有文件访问权限”（MANAGE_EXTERNAL_STORAGE）；没授权时 App 降级回
          内部存储继续用，不硬要权限。 -->

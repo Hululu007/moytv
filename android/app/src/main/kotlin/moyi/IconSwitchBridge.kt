@@ -2,7 +2,11 @@ package moyi
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 
@@ -26,6 +30,14 @@ import io.flutter.plugin.common.MethodChannel
  * 图标摘掉，整个切换随之失败。换后回读全量校验，系统没真正切过
  * 去就当失败；失败时把原生异常类名原样带回（details），供 Dart 侧
  * 归类成一句准话，别只剩“可能不支持”。
+ *
+ * 卓易通兜底：activity-alias 换图标只对“启动器重读组件状态”才有效，
+ * 卓易通外是鸿蒙桌面，桌面图标由鸿蒙侧按安装时信息渲染，不跟随容器
+ * 内 alias 变化——容器内回读校验通过、桌面却不变，就是这么来的。
+ * App 侧逼不了鸿蒙桌面重读，所以另给一条路 pinShortcut：用
+ * ShortcutManager 把选中图标以固定快捷方式放到桌面，点它照常进应用。
+ * 这条路由系统弹确认框、用户点了确认才落桌面；桌面不支持时直接回
+ * false，不谎报。
  */
 object IconSwitchBridge {
 
@@ -60,6 +72,20 @@ object IconSwitchBridge {
                             // details 带原生异常类名（SecurityException 等），
                             // Dart 侧按它归类，界面才能给一句准话。
                             result.error("switch_failed", e.message, e.javaClass.simpleName)
+                        }
+                    }
+                }
+                "pinShortcut" -> {
+                    val id = call.argument<String>("id")
+                    if (id == null || (id != ICON_DEFAULT && !ALIASES.containsKey(id))) {
+                        result.error("invalid_icon", "unknown icon id: $id", null)
+                    } else {
+                        try {
+                            // true 只表示系统受理了请求（会弹确认框），
+                            // 用户点了确认快捷方式才落桌面；false = 桌面不支持。
+                            result.success(pinShortcut(context, id))
+                        } catch (e: Exception) {
+                            result.error("pin_failed", e.message, e.javaClass.simpleName)
                         }
                     }
                 }
@@ -138,5 +164,31 @@ object IconSwitchBridge {
             if (effectiveEnabled(component, false) != (aliasId == id)) return false
         }
         return true
+    }
+
+    /**
+     * 桌面快捷方式兜底：把选中图标以固定快捷方式放到桌面。
+     * 图标资源与 Manifest 里 alias 挂的是同一套 mipmap（默认走
+     * ic_launcher，其余走 ic_launcher_<id>），点快捷方式进 MainActivity。
+     * 同一 id 重复固定会更新已有的快捷方式，不会越积越多。
+     * 返回 true 只表示系统受理了请求、会弹确认框，用户点了确认才落
+     * 桌面；桌面不支持固定快捷方式时返回 false。
+     */
+    private fun pinShortcut(context: Context, id: String): Boolean {
+        val resName = if (id == ICON_DEFAULT) "ic_launcher" else "ic_launcher_$id"
+        val resId = context.resources.getIdentifier(resName, "mipmap", context.packageName)
+        if (resId == 0) throw IllegalArgumentException("missing icon resource: $resName")
+        val label = context.applicationInfo.loadLabel(context.packageManager).toString()
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val info = ShortcutInfoCompat.Builder(context, "moyi-icon-$id")
+            .setShortLabel(label)
+            .setLongLabel(label)
+            .setIcon(IconCompat.createWithResource(context, resId))
+            .setIntent(intent)
+            .build()
+        return ShortcutManagerCompat.requestPinShortcut(context, info, null)
     }
 }
