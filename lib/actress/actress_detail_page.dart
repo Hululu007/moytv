@@ -653,16 +653,21 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         _showDbMissHint(hasDbRow: dbRows.isNotEmpty, query: queryKey);
         return;
       }
-      await _openDetailWithChain(chain, crawled);
+      // 库里没有这个番号、跨站搜到了能播的：播的同时写回库保存，
+      // 下次点这个人的作品就有了，不用再爬一遍。
+      await _openDetailWithChain(
+        chain,
+        crawled,
+        healWork: currentWork,
+        allowInsert: true,
+      );
       return;
     }
     await _openDetailWithChain(
       chain,
       ActressPlayCandidate(detail: storedDetail, episodeIndex: 0),
-      // 库里本来就有这个番号（dbRows 非空）时，播放中途换线成功就
-      // 把新地址回写库；库里没有这个番号的跨站爬取不回写，避免插出
-      // 没有演员归属的孤儿行。
-      healWork: dbRows.isNotEmpty ? currentWork : null,
+      // 库里有这个番号，播放中途换线成功就把新地址写回库。
+      healWork: currentWork,
     );
   }
 
@@ -707,6 +712,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     ActressPlayChain chain,
     ActressPlayCandidate candidate, {
     ActressWork? healWork,
+    bool allowInsert = false,
   }) async {
     await Navigator.of(context).push(
       appPageRoute<void>(
@@ -730,7 +736,12 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
             final work = healWork;
             if (work != null) {
               unawaited(
-                _healLibraryAddress(work, next.detail, next.episodeIndex),
+                _healLibraryAddress(
+                  work,
+                  next.detail,
+                  next.episodeIndex,
+                  allowInsert: allowInsert,
+                ),
               );
             }
             return (detail: next.detail, episodeIndex: next.episodeIndex);
@@ -744,7 +755,12 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
             final work = healWork;
             if (work != null) {
               unawaited(
-                _healLibraryAddress(work, next.detail, next.episodeIndex),
+                _healLibraryAddress(
+                  work,
+                  next.detail,
+                  next.episodeIndex,
+                  allowInsert: allowInsert,
+                ),
               );
             }
             return (detail: next.detail, episodeIndex: next.episodeIndex);
@@ -757,15 +773,18 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
 
   /// 自愈回写：把跨站重新取到的可播直链写进库里这一行。
   ///
-  /// 只改播放地址（m3u8_url / vod_play_url 两列同值），库里原本的
-  /// 标题、封面、分类、演员关联一律不动；库里没有这个 vod_id 时不
-  /// 新插行（避免凭空多出没有演员归属的孤儿条目）。解析型地址
-  /// （needsParse、非 http 直链）不写，写进去下次也放不了。
+  /// - 库里有这个番号：只换播放地址（m3u8_url / vod_play_url 两列同值），
+  ///   标题、封面、分类、演员关联一律不动；
+  /// - 库里没有这个番号且 [allowInsert] 为真（用户点的是库外作品、跨站
+  ///   搜到能播的）：补一行进库，标题/封面/分类照实写，演员按当前人物名
+  ///   挂关联，下次点这个人的作品列表里就有它；
+  /// - 解析型地址（非 http 直链）不写，写进去下次也放不了。
   Future<void> _healLibraryAddress(
     ActressWork work,
     DramaDetail detail,
-    int episodeIndex,
-  ) async {
+    int episodeIndex, {
+    bool allowInsert = false,
+  }) async {
     try {
       final episodes = detail.episodes;
       if (episodes.isEmpty) return;
@@ -781,23 +800,39 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       final code = work.codeKey.isNotEmpty ? work.codeKey : work.codeDisplay;
       final vodId = videoLibraryVodId(code);
       if (vodId.isEmpty) return;
-      // 调用方只在「库里本来就有这个番号的可播行」时才进来，同 vod_id
-      // 命中的是已有行：upsert 只换播放地址，地址相同会自己跳过。
+
+      final existing = jsonEntriesForWorkCode(_fallbackEntries, code);
+      if (existing.isEmpty && !allowInsert) return; // 库外作品且不许插入
+      if (existing.isNotEmpty) {
+        final current = existing.first.playUrl.trim();
+        if (current == rawUrl) return; // 已经是最新地址，不用重复写
+      }
+
+      final title = work.title.isNotEmpty
+          ? work.title
+          : detail.drama.title.trim();
+      final pic = work.coverUrl.isNotEmpty
+          ? work.coverUrl
+          : detail.drama.cover.trim();
+      final personName = _person?.displayName.trim() ?? '';
       await widget.database.upsertVideoEntries([
         (
           vodId: vodId,
-          title: '',
-          picUrl: '',
+          // 更新已有行时传空串：库里的标题/封面不会被这行覆盖掉
+          //（upsert 只在旧值为空时才补）。
+          title: existing.isEmpty ? title : '',
+          picUrl: existing.isEmpty ? pic : '',
           playUrl: rawUrl,
-          remarks: '',
-          pubdate: '',
+          remarks: work.codeDisplay,
+          pubdate: work.date,
           area: '',
           year: '',
           content: '',
           playFrom: work.site,
           typeName: '',
-          category: '',
-          actressName: '',
+          category: work.category,
+          // 库里没有这行时，按当前人物名挂演员关联（找得到才挂，不新建人）。
+          actressName: existing.isEmpty ? personName : '',
         ),
       ]);
       if (!mounted) return;

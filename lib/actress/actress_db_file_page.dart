@@ -10,6 +10,7 @@ import '../local_store.dart';
 import '../player_picker.dart';
 import 'actress_db_fields_page.dart';
 import 'actress_generic_db.dart';
+import 'video_db_repair.dart';
 
 /// 外来数据库浏览页（2026-11-21 用户令，第二轮修复）：
 /// 顶部一级分类瓦片点进来后，这里就是**这个库自己的视频列表**——
@@ -94,6 +95,144 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
 
   int get _selectedCount =>
       _selected.values.fold(0, (sum, values) => sum + values.length);
+
+  bool _repairing = false;
+  bool _repairCancel = false;
+
+  /// 体检修复当前库：逐条验活播放地址，确认打不开的行删掉，重建演员
+  /// 汇总与分类计数。开修前自动备份一份 .bak，修完重开库刷新列表。
+  Future<void> _repairLibrary() async {
+    if (_repairing) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('体检修复这个库'),
+        content: const Text(
+          '逐条测播放地址：能播的留着，确认打不开的删掉，'
+          '测不准的（403、超时、TLS 失败）一律保留，不误删能播的源。\n\n'
+          '30 万条的库大约要几十分钟，期间别退出页面。开修前会自动存一份 .bak 备份。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('开始修复'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _repairing = true;
+      _repairCancel = false;
+    });
+
+    // 先关只读连接，免得写库时被占着。
+    final db = _db;
+    _db = null;
+    try {
+      await db?.close();
+    } catch (_) {}
+
+    var backupNote = '';
+    try {
+      final file = File(widget.filePath);
+      if (await file.exists()) {
+        await file.copy('${widget.filePath}.bak');
+        backupNote = '已备份到 ${path.basename(widget.filePath)}.bak';
+      }
+    } catch (_) {
+      backupNote = '备份没做成（可能空间不够），修复照常进行';
+    }
+
+    final progress = ValueNotifier<String>('正在读库…');
+    final navigator = Navigator.of(context, rootNavigator: true);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('正在体检'),
+          content: ValueListenableBuilder<String>(
+            valueListenable: progress,
+            builder: (context, value, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const LinearProgressIndicator(minHeight: 4),
+                const SizedBox(height: 14),
+                Text(value),
+                const SizedBox(height: 6),
+                Text(
+                  '测不准的地址不会删，只删确认打不开的',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => _repairCancel = true,
+              child: const Text('中止'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    VideoDbRepairReport? report;
+    var error = '';
+    try {
+      report = await VideoDbRepair.run(
+        widget.filePath,
+        onProgress: (done, total) {
+          progress.value = total > 0
+              ? '已测 $done / $total（${(done * 100 / total).toStringAsFixed(0)}%）'
+              : '已测 $done';
+        },
+        cancelled: () => _repairCancel,
+      );
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      progress.dispose();
+      if (mounted) navigator.pop();
+    }
+
+    if (!mounted) return;
+    setState(() => _repairing = false);
+    await _open();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(error.isEmpty ? '体检修复完成' : '修复没做成'),
+        content: Text(
+          error.isEmpty
+              ? [
+                  if (report != null) report.summary,
+                  if (report?.cancelled ?? false) '（中途中止，已测的部分已生效）',
+                  if (backupNote.isNotEmpty) backupNote,
+                  '修复只删确认打不开的行，测不准的都保留。',
+                ].join('\n')
+              : '$error\n\n$backupNote',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _open() async {
     final generation = ++_generation;
@@ -371,6 +510,18 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
               icon: const Icon(Icons.tune_rounded),
               onPressed: _openFieldPage,
             ),
+          IconButton(
+            key: const ValueKey('actress-db-repair'),
+            tooltip: '体检修复这个库',
+            icon: _repairing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.healing_rounded),
+            onPressed: _repairing ? null : () => unawaited(_repairLibrary()),
+          ),
         ],
       ),
       body: Column(

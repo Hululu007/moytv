@@ -11,6 +11,7 @@ import 'crack_config_section.dart';
 import 'import_center.dart';
 import 'import_file_store.dart';
 import 'imported_site_record.dart';
+import 'live_repair.dart';
 import 'local_store.dart';
 import 'm3u_subscriptions.dart';
 import 'plugin_market_screen.dart';
@@ -626,6 +627,117 @@ class _M3uImportSectionState extends State<M3uImportSection> {
     }
   }
 
+  /// 体检修复一条 m3u/txt 订阅：逐条验活，确认打不开的频道删掉，
+  /// 测不准的（403、超时）一律保留；清理后的列表写回本地副本。
+  Future<void> _repairM3u(M3uSubscription sub) async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('体检修复「${sub.name}」'),
+        content: const Text(
+          '逐条测每个频道的播放地址：能通的留着，确认打不开的删掉，'
+          '测不准的（403、超时、TLS 失败）一律保留。\n\n'
+          '修完会覆盖这条订阅的列表，频道数会变少是正常的。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('开始体检'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    final progress = ValueNotifier<String>('正在读取列表…');
+    var cancel = false;
+    var dialogShown = false;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    try {
+      final text = sub.isUrl
+          ? await M3uSubscriptionService.fetchText(sub.url)
+          : await M3uFileStore.readText(sub.fileName);
+      final parsed = analyzeM3u(text, source: sub.sourceId);
+      final channels = parsed.channels;
+      if (channels.isEmpty) {
+        _showMessage('这条订阅里没有可解析的频道');
+        return;
+      }
+      if (!mounted) return;
+      dialogShown = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('正在体检频道'),
+            content: ValueListenableBuilder<String>(
+              valueListenable: progress,
+              builder: (context, value, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const LinearProgressIndicator(minHeight: 4),
+                  const SizedBox(height: 14),
+                  Text(value),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => cancel = true,
+                child: const Text('中止'),
+              ),
+            ],
+          ),
+        ),
+      );
+      final (kept, report) = await LiveM3uRepair.clean(
+        channels,
+        onProgress: (done, total) {
+          progress.value = '已测 $done / $total（${(done * 100 / total).toStringAsFixed(0)}%）';
+        },
+        cancelled: () => cancel,
+      );
+      progress.dispose();
+      dialogShown = false;
+      if (mounted) navigator.pop();
+      if (kept.isEmpty) {
+        _showMessage('全部频道都打不开（${report.summary}），这条订阅没动');
+        return;
+      }
+      final cleaned = LiveM3uRepair.toM3uText(kept);
+      final updated = await M3uSubscriptionService.build(
+        name: sub.name,
+        kind: sub.kind,
+        text: cleaned,
+        rawBytes: utf8.encode(cleaned),
+        url: sub.url,
+        existing: sub.id,
+      );
+      await widget.store.syncM3uSubscriptions([
+        for (final item in widget.store.m3uSubscriptions)
+          if (item.id == sub.id) updated else item,
+      ]);
+      _showMessage('「${sub.name}」修复完成：${report.summary}');
+    } catch (error) {
+      try {
+        progress.dispose();
+      } catch (_) {}
+      // 只关自己开出来的进度框；读取阶段就失败时不能把整个页面弹掉。
+      if (mounted && dialogShown) navigator.pop();
+      _showMessage('修复失败：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _rename(M3uSubscription sub) async {
     final name = await _askText(
       title: '重命名订阅',
@@ -736,6 +848,14 @@ class _M3uImportSectionState extends State<M3uImportSection> {
                               ? null
                               : () => unawaited(_refresh(sub)),
                           icon: const Icon(Icons.refresh_rounded),
+                        ),
+                        IconButton(
+                          key: ValueKey('m3u-repair-${sub.id}'),
+                          tooltip: '体检修复（删掉打不开的频道）',
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(_repairM3u(sub)),
+                          icon: const Icon(Icons.healing_rounded),
                         ),
                         IconButton(
                           tooltip: '改名',
