@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'core_bridge.dart' show AppFailure;
 import 'feed_playability.dart';
 import 'live_models.dart';
 
