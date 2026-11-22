@@ -3043,49 +3043,60 @@ class _PlayerScreenState extends State<PlayerScreen>
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final desktop = constraints.maxWidth >= 840;
-                        if (fullscreen) {
-                          return _videoPane(context);
+                        final wide =
+                            desktop ||
+                            constraints.maxWidth > constraints.maxHeight * 1.3;
+                        // 画面层绝不换父级：全屏/非全屏都挂在同一条
+                        // Stack → Positioned 链上，只改四条边。
+                        // 短剧走的是原生画面层（AndroidView），早先全屏时
+                        // 把 _videoPane 从 SizedBox/Row 里搬到 LayoutBuilder
+                        // 直下，平台视图被重建 → 解码器照旧出声、画面全黑
+                        // （v45 修的是观看房那台播放器，这条路径没吃到）。
+                        // 改成尺寸变化后，Element 不搬，表面也不重建。
+                        final panelSide =
+                            !fullscreen && wide && _episodePanelVisible;
+                        final sideWidth = panelSide
+                            ? (desktop ? 312.0 : 210.0)
+                            : 0.0;
+                        double videoHeight = 0; // 0 = 视频占满剩余高度
+                        if (!fullscreen && !wide) {
+                          final maxRatio = _mobile ? .56 : .64;
+                          videoHeight = (constraints.maxWidth / _aspectRatio)
+                              .clamp(0.0, constraints.maxHeight * maxRatio);
                         }
-                        if (desktop ||
-                            constraints.maxWidth >
-                                constraints.maxHeight * 1.3) {
-                          return Row(
-                            children: [
-                              Expanded(child: _videoPane(context)),
-                              if (_episodePanelVisible)
-                                SizedBox(
-                                  width: desktop ? 312 : 210,
-                                  child: _episodePanel(
-                                    onClose: _toggleEpisodePanel,
-                                  ),
-                                ),
-                            ],
-                          );
-                        }
-                        if (_mobile) {
-                          final height = (constraints.maxWidth / _aspectRatio)
-                              .clamp(0.0, constraints.maxHeight * .56);
-                          return Column(
-                            children: [
-                              SizedBox(
-                                height: height,
-                                width: double.infinity,
-                                child: _videoPane(context),
-                              ),
-                              Expanded(child: _mobilePlaybackPanel()),
-                            ],
-                          );
-                        }
-                        final height = (constraints.maxWidth / _aspectRatio)
-                            .clamp(0.0, constraints.maxHeight * .64);
-                        return Column(
+                        final filler = videoHeight > 0
+                            ? (constraints.maxHeight - videoHeight).clamp(
+                                0.0,
+                                constraints.maxHeight,
+                              )
+                            : 0.0;
+                        return Stack(
                           children: [
-                            SizedBox(
-                              height: height,
-                              width: double.infinity,
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              right: sideWidth,
+                              bottom: filler,
                               child: _videoPane(context),
                             ),
-                            Expanded(child: _mobilePlaybackPanel()),
+                            if (!fullscreen && !wide)
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                top: filler,
+                                bottom: 0,
+                                child: _mobilePlaybackPanel(),
+                              ),
+                            if (panelSide)
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                bottom: 0,
+                                width: sideWidth,
+                                child: _episodePanel(
+                                  onClose: _toggleEpisodePanel,
+                                ),
+                              ),
                           ],
                         );
                       },

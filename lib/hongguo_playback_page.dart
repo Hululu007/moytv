@@ -1300,59 +1300,80 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_fullscreen) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            _videoArea(),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: SafeArea(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withValues(alpha: 0.6),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                  child: _topBar(),
-                ),
-              ),
-            ),
-            // 常驻播放进度：开关默认关；开着时即使控制层隐藏也可见。
-            if (widget.store.hongguoAlwaysShowProgress)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: SafeArea(
-                  top: false,
-                  child: _alwaysOnProgress(),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
+    // 全屏/非全屏只改 _videoArea 的四条边，不换父级。
+    // 短剧的画面是原生层（AndroidView）：早先全屏时整页换成另一个
+    // Scaffold，把播放区从 Column 里的 SizedBox 挪到 Stack 直下，
+    // 平台视图跟着重建 → 解码器照旧出声、画面全黑。v45 给视频区挂
+    // GlobalKey 只保住 Flutter 侧的 Element，原生表面仍会被重挂；
+    // 这里干脆让结构恒定，尺寸变化不代表重建。
+    final size = MediaQuery.sizeOf(context);
+    const barHeight = 56.0;
+    final videoHeight = size.height * 0.42;
+    final videoTop = _fullscreen ? 0.0 : barHeight;
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Column(
+        top: !_fullscreen,
+        bottom: !_fullscreen,
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            _topBar(),
-            SizedBox(
-              height: MediaQuery.sizeOf(context).height * 0.42,
+            Positioned(
+              left: 0,
+              right: 0,
+              top: videoTop,
+              height: _fullscreen ? null : videoHeight,
+              bottom: _fullscreen ? 0 : null,
               child: _videoArea(),
             ),
-            Expanded(child: _infoArea()),
+            if (!_fullscreen) ...[
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: barHeight,
+                child: _topBar(),
+              ),
+              Positioned(
+                top: videoTop + videoHeight,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _infoArea(),
+              ),
+            ] else ...[
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.6),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                    child: _topBar(),
+                  ),
+                ),
+              ),
+              // 常驻播放进度：开关默认关；开着时即使控制层隐藏也可见。
+              if (widget.store.hongguoAlwaysShowProgress)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SafeArea(
+                    top: false,
+                    child: _alwaysOnProgress(),
+                  ),
+                ),
+            ],
           ],
         ),
       ),
