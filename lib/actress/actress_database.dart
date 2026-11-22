@@ -448,10 +448,14 @@ ActressPerson videoLibraryPersonFromRow(Map<String, Object?> row) {
     fromMissav = true;
     missavPath = cateId.substring('missav:'.length);
   }
+  // 2026-11-22 用户令（男优要与女优分开、按番号绑定）：
+  // 库里 actresses 加了 sex 列（合并时写入），读人时按列取值；
+  // 老库没有该列、或列值为空时仍按女优处理，行为与改前一致。
+  final sexValue = (row['sex'] as String?)?.trim() ?? '';
   return ActressPerson(
     localId: (row['id'] as num?)?.toInt() ?? 0,
     displayName: (row['display_name'] as String?) ?? '',
-    sex: 'female',
+    sex: sexValue.isNotEmpty ? sexValue : 'female',
     avatarUrl: (row['avatar_url'] as String?) ?? '',
     worksCount: count,
     rosterWorks: count,
@@ -474,6 +478,9 @@ class _RollupAcc {
   String avatar = '';
   int works = 0;
   String lastDate = '';
+
+  /// 2026-11-22：性别按人归并（同一名字下有一行是男优就算男优）。
+  String sex = 'female';
 }
 
 /// 视频库（女优库.db）行 → 作品：id 用 videos.rowid；vod_id 作
@@ -669,6 +676,16 @@ class SqfliteActressDatabase implements ActressDatabase {
     }
   }
 
+  /// 库里 actresses 是否有 sex 列（2026-11-22 合并版库才有；老库没有）。
+  Future<bool> _hasActressSexColumn(Database db) async {
+    try {
+      final rows = await db.rawQuery('PRAGMA table_info(actresses)');
+      return rows.any((r) => (r['name']?.toString() ?? '') == 'sex');
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String _placeholders(int n) =>
       List.filled(n, '?').join(', ');
 
@@ -718,12 +735,30 @@ class SqfliteActressDatabase implements ActressDatabase {
         'first_rowid INTEGER NOT NULL, '
         'avatar TEXT NOT NULL DEFAULT \'\', '
         'works INTEGER NOT NULL DEFAULT 0, '
+        'sex TEXT NOT NULL DEFAULT \'female\', '
         'last_date TEXT NOT NULL DEFAULT \'\')',
       );
       await db.execute(
         'CREATE TABLE IF NOT EXISTS actress_rollup_meta ('
         'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
       );
+      // 老版本建的汇总表没有 sex 列：补上，否则重建时写不进去。
+      try {
+        final rollupCols = await db.rawQuery(
+          'PRAGMA table_info(actress_rollup)',
+        );
+        final hasSexCol = rollupCols.any(
+          (r) => (r['name']?.toString() ?? '') == 'sex',
+        );
+        if (!hasSexCol) {
+          await db.execute(
+            'ALTER TABLE actress_rollup ADD COLUMN sex TEXT '
+            "NOT NULL DEFAULT 'female'",
+          );
+        }
+      } catch (_) {
+        // 只读库/加列失败：重建会退回现算，功能不丢。
+      }
       final meta = await db.query(
         'actress_rollup_meta',
         columns: ['value'],
@@ -754,9 +789,11 @@ class SqfliteActressDatabase implements ActressDatabase {
         final d = row['d']?.toString() ?? '';
         if (d.isNotEmpty) dates[cateId] = d;
       }
+      final hasSex = await _hasActressSexColumn(db);
       final people = await db.rawQuery(
         'SELECT rowid AS rid, name AS name, cate_id AS cate_id, '
-        "COALESCE(NULLIF(avatar,''),'') AS avatar "
+        "COALESCE(NULLIF(avatar,''),'') AS avatar, "
+        "${hasSex ? "COALESCE(NULLIF(sex,''),'female')" : "'female'"} AS sex "
         'FROM actresses',
       );
       final byName = <String, _RollupAcc>{};
@@ -770,6 +807,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         );
         final avatar = row['avatar']?.toString() ?? '';
         if (acc.avatar.isEmpty && avatar.isNotEmpty) acc.avatar = avatar;
+        if ((row['sex']?.toString() ?? '') == 'male') acc.sex = 'male';
         acc.works += works[cateId] ?? 0;
         final d = dates[cateId];
         if (d != null && d.compareTo(acc.lastDate) > 0) acc.lastDate = d;
@@ -783,6 +821,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'first_rowid': acc.firstRowid,
             'avatar': acc.avatar,
             'works': acc.works,
+            'sex': acc.sex,
             'last_date': acc.lastDate,
           });
         });
@@ -1490,9 +1529,11 @@ class SqfliteActressDatabase implements ActressDatabase {
   }) async {
     final db = await _open();
     if (_videoLibraryMode) {
-      // 视频库里人一律是女优：male 匹配不到，female/all 不筛；
-      // tag 没有对应列，忽略（分类筛走 main_category，见下）。
-      if (sex == ActressSexFilter.male) return const [];
+      // 2026-11-22 用户令（男优与女优分开）：合并版库 actresses 带
+      // sex 列（男优 257 位，按 who's 番号绑定作品），男优筛选按列
+      // 过滤；老库没有 sex 列时保持改前行为（male 无结果）。
+      final hasSex = await _hasActressSexColumn(db);
+      if (sex != ActressSexFilter.all && !hasSex) return const [];
       final trimmedQuery = query.trim();
       final args = <Object?>[];
       final conditions = <String>[];
@@ -1504,6 +1545,17 @@ class SqfliteActressDatabase implements ActressDatabase {
         if (trimmedQuery.isNotEmpty) {
           args.add('%$trimmedQuery%');
           conditions.add('r.name LIKE ?');
+        }
+        if (sex == ActressSexFilter.male) {
+          conditions.add(
+            "EXISTS (SELECT 1 FROM actresses ax WHERE ax.name = r.name "
+            "AND ax.sex = 'male')",
+          );
+        } else if (sex == ActressSexFilter.female) {
+          conditions.add(
+            "NOT EXISTS (SELECT 1 FROM actresses ax WHERE ax.name = r.name "
+            "AND ax.sex = 'male')",
+          );
         }
         if (category.isNotEmpty) {
           args.add(category);
@@ -1524,10 +1576,15 @@ class SqfliteActressDatabase implements ActressDatabase {
           ActressSort.nameAsc => 'r.name ASC',
           ActressSort.recentDesc => 'r.last_date DESC, r.name ASC',
         };
+        final sexExpr = hasSex
+            ? "(SELECT CASE WHEN EXISTS(SELECT 1 FROM actresses a4 "
+                  "WHERE a4.name = r.name AND a4.sex = 'male') "
+                  "THEN 'male' ELSE 'female' END) AS sex"
+            : "'female' AS sex";
         final rows = await db.rawQuery(
           'SELECT r.first_rowid AS id, r.name AS display_name, '
           'r.name AS cate_id, r.avatar AS avatar_url, '
-          'r.works AS works_count '
+          'r.works AS works_count, $sexExpr '
           'FROM actress_rollup r $where '
           'ORDER BY $order LIMIT ? OFFSET ?',
           [...args, limit, offset],
@@ -1539,6 +1596,11 @@ class SqfliteActressDatabase implements ActressDatabase {
       if (trimmedQuery.isNotEmpty) {
         args.add('%$trimmedQuery%');
         conditions.add('a.name LIKE ?');
+      }
+      if (hasSex && sex == ActressSexFilter.male) {
+        conditions.add("a.sex = 'male'");
+      } else if (hasSex && sex == ActressSexFilter.female) {
+        conditions.add("COALESCE(NULLIF(a.sex,''),'female') = 'female'");
       }
       if (category.isNotEmpty) {
         // 该人有该分类的作品才留：分类口径与 workCategories 同
@@ -1569,6 +1631,8 @@ class SqfliteActressDatabase implements ActressDatabase {
         'LEFT JOIN videos v ON v.vod_id = va.vod_id GROUP BY cate_id) '
         'SELECT MIN(a.rowid) AS id, a.name AS display_name, '
         'a.name AS cate_id, '
+        '${hasSex ? "CASE WHEN SUM(CASE WHEN a.sex='male' THEN 1 ELSE 0 END)>0 "
+            "THEN 'male' ELSE 'female' END" : "'female'"} AS sex, '
         "COALESCE(MAX(NULLIF(a.avatar,'')),'') AS avatar_url, "
         'SUM(COALESCE(pc.n,0)) AS works_count, '
         "COALESCE(MAX(COALESCE(pc.d,'')),'') AS last_date "
@@ -1601,13 +1665,19 @@ class SqfliteActressDatabase implements ActressDatabase {
   }) async {
     final db = await _open();
     if (_videoLibraryMode) {
-      if (sex == ActressSexFilter.male) return 0;
+      final hasSex = await _hasActressSexColumn(db);
+      if (sex != ActressSexFilter.all && !hasSex) return 0;
       final args = <Object?>[];
       final conditions = <String>[];
       final trimmedQuery = query.trim();
       if (trimmedQuery.isNotEmpty) {
         args.add('%$trimmedQuery%');
         conditions.add('name LIKE ?');
+      }
+      if (sex == ActressSexFilter.male) {
+        conditions.add("sex = 'male'");
+      } else if (sex == ActressSexFilter.female) {
+        conditions.add("COALESCE(NULLIF(sex,''),'female') = 'female'");
       }
       final where = conditions.isEmpty
           ? ''
