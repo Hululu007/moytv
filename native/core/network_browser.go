@@ -35,9 +35,6 @@ type huangguoBrowserTransport struct {
 	// 因此它们先走标准传输，只有真被验证页拦住（challenged）才升级到浏览器指纹。
 	custom      map[string]bool
 	upgraded    map[string]bool
-	onChallenge  func(rawurl string)
-	shieldApply  func(*http.Request) (*http.Request, bool)
-	shieldForget func(host string)
 }
 
 func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader) *huangguoBrowserTransport {
@@ -49,9 +46,6 @@ func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader)
 		upgraded: make(map[string]bool),
 	}
 	transport.newClient = transport.createClient
-	transport.onChallenge = downloader.recordShieldChallenge
-	transport.shieldApply = downloader.applyShieldRequest
-	transport.shieldForget = downloader.removeShieldClearance
 	return transport
 }
 
@@ -242,38 +236,7 @@ func isCFMitigatedChallenge(response *http.Response) bool {
 }
 
 func (transport *huangguoBrowserTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	original := request
-	applied := false
-	if transport.shieldApply != nil {
-		if cloned, ok := transport.shieldApply(request); ok {
-			request = cloned
-			applied = true
-		}
-	}
-	response, err := transport.roundTripInner(request)
-	// 票被 Cloudflare 直接拒掉（403/451/1020）：说明这张票和当前出口 IP
-	// 或 UA 已经对不上，继续带着它只会让这个 host 永远打不开。
-	// 立刻作废这张票，然后用不带票的原始请求再走一次。
-	if applied && err == nil && response != nil && shieldTicketRejected(response.StatusCode) {
-		if response.Body != nil {
-			response.Body.Close()
-		}
-		if transport.shieldForget != nil && original != nil && original.URL != nil {
-			transport.shieldForget(original.URL.Hostname())
-		}
-		return transport.roundTripInner(original)
-	}
-	return response, err
-}
-
-// shieldTicketRejected 判断「这张票被服务端拒了」，而不是站点本身的正常 403。
-// 只认盾类状态码，避免把防盗链 403 也当成票失效。
-func shieldTicketRejected(status int) bool {
-	switch status {
-	case http.StatusForbidden, http.StatusUnavailableForLegalReasons:
-		return true
-	}
-	return false
+	return transport.roundTripInner(request)
 }
 
 func (transport *huangguoBrowserTransport) roundTripInner(request *http.Request) (*http.Response, error) {
@@ -290,9 +253,6 @@ func (transport *huangguoBrowserTransport) roundTripInner(request *http.Request)
 			response.Body.Close()
 		}
 		transport.promote(request.URL.Hostname())
-		if transport.onChallenge != nil && strings.Contains(strings.ToLower(mitigated), "challenge") {
-			transport.onChallenge(request.URL.String())
-		}
 		message := "自定义源返回 403，已改用浏览器指纹重试"
 		if strings.Contains(strings.ToLower(mitigated), "challenge") {
 			message = "自定义源被 Cloudflare 验证页拦截，已改用浏览器指纹重试"
@@ -307,9 +267,6 @@ func (transport *huangguoBrowserTransport) roundTripInner(request *http.Request)
 				response.Body.Close()
 			}
 			transport.promote(request.URL.Hostname())
-			if transport.onChallenge != nil {
-				transport.onChallenge(request.URL.String())
-			}
 			transport.recordEvent(request, response.StatusCode, "站点返回 Cloudflare 验证，已改用浏览器指纹重试")
 			return transport.browserRoundTrip(request)
 		}

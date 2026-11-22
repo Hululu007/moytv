@@ -109,6 +109,33 @@ class MultiDbFilmFallback implements FilmDbFallbackProvider {
     return _filterSite(_merge(rows), site);
   }
 
+  /// 批量按番号取作品（2026-11-22 女优库加载优化）：
+  /// 主库一次批量取（见 [FilmLibraryService.entriesForCodes]），
+  /// 外来小库仍逐番号查；外来库清单只扫一次，不逐番号重扫。
+  /// 本方法不在 [FilmDbFallbackProvider] 接口上（见
+  /// actress_json_fallback.dart 顶部说明），只挂真实实现。
+  Future<List<ActressJsonEntry>> entriesForCodes(
+    List<String> codeKeys, {
+    String? site,
+  }) async {
+    final rows = <ActressJsonEntry>[];
+    try {
+      rows.addAll(await primary.entriesForCodes(codeKeys, site: site));
+    } catch (_) {}
+    final extras = await _extraDatabases();
+    for (final codeKey in codeKeys) {
+      final key = normalizeAvCode(codeKey);
+      if (key.isEmpty) continue;
+      for (final db in extras) {
+        try {
+          final works = await db.reader.worksForCode(key);
+          rows.addAll([for (final work in works) work.toJsonEntry()]);
+        } catch (_) {}
+      }
+    }
+    return _filterSite(_merge(rows), site);
+  }
+
   /// 直接按库浏览用：把合并后的外来库清单给页面（瓦片以外的入口）。
   Future<List<({String name, String path, GenericDbReader reader})>>
   extraDatabases() async => [

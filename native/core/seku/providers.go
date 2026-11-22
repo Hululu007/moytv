@@ -28,7 +28,7 @@ func httpGet(url string, headers map[string]string) ([]byte, int, http.Header, e
 // timeout once per candidate host (v5 device fix: a blackholed first
 // host must not eat minutes before the next host is tried).
 func httpGetTimeout(url string, headers map[string]string, timeout time.Duration) ([]byte, int, http.Header, error) {
-	headers = zkShieldBareHeaders(crackMergedHeaders(url, headers))
+	headers = crackMergedHeaders(url, headers)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, 0, nil, err
@@ -60,159 +60,24 @@ func httpGetTimeout(url string, headers map[string]string, timeout time.Duration
 
 // httpDo 是所有 Go 核站点的统一请求出口。
 //
-// 2026-11-21 重做（v33）。上一版把「带票」做成了无条件前置，结果把一批
-// 本来能用的站点打死：票是「主机 + cf_clearance + 签发时的 UA」三元组，
-// Cloudflare 还会把它绑到签发时的出口 IP 上。用户换一次节点、或者票过期，
-// 带着这张废票去请求，CF 不给挑战页，而是直接 403/451 封死。
-// 真机截图里 whos / 123av 报的「-> 451」就是这个——站点没坏，是我方脏票。
-//
-// 现在的顺序（不针对任何站点，新站自动继承）：
-//  1. 裸连：一个票都不带，先拿真实响应；
-//  2. 真被挡（403/451/挑战页/空正文）才带票重试一次；
-//  3. 带票还不行 = 这张票废了，立刻丢掉（包内 + App 侧），
-//     否则后面每个请求都会继续被封；
-//  4. 把 host 交给 App 的解盾队列，让隐藏浏览器重新解一次；
-//  5. 只有直连一个字都没拿到，才走盾层多通道兜底；绝不用兜底内容顶替
-//     正常的直连响应（v31 的教训：替换回去看着能解析，列表却变空）。
+// 删盾后（2026-11-22 用户令）：只做直连，不带票、不上报、不走盾层兜底。
+// 拿到的就是真实响应——挑战页、403、空正文都原样交给调用方自己的
+// 镜像/重试逻辑处理。传输失败的 GET 仍有 jinaFallback（providers.go
+// 底部 smart routing）兜底，那是独立的传输层回退，与应用盾无关。
 func httpDo(method, url string, body io.Reader, headers map[string]string) ([]byte, int, http.Header, error) {
-	first, code, hdr, err := httpDoDirectMode(method, url, body, headers, false)
-	if method != http.MethodGet || !httpDoBlocked(code, string(first), err) {
-		return first, code, hdr, err
-	}
-
-	host := zkShieldHostOf(url)
-
-	// 有票就带票试一次；这一次还不行，说明票已失效，就地作废。
-	if _, ok := zkShieldLookupTicket(host); ok {
-		if b, c, h, e := httpDoDirectMode(method, url, nil, headers, true); !httpDoBlocked(c, string(b), e) {
-			return b, c, h, e
-		}
-		zkShieldForgetHost(host)
-	}
-
-	text := string(first)
-	if httpDoShieldStatus(code) || (len(strings.TrimSpace(text)) > 0 && zkShieldIsChallenge(text)) {
-		zkShieldMarkShielded(host)
-		zkShieldReportChallenge(url)
-	}
-
-	// 兜底通道只允许在「连不上 / 盾类状态码且一个字没有」时启用。
-	// 502/500 这类错误必须原样交给站点自己的镜像逻辑（hsck 靠它切备用域名），
-	// 否则中转拿回来的限流页会被当成 200 正文，把列表解析成空
-	// （实测：primary 502 -> 兜底返回 Cloudflare 限流页 -> 列表 0 条）。
-	if code == 0 || (httpDoShieldStatus(code) && len(strings.TrimSpace(text)) == 0) {
-		if alt := zkShieldFetch(url, headers, "", 20000, false); alt != "" && !isShieldPage(alt) {
-			return []byte(alt), http.StatusOK, hdr, nil
-		}
-	}
-	return first, code, hdr, err
+	return httpDoDirect(method, url, body, headers)
 }
 
-// isShieldPage 判断中转/兜底通道拿回来的其实是盾页或限流页。
-// 这类内容一律不允许顶替真实响应：它长得像正常 HTML，能骗过解析器，
-// 最后表现成「站点用不了」。
-func isShieldPage(body string) bool {
-	if body == "" {
-		return true
-	}
-	head := body
-	if len(head) > 20000 {
-		head = head[:20000]
-	}
-	lower := strings.ToLower(head)
-	for _, m := range []string{
-		"cloudflare",
-		"rate limited",
-		"just a moment",
-		"attention required",
-		"cf_chl_opt",
-		"challenge-platform",
-		"enable javascript and cookies",
-	} {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
-
-// httpDoBlocked 判断一次直连算不算失败。
-// 只认盾/封锁类状态码、人机校验特征页和空正文——404 之外的正常小接口
-// 不能被当成失败，否则每个小接口白等一轮重试。
-func httpDoBlocked(code int, text string, err error) bool {
-	if err != nil {
-		return true
-	}
-	if httpDoShieldStatus(code) {
-		return true
-	}
-	if code >= 400 {
-		return true
-	}
-	if httpShieldMarker(text) {
-		return true
-	}
-	return strings.TrimSpace(text) == ""
-}
-
-// httpDoShieldStatus: Cloudflare 及同类盾/封锁的典型状态码。
-// 451 = 法律原因不可用，实际多见于 CF 对「票与出口不匹配」的直接拒绝。
-func httpDoShieldStatus(code int) bool {
-	switch code {
-	case 401, 403, 407, 429, 451, 503, 520, 521, 522, 523, 524, 525, 526:
-		return true
-	}
-	return false
-}
-
-// httpShieldMarker 只认真正的人机校验页面特征。
-//
-// 两个容易踩的坑都在这里挡掉：
-//   - 不能看响应长短就判定（小接口本来就几十字节）；
-//   - 不能只要页面里出现 challenge-platform 就当挑战页——接了 Cloudflare
-//     的正常站点首页照样会引用那段脚本。人机校验页必然是「很小 + 带特征」，
-//     所以先卡长度，正常内容页直接放行。
-func httpShieldMarker(body string) bool {
-	if body == "" || len(body) > 8000 {
-		return false
-	}
-	head := body
-	if len(head) > 6000 {
-		head = head[:6000]
-	}
-	lower := strings.ToLower(head)
-	for _, m := range []string{
-		"just a moment",
-		"cf_chl_opt",
-		"cf-browser-verification",
-		"challenge-platform",
-		"enable javascript and cookies to continue",
-		"attention required",
-		"cf-error-details",
-	} {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
-
-// httpDoDirect 是不带盾层兜底的直连实现：只做票池补头、加密配置合并，
+// httpDoDirect 是不带盾层兜底的直连实现：只做加密配置合并，
 // 和改造前的行为一致（jina 中转失败自动降级直连仍在其中）。
 func httpDoDirect(method, url string, body io.Reader, headers map[string]string) ([]byte, int, http.Header, error) {
-	return httpDoDirectMode(method, url, body, headers, true)
+	return httpDoDirectMode(method, url, body, headers)
 }
 
-// httpDoDirectMode 的 withTicket=false 分支是「裸连」：只合并站点自己的
-// header 和加密配置，不加票、不改 UA。裸连必须能走到，否则一张废票会让
-// 整个 host 永久 403/451（v33 的起因）。
-func httpDoDirectMode(method, url string, body io.Reader, headers map[string]string, withTicket bool) ([]byte, int, http.Header, error) {
+// httpDoDirectMode 只做直连：合并站点自己的 header 和加密配置，
+// 不加票、不改 UA、不上报。
+func httpDoDirectMode(method, url string, body io.Reader, headers map[string]string) ([]byte, int, http.Header, error) {
 	headers = crackMergedHeaders(url, headers)
-	if withTicket {
-		headers = zkShieldTicketHeaders(zkShieldHostOf(url), headers)
-	} else {
-		headers = zkShieldBareHeaders(headers)
-	}
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, 0, nil, err

@@ -25,14 +25,19 @@ func TestSupjavFallbackWiring(t *testing.T) {
 	}
 }
 
-// v55 起口径反转：iOS 包源表明文列着 supjav，sites_v54_ios8.go 用仓库里
-// 现成的成套实现把它注册了回来。这里锁定「必须注册且能按对外 id 路由回槽」，
-// 免得以后又被人当成废弃槽删掉，站表里少一格。
+// 2026-11-22 用户令删 6 站：supjav 已摘登记（slotOrder、
+// sites_v54_ios8.go 注册、models.dart、主页一并摘除）。这里锁定
+// 「必须保持未注册」，实现函数留档在 sites_g2.go，仅供以后恢复时复用。
 func TestSupjavSlotRegistered(t *testing.T) {
-	if implForSlot("supjav") == nil {
-		t.Fatal("slot supjav must be registered (v55 iOS source set)")
+	if implForSlot("supjav") != nil {
+		t.Fatal("slot supjav must stay unregistered (removed 2026-11-22)")
 	}
-	if impl := implForSlot("supjav"); impl.Key == "" {
-		t.Fatal("slot supjav registered without a provider key")
+	if _, ok := keyToSlot["supjav"]; ok {
+		t.Fatal("key supjav must not resolve to a slot")
+	}
+	for _, s := range allSlots() {
+		if s == "supjav" {
+			t.Fatal("supjav must not appear in allSlots")
+		}
 	}
 }

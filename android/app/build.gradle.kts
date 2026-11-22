@@ -56,7 +56,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.moyi.box"
+        applicationId = "com.myxptv"
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

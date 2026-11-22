@@ -454,9 +454,6 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 				continue
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 || catalogResponseBlockReason(resp, body) != "" {
-				if catalogResponseBlockReason(resp, body) != "" {
-					d.recordShieldChallenge(candidate)
-				}
 				lastErr = d.catalogResponseError(req, resp, body)
 				if catalogResponseBlockReason(resp, body) != "" || resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 408 {
 					break
@@ -478,22 +475,6 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 	}
 	if len(candidates) > 1 && lastErr != nil {
 		return "", fmt.Errorf("黄果来源请求失败：已尝试 %d 个域名，最后错误：%w", tried, lastErr)
-	}
-	if lastErr != nil {
-		if text, err := d.shieldFallbackText(ctx, rawURL, referer, lastErr); err == nil {
-			return text, nil
-		}
-	}
-	// Cloudflare 前缀加速类「拼接自定义源」命中 403 浏览器验证时，参照 streamhub 的
-	// fetchViaProxy：改经公共 CORS/中继代理代发同一目标（换一个「数据中心出口 IP」），
-	// 往往能绕过针对当前出口 IP 的 CF 挑战。纯 HTTP 客户端无法自行执行 CF 的挑战 JS，
-	// 这是「尝试解决」而非保证绕过；仅当目标确为拼接加速 URL 且确被 CF 拦才进入，
-	// 正常工作源（直连 2xx）不会触发本分支。红果源不受 CF 403 影响，显式排除在外，
-	// 避免其任何失败被拖入最慢的公共中继链（3×25s），保持红果加载速度。
-	if lastErr != nil && isCFChallengeError(lastErr) && isSplicedAcceleratorURL(rawURL) && !isHongguoProviderURL(rawURL) {
-		if relayText, relayErr := d.fetchProviderTextViaCFRelay(ctx, rawURL, referer); relayErr == nil {
-			return relayText, nil
-		}
 	}
 	return "", lastErr
 }

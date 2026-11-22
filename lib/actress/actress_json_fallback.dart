@@ -336,6 +336,13 @@ abstract class FilmDbFallbackProvider {
   });
 }
 
+// 注意：批量按番号取作品（entriesForCodes）不要加进上面这个接口——
+// 三个测试替身（test/actress_*_test.dart）都是 implements 它，
+// 接口多一个方法它们就编不过，而测试文件不在本次可改范围。
+// 批量方法只挂在两个真实实现上（FilmLibraryService、
+// MultiDbFilmFallback），调用方（详情页）按运行时类型分发，
+// 其它实现（含测试替身）逐条回落，见 _dbEntriesForCodes。
+
 class ActressJsonFallback {
   ActressJsonFallback({
     ActressJsonAssetReader? assetReader,
@@ -757,6 +764,9 @@ class ActressJsonFallback {
       return const [];
     }
   }
+
+  // 批量按番号取库里条目不在这里（见文件顶部接口下的说明）：
+  // 调用方（详情页）按运行时类型分发到两个真实提供方。
 
   /// 只取 m3u 行（不含 JSON 行）：详情页第二阶段补流用。
   Future<List<ActressJsonEntry>> m3uEntriesForCode(String codeKey) async {

@@ -9,7 +9,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../core_bridge.dart';
 import '../local_store.dart';
-import '../shield_capture.dart';
 import 'html_bridge.dart';
 import 'html_gateway.dart';
 import 'html_sdk.dart';
@@ -49,11 +48,6 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   String? _error;
   String _lastInjectedUrl = '';
 
-  /// App 内浏览器撞上人机校验时的状态：非空表示当前页面是验证页，
-  /// 顶部要摆提示条，同时后台把用户点出来的票往票池里回填。
-  ShieldCapture? _shieldCapture;
-  Timer? _shieldTimer;
-  String? _shieldHost;
   Size? _lastViewport;
   bool _allowPop = false;
 
@@ -167,7 +161,6 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _shieldTimer?.cancel();
     // 离开页面必把系统栏还给整应用的默认 edgeToEdge（main.dart
     // 启动时所设），否则沉浸模式会漏到壳的其它页面。
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -396,105 +389,6 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
       _lastInjectedUrl = url;
       unawaited(_injectRouteB());
     }
-    unawaited(_watchShield(url));
-  }
-
-  /// 撞上人机校验页时的通用处理（不认识站点）。
-  ///
-  /// 验证页是站点自己塞进 WebView 的，用户直接点勾选框就能过；
-  /// 这一步负责两件事：顶部提示「点一下勾选框」，以及把用户点出来
-  /// 的票（cf_clearance + 当前 WebView 的 UA）回填进票池，然后
-  /// 自动重载，让页面回到正常内容而不是停在验证页上。
-  Future<void> _watchShield(String url) async {
-    _shieldTimer?.cancel();
-    _shieldTimer = null;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-    final controller = _controller;
-    if (controller == null) return;
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.host.isEmpty) return;
-    final host = uri.host;
-    final capture = ShieldCapture(
-      repository: widget.repository,
-      controller: controller,
-      host: host,
-      url: url,
-    );
-    // 验证页要等脚本跑起来才成型，稍等一下再判。
-    await Future<void>.delayed(const Duration(milliseconds: 900));
-    if (!mounted || _controller != controller) return;
-    final hit = await capture.detect();
-    if (!mounted) return;
-    if (!hit) {
-      if (_shieldHost != null) setState(() => _shieldHost = null);
-      return;
-    }
-    setState(() {
-      _shieldHost = host;
-      _shieldCapture = capture;
-    });
-    var ticks = 0;
-    _shieldTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      ticks++;
-      if (!mounted || _shieldCapture != capture) {
-        timer.cancel();
-        return;
-      }
-      final ok = await capture.captureIfReady();
-      if (ok) {
-        timer.cancel();
-        if (!mounted) return;
-        setState(() {
-          _shieldHost = null;
-          _shieldCapture = null;
-        });
-        _showToast('验证已通过，正在刷新页面');
-        unawaited(_controller?.reload());
-        return;
-      }
-      // 一分钟还没拿到票就别再空转了，提示留着让用户自己点。
-      if (ticks >= 30) timer.cancel();
-    });
-  }
-
-  Widget _shieldBanner(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      color: colors.secondaryContainer,
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          child: Row(
-            children: [
-              Icon(Icons.shield_outlined, size: 18, color: colors.onSecondaryContainer),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '这个站点要验证一下：勾选页面里的「验证您是真人」，通过后会自动刷新',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: colors.onSecondaryContainer,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: () => unawaited(_controller?.reload()),
-                child: const Text('刷新'),
-              ),
-              IconButton(
-                tooltip: '关闭提示',
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: () => setState(() {
-                  _shieldHost = null;
-                  _shieldTimer?.cancel();
-                }),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   /// Route B 注入：垫片 + 各扩展（document-end；runAt=start 暂无
@@ -607,16 +501,7 @@ class _HtmlHostPageState extends State<HtmlHostPage> with WidgetsBindingObserver
         : !_ready || _controller == null
         ? const Center(child: CircularProgressIndicator())
         : WebViewWidget(controller: _controller!);
-    // 撞上人机校验页时，顶部摆一条提示（页面本身还是用户自己在点），
-    // 提示条不影响 WebView 交互。
-    final body = _shieldHost == null
-        ? content
-        : Column(
-            children: [
-              _shieldBanner(context),
-              Expanded(child: content),
-            ],
-          );
+    final body = content;
     // 沉浸模式的原生恢复入口：页面自绘返回（restoreAffordance none）
     // 时不叠加；其余情况右上角给一个半透明恢复钮，点按回到
     // 进入沉浸前的模式。返回键仍优先走 WebView 历史（见 _onPopInvoked）。

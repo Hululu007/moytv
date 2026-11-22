@@ -859,19 +859,24 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
         args.addAll([like, like]);
       }
+      // 2026-11-22 加载优化：原来一页 60 行也要先对 34 万行做
+      // LEFT JOIN video_actress + GROUP BY v.vod_id 再 LIMIT，
+      // 首页实测 0.09~0.35 秒、翻到 100 页（OFFSET 6000）要
+      // 1.6~3.5 秒；改成两步——先只查 videos + video_category
+      // 取本页 60 行（主键序，无 JOIN 无 GROUP，实测约 0.01 秒），
+      // 再一次 GROUP_CONCAT 批量取这 60 行的女优名。结果与改前
+      // 完全一致（vod_id 是主键，本来就没有重复行可去重）。
       final rows = await db.rawQuery(
         'SELECT v.vod_id, v.title, v.pic_url, v.m3u8_url, v.vod_play_url, '
         'v.vod_play_from, v.vod_pubdate, v.vod_remarks, v.type_name, '
-        'v.vod_content, vc.main_category, '
-        'GROUP_CONCAT(DISTINCT va.cate_id) AS actresses '
-        'FROM videos v LEFT JOIN video_actress va '
-        'ON va.vod_id = v.vod_id '
+        'v.vod_content, vc.main_category '
+        'FROM videos v '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
         '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} '
-        'GROUP BY v.vod_id ORDER BY v.vod_id LIMIT ? OFFSET ?',
+        'ORDER BY v.vod_id LIMIT ? OFFSET ?',
         [...args, limit, offset],
       );
-      return [for (final row in rows) _strictRowToEntry(row)];
+      return _strictRowsWithActresses(rows);
     }
     final reader = _genericReader;
     if (reader == null) return [];
@@ -952,9 +957,14 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       if (isStrict) {
         final db = _readDb;
         if (db == null) return const [];
+        // 2026-11-22 加载优化：原来从 video_actress（47 万行）取
+        // DISTINCT cate_id，每次 0.25~0.28 秒；actresses 表只有
+        // 2.9 万行、cate_id 同值（实测 video_actress 里没有
+        // actresses 之外的 cate_id，0 个孤儿键），改查它只要
+        // 0.003~0.02 秒。缓存仍只建一次。
         _filmActressNames ??= [
           for (final row in await db.rawQuery(
-            'SELECT DISTINCT cate_id FROM video_actress',
+            'SELECT DISTINCT cate_id FROM actresses',
           ))
             row['cate_id'].toString(),
         ];
@@ -1001,6 +1011,11 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       final slug = filmSlugCode(codeKey);
       if (slug.isEmpty) return const [];
       if (isStrict) {
+        // 2026-11-22 加载优化：先走主键精确取（约 0.003 秒）。
+        // 只有库里写法与所给番号对不上（大小写/分隔符差异）时，
+        // 才回落到原来的 LIKE 扫表 + slug 过滤（全表扫，慢）。
+        final fast = await entriesForCodes([codeKey], site: site);
+        if (fast.isNotEmpty) return fast;
         final films = await listFilms(query: slug, offset: 0, limit: 100);
         final out = <ActressJsonEntry>[
           for (final f in films)
@@ -1017,6 +1032,53 @@ class FilmLibraryService implements FilmDbFallbackProvider {
             _genericWorkToEntry(work).toJsonEntry(),
       ];
       return _filterFallbackSite(out, site);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 批量按番号取作品（2026-11-22 女优库加载优化）：
+  /// 严格结构一次主键 IN 取回全部番号的行（60 个番号约 0.003 秒），
+  /// 不再逐番号 LIKE 扫表（一次 LIKE + GROUP BY 在 34 万行库上
+  /// 实测可达数秒以上，60 次就是几分钟——详情页地址池建不起来、
+  /// 点卡报“库里暂无播放地址”的直接原因）。
+  /// IN 键 = 原样番号 + slug + 大小写两种写法（库里 vod_id 大小写
+  /// 不统一，如 003T28-262）；返回时仍按 slug 精确过滤，与
+  /// [entriesForCode] 语义一致（jul-893 与
+  /// jul-893-uncensored-leak 是同一 slug 的两行，都回）。
+  /// 通用结构沿用逐条（外来小库，便宜）。本方法不在
+  /// [FilmDbFallbackProvider] 接口上（见 actress_json_fallback.dart
+  /// 顶部说明），只挂真实实现。
+  Future<List<ActressJsonEntry>> entriesForCodes(
+    List<String> codeKeys, {
+    String? site,
+  }) async {
+    try {
+      if (!await _ensureFilmOpen()) return const [];
+      final wanted = <String>{};
+      for (final codeKey in codeKeys) {
+        final slug = filmSlugCode(codeKey);
+        if (slug.isEmpty) continue;
+        wanted.add(slug);
+        final trimmed = codeKey.trim();
+        wanted.add(trimmed);
+        wanted.add(trimmed.toLowerCase());
+        wanted.add(trimmed.toUpperCase());
+      }
+      if (wanted.isEmpty) return const [];
+      if (isStrict) {
+        final films = await _strictFilmsByIds(wanted.toList());
+        final out = <ActressJsonEntry>[
+          for (final f in films)
+            if (wanted.contains(filmSlugCode(f.vodId))) f.toJsonEntry(),
+        ];
+        return _filterFallbackSite(out, site);
+      }
+      final out = <ActressJsonEntry>[];
+      for (final codeKey in codeKeys) {
+        out.addAll(await entriesForCode(codeKey, site: site));
+      }
+      return out;
     } catch (_) {
       return const [];
     }
@@ -1170,6 +1232,53 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// 本次打开后缓存的 video_actress 去重女优名（归一化匹配用；
   /// 换库重开时清空）。
   List<String>? _filmActressNames;
+
+  /// 严格结构行 + 女优名批量补齐（见 listFilms 两步查）：
+  /// 只对已取到的行做一次 GROUP_CONCAT，不扫全表。
+  Future<List<FilmLibraryEntry>> _strictRowsWithActresses(
+    List<Map<String, Object?>> rows,
+  ) async {
+    if (rows.isEmpty) return const [];
+    final db = _readDb;
+    if (db == null) return [for (final row in rows) _strictRowToEntry(row)];
+    final ids = [for (final row in rows) row['vod_id']?.toString() ?? ''];
+    final inList = List.filled(ids.length, '?').join(',');
+    final actressRows = await db.rawQuery(
+      'SELECT vod_id, GROUP_CONCAT(DISTINCT cate_id) AS actresses '
+      'FROM video_actress WHERE vod_id IN ($inList) GROUP BY vod_id',
+      ids,
+    );
+    final actressById = <String, String>{
+      for (final row in actressRows)
+        row['vod_id'].toString(): row['actresses']?.toString() ?? '',
+    };
+    return [
+      for (final row in rows)
+        _strictRowToEntry({
+          ...row,
+          'actresses': actressById[row['vod_id']?.toString() ?? ''] ?? '',
+        }),
+    ];
+  }
+
+  /// 严格结构按主键批量取行（供 [entriesForCodes] 用）：
+  /// vod_id 是主键，IN 一次取回，不走 LIKE 扫表。
+  Future<List<FilmLibraryEntry>> _strictFilmsByIds(
+    List<String> vodIds,
+  ) async {
+    final db = _readDb;
+    if (db == null || vodIds.isEmpty) return const [];
+    final inList = List.filled(vodIds.length, '?').join(',');
+    final rows = await db.rawQuery(
+      'SELECT v.vod_id, v.title, v.pic_url, v.m3u8_url, v.vod_play_url, '
+      'v.vod_play_from, v.vod_pubdate, v.vod_remarks, v.type_name, '
+      'v.vod_content, vc.main_category '
+      'FROM videos v LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
+      'WHERE v.vod_id IN ($inList)',
+      vodIds,
+    );
+    return _strictRowsWithActresses(rows);
+  }
 
   FilmLibraryEntry _strictRowToEntry(Map<String, Object?> row) {
     String text(String key) => row[key]?.toString() ?? '';
@@ -1798,6 +1907,19 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
       _total = open.total;
     });
     if (open.error == null) {
+      // 2026-11-22 加载优化：分类/站点不再堵首屏——原来串行等
+      // categories() + sites()（站点去重全表扫 1.8~8.3 秒）完了
+      // 才取列表，页上一直转圈；现在列表先出，分类/站点后台取、
+      // 到了再补 chips。
+      unawaited(_loadFilters());
+      await _reload();
+    } else {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadFilters() async {
+    try {
       final categories = await _service.categories();
       final sites = await _service.sites();
       if (!mounted) return;
@@ -1805,9 +1927,8 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
         _categories = categories;
         _sites = sites;
       });
-      await _reload();
-    } else {
-      setState(() => _loading = false);
+    } catch (_) {
+      // 页面已关/库已关：chips 不补，不崩。
     }
   }
 
@@ -1817,7 +1938,8 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
       _films = [];
       _hasMore = true;
     });
-    final films = await _service.listFilms(
+    // 2026-11-22 加载优化：列表与总数并行取，不再串行等两遍。
+    final filmsFuture = _service.listFilms(
       category: _category,
       site: _site,
       actress: _actress,
@@ -1825,12 +1947,14 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
       offset: 0,
       limit: _pageSize,
     );
-    final total = await _service.countFilms(
+    final totalFuture = _service.countFilms(
       category: _category,
       site: _site,
       actress: _actress,
       query: _query,
     );
+    final films = await filmsFuture;
+    final total = await totalFuture;
     if (!mounted) return;
     setState(() {
       _films = films;

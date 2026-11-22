@@ -546,18 +546,5 @@ func singleChapter(slot, rawID string) []interface{} {
 }
 
 func init() {
-	registerSite("xnxx", xnxxImpl(), "XNXX")
-	registerSite("pornhub", pornhubImpl(), "Pornhub")
-	registerSite("eporner", epornerImpl(), "EPorner")
 	registerSite("xvideos", xvideosImpl(), "XVideos")
-	registerSite("supjav", &siteImpl{
-		Key: "supjav", Name: "🔞SupJav", DefaultCat: "home",
-		HomeURL:    supjavHost + "/",
-		Categories: supjavCategories,
-		Catalog:    supjavCatalog,
-		Detail:     supjavDetail,
-		Resolve:    supjavResolve,
-		Search:     supjavSearch,
-		Headers:    func() map[string]string { return supjavHeaders("") },
-	}, "SupJav")
 }

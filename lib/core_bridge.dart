@@ -297,12 +297,6 @@ abstract class AppRepository {
   /// 恢复默认：删除全部自定义源，仅保留内置源。返回删除数量。
   Future<int> resetCustomSources() async => throw AppFailure('当前环境不支持自定义源');
   Future<List<String>> suggestions(String query) async => const [];
-  Future<List<ClearanceChallenge>> clearanceNeeded() async => const [];
-  Future<void> setClearance({
-    required String host,
-    required String cookie,
-    required String ua,
-  }) async => throw AppFailure('当前环境不支持过盾回填');
   Future<Map<String, dynamic>> storage() async => {};
   Future<String> downloadDirectory() async =>
       (await storage())['directory'] as String? ?? '';
@@ -2000,33 +1994,6 @@ class NativeRepository extends AppRepository {
     _adminPermission();
     final result = await _call({'action': 'resetCustomSources'});
     return (result as Map)['removed'] as int? ?? 0;
-  }
-
-  @override
-  Future<List<ClearanceChallenge>> clearanceNeeded() async {
-    final result = await _call({'action': 'clearanceNeeded'});
-    final userAgent = result['userAgent'] as String? ?? '';
-    return [
-      for (final row in result['items'] as List? ?? const [])
-        ClearanceChallenge.fromJson(
-          Map<String, dynamic>.from(row as Map),
-          userAgent,
-        ),
-    ];
-  }
-
-  @override
-  Future<void> setClearance({
-    required String host,
-    required String cookie,
-    required String ua,
-  }) async {
-    await _call({
-      'action': 'setClearance',
-      'host': host,
-      'cookie': cookie,
-      'ua': ua,
-    });
   }
 
   void _authorize(String source, {bool download = false}) {

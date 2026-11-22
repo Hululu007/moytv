@@ -698,6 +698,11 @@ class SqfliteActressDatabase implements ActressDatabase {
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_act_name ON actresses(name)',
+      // 2026-11-22 加载优化：影视库站点去重（SELECT DISTINCT
+      // vod_play_from）原来无索引、全表扫 34 万行，实测 1.8~8.3 秒，
+      // 全球丽影库首屏被它堵住；建索引后 0.05 秒。只加索引，
+      // 不动任何一行数据；已存在时不建。
+      'CREATE INDEX IF NOT EXISTS idx_moyi_v_play_from ON videos(vod_play_from)',
     ]) {
       try {
         await db.execute(sql);
@@ -1873,19 +1878,27 @@ class SqfliteActressDatabase implements ActressDatabase {
   ) async {
     final db = await _open();
     if (_videoLibraryMode) {
+      // 2026-11-22 加载优化：先按 rowid 取同名 cate_id（已索引，
+      // 见 _videoCateIdsOf），再与 worksForPerson 同形走
+      // IN (SELECT vod_id FROM video_actress …) 取分类。
+      // 原来的 videos × video_actress × actresses 三表 JOIN 再
+      // GROUP BY，34 万行库上实测 0.9~6.3 秒、抖动大，详情页首屏
+      // 被它堵住一直转圈；改后同量级实测 0.02 秒（热缓存）。
+      final cateIds = await _videoCateIdsOf(db, personId);
+      if (cateIds.isEmpty) return const [];
+      final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
         "SELECT COALESCE(vc.main_category, v.type_name, '') AS name, "
         'COUNT(*) AS c FROM videos v '
-        'JOIN video_actress va ON va.vod_id = v.vod_id '
-        'JOIN actresses a ON a.cate_id = va.cate_id '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
-        'WHERE a.rowid = ? '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
+        'WHERE cate_id IN ($inList)) '
         "AND COALESCE(vc.main_category, v.type_name, '') <> '' "
         // GROUP BY 必须写完整表达式：写别名 name 有歧义（actresses
         // 表也有 name 列），SQLite 会按人名分组、全并成一组。
         "GROUP BY COALESCE(vc.main_category, v.type_name, '') "
         'ORDER BY c DESC, name ASC',
-        [personId],
+        cateIds,
       );
       return [
         for (final row in rows)

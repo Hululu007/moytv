@@ -1,7 +1,7 @@
 # 蚂蚁影视架构逆向 + 本工程改造对照
 
 > 对象：`app-arm64-v8a-release-1.apk`（包名 `com.leospring.flutter_ant_video`，versionName 2.0.6 / versionCode 2020，minSdk 24，targetSdk 28，597 个文件）
-> 本工程：`moytv`（魔蚁box，`com.moyi.box`，Flutter 3.47 / minSdk 24 / target & compileSdk 36）
+> 本工程：`moytv`（魔蚁box，`com.myxptv`，Flutter 3.47 / minSdk 24 / target & compileSdk 36）
 
 ---
 
@@ -106,7 +106,7 @@
 | `flutter analyze` | 0 error / 0 warning（其余 127 条是仓库原有的 lint 提示） |
 | widget 测试 | `app_drawer_test` + `mini_app_test` + `ui_style_test` 共 38 条全过 |
 | 构建 | Go 原生库 + Gradle `assembleRelease` 通过，APK 90.7 MB |
-| 包信息 | `com.moyi.box`，versionName 1.0.0 / versionCode 1，minSdk 24，target & compileSdk 36 |
+| 包信息 | `com.myxptv`，versionName 1.0.0 / versionCode 1，minSdk 24，target & compileSdk 36 |
 | ABI | 只有 `arm64-v8a`（30 个原生库，与云构建产物一致） |
 | 签名 | v2/v3，`CN=Android Debug`（未配签名 Secrets 时的预览签，能装能跑，不能上架） |
 | 新 UI 是否进包 | 已核 `libapp.so` 内的 UTF-16 字符串：9 个分组名、全部设置条目标题、小程序「已安装 / 市场」全在 |

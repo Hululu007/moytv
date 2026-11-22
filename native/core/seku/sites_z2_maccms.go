@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ---- Batch2 MacCMS-template HTML sites (ZakaSec-restored recipes) ----
@@ -381,9 +382,17 @@ func z2Av321Fetch(rawurl string, headers map[string]string, _ string) ([]byte, i
 		if strings.HasPrefix(u, base) && host != base {
 			u = host + strings.TrimPrefix(u, base)
 		}
-		body := zkShieldRawGet(u, headers, host+"/enter", 20000)
-		if z2Av321LooksOk(body) {
-			return []byte(body), 200, nil
+		hdr := map[string]string{}
+		for k, v := range headers {
+			hdr[k] = v
+		}
+		hdr["Referer"] = host + "/enter"
+		body, _, _, err := httpGetTimeout(u, hdr, 20*time.Second)
+		if err != nil {
+			continue
+		}
+		if z2Av321LooksOk(string(body)) {
+			return body, 200, nil
 		}
 	}
 	return nil, 0, fmt.Errorf("z2_321av all hosts failed looksOk")

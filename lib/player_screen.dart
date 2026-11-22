@@ -30,8 +30,13 @@ import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
 import 'episode_frame_cache.dart';
 import 'episode_preview_card.dart';
+import 'exo_subtitle.dart';
 import 'follow_state.dart';
 import 'local_store.dart';
+import 'live_subtitle_audio.dart';
+import 'live_subtitle_engine.dart';
+import 'live_subtitle_service.dart';
+import 'live_subtitle_settings.dart';
 import 'models.dart';
 import 'nonvideo_content.dart';
 import 'playback_loader.dart';
@@ -45,7 +50,6 @@ import 'playback_recovery.dart';
 import 'playback_error.dart';
 import 'player_backend.dart';
 import 'playback_preferences.dart';
-import 'media_shield.dart';
 import 'player_controls.dart';
 import 'player_core.dart';
 import 'player_route.dart';
@@ -89,6 +93,8 @@ class PlayerScreen extends StatefulWidget {
     this.onEmbeddedIndexChanged,
     this.onPlaybackExhausted,
     this.onRetryProbe,
+    this.liveSubtitleEngine,
+    this.liveSubtitleAudioExtractor,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -119,6 +125,13 @@ class PlayerScreen extends StatefulWidget {
   final Player Function()? playerFactory;
   @visibleForTesting
   final Widget Function(Widget controls)? videoBuilder;
+
+  /// 测试用注入：实时翻译字幕的识别引擎与音频取流器。生产环境不传，
+  /// 服务用默认插件引擎与 FFmpeg 取流；测试注入假实现以便出字幕行。
+  @visibleForTesting
+  final LiveSubtitleEngine? liveSubtitleEngine;
+  @visibleForTesting
+  final LiveSubtitleAudioExtractor? liveSubtitleAudioExtractor;
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
@@ -132,6 +145,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// （setSubtitleViewPadding）。非 media_kit 核（Exo/IJK/TVBox）与
   /// 测试桩视频路径下不走 Video，这里保持 null，回调空操作。
   VideoState? _videoState;
+  // 实时翻译字幕（MPV 核）：TVBox 面在 TvboxVideoPane 里自带接线，
+  // 这里给 media_kit 路径补一份——服务只在 MPV 核启动；Exo 核走
+  // TvboxVideoPane 里那份，IJK 核暂未接。
+  LiveSubtitleSettings? _liveSettings;
+  LiveSubtitleService? _liveSubtitle;
+  final List<StreamSubscription<dynamic>> _liveSubscriptions = [];
+  String _livePartial = '';
+  List<String> _liveLines = const [];
   late final VideoEnhancementController _enhancement;
   late final PictureQualityApplier _pictureQuality;
   late final PlaybackLoader _loader;
@@ -430,6 +451,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _danmakuEnabled = preferences.danmaku;
     _adBlock = preferences.adBlock;
     unawaited(_loadDeepSniffer());
+    unawaited(_loadLiveSubtitleSettings());
     _preloadEnabled = true;
     _televisionDecoder = preferences.televisionDecoder;
     _orientationMode = preferences.orientationMode;
@@ -548,6 +570,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _syncPreload();
         _maybeCaptureEpisodeFrame(position);
         _claimOrReportExternalAudio();
+        if (_updateLiveSubtitleLines(position)) setState(() {});
       }),
     );
     for (final stream in [
@@ -1410,6 +1433,106 @@ class _PlayerScreenState extends State<PlayerScreen>
     unawaited(_saveProgress());
   }
 
+  /// 实时翻译字幕设置：initState 里异步加载；_startLiveSubtitle 里
+  /// 设置还没到时会当场再读一次，免得 _play 先跑、设置后到导致
+  /// 首集漏启动。
+  Future<void> _loadLiveSubtitleSettings() async {
+    final settings = await LiveSubtitleSettings.load();
+    if (mounted) setState(() => _liveSettings = settings);
+  }
+
+  /// 实时翻译字幕：只在总开关开着、平台支持（或测试注入了引擎）、
+  /// 源不是播放器侧内存密钥解密时才启动。只给 MPV 核用——Exo 核
+  /// 走 TvboxVideoPane 里那份，TVBox 核同理；IJK 核暂未接。
+  /// 调用方不 await：模型首次加载要十几秒，服务在后台起，字幕行
+  /// 到了再经 cue 流刷出来，不拖住播放与加载态。
+  Future<void> _startLiveSubtitle(
+    PlaybackPlan plan,
+    double startPosition,
+  ) async {
+    var settings = _liveSettings;
+    settings ??= await LiveSubtitleSettings.load();
+    if (!mounted || _closed) return;
+    _liveSettings ??= settings;
+    if (!settings.enabled) return;
+    if (plan.decryptionKey.isNotEmpty) return;
+    if (widget.liveSubtitleEngine == null && !liveSubtitleEngineSupported) {
+      return;
+    }
+    final service = LiveSubtitleService(
+      settings: settings,
+      engine: widget.liveSubtitleEngine,
+      extractor: widget.liveSubtitleAudioExtractor,
+    );
+    _liveSubtitle = service;
+    _liveSubscriptions.add(
+      service.cueStream.listen((_) {
+        if (mounted && _updateLiveSubtitleLines()) setState(() {});
+      }),
+    );
+    _liveSubscriptions.add(
+      service.partialStream.listen((partial) {
+        if (!mounted) return;
+        _livePartial = partial;
+        if (_updateLiveSubtitleLines()) setState(() {});
+      }),
+    );
+    await service.start(
+      url: plan.url,
+      headers: plan.headers,
+      startPosition: Duration(milliseconds: (startPosition * 1000).round()),
+    );
+  }
+
+  /// 停掉实时翻译字幕服务并清掉行：换集、换核、切非视频内容、
+  /// 退出播放页时调用。不在这里 setState——调用方随后自有一次
+  /// setState（_play 的加载态、dispose 不需要）；位置 tick 与
+  /// cue 流也会把行刷回空。
+  Future<void> _stopLiveSubtitle() async {
+    for (final subscription in _liveSubscriptions) {
+      await subscription.cancel();
+    }
+    _liveSubscriptions.clear();
+    final service = _liveSubtitle;
+    _liveSubtitle = null;
+    if (service != null) await service.dispose();
+    _livePartial = '';
+    _liveLines = const [];
+  }
+
+  /// 取当前播放进度对应的实时字幕行；没有则返回空（内嵌字幕仍由
+  /// media_kit 自带的 SubtitleView 画，不走这里）。
+  /// 有确认字幕时不画临时行，避免同一句话在两行里重复。
+  List<String> _liveLinesAt(Duration position) {
+    final service = _liveSubtitle;
+    if (service == null || !service.isRunning) return const [];
+    final cue = service.cueAt(position);
+    if (cue != null) {
+      return cue.displayLines(
+        showOriginal: _liveSettings?.showOriginal ?? true,
+      );
+    }
+    if (_livePartial.isNotEmpty) return [_livePartial];
+    return const [];
+  }
+
+  /// 按当前位置刷新实时字幕行；行内容变化时返回 true，调用方再 setState。
+  bool _updateLiveSubtitleLines([Duration? position]) {
+    final lines = _liveLinesAt(position ?? _enginePosition);
+    if (lines.length == _liveLines.length) {
+      var same = true;
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i] != _liveLines[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return false;
+    }
+    _liveLines = lines;
+    return true;
+  }
+
   Future<void> _play(
     int index, {
     double position = 0,
@@ -1454,6 +1577,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (widget.embedded && previousIndex != index) {
         widget.onEmbeddedIndexChanged?.call(index);
       }
+      unawaited(_stopLiveSubtitle());
       unawaited(_player.stop().catchError((Object _) {}));
       return;
     }
@@ -1658,6 +1782,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         final resolved = await resolvePlaybackRedirects(plan.url, plan.headers);
         plan = plan.withUrl(resolved.url).withHeaders(resolved.headers);
       }
+      // 换集/换核/重试：先停掉上一集的实时字幕服务，免得旧行的
+      // 识别结果跑到新集的画面上；新服务在 MPV 分支打开后起。
+      await _stopLiveSubtitle();
       await _serialize(() async {
         if (_closed || ticket != _generation) {
           await widget.repository.release(plan.session);
@@ -1755,45 +1882,32 @@ class _PlayerScreenState extends State<PlayerScreen>
         _plan = plan;
         installed = true;
         _acceptErrors = true;
-        // 通用过盾：媒体 CDN 被 Cloudflare 挡时补齐通行证与 UA
-        // （没有需要就原样返回，零成本）。三种内核都要走这一步——
-        // 以前只有 media_kit 那条分支补票，切成 EXO/IJK 之后带盾的
-        // 媒体 CDN 一律 403，表现就是「这个站点了播不了」。
-        // 补票本身出任何岔子都退回原样播，绝不让它挡住起播。
-        var shieldedHeaders = plan.headers;
-        try {
-          shieldedHeaders = await MediaShield.headersFor(
-            plan.url,
-            plan.headers,
-          );
-        } catch (_) {
-          shieldedHeaders = plan.headers;
-        }
         if (_closed || ticket != _generation) {
           return;
         }
-        final shieldedPlan = identical(shieldedHeaders, plan.headers)
-            ? plan
-            : plan.withHeaders(shieldedHeaders);
         if (useNativeForPlan) {
-          _tvboxPlan = shieldedPlan;
+          _tvboxPlan = plan;
           _tvboxStartPosition = position;
           _tvboxAutoplay = _foreground && _playIntent;
         } else if (useIjkForPlan) {
-          _ijkPlan = shieldedPlan;
+          _ijkPlan = plan;
           _ijkStartPosition = position;
           _ijkAutoplay = _foreground && _playIntent;
         } else {
           await _player.open(
             Media(
               plan.url,
-              httpHeaders: shieldedHeaders,
+              httpHeaders: plan.headers,
               start: position > 0
                   ? Duration(milliseconds: (position * 1000).round())
                   : null,
             ),
             play: _foreground && _playIntent,
           );
+          // MPV 核：播放器打开后在后台起实时翻译字幕（不 await，
+          // 模型加载不拖住加载态）；Exo/TVBox 核走 TvboxVideoPane
+          // 里那份，不在这里起。
+          unawaited(_startLiveSubtitle(plan, position));
         }
         if (_closed || ticket != _generation) {
           return;
@@ -2539,6 +2653,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         _danmaku.endSeek(succeeded ? target : _seekFallbackPosition);
       }
     }
+    // 拖进度成功后把实时字幕锚点重钉到新位置，免得旧锚点的行
+    // 还留在画面上；服务没起时 reanchor 是空操作。
+    if (succeeded) _liveSubtitle?.reanchor(target);
   }
 
   void _seek(int seconds) {
@@ -2791,6 +2908,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _closed = true;
     _removeAudioMiniBar();
     _releaseExternalAudio();
+    unawaited(_stopLiveSubtitle());
     if (_playbackServiceHeld) {
       _playbackServiceHeld = false;
       unawaited(PlaybackForeground.release());
@@ -2931,17 +3049,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// 叠一个 1 像素的隐藏浏览器：只在播放地址被盾挡住时才会真的干活，
-  /// 平时不加载任何页面、不占布局。
-  Widget _withMediaShield(Widget child) {
-    return Stack(
-      children: [
-        Positioned.fill(child: child),
-        const MediaShieldHost(),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_audioMiniBar != null && ModalRoute.of(context)?.isCurrent == true) {
@@ -2956,9 +3063,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         data: theme,
         child: Focus(
           focusNode: _playerFocus,
-          child: _withMediaShield(
-            _nonVideo != null ? _nonVideoPane() : _videoPane(context),
-          ),
+          child: _nonVideo != null ? _nonVideoPane() : _videoPane(context),
         ),
       );
     }
@@ -2972,7 +3077,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               : Theme.of(context).brightness;
           return AnnotatedRegion<SystemUiOverlayStyle>(
             value: AppTheme.systemBars(overlayBrightness),
-            child: _withMediaShield(_buildPlayer(context)),
+            child: _buildPlayer(context),
           );
         },
       ),
@@ -3103,7 +3208,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                         Positioned(
                           left: 0,
                           right: 0,
-                          top: filler,
+                          // 面板顶边就是视频底边：filler 是视频底边到
+                          // Stack 底的距离（maxHeight - videoHeight），
+                          // 不是视频高度；以前用 filler 当顶边，视频
+                          // 16:9 时面板被顶下去 filler - videoHeight，
+                          // 中间露出一大段底色空白。
+                          top: videoHeight,
                           bottom: 0,
                           child: _mobilePlaybackPanel(),
                         ),
@@ -3623,10 +3733,26 @@ class _PlayerScreenState extends State<PlayerScreen>
                 Video(
                   controller: _video!,
                   fit: BoxFit.contain,
+                  // 实时字幕行在播时，media_kit 自带的内嵌字幕层先藏
+                  // 起来，只画实时行，不两层叠画；没实时行时照常
+                  // 显示内嵌字幕。
+                  subtitleViewConfiguration: SubtitleViewConfiguration(
+                    visible: _liveLines.isEmpty,
+                  ),
                   controls: (videoState) {
                     _videoState = videoState;
                     return layeredControls;
                   },
+                ),
+              // 实时翻译字幕（MPV 核）：画在视频层之上、控制层之下，
+              // 底边距 72 逻辑像素盖过底部控制条；画中画时不画。
+              if (!_sniffEmbedded &&
+                  !_useNativeHandle &&
+                  !_useIjkCore &&
+                  !hideOverlayForPictureInPicture &&
+                  _liveLines.isNotEmpty)
+                Positioned.fill(
+                  child: ExoSubtitleOverlay(lines: _liveLines),
                 ),
               if (_audioMode && !hideOverlayForPictureInPicture)
                 Positioned.fill(child: _audioPosterOverlay()),

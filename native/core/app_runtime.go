@@ -73,9 +73,6 @@ type Downloader struct {
 	legacy                *legacyAPIClient
 	previewMu             sync.Mutex
 	previewSessions       map[string]*huangguoPreviewSession
-	shieldMu              sync.Mutex
-	shieldClearances      map[string]shieldClearance
-	shieldChallenges      map[string]shieldChallenge
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -365,22 +362,6 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 			return nil
 		}}
 	engine := &nativeEngine{downloader: d, directory: directory, catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
-	d.loadShieldClearances()
-	// App 清关票据接进 Go 核站源：查票走本地清关库，撞盾回报给清关页。
-	// 不绑定任何站点，任何 Go 核站点被盾挡住都能用同一条通路。
-	seku.SetShieldBridge(
-		func(host string) (string, string, bool) {
-			entry, ok := d.shieldClearanceFor(host)
-			if !ok || entry.Cookie == "" {
-				return "", "", false
-			}
-			return entry.Cookie, entry.UA, true
-		},
-		func(rawurl string) { d.recordShieldChallenge(rawurl) },
-	)
-	// 带票重试仍被 403/451 挡回，说明这张票已经和当前出口/UA 对不上了：
-	// 让 Go 核把它从 App 清关库里也删掉，否则后续每个请求都会继续被封。
-	seku.SetShieldForget(func(host string) { d.removeShieldClearance(host) })
 	engine.loadResourceSettings()
 	d.loadRankingCache()
 	engine.loadCatalogCache()
@@ -518,20 +499,9 @@ func nativeDispatch(input nativeInput) (any, error) {
 		ctx = work
 	}
 	switch input.Action {
-	case "clearanceNeeded":
-		return map[string]any{"items": engine.downloader.pendingShieldChallenges(), "userAgent": shieldUserAgent}, nil
-	case "setClearance":
-		return true, engine.downloader.setShieldClearance(input.Host, input.Cookie, input.UA)
 	case "crackConfigSet":
-		removed, err := seku.CrackConfigSet(input.Content)
-		if err != nil {
+		if err := seku.CrackConfigSet(input.Content); err != nil {
 			return nil, err
-		}
-		for _, host := range removed {
-			engine.downloader.removeShieldClearance(host)
-		}
-		for _, m := range seku.CrackDownloaderMappings() {
-			_ = engine.downloader.setShieldClearance(m.Host, m.Cookie, m.UA)
 		}
 		return seku.CrackConfigSummary(), nil
 	case "crackConfigSummary":

@@ -120,6 +120,4 @@ var ririluProfile = &htmlProfile{
 
 func init() {
 	registerSite("youguo", youguoImpl, "柚果", "youavhub")
-	registerSite("llsp", htmlProfileImpl("llsp", "🔞榴莲视频", llspProfile), "榴莲视频", "llsp")
-	registerSite("ririlu", htmlProfileImpl("ririlu", "🔞日日撸", ririluProfile), "日日撸", "ririlu")
 }

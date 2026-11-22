@@ -199,11 +199,10 @@ class _CrackConfigSectionState extends State<CrackConfigSection> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            FilledButton.icon(
+            FilledButton(
               key: const ValueKey('crack-config-import'),
               onPressed: _busy ? null : () => unawaited(_import()),
-              icon: const Icon(Icons.shield_outlined, size: 20),
-              label: const Text('导入 JSON 配置'),
+              child: const Text('导入 JSON 配置'),
             ),
             OutlinedButton.icon(
               key: const ValueKey('crack-config-export'),
@@ -234,8 +233,7 @@ class _CrackConfigSectionState extends State<CrackConfigSection> {
                 leading: const Icon(Icons.key_rounded),
                 title: Text(slot),
                 subtitle: Text(
-                  '过盾：${_sites[slot]!.hasShield ? '有' : '无'}'
-                  ' · VIP：${_sites[slot]!.hasVip ? '有' : '无'}',
+                  'VIP：${_sites[slot]!.hasVip ? '有' : '无'}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 trailing: IconButton(

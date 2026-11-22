@@ -29,7 +29,6 @@ import 'haikuo_helpers.dart';
 import 'haikuo_paste_bridge.dart';
 import 'haikuo_program.dart';
 import 'haikuo_runtime_html.dart';
-import 'haikuo_shield.dart';
 import 'haikuo_store.dart';
 import 'haikuo_zip_import.dart';
 
@@ -297,27 +296,6 @@ class _SniffSession {
 /// 字段可变——同一 controller 在页面切换/重渲染时复用，只更新
 /// 配置（URL 变了才重载）；NavigationDelegate 闭包捕获同一对象，
 /// 配置更新后拦截/注入自动用新值。
-/// 一次解盾的结果：票据（Cookie 串 + UA）与浏览器直接取回的正文。
-///
-/// 两者分别是两条路：有票据时 Dart 请求自己带票重发（快）；票据不管用时
-/// 用 [html] 顶上（部分站的盾绑 TLS 指纹，票据天然过不去）。
-class _ShieldSolution {
-  const _ShieldSolution({
-    this.userAgent = '',
-    this.html = '',
-    this.hasTicket = false,
-  });
-
-  const _ShieldSolution.empty()
-      : userAgent = '',
-        html = '',
-        hasTicket = false;
-
-  final String userAgent;
-  final String html;
-  final bool hasTicket;
-}
-
 class _X5RowSession {
   _X5RowSession({
     required this.url,
@@ -451,9 +429,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
   final Map<String, Uint8List> _ruleFileCache = {};
   // fetchCodeByWebView 用的隐藏 WebView：独立槽位，请求结束卸载。
   WebViewController? _webviewFetchController;
-  // 通用过盾：同一主机同时只解一次 / 解失败后的退避时间。
-  final Map<String, Future<_ShieldSolution>> _shieldBusy = {};
-  final Map<String, DateTime> _shieldFailedAt = {};
   // G11 原生 x5 行：独立槽位（同 _sniffSession/_webviewFetchController
   // 的槽位模式），页面切换/重渲染复用同一 controller，只换 URL；
   // 规则页销毁时随 state 一起丢掉（WebViewController 无 dispose）。
@@ -3620,13 +3595,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
     };
   }
 
-  /// 规则 `fetch()` 的统一代理口。
-  ///
-  /// 过盾放在这一层，不放在规则里：每个站的规则、选择器、加密都不一样，
-  /// 但「被盾挡住」是同一件事。所以请求发出去后先按通用特征判定挑战，
-  /// 是就调隐藏浏览器解一次，通行证存进共用票池（同主机所有规则共用）；
-  /// 票据不管用（部分站的盾绑 TLS 指纹）时，直接把浏览器取回的正文交给
-  /// 规则解析。新站接进来不用再写第二遍过盾逻辑。
   Future<void> _proxy(HttpRequest request) async {
     final params = request.uri.queryParameters;
     final target = params['u'] ?? '';
@@ -3668,23 +3636,18 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
     }
     var uri = Uri.parse(target);
     final merged = <String, String>{
-      'User-Agent': _shieldDefaultUserAgent,
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
       ...headers,
     };
-    // 脚本没带 Cookie 时，带上罐子里同主机的 Cookie（含解盾后的通行证）。
+    // 脚本没带 Cookie 时，带上罐子里同主机的 Cookie。
     final hasCookieHeader = merged.keys.any(
       (key) => key.toLowerCase() == 'cookie',
     );
     if (!hasCookieHeader) {
-      final cookie = _shieldCookieFor(uri.host);
-      if (cookie.isNotEmpty) merged['Cookie'] = cookie;
-    }
-    var ticket = HaikuoShieldVault.get(uri.host);
-    if (ticket != null &&
-        ticket.userAgent.isNotEmpty &&
-        !headers.keys.any((key) => key.toLowerCase() == 'user-agent')) {
-      // 票据绑 UA：解盾时用什么 UA 解的，回填后就得用什么 UA 发。
-      merged['User-Agent'] = ticket.userAgent;
+      final jarCookie = _cookieJar.headerFor(uri.host);
+      if (jarCookie.isNotEmpty) merged['Cookie'] = jarCookie;
     }
     try {
       var result = await _proxySend(
@@ -3711,7 +3674,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
               if (!_upstreamOnlyHeaders.contains(entry.key.toLowerCase()))
                 entry.key: entry.value,
           };
-          final directCookie = _shieldCookieFor(uri.host);
+          final directCookie = _cookieJar.headerFor(uri.host);
           if (directCookie.isNotEmpty && !directHeaders.containsKey('Cookie')) {
             directHeaders['Cookie'] = directCookie;
           }
@@ -3726,50 +3689,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
             hexBody: hexBody,
             charset: charset,
           );
-          ticket = HaikuoShieldVault.get(uri.host);
-        }
-      }
-      if (haikuoShieldVerdictOf(result).blocked) {
-        // 带票还被挡 → 票过期或换 IP，先丢掉再解；没票 → 直接解。
-        if (ticket != null) HaikuoShieldVault.drop(uri.host);
-        final solved = await _solveShield(
-          uri,
-          merged,
-          force: ticket != null,
-          timeout: timeout,
-        );
-        if (solved.hasTicket) {
-          final retried = <String, String>{...merged};
-          final cookie = _shieldCookieFor(uri.host);
-          if (cookie.isNotEmpty) retried['Cookie'] = cookie;
-          if (solved.userAgent.isNotEmpty) {
-            retried['User-Agent'] = solved.userAgent;
-          }
-          result = await _proxySend(
-            uri: uri,
-            method: method,
-            body: body,
-            headers: retried,
-            timeout: timeout,
-            followRedirects: followRedirects,
-            onlyHeaders: onlyHeaders,
-            hexBody: hexBody,
-            charset: charset,
-          );
-        }
-        // 票据仍不管用（盾绑 TLS 指纹/独立会话的站）：直接用浏览器取回的
-        // 正文回给规则。规则只负责解析，不需要知道盾是怎么过的。
-        if (haikuoShieldVerdictOf(result).blocked && solved.html.isNotEmpty) {
-          result = {
-            'code': 200,
-            'body': hexBody
-                ? base64Encode(utf8.encode(solved.html))
-                : solved.html,
-            'headers': <String, List<String>>{
-              'content-type': <String>['text/html; charset=utf-8'],
-            },
-            'url': uri.toString(),
-          };
         }
       }
       response.write(jsonEncode(result));
@@ -3787,12 +3706,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
       await response.close();
     }
   }
-
-  /// 过盾默认 UA：走桌面版 Chrome，移动端 UA 更容易被挑战。
-  /// 解盾时浏览器也用同一个，票据才能对上。
-  static const String _shieldDefaultUserAgent =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
   /// 常见第三方取页中转前缀：返回被中转的真实地址，不是中转地址回 null。
   String? _unwrapUpstreamProxy(String url) {
@@ -3834,29 +3747,7 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
     'x-target-selector',
   };
 
-  /// 某主机的 Cookie 头：票池里的通行证优先，再叠上罐子里的其它 Cookie。
-  String _shieldCookieFor(String host) {
-    final ticket = HaikuoShieldVault.get(host);
-    final jarCookie = _cookieJar.headerFor(host);
-    final parts = <String>[
-      if (ticket != null && ticket.cookie.isNotEmpty) ticket.cookie,
-      if (jarCookie.isNotEmpty) jarCookie,
-    ];
-    // 去重按 name 保留先出现的（票池优先）。
-    final seen = <String>{};
-    final out = <String>[];
-    for (final part in parts.join('; ').split(';')) {
-      final item = part.trim();
-      if (item.isEmpty) continue;
-      final eq = item.indexOf('=');
-      final name = eq > 0 ? item.substring(0, eq).trim() : item;
-      if (!seen.add(name)) continue;
-      out.add(item);
-    }
-    return out.join('; ');
-  }
-
-  /// 单次请求（不含过盾）：按规则给的参数发一次，回统一结构。
+  /// 单次请求：按规则给的参数发一次，回统一结构。
   Future<Map<String, dynamic>> _proxySend({
     required Uri uri,
     required String method,
@@ -3930,83 +3821,6 @@ class _HaikuoRunnerPageState extends State<HaikuoRunnerPage>
       'headers': headerMap,
       'url': finalUri.toString(),
     };
-  }
-
-  /// 解盾：同一主机同时只解一次（一页十几个请求不会各起一个浏览器），
-  /// 失败后 90 秒内不再尝试（退避），免得首屏被拖死。
-  Future<_ShieldSolution> _solveShield(
-    Uri uri,
-    Map<String, String> headers, {
-    bool force = false,
-    required Duration timeout,
-  }) async {
-    final host = uri.host;
-    if (host.isEmpty) return const _ShieldSolution.empty();
-    final busy = _shieldBusy[host];
-    if (busy != null) return busy;
-    final failedAt = _shieldFailedAt[host];
-    if (!force &&
-        failedAt != null &&
-        DateTime.now().difference(failedAt) < const Duration(seconds: 90)) {
-      return const _ShieldSolution.empty();
-    }
-    final future = _solveShieldOnce(uri, headers, timeout: timeout);
-    _shieldBusy[host] = future;
-    try {
-      final solved = await future;
-      if (solved.hasTicket || solved.html.isNotEmpty) {
-        _shieldFailedAt.remove(host);
-      } else {
-        _shieldFailedAt[host] = DateTime.now();
-      }
-      return solved;
-    } catch (_) {
-      _shieldFailedAt[host] = DateTime.now();
-      return const _ShieldSolution.empty();
-    } finally {
-      _shieldBusy.remove(host);
-    }
-  }
-
-  Future<_ShieldSolution> _solveShieldOnce(
-    Uri uri,
-    Map<String, String> headers, {
-    required Duration timeout,
-  }) async {
-    if (!mounted) return const _ShieldSolution.empty();
-    final userAgent = headers.entries
-            .where((entry) => entry.key.toLowerCase() == 'user-agent')
-            .map((entry) => entry.value)
-            .firstOrNull ??
-        _shieldDefaultUserAgent;
-    // 隐藏浏览器打开原地址：挑战在真实内核里跑完，拿回真页面。
-    final html = await _fetchHtmlByWebView({
-      'url': uri.toString(),
-      'headers': <String, String>{
-        ...headers,
-        'User-Agent': userAgent,
-      },
-      // 解盾比普通取码慢：挑战本身要 5-15 秒，给足余量。
-      'timeout': (timeout.inMilliseconds * 2).clamp(30000, 90000),
-      'checkJs': haikuoShieldPassJs,
-    });
-    // 通行证：浏览器里的 Cookie（含 cf_clearance）拽回罐子和票池，
-    // 同主机后续的 Dart 请求直接带着走，不必每次都起浏览器。
-    final cookies = await _pageCookiesFor(uri.toString());
-    if (cookies.isNotEmpty) {
-      _cookieJar.setCookie(uri.host, cookies);
-      HaikuoShieldVault.put(
-        uri.host,
-        cookie: cookies,
-        userAgent: userAgent,
-      );
-    }
-    final solvedHtml = haikuoShieldLooksSolved(html) ? html : '';
-    return _ShieldSolution(
-      userAgent: userAgent,
-      html: solvedHtml,
-      hasTicket: cookies.isNotEmpty,
-    );
   }
 
   /// 按显式字符集解码响应正文：gbk 系走 GbkCodec，utf-8 走宽容

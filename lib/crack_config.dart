@@ -2,37 +2,6 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-class CrackShieldConfig {
-  const CrackShieldConfig({
-    this.hosts = const [],
-    this.cfClearance = '',
-    this.cookies = '',
-    this.headers = const <String, String>{},
-    this.userAgent = '',
-  });
-
-  final List<String> hosts;
-  final String cfClearance;
-  final String cookies;
-  final Map<String, String> headers;
-  final String userAgent;
-
-  bool get isEmpty =>
-      hosts.isEmpty &&
-      cfClearance.isEmpty &&
-      cookies.isEmpty &&
-      headers.values.every((value) => value.isEmpty) &&
-      userAgent.isEmpty;
-
-  Map<String, dynamic> toJson() => {
-    'hosts': hosts,
-    'cf_clearance': cfClearance,
-    'cookies': cookies,
-    'headers': headers,
-    'userAgent': userAgent,
-  };
-}
-
 class CrackVipConfig {
   const CrackVipConfig({this.token = '', this.account = '', this.unlock = ''});
 
@@ -50,18 +19,15 @@ class CrackVipConfig {
 }
 
 class CrackSiteConfig {
-  const CrackSiteConfig({required this.slot, this.shield, this.vip});
+  const CrackSiteConfig({required this.slot, this.vip});
 
   final String slot;
-  final CrackShieldConfig? shield;
   final CrackVipConfig? vip;
 
-  bool get hasShield => shield != null && !shield!.isEmpty;
   bool get hasVip => vip != null && !vip!.isEmpty;
 
   Map<String, dynamic> toJson() => {
     'slot': slot,
-    if (shield != null) 'shield': shield!.toJson(),
     if (vip != null) 'vip': vip!.toJson(),
   };
 }
@@ -87,26 +53,6 @@ class CrackConfigParseResult {
 }
 
 String? _asString(dynamic value) => value is String ? value : null;
-
-List<String>? _asStringList(dynamic value) {
-  if (value is! List) return null;
-  final out = <String>[];
-  for (final item in value) {
-    if (item is! String) return null;
-    out.add(item);
-  }
-  return out;
-}
-
-Map<String, String>? _asStringMap(dynamic value) {
-  if (value is! Map) return null;
-  final out = <String, String>{};
-  for (final entry in value.entries) {
-    if (entry.key is! String || entry.value is! String) return null;
-    out[entry.key as String] = entry.value as String;
-  }
-  return out;
-}
 
 CrackConfigParseResult parseCrackConfig(String text) {
   dynamic decoded;
@@ -145,57 +91,6 @@ CrackConfigParseResult parseCrackConfig(String text) {
       errors.add('$siteLabel：slot 重复');
       continue;
     }
-    CrackShieldConfig? shield;
-    final rawShield = rawSite['shield'];
-    if (rawShield != null) {
-      if (rawShield is! Map<String, dynamic>) {
-        errors.add('$siteLabel：shield 必须是对象');
-        continue;
-      }
-      final hosts = rawShield.containsKey('hosts')
-          ? _asStringList(rawShield['hosts'])
-          : <String>[];
-      if (hosts == null) {
-        errors.add('$siteLabel：shield.hosts 必须是字符串数组');
-        continue;
-      }
-      final cfClearance = rawShield.containsKey('cf_clearance')
-          ? _asString(rawShield['cf_clearance'])
-          : '';
-      final cookies = rawShield.containsKey('cookies')
-          ? _asString(rawShield['cookies'])
-          : '';
-      final userAgent = rawShield.containsKey('userAgent')
-          ? _asString(rawShield['userAgent'])
-          : '';
-      final headers = rawShield.containsKey('headers')
-          ? _asStringMap(rawShield['headers'])
-          : <String, String>{};
-      if (cfClearance == null ||
-          cookies == null ||
-          userAgent == null ||
-          headers == null) {
-        errors.add('$siteLabel：shield 字段类型错误');
-        continue;
-      }
-      if (hosts.any((host) => host.trim().isEmpty)) {
-        errors.add('$siteLabel：shield.hosts 含空域名');
-        continue;
-      }
-      if (headers.entries.any(
-        (entry) => entry.key.trim().isEmpty || entry.value.trim().isEmpty,
-      )) {
-        errors.add('$siteLabel：shield.headers 含空键或空值');
-        continue;
-      }
-      shield = CrackShieldConfig(
-        hosts: hosts,
-        cfClearance: cfClearance,
-        cookies: cookies,
-        headers: headers,
-        userAgent: userAgent,
-      );
-    }
     CrackVipConfig? vip;
     final rawVip = rawSite['vip'];
     if (rawVip != null) {
@@ -218,9 +113,9 @@ CrackConfigParseResult parseCrackConfig(String text) {
       }
       vip = CrackVipConfig(token: token, account: account, unlock: unlock);
     }
-    final site = CrackSiteConfig(slot: slot, shield: shield, vip: vip);
-    if (!site.hasShield && !site.hasVip) {
-      errors.add('$siteLabel：shield 与 vip 均为空');
+    final site = CrackSiteConfig(slot: slot, vip: vip);
+    if (!site.hasVip) {
+      errors.add('$siteLabel：vip 为空');
       continue;
     }
     sites.add(site);
@@ -232,9 +127,8 @@ CrackConfigParseResult parseCrackConfig(String text) {
 }
 
 class CrackSitePresence {
-  const CrackSitePresence({required this.hasShield, required this.hasVip});
+  const CrackSitePresence({required this.hasVip});
 
-  final bool hasShield;
   final bool hasVip;
 }
 
@@ -275,7 +169,6 @@ class CrackConfigStore {
     if (config != null) {
       for (final site in config.sites) {
         out[site.slot] = CrackSitePresence(
-          hasShield: site.hasShield,
           hasVip: site.hasVip,
         );
       }

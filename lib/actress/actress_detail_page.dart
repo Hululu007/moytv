@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'actress_database.dart';
+import 'actress_film_library.dart';
 import 'actress_multi_db_fallback.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
@@ -140,9 +141,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       return;
     }
     setState(() => _person = person);
-    await _loadCategories();
-    if (!mounted || generation != _generation) return;
-    await _loadPage(reset: true);
+    // 2026-11-22 加载优化：分类与首屏作品并行取——分类查询原来
+    // 0.9~6.3 秒，串行等它完了才取作品，首屏一直转圈；并行后
+    // 作品到了就撤转圈出网格，分类 chips 到了再补。
+    await Future.wait([_loadCategories(), _loadPage(reset: true)]);
     if (!mounted || generation != _generation) return;
     await _loadFallback();
   }
@@ -157,6 +159,37 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final categories = await widget.database.workCategories(person.localId);
     if (!mounted || generation != _generation) return;
     setState(() => _categories = categories);
+  }
+
+  /// 批量按番号取库里条目（2026-11-22 女优库加载优化）：
+  /// 真实提供方（MultiDbFilmFallback / FilmLibraryService）一次
+  /// 主键 IN 取回全部番号，不再逐条 LIKE 扫表；其它实现（含测试
+  /// 替身）逐条回落。批量方法没放进 FilmDbFallbackProvider 接口
+  ///（测试替身都是 implements，接口多方法就编不过），所以这里
+  /// 按运行时类型分发。
+  Future<List<ActressJsonEntry>> _dbEntriesForCodes(
+    ActressJsonFallback fallback,
+    List<String> codeKeys, {
+    String? site,
+  }) async {
+    if (codeKeys.isEmpty) return const [];
+    final provider = fallback.filmDb;
+    if (provider == null) return const [];
+    try {
+      if (provider is MultiDbFilmFallback) {
+        return await provider.entriesForCodes(codeKeys, site: site);
+      }
+      if (provider is FilmLibraryService) {
+        return await provider.entriesForCodes(codeKeys, site: site);
+      }
+      final out = <ActressJsonEntry>[];
+      for (final codeKey in codeKeys) {
+        out.addAll(await fallback.dbEntriesForCode(codeKey, site: site));
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 库里存的播放地址池（只供点播用，从不渲染）：按女优名 + 已加载
@@ -201,8 +234,12 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     for (final name in [person.displayName, ...person.aliases]) {
       addAll(await fallback.dbEntriesForActress(name, site: site));
     }
-    for (final codeKey in localCodes) {
-      addAll(await fallback.dbEntriesForCode(codeKey, site: site));
+    // 2026-11-22 加载优化：已加载作品的番号一次批量取，不再逐条
+    // 扫表（60 个番号原来是 60 次全表 LIKE + GROUP BY，地址池
+    // 几分钟建不起来，期间点卡只能报“库里暂无播放地址”）。
+    final codes = localCodes.toList();
+    if (codes.isNotEmpty) {
+      addAll(await _dbEntriesForCodes(fallback, codes, site: site));
     }
     if (!mounted) return;
     setState(() => _fallbackEntries = merged);
@@ -219,22 +256,30 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final person = _person;
     final provider = fallback.filmDb;
     if (person == null || provider == null) return;
+    // 2026-11-22 加载优化：无封面作品的番号一次批量取封面，
+    // 不再逐部调 entriesForCode 全表扫（见 _loadFallback）。
+    final uncovered = <ActressWork>[
+      for (final work in _works)
+        if (!work.hasCover && work.codeKey.isNotEmpty) work,
+    ];
+    if (uncovered.isEmpty) return;
+    List<ActressJsonEntry> rows;
+    try {
+      rows = await _dbEntriesForCodes(
+        fallback,
+        [for (final work in uncovered) work.codeKey],
+      );
+    } catch (_) {
+      return;
+    }
+    final picByCode = <String, String>{};
+    for (final entry in rows) {
+      if (entry.vodPic.isEmpty) continue;
+      picByCode.putIfAbsent(entry.codeKey, () => entry.vodPic);
+    }
     var attached = false;
-    for (final work in _works) {
-      if (work.hasCover || work.codeKey.isEmpty) continue;
-      List<ActressJsonEntry> rows;
-      try {
-        rows = await provider.entriesForCode(work.codeKey);
-      } catch (_) {
-        continue;
-      }
-      String? pic;
-      for (final entry in rows) {
-        if (entry.vodPic.isNotEmpty) {
-          pic = entry.vodPic;
-          break;
-        }
-      }
+    for (final work in uncovered) {
+      final pic = picByCode[normalizeAvCode(work.codeKey)];
       if (pic == null) continue;
       await widget.database.attachCover(
         personId: person.localId,

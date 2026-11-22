@@ -79,17 +79,12 @@ func tlsNewRequest(rawurl string, headers map[string]string) (*fhttp.Request, er
 }
 
 // tlsGet mirrors httpGet's signature so CF-site fetchers can swap in.
-//
-// v56：这条快车道以前完全绕开票据池——不带 App 回填的通行证、撞了盾
-// 也不上报，于是 whos / javrate / 9sex / 123av / supjav / missav 这些
-// **只走 tlsGet** 的站，用户在 App 里解完盾也白解，下一次请求照样裸奔。
-// 现在与 httpDo 同源：有票就带票（票绑 UA，必须一起换）、撞盾就上报。
 func tlsGet(rawurl string, headers map[string]string) ([]byte, int, http.Header, error) {
 	follow, _, err := tlsHTTPClients()
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	req, err := tlsNewRequest(rawurl, tlsShieldHeaders(rawurl, headers))
+	req, err := tlsNewRequest(rawurl, headers)
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -102,38 +97,7 @@ func tlsGet(rawurl string, headers map[string]string) ([]byte, int, http.Header,
 	if err != nil {
 		return nil, resp.StatusCode, http.Header(resp.Header), err
 	}
-	tlsNoteShield(rawurl, string(b), resp.StatusCode)
 	return b, resp.StatusCode, http.Header(resp.Header), nil
-}
-
-// tlsShieldHeaders 把通行证并进请求头。没有票就原样返回（零成本）。
-func tlsShieldHeaders(rawurl string, headers map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range headers {
-		out[k] = v
-	}
-	host := zkShieldHostOf(rawurl)
-	if host == "" {
-		return out
-	}
-	if _, ok := zkShieldLookupTicket(host); !ok {
-		return out
-	}
-	return zkShieldTicketHeaders(host, out)
-}
-
-// tlsNoteShield 撞盾就把主机拉进解盾队列，App 侧隐藏浏览器会来补票。
-// 只认真正的挑战页/盾类状态码，正常页面（含二进制流）一律不动。
-func tlsNoteShield(rawurl, body string, code int) {
-	host := zkShieldHostOf(rawurl)
-	if host == "" {
-		return
-	}
-	if !httpDoShieldStatus(code) && !httpShieldMarker(body) {
-		return
-	}
-	zkShieldMarkShielded(host)
-	zkShieldReportChallenge(rawurl)
 }
 
 // tlsFetchLocation mirrors supjavFetchLocation's contract: no redirect

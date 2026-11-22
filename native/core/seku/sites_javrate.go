@@ -78,18 +78,11 @@ func jrFetchURL(u string, referer string) (string, error) {
 	if referer != "" {
 		hdr["Referer"] = referer
 	}
-	done := make(chan string, 1)
-	go func() { done <- zkShieldRender(u, referer, 25000) }()
-	select {
-	case body := <-done:
-		if body != "" && zkShieldGood(u, body, false) {
-			return body, nil
-		}
-	case <-time.After(15 * time.Second):
-	}
-	body := zkShieldFetchWithDirect(u, hdr, referer, 25000, false, jrDirectLadder)
+	// 删盾后（2026-11-22 用户令）：只走直连梯子（标准库 -> TLS 指纹），
+	// 不再经盾层渲染/多通道兜底。
+	body := jrDirectLadder(u, hdr, referer, 25000)
 	if body == "" {
-		return "", fmt.Errorf("javrate shield fetch empty: %s", u)
+		return "", fmt.Errorf("javrate fetch empty: %s", u)
 	}
 	return body, nil
 }

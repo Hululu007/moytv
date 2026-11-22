@@ -20,7 +20,6 @@ import 'package:html/parser.dart' as html_parser;
 
 import '../content_http.dart';
 import '../crosssite_probe.dart';
-import '../miniapp/haikuo/haikuo_shield.dart';
 
 /// 通用爬取失败：面向用户的中文原因，调用方直接展示。
 class GenericCrawlFailure implements Exception {
@@ -992,7 +991,6 @@ class GenericSiteCrawler {
       response.bodyBytes,
       contentType: response.headers['content-type'],
     );
-    _ensureNotShielded(response, body);
 
     final cards = parseGenericCards(body, uri);
     if (cards.isEmpty) {
@@ -1118,7 +1116,6 @@ class GenericSiteCrawler {
       response.bodyBytes,
       contentType: response.headers['content-type'],
     );
-    _ensureNotShielded(response, body);
     if (response.statusCode != 200) {
       return (cards: const <GenericCrawlCard>[], hasNext: false);
     }
@@ -1163,29 +1160,6 @@ class GenericSiteCrawler {
       }
     }
     return false;
-  }
-
-  void _ensureNotShielded(ContentResponse response, String body) {
-    final headers = <String, List<String>>{
-      for (final entry in response.headers.entries) entry.key: [entry.value],
-    };
-    final verdict = haikuoShieldCheck(
-      status: response.statusCode,
-      headers: headers,
-      body: body,
-    );
-    if (verdict.blocked || looksLikeShieldBody(body)) {
-      throw const GenericCrawlFailure(
-        '该站点要求人机验证（Cloudflare 一类的验证页）：'
-        '先在应用里对这条站点过一次验证，再回来爬。',
-      );
-    }
-    if (response.statusCode == 403 || response.statusCode == 503) {
-      throw GenericCrawlFailure(
-        '站点拒绝了这次请求（HTTP ${response.statusCode}）：'
-        '可能需要登录，或者挡了这个网络出口。',
-      );
-    }
   }
 
   String _normalize(String input) {

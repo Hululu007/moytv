@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var av520Profile = &htmlProfile{
@@ -27,15 +28,25 @@ var av520Profile = &htmlProfile{
 	DescRe:    regexp.MustCompile(`<meta[^>]*name="description"[^>]*content="([^"]*)"`),
 	PlayRes:   []*regexp.Regexp{regexp.MustCompile(`"url"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"`)},
 	SearchURL: "/video/search?search={kw}",
-	Fetch:     av520ShieldFetch,
+	Fetch:     av520Fetch,
 }
 
-func av520ShieldFetch(rawurl string, headers map[string]string, referer string) ([]byte, int, error) {
-	body := zkShieldFetch(rawurl, headers, referer, 22000, false)
-	if body == "" {
-		return nil, 0, fmt.Errorf("av520 shield fetch empty")
+func av520Fetch(rawurl string, headers map[string]string, referer string) ([]byte, int, error) {
+	hdr := map[string]string{}
+	for k, v := range headers {
+		hdr[k] = v
 	}
-	return []byte(body), 200, nil
+	if referer != "" {
+		hdr["Referer"] = referer
+	}
+	body, code, _, err := httpGetTimeout(rawurl, hdr, 22*time.Second)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(body) == 0 {
+		return nil, 0, fmt.Errorf("av520 fetch empty")
+	}
+	return body, code, nil
 }
 
 var av520AnchorRe = regexp.MustCompile(`href="https?://[A-Za-z0-9.]*520avtv\.com/video/watch/(\d+)/([^"/]+)"`)

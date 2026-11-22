@@ -45,26 +45,6 @@ class CustomSourceSite {
   );
 }
 
-class ClearanceChallenge {
-  const ClearanceChallenge({
-    required this.host,
-    required this.url,
-    required this.userAgent,
-  });
-  final String host;
-  final String url;
-  final String userAgent;
-
-  factory ClearanceChallenge.fromJson(
-    Map<String, dynamic> json,
-    String userAgent,
-  ) => ClearanceChallenge(
-    host: json['host'] as String? ?? '',
-    url: json['url'] as String? ?? '',
-    userAgent: userAgent,
-  );
-}
-
 class SourceSite {
   const SourceSite(
     this.id,
@@ -725,48 +705,6 @@ class SourceSite {
       'youavhub.com · 苹果CMS接口 · 10万条 · 槽位 youguo',
       section: sectionVideo,
       slotId: 'youguo',
-    ),
-    SourceSite(
-      'v_llsp',
-      '🔞榴莲视频',
-      'llsp.me · 37分类 · 槽位 llsp',
-      section: sectionVideo,
-      slotId: 'llsp',
-    ),
-    SourceSite(
-      'v_ririlu',
-      '🔞日日撸',
-      'ririlu.cc · 中文字幕/无码 · 槽位 ririlu',
-      section: sectionVideo,
-      slotId: 'ririlu',
-    ),
-    SourceSite(
-      'v_xnxx',
-      '🔞XNXX',
-      'xnxx.com · 最佳/最热 · 槽位 xnxx',
-      section: sectionVideo,
-      slotId: 'xnxx',
-    ),
-    SourceSite(
-      'v_pornhub',
-      '🔞Pornhub',
-      'pornhub.com · 最热/最新 · 槽位 pornhub',
-      section: sectionVideo,
-      slotId: 'pornhub',
-    ),
-    SourceSite(
-      'v_eporner',
-      '🔞EPorner',
-      'eporner.com · 10类 · 槽位 eporner',
-      section: sectionVideo,
-      slotId: 'eporner',
-    ),
-    SourceSite(
-      'v_supjav',
-      '🔞SupJav',
-      'supjav.com · 有码/无码/中字 · 槽位 supjav',
-      section: sectionVideo,
-      slotId: 'supjav',
     ),
   ];
   static const knownValues = [

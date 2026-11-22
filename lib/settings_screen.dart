@@ -21,8 +21,6 @@ import 'app_update_screen.dart';
 import 'app_icon_picker_page.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
-import 'clearance_bridge.dart';
-import 'crack_config_section.dart';
 import 'custom_headers_screen.dart';
 import 'live_subtitle_settings_screen.dart';
 import 'jar_bridge.dart';
@@ -384,14 +382,6 @@ class _SettingsScreenState extends State<SettingsScreen>
               ),
             ),
           ),
-        _SettingsItem(
-          keyName: 'clearance-entry',
-          icon: Icons.verified_user_outlined,
-          lucide: LucideIcons.shieldCheck,
-          title: '站点验证',
-          detail: '为被拦截的站点完成浏览器验证',
-          onTap: () => openClearanceFlow(context, widget.repository),
-        ),
         _SettingsItem(
           keyName: 'dns-settings-entry',
           icon: Icons.language_outlined,
@@ -1019,8 +1009,6 @@ class _AntiBotScreenState extends State<_AntiBotScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          CrackConfigSection(repository: widget.repository),
         ],
       ),
     );

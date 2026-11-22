@@ -133,7 +133,7 @@ flutter test test/app_drawer_test.dart test/midnight_zone_test.dart
 
 ## 5. 直接丢给 AI 的接管提示词
 
-> 这是一个 Flutter 安卓应用（魔蚁box，包名 com.moyi.box）。工程结构：`lib/` 是 Dart UI，`native/` 是 Go 核心（编成 libmoyi_core.so），Python 蜘蛛走 Chaquopy 打包。构建只能走 GitHub Actions 的 `build-android` workflow：推 main 自动跑，或手动 Run workflow 选 `variant` 和 `abi`。出包在 `dist/android/`。
+> 这是一个 Flutter 安卓应用（魔蚁box，包名 com.myxptv）。工程结构：`lib/` 是 Dart UI，`native/` 是 Go 核心（编成 libmoyi_core.so），Python 蜘蛛走 Chaquopy 打包。构建只能走 GitHub Actions 的 `build-android` workflow：推 main 自动跑，或手动 Run workflow 选 `variant` 和 `abi`。出包在 `dist/android/`。
 >
 > 已知坑：CI 必须装 Python 3.11 并把路径注入 `CHAQUOPY_BUILD_PYTHON`，否则 Chaquopy 会报 `Couldn't find Python 3.11`。NDK 28.2.13676358、CMake 3.22.1、Flutter 3.50.0。默认 debug 签名，配了 4 个 ANDROID_* Secrets 才用正式签名。
 >
