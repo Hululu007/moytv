@@ -291,10 +291,17 @@ List<String> categoryFacetColumns(GenericDbTableMapping mapping) {
 
 /// 一个分类维度里的一个取值：值 + 该值下的作品数。
 class GenericDbFacetValue {
-  const GenericDbFacetValue({required this.value, required this.count});
+  const GenericDbFacetValue({
+    required this.value,
+    required this.count,
+    this.coverUrl = '',
+  });
 
   final String value;
   final int count;
+
+  /// 这个取值下首张作品封面：给「分类按视频卡片显示」用，取不到就空着。
+  final String coverUrl;
 }
 
 /// 一个分类维度（库里的某个人工列，如 type/class/tags/series）：
@@ -755,6 +762,11 @@ String extractPlayUrl(dynamic value) {
   }
   var text = value.toString().trim();
   if (text.isEmpty) return '';
+  // 有的库把地址存成 JSON 转义态（`https:\/\/host\/a\/index.m3u8`），
+  // 不还原就是废地址：播放器打不开，体检时还会被当死链整库删掉。
+  if (text.contains(r'\/')) {
+    text = text.replaceAll(r'\/', '/').trim();
+  }
   if (text.startsWith('[')) {
     try {
       final decoded = jsonDecode(text);
@@ -803,8 +815,11 @@ bool _looksLikePlayAddress(String value) =>
 /// 返回；相对路径原样返回（调用方按站拼或直接加载）。
 String resolveCoverUrl(dynamic value, {String? baseUrl}) {
   if (value == null) return '';
-  final text = value.toString().trim();
+  var text = value.toString().trim();
   if (text.isEmpty) return '';
+  if (text.contains(r'\/')) {
+    text = text.replaceAll(r'\/', '/').trim();
+  }
   if (text.startsWith('http://') || text.startsWith('https://')) {
     return text;
   }
@@ -1374,12 +1389,14 @@ class GenericDbReader {
       }
     }
     // 2) 作品表自己的分类列
-    for (final column in categoryFacetColumns(mapping).take(6)) {
+    final coverColumn = mapping.columnFor(GenericDbRole.cover);
+    for (final column in categoryFacetColumns(mapping).take(8)) {
       if (out.any((facet) => facet.column == column)) continue;
       final quoted = _quote(column);
       try {
         final rows = await db.rawQuery(
-          'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c '
+          'SELECT CAST($quoted AS TEXT) AS v, COUNT(*) AS c'
+          '${coverColumn == null ? '' : ', MAX(${_quote(coverColumn)}) AS pic'} '
           'FROM ${_quote(mapping.table)} '
           'WHERE $quoted IS NOT NULL AND TRIM(CAST($quoted AS TEXT)) <> \'\' '
           'GROUP BY CAST($quoted AS TEXT) '
@@ -1408,6 +1425,7 @@ class GenericDbReader {
         GenericDbFacetValue(
           value: value,
           count: (row['c'] as num?)?.toInt() ?? 0,
+          coverUrl: resolveCoverUrl(row['pic'] ?? row['cover']),
         ),
       );
     }

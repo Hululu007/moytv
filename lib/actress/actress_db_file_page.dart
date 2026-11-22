@@ -7,8 +7,8 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core_bridge.dart';
 import '../local_store.dart';
-import '../player_picker.dart';
 import 'actress_db_fields_page.dart';
+import 'actress_db_work_detail_page.dart';
 import 'actress_generic_db.dart';
 import 'video_db_repair.dart';
 
@@ -53,11 +53,27 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   final _works = <GenericDbWork>[];
   final _facets = <GenericDbFacet>[];
   final _selected = <String, Set<String>>{};
+
+  /// 分类下钻路径：一级分类卡片 → 二级分类卡片 → …→ 视频卡片列表。
+  /// `value` 为 null 表示这一层点了「全部」，只往下走、不加筛选条件。
+  final _path = <({String column, String? value})>[];
+
+  /// 这一步先选了哪个分类维度（分类/类型/标签…）。
+  ///
+  /// 库里分类维度不止一个时，进库第一屏是「维度卡片墙」——一张卡一个
+  /// 维度；点某张才进它的取值卡片（分类卡片墙）。只有一个维度就免这步，
+  /// 直接摆分类卡片。
+  var _dimension = '';
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
 
   var _total = -1; // -1 = 还在后台数
   var _loadingFirst = true;
+
+  /// 分类维度还没查出来时先等一会儿（这样一进库就是分类卡片，不会先闪
+  /// 一下视频列表）；等太久就先把视频摆出来，别让人对着转圈干等。
+  var _facetWaitExpired = false;
+  Timer? _facetWaitTimer;
   var _loadingMore = false;
   var _loadingFacets = false;
   var _hasMore = false;
@@ -77,6 +93,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   @override
   void dispose() {
     _generation++;
+    _facetWaitTimer?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     final db = _db;
@@ -88,10 +105,85 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     super.dispose();
   }
 
-  Map<String, List<String>> get _filters => {
-    for (final entry in _selected.entries)
-      if (entry.value.isNotEmpty) entry.key: entry.value.toList(),
-  };
+  Map<String, List<String>> get _filters {
+    final out = <String, List<String>>{
+      for (final entry in _selected.entries)
+        if (entry.value.isNotEmpty) entry.key: entry.value.toList(),
+    };
+    // 下钻路径上的选择也算筛选；同一列用户在 chips 里手动改过，听用户的。
+    for (final step in _path) {
+      final value = step.value;
+      if (value == null) continue;
+      out.putIfAbsent(step.column, () => [value]);
+    }
+    return out;
+  }
+
+  /// 当前正停在哪一层分类卡片上；null = 没有下一层分类，该出视频卡片了。
+  GenericDbFacet? get _levelFacet {
+    if (_facets.isEmpty || _path.length >= _facets.length) return null;
+    // 多维度库还没选维度：先出维度卡片墙，别把第一个维度当唯一分类。
+    if (_path.isEmpty && _dimension.isEmpty && _facets.length > 1) {
+      return null;
+    }
+    return _facets[_path.length];
+  }
+
+  /// 是否正停在「分类维度卡片墙」这一层。
+  bool get _showDimensionWall =>
+      _query.isEmpty &&
+      _path.isEmpty &&
+      _dimension.isEmpty &&
+      _facets.length > 1;
+
+  /// 分类卡片层 or 视频卡片层。搜索时直接给视频（搜索不绕分类）。
+  bool get _showWorkGrid =>
+      _query.isNotEmpty || (!_showDimensionWall && _levelFacet == null);
+
+  /// 点了维度卡片：把这个维度转到队首先看它的取值，再按顺序往下钻。
+  void _pickDimension(GenericDbFacet facet) {
+    setState(() {
+      _dimension = facet.column;
+      final index = _facets.indexWhere((item) => item.column == facet.column);
+      if (index > 0) _facets.insert(0, _facets.removeAt(index));
+    });
+  }
+
+  void _drillInto(GenericDbFacet facet, String? value) {
+    setState(() {
+      _path.add((column: facet.column, value: value));
+      if (value == null) {
+        _selected.remove(facet.column);
+      } else {
+        _selected[facet.column] = {value};
+      }
+    });
+    _reload();
+  }
+
+  void _drillBack() {
+    if (_path.isNotEmpty) {
+      setState(() {
+        final step = _path.removeLast();
+        _selected.remove(step.column);
+      });
+      _reload();
+      return;
+    }
+    // 已经在分类第一层：退回维度卡片墙（不重新查库）。
+    if (_dimension.isNotEmpty) setState(() => _dimension = '');
+  }
+
+  void _resetPath() {
+    if (_path.isEmpty && _selected.isEmpty && _dimension.isEmpty) return;
+    final hadPath = _path.isNotEmpty;
+    setState(() {
+      _path.clear();
+      _selected.clear();
+      _dimension = '';
+    });
+    if (hadPath) _reload();
+  }
 
   int get _selectedCount =>
       _selected.values.fold(0, (sum, values) => sum + values.length);
@@ -110,7 +202,9 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         content: const Text(
           '逐条测播放地址：能播的留着，确认打不开的删掉，'
           '测不准的（403、超时、TLS 失败）一律保留，不误删能播的源。\n\n'
-          '30 万条的库大约要几十分钟，期间别退出页面。开修前会自动存一份 .bak 备份。',
+          '30 万条的库大约要几十分钟；几 G 的大库更久，'
+          '可以随时点中止，已测的部分已经生效。\n\n'
+          '开修前会自动存一份 .bak 备份。',
         ),
         actions: [
           TextButton(
@@ -219,6 +313,8 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
               ? [
                   if (report != null) report.summary,
                   if (report?.cancelled ?? false) '（中途中止，已测的部分已生效）',
+                  if (report?.rollupSkipped ?? false)
+                    '大库跳过了演员汇总重建，进女优库时它会自己重算。',
                   if (backupNote.isNotEmpty) backupNote,
                   '修复只删确认打不开的行，测不准的都保留。',
                 ].join('\n')
@@ -278,6 +374,11 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       _reader = reader;
       _schema = schema;
       _table = schema.worksTable?.table ?? '';
+      _facetWaitExpired = false;
+      _facetWaitTimer?.cancel();
+      _facetWaitTimer = Timer(const Duration(seconds: 6), () {
+        if (mounted) setState(() => _facetWaitExpired = true);
+      });
       if (schema.worksTable == null) {
         // 认不出作品表：不空白，进诊断态（列已探到的表 + 手动指定入口）。
         setState(() => _loadingFirst = false);
@@ -343,17 +444,27 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   }
 
   /// 后台补总数与分类维度（不阻塞首屏）。
-  Future<void> _loadTotalAndFacets(int generation) async {
+  ///
+  /// [refreshFacets] 为 false 时沿用已查到的分类维度：分类是整库统计，
+  /// 下钻/翻页不会改变它，重查一次大库要白扫几遍全表。
+  Future<void> _loadTotalAndFacets(
+    int generation, {
+    bool refreshFacets = true,
+  }) async {
     final reader = _reader;
     if (reader == null) return;
-    setState(() => _loadingFacets = true);
+    if (refreshFacets) setState(() => _loadingFacets = true);
+    if (!refreshFacets && _facets.isNotEmpty) {
+      unawaited(_refreshTotal(generation, reader));
+      return;
+    }
     // 分类先查：大库 COUNT 可能慢几十秒，等它会把分类条一起拖住，
     // 用户看到的就是「点进来没有分类」。
     try {
       // 分类维度逐列查（副表维度在前），大库上可能几秒到十几秒；
       // 给足时间，别一超时就把整批分类丢掉（那正是「读不到分类」）。
       final facets = await reader
-          .facets()
+          .facets(maxValues: 200)
           .timeout(const Duration(seconds: 90));
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -366,6 +477,10 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       if (!mounted || generation != _generation) return;
       setState(() => _loadingFacets = false);
     }
+    await _refreshTotal(generation, reader);
+  }
+
+  Future<void> _refreshTotal(int generation, GenericDbReader reader) async {
     try {
       final total = await reader.countWorks(
         query: _query,
@@ -394,10 +509,10 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     _reload();
   }
 
-  void _reload() {
+  void _reload({bool refreshFacets = false}) {
     final generation = ++_generation;
     unawaited(_loadFirst(generation));
-    unawaited(_loadTotalAndFacets(generation));
+    unawaited(_loadTotalAndFacets(generation, refreshFacets: refreshFacets));
   }
 
   Future<void> _loadMore() async {
@@ -424,26 +539,16 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     }
   }
 
-  Future<void> _play(GenericDbWork work) async {
-    if (!work.playable) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            work.playUrl.isEmpty
-                ? '这条在库里没有播放地址（可能地址在另一张表，点“数据库字段”指定一下）'
-                : '这条地址不是可播的 http 地址：${work.playUrl}',
-          ),
+  /// 点视频卡片进详情页（详情页里再播放）。
+  Future<void> _openWork(GenericDbWork work) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ActressDbWorkDetailPage(
+          work: work,
+          repository: widget.repository,
+          store: widget.store,
         ),
-      );
-      return;
-    }
-    final entry = work.toJsonEntry();
-    await pushPlayer<void>(
-      context,
-      detail: entry.toDramaDetail(),
-      initialIndex: 0,
-      repository: widget.repository,
-      store: widget.store,
+      ),
     );
   }
 
@@ -458,8 +563,9 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         _schema = reader.schema;
         _table = reader.schema.worksTable?.table ?? '';
         _selected.clear();
+        _path.clear();
       });
-      _reload();
+      _reload(refreshFacets: true);
     }
   }
 
@@ -546,8 +652,10 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
               ),
             ),
           ),
-          if (_facets.isNotEmpty || _selectedCount > 0) _buildFacetBar(colors),
-          if (_facets.isEmpty &&
+          if (_showWorkGrid && (_facets.isNotEmpty || _selectedCount > 0))
+            _buildFacetBar(colors),
+          if (_showWorkGrid &&
+              _facets.isEmpty &&
               !_loadingFacets &&
               !_loadingFirst &&
               _error.isEmpty &&
@@ -673,6 +781,16 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     if (schema != null && schema.worksTable == null) {
       return _buildSchemaHelp(colors, schema);
     }
+    // 分类卡片优先：搜过词就直接出视频（搜索不绕分类）。
+    if (_showDimensionWall) return _buildDimensionCards(colors);
+    final facet = _query.isEmpty ? _levelFacet : null;
+    if (facet != null) return _buildFacetCards(colors, facet);
+    if (_works.isEmpty &&
+        _loadingFacets &&
+        !_facetWaitExpired &&
+        _query.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
     if (_works.isEmpty) {
       return _message(
         colors,
@@ -705,9 +823,147 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         return _DbWorkCard(
           key: ValueKey('db-work-${work.id ?? work.title}'),
           work: work,
-          onTap: () => unawaited(_play(work)),
+          onTap: () => unawaited(_openWork(work)),
         );
       },
+    );
+  }
+
+  /// 分类维度卡片墙：一个维度一张卡（分类 / 类型 / 标签 / 系列…），
+  /// 点一张进这个维度的取值卡片。库里有几个分类列就摆几张，不漏维度。
+  Widget _buildDimensionCards(ColorScheme colors) {
+    final facets = _facets;
+    return CustomScrollView(
+      key: const ValueKey('db-dimension-wall'),
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+            child: Text(
+              '选一个分类维度',
+              style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.74,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final facet = facets[index];
+                final total =
+                    facet.values.fold<int>(0, (sum, v) => sum + v.count);
+                return _DbFacetCard(
+                  key: ValueKey('db-dimension-card-${facet.column}'),
+                  label: facetDisplayLabel(facet.column),
+                  subtitle: '${facet.values.length} 类 · $total 部',
+                  coverUrl:
+                      facet.values.isEmpty ? '' : facet.values.first.coverUrl,
+                  onTap: () => _pickDimension(facet),
+                );
+              },
+              childCount: facets.length,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 分类层：一个维度的取值铺成卡片墙（封面 + 名字 + 数量），
+  /// 点一张进下一层；最后一层之后才是视频卡片列表。
+  Widget _buildFacetCards(ColorScheme colors, GenericDbFacet facet) {
+    final values = facet.values;
+    return CustomScrollView(
+      key: ValueKey('db-facet-level-${_path.length}-${facet.column}'),
+      slivers: [
+        SliverToBoxAdapter(child: _buildCrumb(colors, facet)),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.74,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                if (index == 0) {
+                  return _DbFacetCard(
+                    key: const ValueKey('db-facet-all'),
+                    label: '全部',
+                    subtitle: '${values.fold(0, (sum, v) => sum + v.count)} 部',
+                    coverUrl: values.isEmpty ? '' : values.first.coverUrl,
+                    onTap: () => _drillInto(facet, null),
+                  );
+                }
+                final value = values[index - 1];
+                return _DbFacetCard(
+                  key: ValueKey('db-facet-card-${value.value}'),
+                  label: value.value,
+                  subtitle: '${value.count} 部',
+                  coverUrl: value.coverUrl,
+                  onTap: () => _drillInto(facet, value.value),
+                );
+              },
+              childCount: values.length + 1,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 分类层顶部一条：返回上一级 + 现在看的是哪一维。
+  Widget _buildCrumb(ColorScheme colors, GenericDbFacet facet) {
+    final trail = [
+      for (final step in _path)
+        '${facetDisplayLabel(step.column)}·${step.value ?? '全部'}',
+    ];
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+        children: [
+          if (_path.isNotEmpty || _dimension.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ActionChip(
+                key: const ValueKey('db-facet-back'),
+                avatar: const Icon(Icons.arrow_back_rounded, size: 14),
+                label: const Text('返回', style: TextStyle(fontSize: 12)),
+                onPressed: _drillBack,
+              ),
+            ),
+          if (trail.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ActionChip(
+                avatar: const Icon(Icons.home_outlined, size: 14),
+                label: Text(
+                  trail.join(' / '),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onPressed: _resetPath,
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+            child: Text(
+              '${facetDisplayLabel(facet.column)} · ${facet.values.length} 个',
+              style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -992,6 +1248,91 @@ class _DbWorkCard extends StatelessWidget {
               style: TextStyle(fontSize: 10, color: colors.onSurfaceVariant),
             ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// 分类卡片：用这一分类下首部作品的封面当背景，名字 + 数量压在底部。
+/// 取不到封面就退成色块 + 名字，不留白块。
+class _DbFacetCard extends StatelessWidget {
+  const _DbFacetCard({
+    super.key,
+    required this.label,
+    required this.subtitle,
+    required this.coverUrl,
+    required this.onTap,
+  });
+
+  final String label;
+  final String subtitle;
+  final String coverUrl;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ColoredBox(
+          color: colors.surfaceContainerHighest,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (coverUrl.isNotEmpty)
+                Image.network(
+                  coverUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Colors.black87],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        height: 1.2,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
