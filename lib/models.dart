@@ -719,6 +719,27 @@ class SourceSite {
       section: sectionVideo,
       slotId: 'mjv011',
     ),
+    SourceSite(
+      'v_youguo',
+      '🔞柚果',
+      'youavhub.com · 苹果CMS接口 · 10万条 · 槽位 youguo',
+      section: sectionVideo,
+      slotId: 'youguo',
+    ),
+    SourceSite(
+      'v_llsp',
+      '🔞榴莲视频',
+      'llsp.me · 37分类 · 槽位 llsp',
+      section: sectionVideo,
+      slotId: 'llsp',
+    ),
+    SourceSite(
+      'v_ririlu',
+      '🔞日日撸',
+      'ririlu.cc · 中文字幕/无码 · 槽位 ririlu',
+      section: sectionVideo,
+      slotId: 'ririlu',
+    ),
   ];
   static const knownValues = [
     hongguo,

@@ -46,6 +46,8 @@ type htmlProfile struct {
 	DescRe    *regexp.Regexp // group 1 (optional)
 	PlayRes   []*regexp.Regexp
 	PlayBase  string // prefix for relative play URLs ("" = Base)
+	// PlayFix 在 PlayRes 命中后加工地址（去掉 JSON 转义的 \/、补协议等）。
+	PlayFix func(string) string
 
 	SearchURL    string         // template {kw} {page}
 	SearchItemRe *regexp.Regexp // nil -> ItemRe
@@ -232,6 +234,9 @@ func htmlProfileImpl(key, name string, p *htmlProfile) *siteImpl {
 					v = m[1]
 				}
 				if v != "" {
+					if p.PlayFix != nil {
+						v = p.PlayFix(v)
+					}
 					play = p.abs(p.PlayBase, v)
 					break
 				}

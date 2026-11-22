@@ -66,6 +66,8 @@ var slotOrder = []string{
 	"yh_av91", "yh_md", "yh_sex8",
 	"yh_gdian", "yh_ins", "yh_huangguo",
 	"mjv011",
+	// v52 第一批移植源（真果鉴 → 魔蚁片库）
+	"youguo", "llsp", "ririlu",
 }
 
 // keyToSlot resolves internal keys and display aliases to slot ids.
