@@ -82,14 +82,7 @@ class LiveSubtitleService {
                : null),
        _engineInjected = engine != null,
        _extractor = extractor ?? FfmpegLiveSubtitleAudioExtractor(),
-       _translator =
-           translator ??
-           (settings.hasRemoteTranslator
-               ? ChainTranslator([
-                   LibreTranslateTranslator(baseUrl: settings.libreTranslateUrl),
-                   GoogleTranslateTranslator(),
-                 ])
-               : GoogleTranslateTranslator());
+       _translator = translator ?? buildLiveSubtitleTranslator(settings);
 
   final LiveSubtitleSettings settings;
   final LiveSubtitleEngine? _engine;
@@ -402,5 +395,49 @@ class LiveSubtitleService {
     await _stateController.close();
     await _partialController.close();
     await _downloadController.close();
+  }
+}
+
+/// 按设置组装翻译链：选定的通道优先，内置免费通道永远兜底。
+///
+/// 顺序与 `LiveSubtitleSettings.effectiveTranslationProvider` 对齐：
+/// 选了但没配好（缺 Key / 缺地址）就回落到内置通道，不让字幕整条不出。
+LiveSubtitleTranslator buildLiveSubtitleTranslator(
+  LiveSubtitleSettings settings,
+) {
+  final fallback = GoogleTranslateTranslator();
+  switch (settings.effectiveTranslationProvider) {
+    case 'llm':
+      return ChainTranslator([
+        OpenAiCompatibleTranslator(
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          thinking: settings.llmThinking,
+          context: settings.llmContext,
+        ),
+        fallback,
+      ]);
+    case 'mtran':
+      return ChainTranslator([
+        MtranServerTranslator(
+          baseUrl: settings.mtranUrl,
+          token: settings.mtranToken,
+        ),
+        fallback,
+      ]);
+    case 'libre':
+      return ChainTranslator([
+        LibreTranslateTranslator(baseUrl: settings.libreTranslateUrl),
+        fallback,
+      ]);
+    default:
+      if (settings.hasRemoteTranslator) {
+        return ChainTranslator([
+          LibreTranslateTranslator(baseUrl: settings.libreTranslateUrl),
+          fallback,
+        ]);
+      }
+      return fallback;
   }
 }

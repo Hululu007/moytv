@@ -160,3 +160,26 @@ v33（未发布），基线 v32。
 ### 未验
 - 真机：分类条显示、筛选、起播
 - `video_category.main_category` 有 1,278 行 NULL（数据本身缺）
+
+## v48（2026-11-22）字幕翻译三通道 + 黄果潜力榜
+### 这轮改了什么
+1. 字幕翻译从「LibreTranslate / 内置二选一」升级为四个后端，设置页可选：
+   - `builtin` 内置免费通道（谷歌端点，默认）
+   - `llm` OpenAI 兼容大模型（默认 `https://api.deepseek.com` + `deepseek-chat`，
+     提示词照魔改影视：只出译文、不解释、不加引号；带「思考模式」「带上文」两个开关，
+     带上文时把最近 6 条原文/译文一起送，人名代词更连贯）
+   - `mtran` MTranServer（`POST {base}/translate`，`{from,to,text}`，可选 Bearer）
+   - `libre` LibreTranslate（原样保留）
+   任一所选通道失败自动回落内置通道，字幕不会断。
+2. `provider_huangguo.go`：AI 短剧分类补「潜力榜」（`ranks/potential`，实测 200/164KB）。
+
+### 已排除 / 不要重复排查
+- iDuanJu(App) 的 `/api/app/*` 接口是加密接口（interfaceKey / paramKey / paramIV /
+  token / deviceId），且候选 base（huangguoai.*、hgai12.com、*.adihsppe.cc）
+  在机房出口一律 404 / CF 拦，接进来就是一个空站 → 本轮不接，改用网页通道。
+- `ranks/rank-recommend` 实测 404（站方没这个路由），不要再加。
+- AV资源总库：36 万条里只有 1,352 部真片（其余是采集分页 bug 重复写），
+  播放域 `v-proxy.imgcaches.cc` 已无 DNS；按番号回填女优库源后 221 部可播（抽测 206）。
+
+### 未验
+- 真机：字幕翻译三个新通道、潜力榜列表
