@@ -178,6 +178,30 @@ class ContentRegistry {
       section: ContentSection.novel,
     ),
     PyContentSource(
+      id: 'zymk',
+      name: '知音漫客',
+      assetPath: 'assets/novel_spiders/zymk.py',
+      section: ContentSection.novel,
+    ),
+    PyContentSource(
+      id: 'dongmanla',
+      name: '动漫啦',
+      assetPath: 'assets/novel_spiders/dongmanla.py',
+      section: ContentSection.novel,
+    ),
+    PyContentSource(
+      id: 'jisu_1kkk',
+      name: '极速漫画',
+      assetPath: 'assets/novel_spiders/jisu_1kkk.py',
+      section: ContentSection.novel,
+    ),
+    PyContentSource(
+      id: 'kanman',
+      name: '看漫画',
+      assetPath: 'assets/novel_spiders/kanman.py',
+      section: ContentSection.novel,
+    ),
+    PyContentSource(
       id: 'baozi',
       name: '包子漫画',
       assetPath: 'assets/novel_spiders/baozi.py',
