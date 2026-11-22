@@ -11,6 +11,7 @@ import 'actress_db_fields_page.dart';
 import 'actress_db_work_detail_page.dart';
 import 'actress_generic_db.dart';
 import 'video_db_repair.dart';
+import 'video_db_normalize.dart';
 
 /// 外来数据库浏览页（2026-11-21 用户令，第二轮修复）：
 /// 顶部一级分类瓦片点进来后，这里就是**这个库自己的视频列表**——
@@ -64,6 +65,13 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   /// 维度；点某张才进它的取值卡片（分类卡片墙）。只有一个维度就免这步，
   /// 直接摆分类卡片。
   var _dimension = '';
+  /// 分类值自身的层级路径（同一维度内往里钻）。
+  ///
+  /// 库里的分类值常常自带层级（`日本AV/有码`、`无码/流出`），用户要的是
+  /// 「分类卡片 → 子分类卡片 → 视频卡片」这种翻法。所以同一维度内走这张
+  /// 前缀链：每点一层往里压一段，面包屑跟着变，返回逐层退。
+  final _valuePath = <String>[];
+
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
 
@@ -144,6 +152,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   void _pickDimension(GenericDbFacet facet) {
     setState(() {
       _dimension = facet.column;
+      _valuePath.clear();
       final index = _facets.indexWhere((item) => item.column == facet.column);
       if (index > 0) _facets.insert(0, _facets.removeAt(index));
     });
@@ -161,7 +170,30 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     _reload();
   }
 
+  /// 用一个「值集合」下钻：分类值带层级时，「本级全部」就是把这一前缀
+  /// 下的所有完整值一起选中（前缀含几个分叉就筛几个）。
+  void _drillIntoValues(
+    GenericDbFacet facet,
+    List<String> values,
+    String label,
+  ) {
+    if (values.isEmpty) {
+      _drillInto(facet, null);
+      return;
+    }
+    setState(() {
+      _path.add((column: facet.column, value: label));
+      _selected[facet.column] = values.toSet();
+    });
+    _reload();
+  }
+
   void _drillBack() {
+    // 先在当前维度里退一层子分类。
+    if (_valuePath.isNotEmpty) {
+      setState(() => _valuePath.removeLast());
+      return;
+    }
     if (_path.isNotEmpty) {
       setState(() {
         final step = _path.removeLast();
@@ -175,12 +207,18 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
   }
 
   void _resetPath() {
-    if (_path.isEmpty && _selected.isEmpty && _dimension.isEmpty) return;
+    if (_path.isEmpty &&
+        _selected.isEmpty &&
+        _dimension.isEmpty &&
+        _valuePath.isEmpty) {
+      return;
+    }
     final hadPath = _path.isNotEmpty;
     setState(() {
       _path.clear();
       _selected.clear();
       _dimension = '';
+      _valuePath.clear();
     });
     if (hadPath) _reload();
   }
@@ -200,7 +238,11 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       builder: (context) => AlertDialog(
         title: const Text('体检修复这个库'),
         content: const Text(
-          '逐条测播放地址：能播的留着，确认打不开的删掉，'
+          '一次做两件事：\n\n'
+          '一、按女优库结构补齐：缺的表/字段补上，值能对上的先搬到对应字段'
+          '（你库里原有的其它字段不动，不删），顺手补女优头像，'
+          '库里播放域名判死的换到能通的域名上。\n\n'
+          '二、逐条测播放地址：能播的留着，确认打不开的删掉，'
           '测不准的（403、超时、TLS 失败）一律保留，不误删能播的源。\n\n'
           '30 万条的库大约要几十分钟；几 G 的大库更久，'
           '可以随时点中止，已测的部分已经生效。\n\n'
@@ -243,6 +285,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       backupNote = '备份没做成（可能空间不够），修复照常进行';
     }
 
+    if (!mounted) return;
     final progress = ValueNotifier<String>('正在读库…');
     final navigator = Navigator.of(context, rootNavigator: true);
     unawaited(
@@ -282,8 +325,23 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     );
 
     VideoDbRepairReport? report;
+    VideoDbNormalizeReport? normalize;
+    var normalizeError = '';
     var error = '';
     try {
+      // 第一步：结构对齐 + 头像 + 域名（快，几十秒）。
+      progress.value = '按女优库结构整理…';
+      try {
+        normalize = await VideoDbNormalizer.run(
+          widget.filePath,
+          schema: _schema,
+          onStage: (stage) => progress.value = stage,
+        );
+      } catch (e) {
+        normalizeError = e.toString();
+      }
+      if (_repairCancel) throw StateError('已中止');
+      // 第二步：逐条验播放地址（慢）。
       report = await VideoDbRepair.run(
         widget.filePath,
         onProgress: (done, total) {
@@ -311,6 +369,14 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         content: Text(
           error.isEmpty
               ? [
+                  if (normalize != null) '结构：${normalize.summary}',
+                  if (normalize != null && normalize.hostFixes.isNotEmpty)
+                    '换掉的域名：${normalize.hostFixes.entries.map((e) => '${e.key} → ${e.value}').join('；')}',
+                  if (normalize != null && normalize.deadHosts.isNotEmpty)
+                    '判死的域名：${normalize.deadHosts.join('、')}',
+                  if (normalize != null)
+                    for (final note in normalize.notes.take(3)) '· $note',
+                  if (normalizeError.isNotEmpty) '结构整理没做成：$normalizeError',
                   if (report != null) report.summary,
                   if (report?.cancelled ?? false) '（中途中止，已测的部分已生效）',
                   if (report?.rollupSkipped ?? false)
@@ -318,7 +384,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
                   if (backupNote.isNotEmpty) backupNote,
                   '修复只删确认打不开的行，测不准的都保留。',
                 ].join('\n')
-              : '$error\n\n$backupNote',
+              : '$error\n\n${normalize != null ? '结构：${normalize.summary}\n' : ''}$backupNote',
         ),
         actions: [
           FilledButton(
@@ -878,10 +944,29 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
 
   /// 分类层：一个维度的取值铺成卡片墙（封面 + 名字 + 数量），
   /// 点一张进下一层；最后一层之后才是视频卡片列表。
+  ///
+  /// 分类值自带层级时（`日本AV/有码`），同一维度内再拆成「子分类卡片
+  /// 墙」：点中间层继续往里，点叶子才进视频卡片列表。
   Widget _buildFacetCards(ColorScheme colors, GenericDbFacet facet) {
-    final values = facet.values;
+    final separator = _valueSeparator(facet);
+    final prefix = _valuePath.join(separator);
+    final children = separator.isEmpty
+        ? [
+            for (final item in facet.values)
+              _FacetChild(
+                label: item.value,
+                full: item.value,
+                count: item.count,
+                coverUrl: item.coverUrl,
+                drillable: false,
+              ),
+          ]
+        : _childFacets(facet, separator, prefix);
+    final shownTotal = children.fold<int>(0, (sum, item) => sum + item.count);
     return CustomScrollView(
-      key: ValueKey('db-facet-level-${_path.length}-${facet.column}'),
+      key: ValueKey(
+        'db-facet-level-${_path.length}-${facet.column}-${_valuePath.length}',
+      ),
       slivers: [
         SliverToBoxAdapter(child: _buildCrumb(colors, facet)),
         SliverPadding(
@@ -896,24 +981,49 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 if (index == 0) {
+                  final cover = children.isEmpty ? '' : children.first.coverUrl;
+                  // 还没进子层：这张是「全部」，跳过这个维度直接往下走。
+                  if (_valuePath.isEmpty) {
+                    return _DbFacetCard(
+                      key: const ValueKey('db-facet-all'),
+                      label: '全部',
+                      subtitle: '$shownTotal 部',
+                      coverUrl: cover,
+                      onTap: () => _drillInto(facet, null),
+                    );
+                  }
+                  // 进了子层：这张是「本级全部」，看这一前缀下的所有作品。
+                  final values = _prefixValues(facet, separator, prefix);
                   return _DbFacetCard(
-                    key: const ValueKey('db-facet-all'),
-                    label: '全部',
-                    subtitle: '${values.fold(0, (sum, v) => sum + v.count)} 部',
-                    coverUrl: values.isEmpty ? '' : values.first.coverUrl,
-                    onTap: () => _drillInto(facet, null),
+                    key: const ValueKey('db-facet-here'),
+                    label: '本级全部',
+                    subtitle: '$shownTotal 部',
+                    coverUrl: cover,
+                    onTap: () => _drillIntoValues(
+                      facet,
+                      values,
+                      _valuePath.join(separator),
+                    ),
                   );
                 }
-                final value = values[index - 1];
+                final child = children[index - 1];
                 return _DbFacetCard(
-                  key: ValueKey('db-facet-card-${value.value}'),
-                  label: value.value,
-                  subtitle: '${value.count} 部',
-                  coverUrl: value.coverUrl,
-                  onTap: () => _drillInto(facet, value.value),
+                  key: ValueKey('db-facet-card-${child.full}'),
+                  label: child.label,
+                  subtitle: child.drillable
+                      ? '${child.count} 部 · 有子类'
+                      : '${child.count} 部',
+                  coverUrl: child.coverUrl,
+                  onTap: () {
+                    if (child.drillable) {
+                      setState(() => _valuePath.add(child.label));
+                    } else {
+                      _drillInto(facet, child.full);
+                    }
+                  },
                 );
               },
-              childCount: values.length + 1,
+              childCount: children.length + 1,
             ),
           ),
         ),
@@ -921,11 +1031,83 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     );
   }
 
+  /// 分类值里的层级分隔符。判不出来（比例太低）返回空串——那就按原来的
+  /// 平铺摆卡片，不乱拆。
+  String _valueSeparator(GenericDbFacet facet) {
+    final values = facet.values;
+    if (values.length < 4) return '';
+    for (final separator in const ['/', '>', '|', ' - ']) {
+      var hit = 0;
+      for (final item in values) {
+        if (item.value.contains(separator)) hit++;
+      }
+      if (hit >= 2 && hit * 100 ~/ values.length >= 25) return separator;
+    }
+    return '';
+  }
+
+  /// 把这一维的值按 [prefix] 投影成下一层卡片（一个子分类一张）。
+  List<_FacetChild> _childFacets(
+    GenericDbFacet facet,
+    String separator,
+    String prefix,
+  ) {
+    final out = <String, _FacetChild>{};
+    for (final item in facet.values) {
+      final text = item.value;
+      if (prefix.isNotEmpty) {
+        if (text == prefix) continue; // 本级自身已经在上一层点过
+        if (!text.startsWith('$prefix$separator')) continue;
+      }
+      final rest = prefix.isEmpty
+          ? text
+          : text.substring(prefix.length + separator.length);
+      if (rest.isEmpty) continue;
+      final cut = rest.indexOf(separator);
+      final segment = cut < 0 ? rest : rest.substring(0, cut);
+      final full = prefix.isEmpty ? segment : '$prefix$separator$segment';
+      final previous = out[full];
+      out[full] = _FacetChild(
+        label: segment,
+        full: full,
+        count: (previous?.count ?? 0) + item.count,
+        coverUrl: (previous != null && previous.coverUrl.isNotEmpty)
+            ? previous.coverUrl
+            : item.coverUrl,
+        drillable: cut >= 0 || (previous?.drillable ?? false),
+      );
+    }
+    final list = out.values.toList()
+      ..sort((a, b) => b.count.compareTo(a.count));
+    return list;
+  }
+
+  /// 某个前缀下的全部完整值（「本级全部」按这些值一起筛）。
+  List<String> _prefixValues(
+    GenericDbFacet facet,
+    String separator,
+    String prefix,
+  ) {
+    if (prefix.isEmpty) {
+      return [for (final item in facet.values) item.value];
+    }
+    final head = '$prefix$separator';
+    return [
+      for (final item in facet.values)
+        if (item.value == prefix || item.value.startsWith(head)) item.value,
+    ];
+  }
+
   /// 分类层顶部一条：返回上一级 + 现在看的是哪一维。
   Widget _buildCrumb(ColorScheme colors, GenericDbFacet facet) {
-    final trail = [
-      for (final step in _path)
-        '${facetDisplayLabel(step.column)}·${step.value ?? '全部'}',
+    final trail = <String>[
+      for (var index = 0; index < _path.length; index++)
+        if (index == _path.length - 1 && _valuePath.isNotEmpty)
+          '${facetDisplayLabel(_path[index].column)}·'
+              '${_valuePath.join('·')}'
+        else
+          '${facetDisplayLabel(_path[index].column)}·'
+              '${_path[index].value ?? '全部'}',
     ];
     return SizedBox(
       height: 40,
@@ -933,7 +1115,7 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
         children: [
-          if (_path.isNotEmpty || _dimension.isNotEmpty)
+          if (_path.isNotEmpty || _dimension.isNotEmpty || _valuePath.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: ActionChip(
@@ -1253,6 +1435,30 @@ class _DbWorkCard extends StatelessWidget {
   }
 }
 
+
+/// 分类层里的一张卡片：可能是一个子分类（还能往里钻），也可能就是
+/// 最终取值（点它直接进视频卡片列表）。
+class _FacetChild {
+  const _FacetChild({
+    required this.label,
+    required this.full,
+    required this.count,
+    required this.coverUrl,
+    required this.drillable,
+  });
+
+  /// 这一层显示的名字（不含上层前缀）。
+  final String label;
+
+  /// 完整取值（带前缀），进视频列表时按它筛。
+  final String full;
+
+  final int count;
+  final String coverUrl;
+
+  /// 底下还有更深一层，点它进子分类卡片墙而不是视频列表。
+  final bool drillable;
+}
 
 /// 分类卡片：用这一分类下首部作品的封面当背景，名字 + 数量压在底部。
 /// 取不到封面就退成色块 + 名字，不留白块。

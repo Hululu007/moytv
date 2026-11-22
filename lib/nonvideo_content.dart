@@ -27,6 +27,29 @@ class NonVideoContent {
   bool get isPics => kind == NonVideoKind.pics;
 }
 
+/// 正文清洗：有的书源返回带 <p>/<br>/&nbsp; 的 HTML，直接喂给分页和
+/// 朗读会把标签念出来、也会把分页算乱。
+String cleanNovelText(String text) {
+  var value = text
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'</(p|div|h\d)\s*>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<[^>]+>'), '');
+  const entities = {
+    '&nbsp;': ' ',
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'",
+    '&ldquo;': '“',
+    '&rdquo;': '”',
+  };
+  entities.forEach((key, val) => value = value.replaceAll(key, val));
+  value = value.replaceAll(RegExp(r'[ \t\u3000]+'), ' ');
+  value = value.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+  return value.trim();
+}
+
 String? _findPayload(String value, String scheme) {
   final start = value.indexOf(scheme);
   if (start < 0) return null;
@@ -49,7 +72,7 @@ NonVideoContent? parseNonVideoUrl(
       final decoded = jsonDecode(jsonText);
       if (decoded is Map) {
         final title = decoded['title']?.toString() ?? '';
-        final text = decoded['content']?.toString() ?? '';
+        final text = cleanNovelText(decoded['content']?.toString() ?? '');
         if (text.isNotEmpty) {
           return NonVideoContent.novel(title: title, text: text);
         }
@@ -130,12 +153,20 @@ class NovelReaderView extends StatefulWidget {
     this.onCenterTap,
     this.initialPage = 0,
     this.onPageChanged,
+    this.onEndReached,
+    this.onStartReached,
   });
   final NonVideoContent content;
   final String title;
   final VoidCallback? onCenterTap;
   final int initialPage;
   final ValueChanged<int>? onPageChanged;
+
+  /// 已到本章最后一页还往后翻：去看下一章（不让人卡在最后一页）。
+  final VoidCallback? onEndReached;
+
+  /// 已到本章第一页还往前翻。
+  final VoidCallback? onStartReached;
   @override
   State<NovelReaderView> createState() => _NovelReaderViewState();
 }
@@ -244,14 +275,30 @@ class _NovelReaderViewState extends State<NovelReaderView>
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: width);
       final metrics = painter.computeLineMetrics();
+      if (metrics.isEmpty) {
+        lines.add(trimmed);
+        continue;
+      }
       var start = 0;
-      for (var i = 0; i < metrics.length; i++) {
-        final boundary = painter.getLineBoundary(
-          TextPosition(offset: start),
-        );
-        lines.add(trimmed.substring(boundary.start, boundary.end));
-        start = boundary.end;
-        if (start >= trimmed.length) break;
+      var guard = 0;
+      while (start < trimmed.length) {
+        if (guard++ > 20000) break;
+        TextRange boundary;
+        try {
+          boundary = painter.getLineBoundary(TextPosition(offset: start));
+        } catch (_) {
+          lines.add(trimmed.substring(start));
+          break;
+        }
+        if (boundary.end <= start) {
+          // 边界没往前走就手动推一格，否则死循环把界面卡死（点了没反应）。
+          lines.add(trimmed.substring(start, start + 1));
+          start += 1;
+          continue;
+        }
+        final end = boundary.end.clamp(0, trimmed.length);
+        lines.add(trimmed.substring(start, end));
+        start = end;
       }
     }
     final lineHeight = _fontSize * 1.7;
@@ -272,9 +319,25 @@ class _NovelReaderViewState extends State<NovelReaderView>
   }
 
   void _startTurn(int direction) {
-    if (_pages.isEmpty || _turnController.isAnimating) return;
+    if (_turnController.isAnimating) return;
+    if (_pages.isEmpty) {
+      // 正文还没分好 / 本章为空：也让人能翻到下一章，不能点了毫无反应。
+      if (direction > 0) {
+        widget.onEndReached?.call();
+      } else {
+        widget.onStartReached?.call();
+      }
+      return;
+    }
     final target = _page + direction;
-    if (target < 0 || target >= _pages.length) return;
+    if (target >= _pages.length) {
+      widget.onEndReached?.call();
+      return;
+    }
+    if (target < 0) {
+      widget.onStartReached?.call();
+      return;
+    }
     setState(() {
       _turnDirection = direction;
       _turnTarget = target;
@@ -350,6 +413,14 @@ class _NovelReaderViewState extends State<NovelReaderView>
     final fling =
         (velocity < -500 && _turnDirection == 1) ||
         (velocity > 500 && _turnDirection == -1);
+    if (target == null && (fling || progress >= 0.28)) {
+      setState(_clearTurn);
+      (details.velocity.pixelsPerSecond.dx < 0
+          ? widget.onEndReached
+          : widget.onStartReached)
+          ?.call();
+      return;
+    }
     if (target != null && (fling || progress >= 0.28)) {
       _turnController.duration = const Duration(milliseconds: 480);
       _turnController.forward().then((_) {
@@ -646,11 +717,15 @@ class PicsViewerView extends StatefulWidget {
     this.initialIndex = 0,
     this.onIndexChanged,
     this.verticalScroll = false,
+    this.onEndReached,
   });
   final NonVideoContent content;
   final String title;
   final int initialIndex;
   final ValueChanged<int>? onIndexChanged;
+
+  /// 最后一屏/最后一张还往后翻：去看下一章。
+  final VoidCallback? onEndReached;
 
   /// 纵向连续滚动：整章图上下排成一列（漫画阅读）；默认横向逐张翻页。
   final bool verticalScroll;
@@ -701,8 +776,22 @@ class _PicsViewerViewState extends State<PicsViewerView> {
     return (fraction * (urls.length - 1)).round().clamp(0, urls.length - 1);
   }
 
+  bool _endReported = false;
+
   void _onVerticalScroll() {
     if (!widget.verticalScroll) return;
+    if (_scrollController.hasClients) {
+      final pos = _scrollController.position;
+      if (pos.maxScrollExtent > 0 &&
+          pos.pixels >= pos.maxScrollExtent - 4) {
+        if (!_endReported) {
+          _endReported = true;
+          widget.onEndReached?.call();
+        }
+      } else if (pos.pixels < pos.maxScrollExtent - 40) {
+        _endReported = false;
+      }
+    }
     final next = _indexFromOffset();
     if (next != _index) {
       setState(() => _index = next);
@@ -769,6 +858,34 @@ class _PicsViewerViewState extends State<PicsViewerView> {
   @override
   Widget build(BuildContext context) {
     final urls = widget.content.urls;
+    if (urls.isEmpty) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '本章没有取到图片',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '可能是源站临时抽风，点下面重试或换一章',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: widget.onEndReached,
+                child: const Text('看下一章'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Container(
       color: Colors.black,
       child: Stack(
@@ -783,6 +900,19 @@ class _PicsViewerViewState extends State<PicsViewerView> {
                   headers: _imageHeaders(urls[i], widget.content.headers),
                   width: double.infinity,
                   fit: BoxFit.fitWidth,
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  },
                   errorBuilder: (context, _, _) => Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
@@ -854,7 +984,7 @@ class _PicsViewerViewState extends State<PicsViewerView> {
                   onPressed: widget.verticalScroll
                       ? (_index + 1 < urls.length
                             ? () => _scrollByViewport(1)
-                            : null)
+                            : (widget.onEndReached ?? () => _scrollByViewport(1)))
                       : _index + 1 < urls.length
                       ? () => _controller.nextPage(
                           duration: const Duration(milliseconds: 200),

@@ -292,6 +292,31 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
     }
   }
 
+  /// 本章翻完继续往后：直接进下一章（读到底不用退出去点章节列表）。
+  void _goNextChapter() {
+    if (_loading) return;
+    if (_index + 1 >= _chapters.length) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已经是最后一章了')));
+      return;
+    }
+    _loadChapter(_index + 1);
+  }
+
+  void _goPrevChapter() {
+    if (_loading) return;
+    if (_index <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已经是第一章了')));
+      return;
+    }
+    _loadChapter(_index - 1);
+  }
+
   void _onChapterReadComplete() {
     if (!mounted || !_ttsPlaying) return;
     if (_index + 1 < _chapters.length) {
@@ -305,7 +330,26 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
   }
 
   void _toggleTts() {
-    if (_content == null || _error.isNotEmpty) return;
+    if (_error.isNotEmpty) return;
+    final content = _content;
+    if (content == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('本章还没加载完，稍等一下再点朗读')));
+      return;
+    }
+    if (content.isPics) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这一章是图片，朗读只支持文字章节')),
+      );
+      return;
+    }
+    if (content.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这一章没有文字内容，可能源站返回空了，换一章试试')),
+      );
+      return;
+    }
     if (_ttsAvailable == false && !_ttsPlaying && !_ttsPaused) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('手机里没有中文语音，朗读不可用，请安装语音引擎后重试')),
@@ -419,6 +463,7 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                     initialIndex: _initialPage,
                     onIndexChanged: _onReaderPageChanged,
                     verticalScroll: true,
+                    onEndReached: _goNextChapter,
                   )
                 : NovelReaderView(
                     content: _content!,
@@ -427,6 +472,8 @@ class _NovelReaderPageState extends State<NovelReaderPage> {
                         setState(() => _overlayVisible = !_overlayVisible),
                     initialPage: _initialPage,
                     onPageChanged: _onReaderPageChanged,
+                    onEndReached: _goNextChapter,
+                    onStartReached: _goPrevChapter,
                   ),
             if (showTop)
               Positioned(

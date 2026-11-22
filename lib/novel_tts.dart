@@ -77,7 +77,19 @@ class FlutterTtsNovelTtsEngine implements NovelTtsEngine {
     _tts.setErrorHandler((_) {
       if (generation == _generation) onError?.call();
     });
-    final result = await _tts.speak(text);
+    // 先把上一条残留清掉：有的引擎在队列未清空时再 speak 会直接返回 0，
+    // 表现就是“点了朗读没声音”。
+    try {
+      await _tts.stop();
+    } catch (_) {}
+    var result = await _tts.speak(text);
+    if (result == 0 || result == false) {
+      // 部分机型第一次调用必返 0（引擎冷启动），重试一次就正常。
+      try {
+        await _tts.stop();
+      } catch (_) {}
+      result = await _tts.speak(text);
+    }
     if (result == 0 || result == false) {
       throw StateError('flutter_tts speak 失败（平台返回 $result）');
     }

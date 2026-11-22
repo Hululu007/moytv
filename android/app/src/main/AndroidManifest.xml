@@ -222,5 +222,10 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- 朗读(TTS)：Android 11+ 有包可见性限制，不声明这条就查不到系统
+             语音引擎，speak 会静默失败（点了没声音）。 -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
 </manifest>
