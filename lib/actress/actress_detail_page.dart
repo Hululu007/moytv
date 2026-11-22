@@ -659,6 +659,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     await _openDetailWithChain(
       chain,
       ActressPlayCandidate(detail: storedDetail, episodeIndex: 0),
+      // 库里本来就有这个番号（dbRows 非空）时，播放中途换线成功就
+      // 把新地址回写库；库里没有这个番号的跨站爬取不回写，避免插出
+      // 没有演员归属的孤儿行。
+      healWork: dbRows.isNotEmpty ? currentWork : null,
     );
   }
 
@@ -701,8 +705,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// 不原地重播同一个死地址（见 DetailScreen.onRetryProbe）。
   Future<void> _openDetailWithChain(
     ActressPlayChain chain,
-    ActressPlayCandidate candidate,
-  ) async {
+    ActressPlayCandidate candidate, {
+    ActressWork? healWork,
+  }) async {
     await Navigator.of(context).push(
       appPageRoute<void>(
         settings: const RouteSettings(name: 'detail'),
@@ -720,6 +725,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
               profileEpoch: widget.store.profileEpoch,
             );
             if (next == null) return null;
+            // 自愈：库里那条地址换线才播得出来，就把新地址写回库，
+            // 下次点这部直接命中，不用再爬。
+            final work = healWork;
+            if (work != null) {
+              unawaited(
+                _healLibraryAddress(work, next.detail, next.episodeIndex),
+              );
+            }
             return (detail: next.detail, episodeIndex: next.episodeIndex);
           },
           onRetryProbe: () async {
@@ -728,12 +741,70 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
               profileEpoch: widget.store.profileEpoch,
             );
             if (next == null) return null;
+            final work = healWork;
+            if (work != null) {
+              unawaited(
+                _healLibraryAddress(work, next.detail, next.episodeIndex),
+              );
+            }
             return (detail: next.detail, episodeIndex: next.episodeIndex);
           },
         ),
       ),
     );
     if (mounted) setState(() {});
+  }
+
+  /// 自愈回写：把跨站重新取到的可播直链写进库里这一行。
+  ///
+  /// 只改播放地址（m3u8_url / vod_play_url 两列同值），库里原本的
+  /// 标题、封面、分类、演员关联一律不动；库里没有这个 vod_id 时不
+  /// 新插行（避免凭空多出没有演员归属的孤儿条目）。解析型地址
+  /// （needsParse、非 http 直链）不写，写进去下次也放不了。
+  Future<void> _healLibraryAddress(
+    ActressWork work,
+    DramaDetail detail,
+    int episodeIndex,
+  ) async {
+    try {
+      final episodes = detail.episodes;
+      if (episodes.isEmpty) return;
+      if (episodeIndex < 0 || episodeIndex >= episodes.length) return;
+      final rawUrl = episodes[episodeIndex].raw['url']?.toString().trim() ?? '';
+      if (rawUrl.isEmpty) return;
+      final uri = Uri.tryParse(rawUrl);
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return;
+      }
+      final code = work.codeKey.isNotEmpty ? work.codeKey : work.codeDisplay;
+      final vodId = videoLibraryVodId(code);
+      if (vodId.isEmpty) return;
+      // 调用方只在「库里本来就有这个番号的可播行」时才进来，同 vod_id
+      // 命中的是已有行：upsert 只换播放地址，地址相同会自己跳过。
+      await widget.database.upsertVideoEntries([
+        (
+          vodId: vodId,
+          title: '',
+          picUrl: '',
+          playUrl: rawUrl,
+          remarks: '',
+          pubdate: '',
+          area: '',
+          year: '',
+          content: '',
+          playFrom: work.site,
+          typeName: '',
+          category: '',
+          actressName: '',
+        ),
+      ]);
+      if (!mounted) return;
+      unawaited(_loadFallback(forceReload: true));
+    } catch (_) {
+      // 库只读/库被换掉/格式对不上都不影响这次播放，静默跳过。
+    }
   }
 
   @override

@@ -301,6 +301,8 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
   bool _usedStartPosition = false;
   bool _synopsisExpanded = false;
   bool _fullscreen = false;
+  /// 视频区恒定身份：全屏切换只换父容器，不重建播放画面。
+  final GlobalKey _videoAreaKey = GlobalKey(debugLabel: 'hongguo-video-area');
   AppOrientationController? _orientationController;
   bool _television = false;
   bool _playbackServiceHeld = false;
@@ -1434,6 +1436,10 @@ class _HongguoPlaybackPageState extends State<HongguoPlaybackPage> {
 
   Widget _videoArea() {
     return GestureDetector(
+      // 进出全屏时视频区的父容器会从 SizedBox 换成 Stack。没有这个
+      // GlobalKey，整棵子树会被当成新 widget 销毁重建，播放器纹理跟着
+      // 重挂 → 全屏黑屏。带上 key 后 Element 是移动而非重建。
+      key: _videoAreaKey,
       onTap: _togglePlay,
       child: ListenableBuilder(
         listenable: _player,

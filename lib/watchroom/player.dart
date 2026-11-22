@@ -303,33 +303,36 @@ class RoomPlayerView extends StatelessWidget {
         }
         final controller = handle.videoController;
         if (controller != null) {
-          final video = Video(controller: controller, fit: BoxFit.contain);
-          if (onFullscreen == null) return video;
+          // 画面元素树必须恒定：进出全屏时只让按钮显隐，Video 永远在
+          // Stack 的第 0 个槽位。以前非全屏直接返回 Video、全屏才包
+          // Stack，槽位一变 Flutter 就销毁重建 Video 的 State，纹理
+          // 随之 detach → 全屏瞬间黑屏、只剩控制层。
           return Stack(
             fit: StackFit.expand,
             children: [
-              video,
-              Positioned(
-                right: 8,
-                bottom: 8,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: .36),
-                    borderRadius: BorderRadius.circular(22),
-                  ),
-                  child: IconButton(
-                    key: const ValueKey('room-fullscreen'),
-                    tooltip: isFullscreen ? '退出全屏' : '全屏',
-                    icon: Icon(
-                      isFullscreen
-                          ? Icons.fullscreen_exit_rounded
-                          : Icons.fullscreen_rounded,
-                      color: Colors.white,
+              Video(controller: controller, fit: BoxFit.contain),
+              if (onFullscreen != null)
+                Positioned(
+                  right: 8,
+                  bottom: 8,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: .36),
+                      borderRadius: BorderRadius.circular(22),
                     ),
-                    onPressed: onFullscreen,
+                    child: IconButton(
+                      key: const ValueKey('room-fullscreen'),
+                      tooltip: isFullscreen ? '退出全屏' : '全屏',
+                      icon: Icon(
+                        isFullscreen
+                            ? Icons.fullscreen_exit_rounded
+                            : Icons.fullscreen_rounded,
+                        color: Colors.white,
+                      ),
+                      onPressed: onFullscreen,
+                    ),
                   ),
                 ),
-              ),
             ],
           );
         }
