@@ -761,3 +761,20 @@ List<ActressJsonEntry> jsonEntriesForWorkCode(
       if (entry.playable && entry.codeKey == key) entry,
   ];
 }
+
+/// 按标题匹配池子条目：通用库作品没有番号（code 列为空、标题里
+/// 才有番号）时用，codeKey 为空才走这条。标题归一化后为空
+///（纯中文标题归一化会 strip 成空）或不相等时不匹配，不硬认。
+/// 2026-11-23：通用库（lsp/yellow/AV 总库）作品进合并后要能播。
+List<ActressJsonEntry> jsonEntriesForWorkTitle(
+  Iterable<ActressJsonEntry> pool,
+  String workTitle,
+) {
+  final key = normalizeAvCode(workTitle);
+  if (key.isEmpty) return const [];
+  return [
+    for (final entry in pool)
+      if (entry.playable &&
+          normalizeAvCode(entry.vodName) == key) entry,
+  ];
+}

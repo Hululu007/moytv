@@ -13,6 +13,7 @@ import 'actress_db_mirror.dart';
 import 'actress_db_selection.dart';
 import 'actress_detail_page.dart';
 import 'actress_film_library.dart';
+import 'actress_generic_database.dart';
 import 'actress_generic_db.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
@@ -26,6 +27,7 @@ import 'actress_site_crawl.dart';
 import 'actress_stacking.dart';
 import 'actress_sync.dart';
 import 'actress_widgets.dart';
+import 'video_db_normalize.dart';
 import '../content_http.dart';
 import '../models.dart';
 import '../whos_fallback.dart';
@@ -238,7 +240,7 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 主库之外的库按这个读列表与分类；打不开/不是严格结构的库不进这里。
   /// 勾选集合本身存在 SharedPreferences（见 actress_db_selection），
   /// 设置弹窗里那份列表自己维护勾选状态，这里只留打开的实例。
-  final _extraDbs = <String, SqfliteActressDatabase>{};
+  final _extraDbs = <String, ActressDatabase>{};
 
   /// 合并后的人名 → 该人作品所在的库：主库优先，只在主库没有这个人
   /// 时才指到外来库；点人进详情页时按这个库取作品。
@@ -461,9 +463,11 @@ class _ActressListPageState extends State<ActressListPage> {
     unawaited(_maybeStartDbMirror());
   }
 
-  /// 多库勾选：读可选库与已勾的库，只读打开勾上的外来库（严格视频
-  /// 库才进列表合并；打不开/不是严格结构的不进，播放兜底仍走老路）。
-  /// 勾选变化时由设置弹窗调 [_applyDbSelection] 再走这里。
+  /// 多库勾选：读可选库与已勾的库，只读打开勾上的外来库（有可播
+  /// 视频的库都进列表合并：严格视频库走 SqfliteActressDatabase，
+  /// 其它结构的库走通用读法 GenericActressDatabase；0 部可播视频
+  /// 或打不开的库不进，播放兜底仍走老路）。勾选变化时由设置弹窗
+  /// 调 [_applyDbSelection] 再走这里。
   /// [reload] 为 false 时只开库、不重读分类与列表（启动时用，
   /// 启动流程自己会读列表）。
   /// 读勾选失败（偏好存储不可用等）时单库继续：这里绝不能抛错，
@@ -481,16 +485,31 @@ class _ActressListPageState extends State<ActressListPage> {
     if (bind == null || !bind.bound) return;
     final choices = ActressDbSelection.availableChoices(bind: bind);
     final selected = await ActressDbSelection.loadSelectedPaths(bind.dbPath);
-    final extras = <String, SqfliteActressDatabase>{};
+    final extras = <String, ActressDatabase>{};
     for (final choice in choices) {
       if (choice.isMain || !selected.contains(choice.path)) continue;
-      if (!await ActressDbSelection.isStrictVideoLibraryDbFile(choice.path)) {
+      // 2026-11-23 用户令：数据库全部支持勾选——有可播视频的库
+      // 都进合并；0 部可播视频 / 打不开的才不进（界面已如实写原因）。
+      final playable =
+          await ActressDbSelection.countPlayableVideos(choice.path);
+      if (playable <= 0) continue;
+      if (await ActressDbSelection.isStrictVideoLibraryDbFile(choice.path)) {
+        extras[choice.path] = SqfliteActressDatabase.forPath(choice.path);
+        // 2026-11-23 转圈根因之三：外来库只读打开、不补索引，点人
+        // ORDER BY vod_pubdate、分类 GROUP BY 都走全表扫；和
+        // MultiDbFilmFallback 同口径，后台给外来库补同一套索引
+        //（只加索引、不动任何一行数据；建不了就跳过，查询照样跑）。
+        unawaited(ensureVideoDbIndexes(choice.path));
         continue;
       }
-      extras[choice.path] = SqfliteActressDatabase.forPath(choice.path);
+      // 非严格结构：通用读法进合并（按作品表女优列分组人物，
+      // 见 GenericActressDatabase）；认不出作品表的库开不出来，
+      // 跳过（界面上它仍显示可播数，播放池那条路还能用它）。
+      final generic = await GenericActressDatabase.open(choice.path);
+      if (generic != null) extras[choice.path] = generic;
     }
     if (!mounted) return;
-    final oldExtras = Map<String, SqfliteActressDatabase>.from(_extraDbs);
+    final oldExtras = Map<String, ActressDatabase>.from(_extraDbs);
     setState(() {
       _extraDbs
         ..clear()
@@ -553,9 +572,15 @@ class _ActressListPageState extends State<ActressListPage> {
     }
     final merged = <String, ActressPerson>{};
     final homeDb = <String, ActressDatabase>{};
+    // 2026-11-23 多库去重：三个库是同一套合库的副本，同一（番号，
+    // 播放链接）在三个库里各有一份，相加会把 2437 计成 7368。
+    // 记下每个人在每个库里的作品数（供下面按（番号，播放链接）
+    // 并集去重；只在多个库出现的人才要去重）。
+    final personDbs = <String, Map<ActressDatabase, int>>{};
     void addRows(List<ActressPerson> rows, ActressDatabase db) {
       for (final person in rows) {
         final key = person.displayName;
+        personDbs.putIfAbsent(key, () => {})[db] = person.worksCount;
         final existing = merged[key];
         if (existing == null) {
           merged[key] = person;
@@ -600,6 +625,11 @@ class _ActressListPageState extends State<ActressListPage> {
     _personHomeDb
       ..clear()
       ..addAll(homeDb);
+    // 多库勾选时按（番号，播放链接）并集去重，计数按去重后的实数算；
+    // 单库时各库计数本身就是实数，不动。
+    if (_hasExtraDbs) {
+      await _dedupMergedWorksCounts(merged, personDbs);
+    }
     final persons = merged.values.toList();
     switch (_sort) {
       case ActressSort.nameAsc:
@@ -617,6 +647,64 @@ class _ActressListPageState extends State<ActressListPage> {
     if (offset >= persons.length) return const [];
     final end = (offset + limit).clamp(0, persons.length);
     return persons.sublist(offset, end);
+  }
+
+  /// 多库合并去重：同一（番号，播放链接）只算一条，计数按去重后
+  /// 的实数算（2026-11-20 合并规则：只有番号与播放链接完全一样
+  /// 才过滤，同番号不同地址各留一条）。每个人在各库拉（番号，
+  /// 播放链接）键集合求并集，计数 = 并集大小；作品数巨大的兜底名
+  ///（如 素人 29 万部）不拉全量集合（内存顶不住），三个库是同一
+  /// 套合库的副本，并集 ≈ 最大单库数，取最大库数。只在勾了外来库
+  /// 时跑；单库时各库计数本身就是实数，不动。
+  static const _mergedDedupKeyCap = 50000;
+
+  Future<void> _dedupMergedWorksCounts(
+    Map<String, ActressPerson> merged,
+    Map<String, Map<ActressDatabase, int>> personDbs,
+  ) async {
+    final targets = <String, Map<ActressDatabase, int>>{};
+    final capped = <String, int>{};
+    for (final entry in personDbs.entries) {
+      final name = entry.key;
+      final perDb = entry.value;
+      final person = merged[name];
+      if (person == null || perDb.length < 2) continue;
+      if (person.worksCount > _mergedDedupKeyCap) {
+        capped[name] = perDb.values.reduce((a, b) => a > b ? a : b);
+        continue;
+      }
+      targets[name] = perDb;
+    }
+    // 各库并行拉键集合（不同库是不同连接，互不堵；同一库内
+    // sqflite 串行）。单个库查失败时按该库无此人处理，不堵整页。
+    final unions = <String, Set<String>>{};
+    await Future.wait([
+      for (final entry in targets.entries)
+        for (final db in entry.value.keys)
+          db
+              .distinctWorkKeysForName(entry.key)
+              .then(
+                (keys) => unions
+                    .putIfAbsent(entry.key, () => <String>{})
+                    .addAll(keys),
+              )
+              .catchError((_) {}),
+    ]);
+    for (final entry in merged.entries) {
+      final name = entry.key;
+      final union = unions[name];
+      if (union != null) {
+        merged[name] = entry.value.copyWith(
+          worksCount: union.length,
+          exactWorks: union.length,
+        );
+      } else if (capped.containsKey(name)) {
+        merged[name] = entry.value.copyWith(
+          worksCount: capped[name],
+          exactWorks: capped[name],
+        );
+      }
+    }
   }
 
   var _mergedHasMore = false;
@@ -1833,8 +1921,11 @@ class _ActressListPageState extends State<ActressListPage> {
     if (service == null) return;
     try {
       var categories = await service.categories();
-      // 2026-11-23 多库勾选：分类取勾选库的并集（按名合并、条数相加，
-      // 仍按条数倒序）。勾上的外来库查不到就跳过，不堵主库分类。
+      // 2026-11-23 多库去重：三个库是同一套合库的副本，分类数相加
+      // 会翻倍（有码 22 万计成 44 万）。分类的精确并集要拉全库
+      //（番号，播放链接）集合，太贵；取最大单库数——并集 ≈ 最大库数
+      //（副本之间几乎全重叠），误差 <1%。人物计数走精确并集，见
+      // _dedupMergedWorksCounts。
       if (_hasExtraDbs) {
         final counts = <String, int>{
           for (final c in categories) c.$1: c.$2,
@@ -1842,7 +1933,8 @@ class _ActressListPageState extends State<ActressListPage> {
         for (final extra in _extraDbs.values) {
           try {
             for (final c in await extra.dbCategories()) {
-              counts[c.$1] = (counts[c.$1] ?? 0) + c.$2;
+              final prev = counts[c.$1];
+              if (prev == null || c.$2 > prev) counts[c.$1] = c.$2;
             }
           } catch (_) {}
         }
@@ -2768,10 +2860,12 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
 
 /// 设置弹窗“数据库”区下的多库勾选（2026-11-23 用户令）。
 /// 勾上的库一起加载：列表按人名归并、分类取并集；默认只勾主库，
-/// 主库永远勾着不可取消。不是严格视频库结构（videos /
-/// video_actress / video_category 三张表）的库不参与合并，勾上
-/// 了也会自动取消。本 widget 自己读可选库与已勾集合（弹窗是独立
-/// 路由，宿主 setState 不会重建它）；勾选变化时调宿主
+/// 主库永远勾着不可取消。有可播视频的库都能勾（严格视频库与
+/// 通用库都进合并，见 GenericActressDatabase）；只有确实 0 部
+/// 可播视频、或文件打不开的库才不让勾，副标题如实写原因
+///（“0 部可播视频”/“读不出来”），不拿“不是视频库结构”一句话
+/// 把有视频的库挡在外面。本 widget 自己读可选库与已勾集合（弹窗
+/// 是独立路由，宿主 setState 不会重建它）；勾选变化时调宿主
 /// [_ActressListPageState._applyDbSelection] 存勾选并重读列表
 /// 与分类。
 class _ActressDbChoiceList extends StatefulWidget {
@@ -2810,17 +2904,18 @@ class _ActressDbChoiceListState extends State<_ActressDbChoiceList> {
       _loaded = true;
     });
     for (final choice in choices) {
-      final count = await ActressDbSelection.countVideos(choice.path);
+      final count =
+          await ActressDbSelection.countPlayableVideos(choice.path);
       if (!mounted) return;
       setState(() => _counts[choice.path] = count);
     }
-    // 不是严格视频库的勾选不参与合并：自动取消勾选并存回去。
+    // 0 部可播视频 / 读不出来的勾选不参与合并：自动取消勾选并存回去。
     final pruned = Set<String>.from(_selected);
     var changed = false;
     for (final choice in _choices) {
       if (choice.isMain) continue;
       final count = _counts[choice.path];
-      if (count != null && count < 0 && pruned.remove(choice.path)) {
+      if (count != null && count <= 0 && pruned.remove(choice.path)) {
         changed = true;
       }
     }
@@ -2854,7 +2949,7 @@ class _ActressDbChoiceListState extends State<_ActressDbChoiceList> {
             value: _selected.contains(choice.path),
             onChanged: choice.isMain ||
                     (_counts[choice.path] != null &&
-                        _counts[choice.path]! < 0)
+                        _counts[choice.path]! <= 0)
                 ? null
                 : (value) async {
                     final next = Set<String>.from(_selected);
@@ -2874,8 +2969,10 @@ class _ActressDbChoiceListState extends State<_ActressDbChoiceList> {
               _counts[choice.path] == null
                   ? '正在数…'
                   : _counts[choice.path]! < 0
-                      ? '不是视频库结构，不参与合并'
-                      : '${_counts[choice.path]} 部视频',
+                      ? '读不出来（打不开或不是数据库）'
+                      : _counts[choice.path]! == 0
+                          ? '0 部可播视频'
+                          : '${_counts[choice.path]} 部视频',
             ),
             controlAffinity: ListTileControlAffinity.leading,
             dense: true,

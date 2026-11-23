@@ -171,6 +171,26 @@ abstract class ActressDatabase {
 
   Future<int> countWorks(int personId, {String? category});
 
+  /// 多库合并去重用：该人名下全部作品的（番号，播放链接）键集合
+  ///（键形如 `番号键|有效播放地址`，番号键是归一化后的番号
+  ///（normalizeAvCode，跨库同作品才能对上：严格库的 vod_id
+  ///是小写 slug、通用库的 code 列可能是大写带连字符），有效地址
+  ///口径与播放链一致：m3u8_url 优先、否则 vod_play_url，再过
+  ///extractPlayUrl）。
+  /// 2026-11-20 合并规则：只有番号与播放链接完全一样才过滤，
+  /// 同番号不同地址各留一条。视频库模式才有数据；其它模式回空集
+  ///（合并时退回相加口径）。默认实现回空集——测试替身与内存库
+  /// 不用实现。
+  Future<Set<String>> distinctWorkKeysForName(String name) async =>
+      const <String>{};
+
+  /// 全库一级分类（去重计数）：多库勾选时列表页分类行取各库并集。
+  /// 严格库读 video_category.main_category；通用库读通用读法
+  /// 的分类（优先 video_category、否则作品表自己的分类列，
+  /// 见 GenericDbReader.categories）。默认实现回空集——测试替身
+  /// 与内存库不用实现。
+  Future<List<(String, int)>> dbCategories() async => const [];
+
   /// 该人物作品里实际存在的分类（只含 category 非空的行），按作品
   /// 数从多到少、同数按名字排；没有分类的作品不产生标签、不丢数据
   /// （它们只在“全部”里显示）。详情页分类筛选的标签来源。
@@ -664,7 +684,7 @@ class SqfliteActressDatabase implements ActressDatabase {
           // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
           // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
           // 或磁盘满时建不了就跳过，查询照样能跑。
-          await _ensureVideoIndexes(db);
+          await _ensureVideoIndexes(db, filePath);
           // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
           // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
           await _ensureActressSexColumn(db);
@@ -743,7 +763,7 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 汇总表重建不再这里同步等（2026-11-22 修复：重建 2.5~24 秒
   /// 堵住首次开屏）：只排期后台跑，列表先用旧汇总表、没有就现算
   /// 顶着，不堵首屏。
-  Future<void> _ensureVideoIndexes(Database db) async {
+  Future<void> _ensureVideoIndexes(Database db, String filePath) async {
     for (final sql in const [
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
@@ -770,7 +790,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 单个索引建不了不影响另一个，也不影响读。
       }
     }
-    _scheduleVideoRollup(db);
+    _scheduleVideoRollup(db, filePath);
   }
 
   /// actresses 补 sex 列（2026-11-23 v58 验机：合并版库与老库的
@@ -805,16 +825,26 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 汇总表重建挪到后台：首次开库只建索引就放行，3 秒后再跑；
   /// 库已关/已换时不再是当前连接，不跑。失败不影响读（读取侧
   /// 回退现算）。
-  void _scheduleVideoRollup(Database db) {
+  void _scheduleVideoRollup(Database db, String filePath) {
     if (_videoRollupScheduled) return;
     _videoRollupScheduled = true;
     Future.delayed(const Duration(seconds: 3), () async {
+      // 2026-11-23 详情页转圈 12~54 秒的根因之一：汇总表重建（per_cate
+      // 全表 GROUP BY + 分批写回，实测冷盘 36 秒）在共享连接上跑，
+      // sqflite 单连接串行排队，列表/详情的读全被堵在重建后面。改在
+      // 独立连接上重建：读连接照常读，只剩磁盘 IO 竞争；写锁只在每批
+      // 提交与换表的一瞬间，读等一小下就过去。重建失败不影响读。
+      Database? rebuildDb;
       try {
         if (!identical(_db, db)) return;
-        await _ensureVideoRollup(db);
+        rebuildDb = await openDatabase(filePath, singleInstance: false);
+        await _ensureVideoRollup(rebuildDb);
       } catch (_) {
         // 后台重建失败不影响读。
       } finally {
+        try {
+          await rebuildDb?.close();
+        } catch (_) {}
         _videoRollupScheduled = false;
       }
     });
@@ -1778,11 +1808,20 @@ class SqfliteActressDatabase implements ActressDatabase {
         ActressSort.nameAsc => 'a.name ASC',
         ActressSort.recentDesc => 'last_date DESC, a.name ASC',
       };
+      // 2026-11-23 转圈根因之二：回退 CTE 里 LEFT JOIN videos 只为
+      // 取 MAX(vod_pubdate)（最近更新排序用），47 万行逐行回表查
+      // videos 主键，冷盘实测 36 秒；按作品数/名字排时 last_date
+      // 根本不用。只在 recentDesc 时才 join，平时纯走
+      // video_actress(cate_id) 索引扫，实测 0.6 秒（冷盘）/ 0.1 秒（热）。
+      final needLatestDate = sort == ActressSort.recentDesc;
+      final perCateSql = needLatestDate
+          ? 'SELECT cate_id AS cate_id, COUNT(*) AS n, '
+              'MAX(v.vod_pubdate) AS d FROM video_actress va '
+              'LEFT JOIN videos v ON v.vod_id = va.vod_id GROUP BY cate_id'
+          : 'SELECT cate_id AS cate_id, COUNT(*) AS n, '
+              "'' AS d FROM video_actress GROUP BY cate_id";
       final rows = await db.rawQuery(
-        'WITH per_cate AS ('
-        'SELECT cate_id AS cate_id, COUNT(*) AS n, '
-        'MAX(v.vod_pubdate) AS d FROM video_actress va '
-        'LEFT JOIN videos v ON v.vod_id = va.vod_id GROUP BY cate_id) '
+        'WITH per_cate AS ($perCateSql) '
         'SELECT MIN(a.rowid) AS id, a.name AS display_name, '
         'a.name AS cate_id, '
         '${hasSex ? "CASE WHEN SUM(CASE WHEN a.sex='male' THEN 1 ELSE 0 END)>0 "
@@ -2021,9 +2060,39 @@ class SqfliteActressDatabase implements ActressDatabase {
     return (rows.first['c'] as num?)?.toInt() ?? 0;
   }
 
+  @override
+  Future<Set<String>> distinctWorkKeysForName(String name) async {
+    final db = await _open();
+    if (!_videoLibraryMode) return const {};
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return const {};
+    try {
+      final rows = await db.rawQuery(
+        'SELECT v.vod_id AS vod_id, v.m3u8_url AS m3u8_url, '
+        'v.vod_play_url AS vod_play_url FROM videos v '
+        'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
+        'WHERE cate_id IN (SELECT cate_id FROM actresses '
+        'WHERE name = ?))',
+        [trimmed],
+      );
+      return {
+        for (final row in rows)
+          '${normalizeAvCode((row['vod_id'] ?? '').toString())}|'
+              '${extractPlayUrl(
+            (row['m3u8_url']?.toString() ?? '').isNotEmpty
+                ? row['m3u8_url']
+                : row['vod_play_url'],
+          )}',
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// 全库一级分类（video_category.main_category，去重计数）：
   /// 多库勾选时列表页分类行取各库并集。只读查询，不写盘；
   /// 没有 video_category 表的库直接抛错，调用方跳过。
+  @override
   Future<List<(String, int)>> dbCategories() async {
     final db = await _open();
     final rows = await db.rawQuery(
@@ -3411,6 +3480,23 @@ class MemoryActressDatabase implements ActressDatabase {
   }
 
   @override
+  Future<Set<String>> distinctWorkKeysForName(String name) async {
+    // 内存库没有 videos 表（没有播放链接）：只按番号键去重。
+    int? personId;
+    for (final person in _persons.values) {
+      if (person.displayName == name) {
+        personId = person.localId;
+        break;
+      }
+    }
+    if (personId == null) return const {};
+    return {
+      for (final work in _works.values)
+        if (work.personId == personId) '${work.codeKey}|',
+    };
+  }
+
+  @override
   Future<List<({String name, int count})>> workCategories(
     int personId,
   ) async {
@@ -3431,6 +3517,10 @@ class MemoryActressDatabase implements ActressDatabase {
     });
     return out;
   }
+
+  /// 内存库没有全库分类表：回空集（多库合并时跳过）。
+  @override
+  Future<List<(String, int)>> dbCategories() async => const [];
 
   void _refreshWorksCount(int personId) {
     final person = _persons[personId];

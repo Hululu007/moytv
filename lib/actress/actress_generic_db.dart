@@ -1475,6 +1475,16 @@ class GenericDbReader {
       if (titleCol != null) titleCol,
     ];
     if (columns.isEmpty) return const [];
+    // 2026-11-23 转圈根因之四：兜底池按番号查外来库时，LIKE '%番号%'
+    // 全表扫（番号列还包了 REPLACE/UPPER，索引用不上），60 个番号 ×
+    // 两个外来库 = 120 次全表扫，磁盘被打满几分钟，详情页的读也被拖
+    // 慢。视频库的番号列就是 vod_id 主键：先按精确值查（走主键索引，
+    // 毫秒级），命中就直接回；只有精确查不到才落回 LIKE 模糊查
+    //（标题含番号、分隔符写法不同等情况）。
+    if (codeCol == 'vod_id') {
+      final exact = await _worksForCodeExact(codeKey, normalized, limit);
+      if (exact.isNotEmpty) return exact;
+    }
     final tokens = [for (final column in columns) _normalizedColumn(column)];
     final List<Map<String, Object?>> rows;
     try {
@@ -1495,6 +1505,58 @@ class GenericDbReader {
       final codeMatch = _normalizeCodeKey(work.code) == normalized;
       final titleMatch = _normalizeCodeKey(work.title).contains(normalized);
       if (!codeMatch && !titleMatch) continue;
+      out.add(work);
+      if (out.length >= limit) break;
+    }
+    return _attachRelated(out);
+  }
+
+  /// 按番号精确查（走主键/索引）：调用方传来的番号可能是库里原样
+  ///（ipzz-840）、也可能是归一化后（IPZZ840），几种写法都试一遍。
+  /// 命中后仍按归一化番号在 Dart 侧精确比对，不合的不要。
+  Future<List<GenericDbWork>> _worksForCodeExact(
+    String codeKey,
+    String normalized,
+    int limit,
+  ) async {
+    final mapping = schema.worksTable;
+    final db = _db;
+    if (mapping == null || db == null) return const [];
+    final codeCol = mapping.columnFor(GenericDbRole.code);
+    if (codeCol == null) return const [];
+    final variants = <String>{};
+    for (final raw in [codeKey, normalized]) {
+      final t = raw.trim();
+      if (t.isEmpty) continue;
+      variants.add(t);
+      variants.add(t.toLowerCase());
+      variants.add(t.toUpperCase());
+      // 归一化番号（IPZZ840）补回连字符写法（ipzz-840）。
+      final m = RegExp(r'^([A-Za-z]+)0*(\d+)$').firstMatch(t);
+      if (m != null) {
+        variants.add('${m.group(1)}-${m.group(2)}'.toLowerCase());
+        variants.add('${m.group(1)}-${m.group(2)}'.toUpperCase());
+      }
+    }
+    if (variants.isEmpty) return const [];
+    final placeholders = List.filled(variants.length, '?').join(',');
+    final List<Map<String, Object?>> rows;
+    try {
+      rows = await db.query(
+        mapping.table,
+        columns: _selectColumns(mapping),
+        where: '${_quote(codeCol)} IN ($placeholders)',
+        whereArgs: variants.toList(),
+        orderBy: 'rowid',
+        limit: limit,
+      );
+    } catch (_) {
+      return const [];
+    }
+    final out = <GenericDbWork>[];
+    for (final row in rows) {
+      final work = _rowToWork(mapping, row);
+      if (_normalizeCodeKey(work.code) != normalized) continue;
       out.add(work);
       if (out.length >= limit) break;
     }

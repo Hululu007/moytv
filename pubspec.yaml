@@ -1,7 +1,7 @@
 name: moyi
 description: 独立运行的多端短剧应用
 publish_to: none
-version: 1.0.5+30
+version: 1.0.6+31
 
 environment:
   sdk: '>=3.12.0 <4.0.0'

@@ -3,9 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_theme_config.dart';
-import 'core_bridge.dart';
 import 'neon_glass_kit.dart';
-import 'site_cube.dart';
 import 'site_icon.dart';
 
 class SourcePickerEntry {
@@ -35,7 +33,7 @@ class SourcePickerGroup {
   final String title;
   final List<SourcePickerEntry> entries;
 
-  /// 3D 翻页分区：builtin=内置区，import=导入区（本地导入 +
+  /// 双区翻页分区：builtin=内置区，import=导入区（本地导入 +
   /// 远程配置）。默认 builtin；直播/阅读弹窗不分区，不传即全进
   /// 内置区、不翻页。
   static const zoneBuiltin = 'builtin';
@@ -65,13 +63,8 @@ Future<String?> showSitePickerDialog(
   /// （直播/阅读区不传，只在片库区接导入）。
   Future<void> Function()? onImport,
 
-  /// 取各站首页海报用的仓库：非空且当前主题列表样式为方块时，
-  /// 弹窗改渲染 3D 方块列；为空时永远是普通列表（直播/阅读区
-  /// 不传，方块只在片库区出现）。
-  AppRepository? repository,
-
-  /// 3D 翻页双区开关（只在片库区传 true）：内置区 / 导入区
-  /// 用翻书式 3D 动效切换；不传时保持原来的单列表。
+  /// 双区开关（只在片库区传 true）：内置区 / 导入区
+  /// 用淡入淡出切换；不传时保持原来的单列表。
   bool enableZoneFlip = false,
 
   /// 打开时默认显示的区：0 内置区，1 导入区。导入成功后调用方
@@ -86,7 +79,6 @@ Future<String?> showSitePickerDialog(
     initialEditMode: initialEditMode,
     onDeleteSite: onDeleteSite,
     onImport: onImport,
-    repository: repository,
     enableZoneFlip: enableZoneFlip,
     initialZoneIndex: initialZoneIndex,
   ),
@@ -101,7 +93,6 @@ class SitePickerDialog extends StatefulWidget {
     this.initialEditMode = false,
     this.onDeleteSite,
     this.onImport,
-    this.repository,
     this.enableZoneFlip = false,
     this.initialZoneIndex = 0,
   });
@@ -112,7 +103,6 @@ class SitePickerDialog extends StatefulWidget {
   final bool initialEditMode;
   final Future<bool> Function(SourcePickerEntry entry)? onDeleteSite;
   final Future<void> Function()? onImport;
-  final AppRepository? repository;
   final bool enableZoneFlip;
   final int initialZoneIndex;
 
@@ -130,10 +120,9 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   late bool _editMode;
   late List<_EditableGroup> _groups;
 
-  /// 3D 翻页：0 内置区，1 导入区；每区一个滚动控制器（翻页过渡
+  /// 双区：0 内置区，1 导入区；每区一个滚动控制器（切换过渡
   /// 期两区列表同时在树里，共用一个控制器会断言失败）。
   late int _zoneIndex;
-  int _flipDirection = 1;
   final _zoneScrollControllers = [ScrollController(), ScrollController()];
 
   /// 翻页只在片库区开：调用方传 enableZoneFlip 才翻；直播/阅读
@@ -163,14 +152,12 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
-  /// 切区：点区签或左右滑触发；翻页方向记下来给过渡动效用，
-  /// 切完重定位当前站（在新区里才滚）。
+  /// 切区：点区签或左右滑触发；切完重定位当前站（在新区里才滚）。
   void _setZone(int index) {
     if (!_flipEnabled || index == _zoneIndex || index < 0 || index > 1) {
       return;
     }
     setState(() {
-      _flipDirection = index > _zoneIndex ? 1 : -1;
       _zoneIndex = index;
       _scrolledToCurrent = false;
       _scrollSteps = 0;
@@ -180,8 +167,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   }
 
   /// 打开弹窗自动滚到当前选中的站。宫格列表一次全建出来，选中行
-  /// 首帧就在树里，直接 ensureVisible；方块列是懒加载（每行进树
-  /// 才请求封面，不能改全量），选中行没建出来时按视口步进往下
+  /// 首帧就在树里，直接 ensureVisible；没建出来时按视口步进往下
   /// 跳、直到它出现再 ensureVisible；到底且范围不再变就放弃。
   void _scrollToCurrent() {
     if (_scrolledToCurrent || !mounted || _scrollSteps >= 80) return;
@@ -275,14 +261,6 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       if (entries.isEmpty) continue;
       visible.add((title: group.title, entries: entries));
     }
-    // 方块列只在三个条件同时满足时出现：调用方传了仓库（片库区）、
-    // 当前主题列表样式为方块、且不在编辑模式（编辑模式要留删除按钮，
-    // 仍用普通列表）。其它情况一律走原有普通列表，一字不动。
-    final cubeMode =
-        widget.repository != null &&
-        !_editMode &&
-        siteListStyleForTheme(AppThemeConfig.of(context).mode) ==
-            SiteListStyle.cube;
     return Dialog(
       key: const ValueKey('site-picker-dialog'),
       backgroundColor: colors.surface,
@@ -380,53 +358,19 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                           }
                         },
                         child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 320),
-                          transitionBuilder: (child, animation) {
-                            // 关键：transitionBuilder 只在建条目时调一次，
-                            // 直接读 animation.value 会把首帧角度焊死
-                            // （初始页建时 value=0，列表会以 90° 立着、
-                            // 看不见也滑不动）。用 AnimatedBuilder 包起来，
-                            // 每帧按当前动画值重算角度，翻页才是真翻。
-                            return AnimatedBuilder(
-                              animation: animation,
-                              builder: (context, child) {
-                                // 出场（reverse）与入场（forward）同向绕边翻：
-                                // 前进时旧页绕右边走、新页绕左边来，后退时反过来。
-                                final isOutgoing =
-                                    animation.status ==
-                                    AnimationStatus.reverse;
-                                final dir = _flipDirection.toDouble();
-                                final progress = isOutgoing
-                                    ? 1 - animation.value
-                                    : animation.value;
-                                final angle = isOutgoing
-                                    ? progress * dir * (math.pi / 2)
-                                    : (1 - progress) * dir * (math.pi / 2);
-                                final alignment = isOutgoing
-                                    ? (dir > 0
-                                          ? Alignment.centerRight
-                                          : Alignment.centerLeft)
-                                    : (dir > 0
-                                          ? Alignment.centerLeft
-                                          : Alignment.centerRight);
-                                return Transform(
-                                  alignment: alignment,
-                                  transform: Matrix4.identity()
-                                    ..setEntry(3, 2, 0.0012)
-                                    ..rotateY(angle),
-                                  child: child,
-                                );
-                              },
-                              child: child,
-                            );
-                          },
+                          duration: const Duration(milliseconds: 200),
+                          transitionBuilder: (child, animation) =>
+                              FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              ),
                           child: KeyedSubtree(
                             key: ValueKey('site-picker-zone-$_zoneIndex'),
-                            child: _listBody(visible, searching, cubeMode),
+                            child: _listBody(visible, searching),
                           ),
                         ),
                       )
-                    : _listBody(visible, searching, cubeMode),
+                    : _listBody(visible, searching),
               ),
               const SizedBox(height: 8),
               Row(
@@ -452,12 +396,11 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
-  /// 列表区本体（翻页与不翻页共用）：空态 / 方块列 / 普通宫格列表。
+  /// 列表区本体（翻页与不翻页共用）：空态 / 宫格列表。
   /// 导入区空时给去处提示，不留白屏。
   Widget _listBody(
     List<({String title, List<SourcePickerEntry> entries})> visible,
     bool searching,
-    bool cubeMode,
   ) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -474,7 +417,6 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
         ),
       );
     }
-    if (cubeMode) return _cubeList(visible, searching);
     return ListView(
       controller: _activeScrollController,
       children: [
@@ -536,9 +478,8 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
-  /// 图标宫格：普通列表样式下的站点呈现——圆角图标块 + 下面站名，
-  /// 点块进站（与旧文字芯片点行完全一致，pop 回站 id）。方块列
-  /// （霓虹主题 + 传仓库 + 非编辑模式）走 [_cubeList]，不受影响。
+  /// 图标宫格：站点呈现——圆角图标块 + 下面站名，
+  /// 点块进站（与旧文字芯片点行完全一致，pop 回站 id）。
   /// 图标取不到时显示图案标，见 [SiteIcon]。
   Widget _siteGrid(({String title, List<SourcePickerEntry> entries}) group) {
     return LayoutBuilder(
@@ -667,168 +608,6 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  /// 方块列：每站一行（方块 + 站名），点方块与普通列表点行完全一致
-  /// （pop 回站 id，调用方切站进频道）。惰性 ListView：只有滚到眼前
-  /// 的行才取首页海报，避免开弹窗就并发打全部站。
-  Widget _cubeList(
-    List<({String title, List<SourcePickerEntry> entries})> visible,
-    bool searching,
-  ) {
-    final rows = <_CubeRow>[];
-    for (final group in visible) {
-      if (!searching && group.title.isNotEmpty) {
-        rows.add(_CubeRow.header('${group.title}（${group.entries.length}）'));
-      }
-      for (final entry in group.entries) {
-        rows.add(_CubeRow.entry(entry));
-      }
-    }
-    return ListView.builder(
-      controller: _activeScrollController,
-      itemCount: rows.length,
-      itemBuilder: (context, index) {
-        final row = rows[index];
-        final header = row.header;
-        if (header != null) {
-          return NeonSectionTitle(
-            header,
-            padding: const EdgeInsets.only(top: 12, bottom: 4),
-          );
-        }
-        final entry = row.entry!;
-        final selected = entry.id == widget.currentId;
-        return _SiteCubeRow(
-          key: ValueKey('site-picker-row-${entry.id}'),
-          entry: entry,
-          selected: selected,
-          currentKey: selected ? _currentKey : null,
-          repository: widget.repository!,
-          onTap: () => Navigator.pop(context, entry.id),
-          onLongPress: _canDelete(entry) ? () => _delete(entry) : null,
-        );
-      },
-    );
-  }
-}
-
-/// 方块列里的一行：组标题，或一个站点。
-class _CubeRow {
-  const _CubeRow.header(this.header) : entry = null;
-
-  const _CubeRow.entry(this.entry) : header = null;
-
-  final String? header;
-  final SourcePickerEntry? entry;
-}
-
-/// 方块列里的一站：方块（六个面取该站首页前 6 张海报）+ 站名行。
-/// 海报用调用方已有的仓库取：catalog(siteId, page: 1) 取首页条目，
-/// 再逐条调 repository.cover 解析成本地封面文件；任一环节失败或
-/// 为空都显示占位面，不编假图、不另写裸请求。
-class _SiteCubeRow extends StatefulWidget {
-  const _SiteCubeRow({
-    super.key,
-    required this.entry,
-    required this.selected,
-    this.currentKey,
-    required this.repository,
-    required this.onTap,
-    this.onLongPress,
-  });
-
-  final SourcePickerEntry entry;
-  final bool selected;
-
-  /// 当前站的定位 key（滚到当前站用），只在选中行上挂。
-  final Key? currentKey;
-  final AppRepository repository;
-  final VoidCallback onTap;
-
-  /// 长按删站（可删的站才传）：与宫格长按同一 [_delete] 入口。
-  final VoidCallback? onLongPress;
-
-  @override
-  State<_SiteCubeRow> createState() => _SiteCubeRowState();
-}
-
-class _SiteCubeRowState extends State<_SiteCubeRow> {
-  late final Future<List<String>> _covers;
-
-  @override
-  void initState() {
-    super.initState();
-    _covers = _loadCovers();
-  }
-
-  Future<List<String>> _loadCovers() async {
-    try {
-      final page = await widget.repository.catalog(widget.entry.id, page: 1);
-      final covers = <String>[];
-      for (final drama in page.items.take(6)) {
-        try {
-          final resolved = await widget.repository.cover(drama);
-          if (resolved.isNotEmpty) {
-            covers.add(resolved);
-            continue;
-          }
-        } catch (_) {
-          // 单张解析失败就回落到条目自带的封面地址，继续下一张。
-        }
-        if (drama.cover.isNotEmpty) covers.add(drama.cover);
-      }
-      return covers;
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final config = AppThemeConfig.of(context);
-    final theme = Theme.of(context);
-    return Container(
-      key: widget.currentKey,
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      child: Column(
-        children: [
-          FutureBuilder<List<String>>(
-            future: _covers,
-            builder: (context, snapshot) => SiteCube(
-              siteName: widget.entry.name,
-              covers: snapshot.data ?? const [],
-              size: 132,
-              onTap: widget.onTap,
-              onLongPress: widget.onLongPress,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(
-                  widget.entry.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: widget.selected
-                        ? config.primaryColor
-                        : config.unselectedText,
-                    fontWeight: widget.selected ? FontWeight.w600 : null,
-                  ),
-                ),
-              ),
-              if (widget.selected) ...[
-                const SizedBox(width: 6),
-                Icon(Icons.check, size: 18, color: config.primaryColor),
-              ],
-            ],
-          ),
-        ],
       ),
     );
   }

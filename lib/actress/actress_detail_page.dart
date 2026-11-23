@@ -21,14 +21,15 @@ import '../widgets.dart';
 ///
 /// - 作品一律视频卡片（DramaTile，与站内卡片同一形态）：有封面显示
 ///   封面 + 标题/番号，无封面用占位卡片 + 番号，点卡片才播；
-/// - 作品的播放链接全部以数据库里为准（2026-11-22 用户令：女优库
+/// - 作品与首选地址以数据库里为准（2026-11-22 用户令：女优库
 ///   全部播放只走数据库里的数据）：只读库，不走跨站现取、不走
 ///   json/m3u 兜底做展示——m3u hash 图贴封面与跨站搜索补封面
 ///   （双键合流）都已停掉，库里没有封面就如实显示占位卡片，不编
-///   地址；点卡只试库里存的地址（按番号匹配、同番号多条逐条
-///   resolve + 验活，最多 3 条，首条活的进详情页播），库里没有
-///   可播地址就报“库里暂无播放地址”，不落回内置兜底、不跨站探活、
-///   不弹去搜索；
+///   地址；点卡先试库里存的地址（按番号匹配、同番号多条逐条
+///   resolve + 验活，最多 3 条，首条活的进详情页播）；库里地址
+///   全死了才走站点线路兜底（2026-11-23 13:46 改令：潮流线路不关，
+///   修通接过来——按番号 jpcode 现查，和片库同一条解析路子），
+///   兜底也查不到才报“库里暂无播放地址”，不落回内置兜底、不弹去搜索；
 /// - 分类 chips 与顶栏走霓虹样式（见 actress_neon.dart）。
 class ActressDetailPage extends StatefulWidget {
   const ActressDetailPage({
@@ -520,10 +521,19 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     // 兜底条目的 codeKey 是归一化番号（RKI6042）——直接比字符串永远
     // 不相等，导致库里 32 万条直链一条都取不到、点播放只能去跨站爬。
     // 统一归一化比较，见 jsonEntriesForWorkCode。
-    final dbRows = jsonEntriesForWorkCode(
+    var dbRows = jsonEntriesForWorkCode(
       _fallbackEntries,
       currentWork.codeKey,
     );
+    // 通用库作品没有番号（codeKey 为空、标题里才有番号）时按标题
+    // 匹配池子条目：池子里的同一条作品就是从通用库读出来的，
+    // 标题相同；标题归一化后为空时不匹配（见 jsonEntriesForWorkTitle）。
+    if (dbRows.isEmpty && currentWork.codeKey.trim().isEmpty) {
+      dbRows = jsonEntriesForWorkTitle(
+        _fallbackEntries,
+        currentWork.displayTitle,
+      );
+    }
     DramaDetail? storedDetail;
     try {
       // 只试库里存的地址：逐条 resolve + 验活，首条活的直接进详情页播
@@ -558,6 +568,60 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           continue;
         }
       }
+      // 2026-11-23 13:46 改令：潮流线路不关、修通接过来——库里地址
+      // 全死了时走站点线路兜底（潮流站优先）。片库里潮流站播同一部
+      // 片走的是 detailContent('code_<番号>') → '正片$jpcode:<番号>'
+      // → playerContent('jpcode:<番号>') → _resolve_code 现查活链；
+      // 女优库之前只把库里存的地址原样当集 id 传给 playerContent
+      // 的“原始分支”，存的地址一死（旧库里多是 streamfastpro 死链）
+      // 就报无法播放，哪怕潮流站现查能拿到活链。这里按番号走同一
+      // 条路：jpcode 现查 + 验活，活的就进详情页播（集 id 用
+      // jpcode:<番号>，播放器 resolve 时走和片库完全相同的
+      // _resolve_code，头也一样）。现查是联网动作，预算放宽到 60 秒
+      //（库里直链那 8 秒不够它查桶 JSON）。
+      if (storedDetail == null) {
+        final code = currentWork.codeKey;
+        if (code.isNotEmpty) {
+          try {
+            final drama = Drama(
+              id: 'json:chaoliu:$code',
+              source: 'chaoliu',
+              title: currentWork.displayTitle,
+            );
+            final episode = Episode(
+              {'id': 'jpcode:$code', 'title': '正片'},
+              1,
+            );
+            final plan = await widget.repository
+                .resolve(drama, episode)
+                .timeout(const Duration(seconds: 60));
+            if (!cancel.isCompleted &&
+                playGeneration == _playGeneration &&
+                !plan.needsParse) {
+              final uri = Uri.tryParse(plan.url.trim());
+              if (uri != null &&
+                  (uri.scheme == 'http' || uri.scheme == 'https') &&
+                  uri.host.isNotEmpty) {
+                final response = await _verifyFetch(
+                  plan.url,
+                  plan.headers,
+                  const Duration(seconds: 5),
+                );
+                if (feedProbePlayable(uri, response)) {
+                  final base = dbRows.isNotEmpty
+                      ? dbRows.first.toDramaDetail()
+                      : _detailForWork(currentWork);
+                  storedDetail = base.withEpisodes([
+                    Episode({'id': 'jpcode:$code', 'title': '正片'}, 1),
+                  ]);
+                }
+              }
+            }
+          } catch (_) {
+            // 潮流站也查不到活链：往下走老路（第一条库地址进页 / 报暂无）。
+          }
+        }
+      }
     } finally {
       if (mounted && playGeneration == _playGeneration) {
         setState(() {
@@ -583,18 +647,33 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       await _openDetail(dbRows.first.toDramaDetail());
       return;
     }
-    // 库里没有可播地址（没有这部、没有直链、或存的地址全死）：
-    // 只报这一句，不落回内置、不探活、不弹去搜索。
+    // 库里没有可播地址（没有这部、没有直链、或存的地址全死、潮流站
+    // 现查也没找到）：只报这一句，不落回内置、不探活、不弹去搜索。
     // 2026-11-23：但视频库模式下本页明明有作品（_works 非空）却一条
     // 地址都没取到时，不是“库里没地址”，是影视库那路没打开/没查到
     // ——报实情，别让用户以为库是空的。
     final noAddressMessage =
         widget.database.isVideoLibrary && _works.isNotEmpty
-        ? '影视库没读出这部作品的地址（库里有这部，先检查 MYTV/db/ 下的库文件与站点筛选）'
+        ? '库里没读出这部作品的地址，潮流站现查也没找到（先检查 MYTV/db/ 下的库文件）'
         : '库里暂无播放地址';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(noAddressMessage)),
     );
+  }
+
+  /// 池子里一条地址都没有时，jpcode 兜底用的合成详情：标题/封面/
+  /// 分类取作品行本身，集 id 由调用方填（jpcode:<番号>）。
+  DramaDetail _detailForWork(ActressWork work) {
+    final drama = Drama(
+      id: 'json:chaoliu:${work.codeKey}',
+      source: 'chaoliu',
+      title: work.displayTitle,
+      cover: work.coverUrl,
+      episodes: 1,
+      category: work.category,
+      onlineDate: work.date,
+    );
+    return DramaDetail(drama, const []);
   }
 
   /// 库里地址直进详情页：首选线路进页即播（initialDetail 带进去：

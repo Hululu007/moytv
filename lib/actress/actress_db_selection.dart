@@ -109,22 +109,65 @@ class ActressDbSelection {
     }
   }
 
-  /// 该库的视频数（严格结构才数，失败/不是严格结构返回 -1，
-  /// 界面不显示数字，只显示名字）。
-  static Future<int> countVideos(String filePath) async {
+  /// 该库的可播视频数（2026-11-23 用户令：数据库全部支持勾选）。
+  /// 严格结构时数 videos 表（有行就回行数，老口径）；videos 表
+  /// 是空的、或不是严格结构时，按通用读法数：每张同时有标题列
+  /// 与播放地址列的表各数一次可播地址行（地址含 http，磁力不算），
+  /// 取最大的那张——AV 总库就是这样：videos/video_actress/
+  /// video_category 三张表都在但全是空的，361681 条在 results
+  /// 表（fanhao + video_url），只数 videos 会把它报成 0 部。
+  /// 返回 -1 = 文件打不开/不是数据库；返回 0 = 确实一条可播
+  /// 视频都没有（界面如实写“0 部可播视频”，不勾）。
+  static Future<int> countPlayableVideos(String filePath) async {
     Database? db;
     try {
       final file = File(filePath);
       if (!file.existsSync() || file.lengthSync() == 0) return -1;
       db = await openDatabase(filePath, readOnly: true);
       final schema = await probeGenericDbSchema(db);
-      if (!filmIsStrictVideosSchema(schema)) return -1;
-      final rows = await db.rawQuery('SELECT COUNT(*) AS c FROM videos');
-      return (rows.first['c'] as num?)?.toInt() ?? -1;
+      if (filmIsStrictVideosSchema(schema)) {
+        final rows = await db.rawQuery('SELECT COUNT(*) AS c FROM videos');
+        final strictCount = (rows.first['c'] as num?)?.toInt() ?? -1;
+        if (strictCount > 0) return strictCount;
+      }
+      var best = 0;
+      for (final mapping in schema.tables) {
+        final titleCol = mapping.columnFor(GenericDbRole.title);
+        final urlCol = mapping.columnFor(GenericDbRole.playUrl);
+        if (titleCol == null || urlCol == null) continue;
+        final rows = await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM ${_quote(mapping.table)} '
+          "WHERE CAST(${_quote(urlCol)} AS TEXT) LIKE '%http%'",
+        );
+        final n = (rows.first['c'] as num?)?.toInt() ?? 0;
+        if (n > best) best = n;
+      }
+      // 作品表经关联副表取地址时，上面的循环数不到：按 worksTable
+      // + 关联补一次（地址在副表、标题在主表的库）。
+      final works = schema.worksTable;
+      if (works != null && works.columnFor(GenericDbRole.playUrl) == null) {
+        final relation = schema.relationFor(GenericDbRole.playUrl);
+        final relUrlCol = relation?.columnFor(GenericDbRole.playUrl);
+        if (relation != null && relUrlCol != null) {
+          final rows = await db.rawQuery(
+            'SELECT COUNT(*) AS c FROM ${_quote(works.table)} w '
+            'WHERE EXISTS (SELECT 1 FROM ${_quote(relation.table)} r '
+            'WHERE CAST(r.${_quote(relation.foreignKey)} AS TEXT) = '
+            'CAST(w.${_quote(relation.primaryKey)} AS TEXT) '
+            "AND CAST(r.${_quote(relUrlCol)} AS TEXT) LIKE '%http%')",
+          );
+          final n = (rows.first['c'] as num?)?.toInt() ?? 0;
+          if (n > best) best = n;
+        }
+      }
+      return best;
     } catch (_) {
       return -1;
     } finally {
       await db?.close();
     }
   }
+
+  static String _quote(String identifier) =>
+      '"${identifier.replaceAll('"', '""')}"';
 }

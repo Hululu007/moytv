@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'actress/actress_list_page.dart';
 import 'actress/actress_nvku_page.dart';
 import 'game_zone_page.dart';
 import 'app_layout.dart';
@@ -642,7 +641,7 @@ class _HomeScreenState extends State<HomeScreen>
                   site.origin == SourceSite.originBuiltin,
             ),
         ],
-        // 3D 翻页分区：内置组进内置区，导入/导入配置组进导入区。
+        // 双区翻页分区：内置组进内置区，导入/导入配置组进导入区。
         zone: group.origin == SourceSite.originBuiltin
             ? SourcePickerGroup.zoneBuiltin
             : SourcePickerGroup.zoneImport,
@@ -674,7 +673,6 @@ class _HomeScreenState extends State<HomeScreen>
           unawaited(_pickSource(initialZoneIndex: 1));
         }
       },
-      repository: widget.repository,
       enableZoneFlip: true,
       initialZoneIndex: initialZoneIndex,
     );
