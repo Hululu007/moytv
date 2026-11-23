@@ -26,10 +26,10 @@ import '../widgets.dart';
 ///   json/m3u 兜底做展示——m3u hash 图贴封面与跨站搜索补封面
 ///   （双键合流）都已停掉，库里没有封面就如实显示占位卡片，不编
 ///   地址；点卡先试库里存的地址（按番号匹配、同番号多条逐条
-///   resolve + 验活，最多 3 条，首条活的进详情页播）；库里地址
-///   全死了才走站点线路兜底（2026-11-23 13:46 改令：潮流线路不关，
-///   修通接过来——按番号 jpcode 现查，和片库同一条解析路子），
-///   兜底也查不到才报“库里暂无播放地址”，不落回内置兜底、不弹去搜索；
+///   resolve + 验活，最多 3 条）与 MissAV 按番号现查并行竞速
+///   （2026-11-23 18:00 改令：潮流 jpcode 兜底换成 MissAV+数据库
+///   竞速，哪边先出可播地址就先播哪边）；两边都查不到才报
+///   “库里暂无播放地址”，不落回内置兜底、不弹去搜索；
 /// - 分类 chips 与顶栏走霓虹样式（见 actress_neon.dart）。
 class ActressDetailPage extends StatefulWidget {
   const ActressDetailPage({
@@ -81,8 +81,15 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _hasMore = true;
   var _generation = 0;
   var _playGeneration = 0;
-  var _findingSource = false;
-  Completer<void>? _playCancel;
+
+  /// 详情页正在打开（点卡已推 DetailScreen、还没弹回）：防双击
+  /// 连点推两个详情页。_playWork 推页前置 true，弹回后置 false。
+  var _openingDetail = false;
+
+  /// 会话级已验活地址缓存：番号（归一化）→ 竞速赢过的详情。
+  /// 某番号竞速赢过一次后，下次点同一番号直接用缓存的已验活
+  /// 地址开页，不再等竞速。只活在 App 本次运行里，重启即清空。
+  static final Map<String, DramaDetail> _verifiedDetailCache = {};
 
   /// 分类筛选：null = 全部；其余为该女优作品里实际存在的分类名。
   /// 头顶“作品 N 部”总数不受筛选影响；进出详情页即重置（状态只
@@ -101,8 +108,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _fallbackEntries = <ActressJsonEntry>[];
 
   /// 地址池正在建的 Future（_bootstrap 末尾起，不堵首屏）：
-  /// 点卡时先等它建好（15 秒超时兜底），池子没建好不急着报
-  /// “库里暂无播放地址”（2026-11-22 修复：点卡竞态）。
+  /// 点卡时池子没建好最多等 2 秒（2026-11-24 秒进改法；原来等
+  /// 15 秒），等不到按当前池子走，不在点播里卡住。
   Future<void>? _fallbackLoad;
 
   /// 没有外置数据库：详情页显示空态提示，不显示“人物不存在”。
@@ -137,9 +144,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final reload = await widget.database.reloadIfChanged();
     if (!mounted || generation != _generation) return;
     if (reload.error != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(actressReloadErrorText(reload.error!))),
       );
     }
@@ -238,8 +243,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (injectedFilmDb != null) {
       fallback.filmDb = injectedFilmDb;
     } else if (widget.fallback == null) {
-      fallback.filmDb ??=
-          _multiDb ??= MultiDbFilmFallback(database: widget.database);
+      fallback.filmDb ??= _multiDb ??= MultiDbFilmFallback(
+        database: widget.database,
+      );
     }
     final site = widget.siteFilter == ActressSiteFilter.all
         ? null
@@ -327,10 +333,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (uncovered.isEmpty) return;
     List<ActressJsonEntry> rows;
     try {
-      rows = await _dbEntriesForCodes(
-        fallback,
-        [for (final work in uncovered) work.codeKey],
-      );
+      rows = await _dbEntriesForCodes(fallback, [
+        for (final work in uncovered) work.codeKey,
+      ]);
     } catch (_) {
       return;
     }
@@ -466,8 +471,17 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     return null;
   }
 
+  /// 点卡秒进详情页播放（2026-11-24 用户令）：
+  /// 点卡即推 DetailScreen、首条库地址立即播，不等竞速；
+  /// 库里地址与 MissAV 的竞速放后台跑，赢家进会话缓存
+  /// （下次点同一番号直接用已验活地址开页）。
+  /// 首条地址死了不用重进：DetailScreen 的换线回调
+  /// （nextLineOnExhausted）按“库里下一条 → 竞速赢家”顺序
+  /// 自动换线；报错屏点“重试”走 onRetryProbe 重探。
+  /// 以前是等竞速赢了才开页（A 路 3 条 × 13 秒 + B 路 43 秒，
+  /// 最坏开页要 40 多秒），现在开页不等竞速。
   Future<void> _playWork(ActressWork work) async {
-    if (_findingSource) return;
+    if (_openingDetail) return;
     // 2026-11-20 热换库：播之前先看库文件变了没有——变了就关旧连接
     // 重开，再按当前库重取这部作品与兜底条目，不播缓存的旧地址。
     // 重读失败留旧库并报原因，不崩；作品在新库里没有了就提示并
@@ -475,9 +489,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     var currentWork = work;
     final reload = await widget.database.reloadIfChanged();
     if (reload.error != null && mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(actressReloadErrorText(reload.error!))),
       );
     }
@@ -496,32 +508,19 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       await _fallbackLoad;
       if (!mounted) return;
     }
-    // 2026-11-22 修复：地址池没建好就点卡，直接报“库里暂无播放
-    // 地址”是时序问题、不是库里没地址——先等池子建好（15 秒
-    // 超时兜底），等不到才按空池子走。
-    final poolLoad = _fallbackLoad;
-    if (poolLoad != null) {
-      try {
-        await poolLoad.timeout(const Duration(seconds: 15));
-      } catch (_) {
-        // 超时：按当前池子走，不在点播里卡住。
-      }
-    }
+    // 取地址：池子第一段（主库 IN 主键取，毫秒级）建好就立刻
+    // setState 进 _fallbackEntries，进页后点卡时基本已在。
+    // 池子还没建好（刚进页就点卡）最多等 2 秒，不再等整个池子
+    // （第二段多库 LIKE 扫要几分钟；原来等 15 秒）。
     // 2026-11-22 用户令（只走数据库）：点卡只试库里存的地址，不再
     // 往下探内置 json/m3u、也不再跨站探活；库里没有这个番号、或库里
     // 的地址全都验不活，就报“库里暂无播放地址”。
-    final playGeneration = ++_playGeneration;
-    final cancel = Completer<void>();
-    setState(() {
-      _findingSource = true;
-      _playCancel = cancel;
-    });
     // 库里这个人名下、番号相同的地址行（_fallbackEntries 现在只有 DB 行）。
     // 2026-11-22 修复：作品侧 codeKey 是库里的 vod_id 原样（rki-6042），
     // 兜底条目的 codeKey 是归一化番号（RKI6042）——直接比字符串永远
     // 不相等，导致库里 32 万条直链一条都取不到、点播放只能去跨站爬。
     // 统一归一化比较，见 jsonEntriesForWorkCode。
-    var dbRows = jsonEntriesForWorkCode(
+    List<ActressJsonEntry> dbRows = jsonEntriesForWorkCode(
       _fallbackEntries,
       currentWork.codeKey,
     );
@@ -534,152 +533,285 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         currentWork.displayTitle,
       );
     }
-    DramaDetail? storedDetail;
-    try {
-      // 只试库里存的地址：逐条 resolve + 验活，首条活的直接进详情页播
-      //（来源就是条目自己的站，parse=0 直链 + 该站的头）；最多试 3 条，
-      // 点取消立即停。
-      for (final entry in dbRows.take(3)) {
-        if (cancel.isCompleted || playGeneration != _playGeneration) break;
-        final detail = entry.toDramaDetail();
+    if (dbRows.isEmpty) {
+      final poolLoad = _fallbackLoad;
+      if (poolLoad != null) {
         try {
-          final plan = await widget.repository
-              .resolve(detail.drama, detail.episodes.first)
-              .timeout(const Duration(seconds: 8));
-          if (cancel.isCompleted || playGeneration != _playGeneration) break;
-          // 解析型计划验不了活：不冒进，算这条库里地址不可直播。
-          if (plan.needsParse) continue;
-          final uri = Uri.tryParse(plan.url.trim());
-          if (uri == null ||
-              !(uri.scheme == 'http' || uri.scheme == 'https') ||
-              uri.host.isEmpty) {
-            continue;
-          }
-          final response = await _verifyFetch(
-            plan.url,
-            plan.headers,
-            const Duration(seconds: 5),
-          );
-          if (!feedProbePlayable(uri, response)) continue;
-          storedDetail = detail;
-          break;
+          await poolLoad.timeout(const Duration(seconds: 2));
         } catch (_) {
-          // 这条死了：换库里下一条地址。
-          continue;
+          // 超时：按当前池子走，不在点播里卡住。
+        }
+        if (!mounted) return;
+        dbRows = jsonEntriesForWorkCode(
+          _fallbackEntries,
+          currentWork.codeKey,
+        );
+        if (dbRows.isEmpty && currentWork.codeKey.trim().isEmpty) {
+          dbRows = jsonEntriesForWorkTitle(
+            _fallbackEntries,
+            currentWork.displayTitle,
+          );
         }
       }
-      // 2026-11-23 13:46 改令：潮流线路不关、修通接过来——库里地址
-      // 全死了时走站点线路兜底（潮流站优先）。片库里潮流站播同一部
-      // 片走的是 detailContent('code_<番号>') → '正片$jpcode:<番号>'
-      // → playerContent('jpcode:<番号>') → _resolve_code 现查活链；
-      // 女优库之前只把库里存的地址原样当集 id 传给 playerContent
-      // 的“原始分支”，存的地址一死（旧库里多是 streamfastpro 死链）
-      // 就报无法播放，哪怕潮流站现查能拿到活链。这里按番号走同一
-      // 条路：jpcode 现查 + 验活，活的就进详情页播（集 id 用
-      // jpcode:<番号>，播放器 resolve 时走和片库完全相同的
-      // _resolve_code，头也一样）。现查是联网动作，预算放宽到 60 秒
-      //（库里直链那 8 秒不够它查桶 JSON）。
-      if (storedDetail == null) {
-        final code = currentWork.codeKey;
-        if (code.isNotEmpty) {
-          try {
-            final drama = Drama(
-              id: 'json:chaoliu:$code',
-              source: 'chaoliu',
-              title: currentWork.displayTitle,
-            );
-            final episode = Episode(
-              {'id': 'jpcode:$code', 'title': '正片'},
-              1,
-            );
-            final plan = await widget.repository
-                .resolve(drama, episode)
-                .timeout(const Duration(seconds: 60));
-            if (!cancel.isCompleted &&
-                playGeneration == _playGeneration &&
-                !plan.needsParse) {
-              final uri = Uri.tryParse(plan.url.trim());
-              if (uri != null &&
-                  (uri.scheme == 'http' || uri.scheme == 'https') &&
-                  uri.host.isNotEmpty) {
-                final response = await _verifyFetch(
-                  plan.url,
-                  plan.headers,
-                  const Duration(seconds: 5),
-                );
-                if (feedProbePlayable(uri, response)) {
-                  final base = dbRows.isNotEmpty
-                      ? dbRows.first.toDramaDetail()
-                      : _detailForWork(currentWork);
-                  storedDetail = base.withEpisodes([
-                    Episode({'id': 'jpcode:$code', 'title': '正片'}, 1),
-                  ]);
-                }
-              }
-            }
-          } catch (_) {
-            // 潮流站也查不到活链：往下走老路（第一条库地址进页 / 报暂无）。
-          }
+    }
+    if (dbRows.isEmpty) {
+      // 库里没有可播地址（没有这部、没有直链）：只报这一句，
+      // 不落回内置、不探活、不弹去搜索。不进详情页。
+      // 2026-11-23：但视频库模式下本页明明有作品（_works 非空）却一条
+      // 地址都没取到时，不是“库里没地址”，是影视库那路没打开/没查到
+      // ——报实情，别让用户以为库是空的。
+      if (!mounted) return;
+      final noAddressMessage =
+          widget.database.isVideoLibrary && _works.isNotEmpty
+          ? '库里没读出这部作品的地址，MissAV 现查也没找到（先检查 MYTV/db/ 下的库文件）'
+          : '库里暂无播放地址';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(noAddressMessage)));
+      return;
+    }
+    final playGeneration = ++_playGeneration;
+    final cancel = Completer<void>();
+    // 后台竞速（不堵开页）：库里地址与 MissAV 按番号现查并行跑，
+    // 哪边先出可播地址就先赢，赢家进会话缓存；输的那路丢弃。
+    // 开页不等它——首播地址直接播，竞速只用来换线与下次加速。
+    final raceFuture = _racePlayableDetail(
+      dbRows: dbRows,
+      code: currentWork.codeKey,
+      title: currentWork.displayTitle,
+      cancel: cancel,
+      playGeneration: playGeneration,
+    );
+    final cacheKey = normalizeAvCode(currentWork.codeKey);
+    unawaited(
+      raceFuture.then((winner) {
+        if (winner != null && cacheKey.isNotEmpty) {
+          _verifiedDetailCache[cacheKey] = winner;
         }
-      }
-    } finally {
-      if (mounted && playGeneration == _playGeneration) {
-        setState(() {
-          _findingSource = false;
-          _playCancel = null;
-        });
-      }
-    }
-    if (!mounted || cancel.isCompleted || playGeneration != _playGeneration) {
-      return;
-    }
-    if (storedDetail != null) {
-      await _openDetail(storedDetail);
-      return;
-    }
+      }, onError: (_) {}),
+    );
+    // 首播地址：这番号竞速赢过就用缓存的已验活地址，否则库里第一条
+    // （不验活，直接播；库里 99% 以上的地址是活的）。
     // 2026-11-22 主树修法（保留）：探活全失败也拿库里第一条进播放页。
     // 不少流媒体站只认播放器头、探针拿 403/405，但播放器能播；
-    // 探活不过不等于播不了。仍是只走数据库（第一条就是库里地址），
-    // 不落回内置、不跨站。只当第一条真有地址才进（playUrl 为空
-    // 说明这行根本没地址，进播放页也没用）；库里一条地址都没有
-    // 才报暂无。
-    if (dbRows.isNotEmpty && dbRows.first.playUrl.isNotEmpty) {
-      await _openDetail(dbRows.first.toDramaDetail());
-      return;
+    // 探活不过不等于播不了。
+    final cached = cacheKey.isEmpty ? null : _verifiedDetailCache[cacheKey];
+    final firstDetail = cached ?? dbRows.first.toDramaDetail();
+    // 换线链：已试过的播放地址（首播那条已在播，换线时跳过）。
+    // DetailScreen 在首播地址耗尽时调 nextLineOnExhausted，
+    // 在报错屏点“重试”时调 onRetryProbe。
+    final triedUrls = <String>{_detailPlayUrl(firstDetail)};
+    var raceWinnerUsed = false;
+    Future<DetailNextLine?> nextLine() async {
+      // 1. 库里下一条没试过的地址（立即有，不用等）。
+      for (final row in dbRows) {
+        final url = row.playUrl;
+        if (url.isEmpty || triedUrls.contains(url)) continue;
+        triedUrls.add(url);
+        return (detail: row.toDramaDetail(), episodeIndex: 0);
+      }
+      // 2. 库里地址都试过了，等后台竞速的赢家（MissAV 或已验活的库地址）。
+      if (!raceWinnerUsed) {
+        raceWinnerUsed = true;
+        final winner = await raceFuture.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => null,
+        );
+        if (winner != null) {
+          final url = _detailPlayUrl(winner);
+          if (url.isNotEmpty && !triedUrls.contains(url)) {
+            triedUrls.add(url);
+            return (detail: winner, episodeIndex: 0);
+          }
+        }
+      }
+      // 链耗尽：返回 null，播放器保留原错误界面。
+      return null;
     }
-    // 库里没有可播地址（没有这部、没有直链、或存的地址全死、潮流站
-    // 现查也没找到）：只报这一句，不落回内置、不探活、不弹去搜索。
-    // 2026-11-23：但视频库模式下本页明明有作品（_works 非空）却一条
-    // 地址都没取到时，不是“库里没地址”，是影视库那路没打开/没查到
-    // ——报实情，别让用户以为库是空的。
-    final noAddressMessage =
-        widget.database.isVideoLibrary && _works.isNotEmpty
-        ? '库里没读出这部作品的地址，潮流站现查也没找到（先检查 MYTV/db/ 下的库文件）'
-        : '库里暂无播放地址';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(noAddressMessage)),
-    );
+
+    Future<DetailNextLine?> retryProbe() async {
+      // 重试：把已试集合清空（允许重播库里地址），再等一次竞速赢家。
+      triedUrls.clear();
+      final winner = await raceFuture.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => null,
+      );
+      if (winner != null) {
+        final url = _detailPlayUrl(winner);
+        if (url.isNotEmpty) triedUrls.add(url);
+        return (detail: winner, episodeIndex: 0);
+      }
+      // 竞速无赢家：回库里第一条再试一次（播放器原地重播同一集
+      // 是兜底，这里给第一条让它换线再试）。
+      if (dbRows.isNotEmpty) {
+        final first = dbRows.first.toDramaDetail();
+        final url = _detailPlayUrl(first);
+        if (url.isNotEmpty) triedUrls.add(url);
+        return (detail: first, episodeIndex: 0);
+      }
+      return null;
+    }
+
+    _openingDetail = true;
+    try {
+      await _openDetail(
+        firstDetail,
+        nextLineOnExhausted: nextLine,
+        onRetryProbe: retryProbe,
+      );
+    } finally {
+      _openingDetail = false;
+      if (!cancel.isCompleted) cancel.complete();
+    }
   }
 
-  /// 池子里一条地址都没有时，jpcode 兜底用的合成详情：标题/封面/
-  /// 分类取作品行本身，集 id 由调用方填（jpcode:<番号>）。
-  DramaDetail _detailForWork(ActressWork work) {
-    final drama = Drama(
-      id: 'json:chaoliu:${work.codeKey}',
-      source: 'chaoliu',
-      title: work.displayTitle,
-      cover: work.coverUrl,
-      episodes: 1,
-      category: work.category,
-      onlineDate: work.date,
+  /// 取详情首集的播放地址（Episode.id 即直链，见 toDramaDetail）。
+  String _detailPlayUrl(DramaDetail detail) {
+    if (detail.episodes.isEmpty) return '';
+    return detail.episodes.first.id;
+  }
+
+  /// MissAV+数据库竞速：两路并行，哪边先出可播地址就先播哪边。
+  /// A 路是库里地址逐条 resolve + 验活（最多 3 条）；B 路是 MissAV
+  /// 按番号现查（detail 取 m3u8 → resolve → 验活）。先出非空结果的
+  /// 胜出，另一路丢弃；两边都失败返回 null。点取消或换了代次时两路
+  /// 都尽快收手（返回 null），由 _playWork 按取消处理。
+  Future<DramaDetail?> _racePlayableDetail({
+    required List<ActressJsonEntry> dbRows,
+    required String code,
+    required String title,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    final winner = Completer<DramaDetail?>();
+    var pending = 2;
+    void offer(DramaDetail? d) {
+      if (d != null && !winner.isCompleted) {
+        winner.complete(d);
+        return;
+      }
+      pending--;
+      if (pending == 0 && !winner.isCompleted) winner.complete(null);
+    }
+
+    unawaited(
+      _raceDbAddresses(
+        dbRows: dbRows,
+        cancel: cancel,
+        playGeneration: playGeneration,
+      ).then(offer, onError: (_) => offer(null)),
     );
-    return DramaDetail(drama, const []);
+    unawaited(
+      _raceMissav(
+        code: code,
+        title: title,
+        cancel: cancel,
+        playGeneration: playGeneration,
+      ).then(offer, onError: (_) => offer(null)),
+    );
+    return winner.future;
+  }
+
+  /// A 路：库里地址逐条 resolve + 验活，首条活的返回它的详情。
+  ///（来源就是条目自己的站，parse=0 直链 + 该站的头）；最多试 3 条，
+  /// 点取消立即停。
+  Future<DramaDetail?> _raceDbAddresses({
+    required List<ActressJsonEntry> dbRows,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    for (final entry in dbRows.take(3)) {
+      if (cancel.isCompleted || playGeneration != _playGeneration) {
+        return null;
+      }
+      final detail = entry.toDramaDetail();
+      try {
+        final plan = await widget.repository
+            .resolve(detail.drama, detail.episodes.first)
+            .timeout(const Duration(seconds: 8));
+        if (cancel.isCompleted || playGeneration != _playGeneration) {
+          return null;
+        }
+        // 解析型计划验不了活：不冒进，算这条库里地址不可直播。
+        if (plan.needsParse) continue;
+        final uri = Uri.tryParse(plan.url.trim());
+        if (uri == null ||
+            !(uri.scheme == 'http' || uri.scheme == 'https') ||
+            uri.host.isEmpty) {
+          continue;
+        }
+        final response = await _verifyFetch(
+          plan.url,
+          plan.headers,
+          const Duration(seconds: 5),
+        );
+        if (!feedProbePlayable(uri, response)) continue;
+        return detail;
+      } catch (_) {
+        // 这条死了：换库里下一条地址。
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /// B 路：MissAV 按番号现查。detailContent('/cn/<番号小写>') 取回
+  /// 详情（首集就是 m3u8 直链），resolve 拿播放计划（parse=0 直链
+  /// + MissAV 头），验活通过返回该详情；查不到、解析型、验不活
+  /// 都返回 null。番号为空时不查（MissAV 按番号取流，没番号没法查）。
+  Future<DramaDetail?> _raceMissav({
+    required String code,
+    required String title,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    final normalized = code.trim();
+    if (normalized.isEmpty) return null;
+    try {
+      final drama = Drama(id: normalized, source: 'missav', title: title);
+      final detail = await widget.repository
+          .detail(drama)
+          .timeout(const Duration(seconds: 30));
+      if (cancel.isCompleted || playGeneration != _playGeneration) {
+        return null;
+      }
+      if (detail.episodes.isEmpty) return null;
+      final plan = await widget.repository
+          .resolve(drama, detail.episodes.first)
+          .timeout(const Duration(seconds: 8));
+      if (cancel.isCompleted || playGeneration != _playGeneration) {
+        return null;
+      }
+      if (plan.needsParse) return null;
+      final uri = Uri.tryParse(plan.url.trim());
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return null;
+      }
+      final response = await _verifyFetch(
+        plan.url,
+        plan.headers,
+        const Duration(seconds: 5),
+      );
+      if (!feedProbePlayable(uri, response)) return null;
+      return detail;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 库里地址直进详情页：首选线路进页即播（initialDetail 带进去：
   /// 站点详情取回是空的时就用它播）。不接探活链——无链可续，
   /// 播耗尽时详情页只按自身线路走。
-  Future<void> _openDetail(DramaDetail detail) async {
+  /// 推详情页并立即播首集。换线回调由点卡流程注入：
+  /// 首播地址耗尽时 DetailScreen 调 nextLineOnExhausted 要下一条，
+  /// 报错屏点“重试”时调 onRetryProbe 重探。不传时行为与此前一字不差。
+  Future<void> _openDetail(
+    DramaDetail detail, {
+    Future<DetailNextLine?> Function()? nextLineOnExhausted,
+    Future<DetailNextLine?> Function()? onRetryProbe,
+  }) async {
     await Navigator.of(context).push(
       appPageRoute<void>(
         settings: const RouteSettings(name: 'detail'),
@@ -692,6 +824,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           // 候选那条的集数（数据库里存的直链）带进去：站点详情取回
           // 是空的时就用它播，不显示“该站未返回详情”就没得播。
           initialDetail: detail,
+          nextLineOnExhausted: nextLineOnExhausted,
+          onRetryProbe: onRetryProbe,
         ),
       ),
     );
@@ -703,9 +837,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final person = _person;
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: actressNeonAppBar(
-        title: Text(person?.displayName ?? '女优详情'),
-      ),
+      appBar: actressNeonAppBar(title: Text(person?.displayName ?? '女优详情')),
       body: Stack(
         children: [
           _loading
@@ -766,35 +898,6 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                       ),
                   ],
                 ),
-          if (_findingSource) ...[
-            const ModalBarrier(dismissible: false, color: Colors.black54),
-            Center(
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 16),
-                      const Text('正在找可播片源…'),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        key: const ValueKey('cancel-find-source'),
-                        onPressed: () {
-                          final cancel = _playCancel;
-                          if (cancel != null && !cancel.isCompleted) {
-                            cancel.complete();
-                          }
-                        },
-                        child: const Text('取消'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );

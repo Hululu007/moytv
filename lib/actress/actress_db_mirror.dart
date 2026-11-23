@@ -509,7 +509,12 @@ class ActressDbMirror {
     }
     Database? db;
     try {
-      db = await openDatabase(sourcePath, readOnly: true);
+      // 2026-11-24 掉线修复：探库独立连接，关完不拖主库的共享连接掉线。
+      db = await openDatabase(
+        sourcePath,
+        readOnly: true,
+        singleInstance: false,
+      );
       final isActressSchema = await _isActressSchemaDb(db);
       GenericDbReader? reader;
       var total = 0;

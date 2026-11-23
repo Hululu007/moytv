@@ -968,10 +968,12 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// 排序是最新在前（vod_pubdate 倒序，不是 listFilms 的 vod_id
   /// 字典序）；brand 按番号前缀筛（`rki-%`，走 vod_id 主键前缀）；
   /// query 搜标题/番号（前导 % LIKE，大库上本来就慢，只在用户
-  /// 主动搜时跑）。
+  /// 主动搜时跑）；videoCategory 按 video_category 主分类筛
+  /// （有码/无码/国产…，空着不过滤；空分类的只在“全部”里出现）。
   Future<List<FilmLibraryEntry>> listLibraryFilms({
     String brand = '',
     String query = '',
+    String videoCategory = '',
     required int offset,
     required int limit,
   }) async {
@@ -985,6 +987,14 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       if (cleanBrand.isNotEmpty) {
         where.add('v.vod_id LIKE ?');
         args.add('$cleanBrand-%');
+      }
+      final cleanVideoCategory = videoCategory.trim();
+      if (cleanVideoCategory.isNotEmpty) {
+        where.add(
+          'v.vod_id IN (SELECT vod_id FROM video_category '
+          'WHERE main_category = ?)',
+        );
+        args.add(cleanVideoCategory);
       }
       final q = query.trim();
       if (q.isNotEmpty) {
@@ -1011,6 +1021,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   Future<int> countLibraryFilms({
     String brand = '',
     String query = '',
+    String videoCategory = '',
   }) async {
     try {
       if (!await _ensureFilmOpen() || !isStrict) return 0;
@@ -1022,6 +1033,14 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       if (cleanBrand.isNotEmpty) {
         where.add('v.vod_id LIKE ?');
         args.add('$cleanBrand-%');
+      }
+      final cleanVideoCategory = videoCategory.trim();
+      if (cleanVideoCategory.isNotEmpty) {
+        where.add(
+          'v.vod_id IN (SELECT vod_id FROM video_category '
+          'WHERE main_category = ?)',
+        );
+        args.add(cleanVideoCategory);
       }
       final q = query.trim();
       if (q.isNotEmpty) {

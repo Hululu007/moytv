@@ -50,6 +50,60 @@ const _pk = Color(0xFFFF2F6D);
 
 const _favKey = 'actress_nvku_fav';
 
+/// 分类名去尾数：“有码 · 251867”→“有码”；没尾数原样返回。
+/// 尾数不是数字时也原样返回（名字里本来就带“ · ”的不误伤）。
+String cleanNvkuCategoryName(String name) {
+  final index = name.lastIndexOf(' · ');
+  if (index <= 0) return name.trim();
+  final tail = name.substring(index + 3).trim();
+  if (tail.isEmpty || int.tryParse(tail) == null) return name.trim();
+  return name.substring(0, index).trim();
+}
+
+/// 选中分类 → 视频主分类名（供本地兜底按主分类筛库）：
+/// 站点分类 c0/c1… 的名字就是主分类名（去尾数后），主分类标签
+/// main:xxx 直接取冒号后的名字；最新/排行/厂牌不过滤（回空）。
+String nvkuVideoCategoryFor(
+  String category,
+  List<CatalogCategory> siteCategories,
+) {
+  if (category.startsWith('main:')) {
+    return category.substring('main:'.length).trim();
+  }
+  if (category == 'new' ||
+      category == 'rank' ||
+      category.startsWith('brand:')) {
+    return '';
+  }
+  for (final site in siteCategories) {
+    if (site.id != category) continue;
+    return cleanNvkuCategoryName(site.name);
+  }
+  return '';
+}
+
+/// 全部可点标签：站点分类打头，本地分类（最新/排行/厂牌）随后，
+/// 库里主分类补在最后——站点已有的主分类（同名）不重复摆，
+/// 站被挡时主分类标签照样全在。
+List<CatalogCategory> nvkuAllCategories(
+  List<CatalogCategory> siteCategories,
+  List<CatalogCategory> localCategories,
+  List<CatalogCategory> mainCategories,
+) {
+  final covered = <String>{
+    for (final site in siteCategories) cleanNvkuCategoryName(site.name),
+  };
+  return [
+    ...siteCategories,
+    ...localCategories.where(
+      (row) => !siteCategories.any((site) => site.id == row.id),
+    ),
+    ...mainCategories.where(
+      (row) => !covered.contains(cleanNvkuCategoryName(row.name)),
+    ),
+  ];
+}
+
 class _ActressNvkuPageState extends State<ActressNvkuPage> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
@@ -58,6 +112,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
 
   var _siteCategories = <CatalogCategory>[];
   var _localCategories = <CatalogCategory>[];
+  var _mainCategories = <CatalogCategory>[];
   var _category = 'new';
   var _works = <Drama>[];
   var _page = 1;
@@ -108,16 +163,26 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     final local = loaded
         ? await whosLocalCategoriesAsync(library)
         : const <CatalogCategory>[];
+    // 库里视频主分类（有码/无码/国产/4K…）：站点分类取不到时（站被挡）
+    // 也能摆出全部主分类标签；站点已有的主分类不重复摆。
+    final mains = loaded
+        ? await library.mainCategoriesAsync()
+        : const <({String name, int count})>[];
     if (!mounted) return;
     setState(() {
       _siteCategories = online;
       _localCategories = local;
+      _mainCategories = [
+        for (final row in mains)
+          CatalogCategory('main:${row.name}', '${row.name} · ${row.count}'),
+      ];
       _offline = offline || online.isEmpty;
       if (_category.isEmpty ||
           ![
             'new',
             ...online.map((c) => c.id),
             ...local.map((c) => c.id),
+            ..._mainCategories.map((c) => c.id),
           ].contains(_category)) {
         _category = 'new';
       }
@@ -178,6 +243,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     if (!await library.ensureLoaded()) return const [];
     final rows = await library.pageAsync(
       category: _localCategoryFor(_category),
+      videoCategory: _videoCategoryFor(_category),
       query: _query,
       page: page,
       pageSize: _pageSize,
@@ -197,6 +263,25 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     }
     return 'new';
   }
+
+  /// 选中分类 → 视频主分类名（供本地兜底按主分类筛库）：
+  /// 站点分类 c0/c1… 的名字就是主分类名（“有码 · 251867”去尾数），
+  /// 主分类标签 main:xxx 直接取冒号后的名字；最新/排行/厂牌不过滤。
+  String _videoCategoryFor(String category) =>
+      nvkuVideoCategoryFor(category, _siteCategories);
+
+  /// 分类名去尾数：“有码 · 251867”→“有码”；没尾数原样返回。
+  static String _cleanCategoryName(String name) =>
+      cleanNvkuCategoryName(name);
+
+  /// 全部可点标签（首页与分类页共用）：站点分类打头，本地分类
+  /// （最新/排行/厂牌）随后，库里主分类补在最后——站点已有的
+  /// 主分类（同名）不重复摆，站被挡时主分类标签照样全在。
+  List<CatalogCategory> _allCategories() => nvkuAllCategories(
+    _siteCategories,
+    _localCategories,
+    _mainCategories,
+  );
 
   Future<void> _loadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
@@ -528,12 +613,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   }
 
   Widget _homeTab() {
-    final cats = [
-      ..._siteCategories,
-      ..._localCategories.where(
-        (row) => !_siteCategories.any((site) => site.id == row.id),
-      ),
-    ];
+    final cats = _allCategories();
     return RefreshIndicator(
       color: _pk,
       backgroundColor: Neon.surface,
@@ -551,7 +631,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
             ),
           _sectionTitle(
-            _query.isEmpty ? '最新上架' : '搜索结果',
+            _query.isEmpty ? _currentCategoryLabel() : '搜索结果',
             _query.isEmpty ? '按发行日期' : _query,
           ),
           if (_loading)
@@ -579,6 +659,19 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
         ],
       ),
     );
+  }
+
+  /// 当前选中分类的展示名：最新上架是“最新上架”，其余取标签的干净名
+  /// （站点分类去尾数、主分类标签取冒号后、厂牌取展示名）。
+  String _currentCategoryLabel() {
+    if (_category == 'new') return '最新上架';
+    if (_category.startsWith('main:')) {
+      return _category.substring('main:'.length).trim();
+    }
+    for (final cat in _allCategories()) {
+      if (cat.id == _category) return _cleanCategoryName(cat.name);
+    }
+    return '最新上架';
   }
 
   /// 分类胶囊条（首页与分类页共用）：横向滚动的一排霓虹药丸钮，
@@ -613,12 +706,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   }
 
   Widget _categoryTab() {
-    final cats = [
-      ..._siteCategories,
-      ..._localCategories.where(
-        (row) => !_siteCategories.any((site) => site.id == row.id),
-      ),
-    ];
+    final cats = _allCategories();
     return Column(
       children: [
         if (cats.isNotEmpty) _categoryChips(cats),

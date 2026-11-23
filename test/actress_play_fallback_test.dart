@@ -915,10 +915,15 @@ void main() {
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
       expect(find.text('暂无可播片源'), findsNothing);
       expect(find.text('这条播不了，已试过 6 个站'), findsNothing);
-      // 只解过存的地址（链已删、没多解别的站）。
+      // 只解过存的地址与 MissAV 竞速探查（2026-11-23 18:00 改令：
+      // 潮流 jpcode 兜底换成 MissAV+数据库竞速，点卡时 MissAV 按
+      // 番号现查与库里地址并行跑，resolveCalls 里会多一条 MissAV
+      // 的探查 id（归一化番号 SSIS123）；不探别的站的链。
       expect(repository.resolveCalls, contains('json:mjv:db-row-1'));
       expect(
-        repository.resolveCalls.every((id) => id == 'json:mjv:db-row-1'),
+        repository.resolveCalls.every(
+          (id) => id == 'json:mjv:db-row-1' || id == 'SSIS123',
+        ),
         isTrue,
       );
     });
@@ -936,6 +941,14 @@ void main() {
       // mjv resolve 1 次 + whos resolve 1 次成功；播放器起播
       // 再解时失败进错误态，不建真播放器。
       repository.resolveSuccessBudget = 2;
+      // 2026-11-23 18:00 改令：点卡时 MissAV 与库里地址竞速——这里
+      // 只测“mjv 死 → 落到同番号 whos 行”这条库内回落，让假 MissAV
+      // 对这个番号返回空详情（没集数），不抢这条回落、也不多占
+      // resolve 预算；MissAV 竞速本身另有专测。
+      repository.detailsById['SSIS123'] = DramaDetail(
+        Drama(id: 'SSIS123', source: 'missav', title: 'SSIS-00123'),
+        const [],
+      );
       await pumpDetailPage(
         tester,
         // 2026-11-22 只走数据库：两条存的地址都改由库里（filmDb）
@@ -963,10 +976,10 @@ void main() {
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
       expect(find.text('SSIS-00123 MJV 死链标题'), findsNothing);
       // 先解 mjv（死了）、再解 whos（活了播它），不探链。
-      expect(
-        repository.resolveCalls,
-        ['json:mjv:mjv-row-1', 'json:whos:ssis-row-1'],
-      );
+      expect(repository.resolveCalls, [
+        'json:mjv:mjv-row-1',
+        'json:whos:ssis-row-1',
+      ]);
     });
 
     testWidgets('第一档本地 db 活的：播库里的地址，不探链、不走内置', (tester) async {
@@ -995,14 +1008,44 @@ void main() {
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 库里标题'), findsWidgets);
       expect(find.text('SSIS-00123 存的标题'), findsNothing);
-      // 只解过库里的地址（内置行没解、不探链）。
+      // 只解过库里的地址与 MissAV 竞速探查（2026-11-23 18:00 改令，
+      // 见上；内置行没解、不探别的站的链）。
       expect(repository.resolveCalls, contains('json:mjv:db-row-1'));
       expect(
-        repository.resolveCalls.every((id) => id == 'json:mjv:db-row-1'),
+        repository.resolveCalls.every(
+          (id) => id == 'json:mjv:db-row-1' || id == 'SSIS123',
+        ),
         isTrue,
       );
     });
 
+    testWidgets('库里地址全死时 MissAV 竞速赢了进详情页播', (tester) async {
+      suppressKnownListTileAssertion();
+      // 2026-11-23 18:00 改令：潮流 jpcode 兜底换成 MissAV+数据库竞速。
+      // 库里只有一条死地址，MissAV 按番号现查能拿到流（假站回合成
+      // 详情+合成地址，验活放行），竞速由 MissAV 赢、进详情页播，
+      // 不报“库里暂无播放地址”。
+      repository.resolveSuccessBudget = -1;
+      await pumpDetailPage(
+        tester,
+        filmDb: _FakeFilmDb({
+          'SSIS123': [
+            _dbEntry(
+              vodId: 'db-row-1',
+              playUrl: 'https://example.test/dead-db.mp4',
+              vodName: 'SSIS-00123 死链标题',
+            ),
+          ],
+        }),
+        verifyFetch: _playableUnlessDead,
+      );
+      await tester.tap(find.byType(DramaTile).first);
+      await pumpUntilDetail(tester);
+      expect(find.byType(DetailScreen), findsOneWidget);
+      // MissAV 被探过（竞速跑了 B 路），且详情页不是报暂无。
+      expect(repository.resolveCalls, contains('SSIS123'));
+      expect(find.text('库里暂无播放地址'), findsNothing);
+    });
   });
 
   testWidgets('嗅探页接受加载失败回调', (tester) async {
