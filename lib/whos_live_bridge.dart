@@ -45,17 +45,42 @@ List<LiveChannel> whosLibChannels(
   return [
     for (final work in rows)
       if (work.playUrl.startsWith('http'))
-        LiveChannel(
-          key: '$source:${work.id}',
-          name: whosLibChannelName(work),
-          urls: [work.playUrl],
-          number: work.code,
-          logo: work.cover,
-          group: work.brand.isEmpty ? '其它' : whosBrandLabel(work.brand),
-          source: source,
-          headers: whosLibHeaders,
-        ),
+        _whosLibChannel(work, source)!,
   ];
+}
+
+/// 取一页频道（异步版，2026-11-23）：数据库模式按页查库，JSON 模式
+/// 走内存。直播仓储用这个；同步版只留给测试与 JSON 模式调用方。
+Future<List<LiveChannel>> whosLibChannelsAsync(
+  WhosLocalLibrary library, {
+  required String category,
+  int page = 1,
+  String source = whosLibSourceId,
+}) async {
+  final rows = await library.pageAsync(
+    category: category,
+    page: page,
+    pageSize: whosLibPageSize,
+  );
+  return [
+    for (final work in rows)
+      if (work.playUrl.startsWith('http'))
+        _whosLibChannel(work, source)!,
+  ];
+}
+
+LiveChannel? _whosLibChannel(WhosLocalWork work, String source) {
+  if (!work.playUrl.startsWith('http')) return null;
+  return LiveChannel(
+    key: '$source:${work.id}',
+    name: whosLibChannelName(work),
+    urls: [work.playUrl],
+    number: work.code,
+    logo: work.cover,
+    group: work.brand.isEmpty ? '其它' : whosBrandLabel(work.brand),
+    source: source,
+    headers: whosLibHeaders,
+  );
 }
 
 /// 直播里的分类：最新 / 排行榜 + 条目最多的厂牌。
@@ -64,5 +89,14 @@ List<LivePlatform> whosLibPlatforms(
   int brandLimit = 30,
 }) => [
   for (final row in library.categories(brandLimit: brandLimit))
+    LivePlatform(id: row.id, name: '${row.name} · ${row.count}'),
+];
+
+/// 直播里的分类（异步版，2026-11-23）：数据库模式走库里聚合。
+Future<List<LivePlatform>> whosLibPlatformsAsync(
+  WhosLocalLibrary library, {
+  int brandLimit = 30,
+}) async => [
+  for (final row in await library.categoriesAsync(brandLimit: brandLimit))
     LivePlatform(id: row.id, name: '${row.name} · ${row.count}'),
 ];

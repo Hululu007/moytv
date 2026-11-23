@@ -258,15 +258,49 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       }
     }
 
-    for (final name in [person.displayName, ...person.aliases]) {
-      addAll(await fallback.dbEntriesForActress(name, site: site));
+    // 2026-11-23 v58 验机修复：地址池分两段上屏——第一段只走主库
+    // （FilmLibraryService，IN 主键取，毫秒级），建好立刻 setState，
+    // 点卡不再干等；第二段再走多库合并（外来 .db 是全表 LIKE 扫，
+    // 库大时要几分钟），补进来再 setState 一次。原来两段串行完才
+    // 一次 setState，池子建得慢时 _playWork 的 15 秒超时一到就按
+    // 空池子报“库里暂无播放地址”，其实地址都在库里。
+    final provider = fallback.filmDb;
+    final FilmLibraryService? primary;
+    if (provider is MultiDbFilmFallback) {
+      primary = provider.primary;
+    } else if (provider is FilmLibraryService) {
+      primary = provider;
+    } else {
+      primary = null;
     }
-    // 2026-11-22 加载优化：已加载作品的番号一次批量取，不再逐条
-    // 扫表（60 个番号原来是 60 次全表 LIKE + GROUP BY，地址池
-    // 几分钟建不起来，期间点卡只能报“库里暂无播放地址”）。
-    final codes = localCodes.toList();
-    if (codes.isNotEmpty) {
-      addAll(await _dbEntriesForCodes(fallback, codes, site: site));
+    if (primary != null) {
+      try {
+        for (final name in [person.displayName, ...person.aliases]) {
+          addAll(await primary.entriesForActress(name, site: site));
+        }
+        final codes = localCodes.toList();
+        if (codes.isNotEmpty) {
+          addAll(await primary.entriesForCodes(codes, site: site));
+        }
+      } catch (_) {
+        // 主库这段失败不堵第二段（多库合并里还会再试主库一次）。
+      }
+      if (mounted && merged.isNotEmpty) {
+        setState(() => _fallbackEntries = merged);
+      }
+    }
+
+    // 第二段：多库合并（主库 + MYTV/db/ 下其它 .db），补进来再上屏。
+    try {
+      for (final name in [person.displayName, ...person.aliases]) {
+        addAll(await fallback.dbEntriesForActress(name, site: site));
+      }
+      final codes = localCodes.toList();
+      if (codes.isNotEmpty) {
+        addAll(await _dbEntriesForCodes(fallback, codes, site: site));
+      }
+    } catch (_) {
+      // 第二段失败不丢第一段的池子。
     }
     if (!mounted) return;
     setState(() => _fallbackEntries = merged);
@@ -551,8 +585,15 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     }
     // 库里没有可播地址（没有这部、没有直链、或存的地址全死）：
     // 只报这一句，不落回内置、不探活、不弹去搜索。
+    // 2026-11-23：但视频库模式下本页明明有作品（_works 非空）却一条
+    // 地址都没取到时，不是“库里没地址”，是影视库那路没打开/没查到
+    // ——报实情，别让用户以为库是空的。
+    final noAddressMessage =
+        widget.database.isVideoLibrary && _works.isNotEmpty
+        ? '影视库没读出这部作品的地址（库里有这部，先检查 MYTV/db/ 下的库文件与站点筛选）'
+        : '库里暂无播放地址';
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('库里暂无播放地址')),
+      SnackBar(content: Text(noAddressMessage)),
     );
   }
 

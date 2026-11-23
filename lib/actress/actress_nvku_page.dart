@@ -106,7 +106,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     final library = WhosLocalLibrary.shared;
     final loaded = await library.ensureLoaded();
     final local = loaded
-        ? whosLocalCategories(library)
+        ? await whosLocalCategoriesAsync(library)
         : const <CatalogCategory>[];
     if (!mounted) return;
     setState(() {
@@ -176,7 +176,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     // 本地兜底：站被挡/取不到时用本地 whos 库与视频库顶上，分类照旧可用。
     final library = WhosLocalLibrary.shared;
     if (!await library.ensureLoaded()) return const [];
-    final rows = library.page(
+    final rows = await library.pageAsync(
       category: _localCategoryFor(_category),
       query: _query,
       page: page,

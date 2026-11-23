@@ -468,14 +468,16 @@ ActressPerson videoLibraryPersonFromRow(Map<String, Object?> row) {
     fromMissav = true;
     missavPath = cateId.substring('missav:'.length);
   }
-  // 2026-11-22 用户令（男优要与女优分开、按番号绑定）：
-  // 库里 actresses 加了 sex 列（合并时写入），读人时按列取值；
-  // 老库没有该列、或列值为空时仍按女优处理，行为与改前一致。
+  // 2026-11-23 修复（v58 验机：貞松大輔是男优却显示“女”）：
+  // 库里 actresses 有 sex 列时按列取值（名册同步写，见
+  // upsertRosterPerson）；老库没有该列、或列值为空时性别是未知，
+  // 不许再默认成“女”——未知就是未知，界面不显示性别
+  // （actressSexLabel 对未知返回空）。
   final sexValue = (row['sex'] as String?)?.trim() ?? '';
   return ActressPerson(
     localId: (row['id'] as num?)?.toInt() ?? 0,
     displayName: (row['display_name'] as String?) ?? '',
-    sex: sexValue.isNotEmpty ? sexValue : 'female',
+    sex: sexValue,
     avatarUrl: (row['avatar_url'] as String?) ?? '',
     worksCount: count,
     rosterWorks: count,
@@ -500,7 +502,9 @@ class _RollupAcc {
   String lastDate = '';
 
   /// 2026-11-22：性别按人归并（同一名字下有一行是男优就算男优）。
-  String sex = 'female';
+  /// 2026-11-23：默认改未知（''），不再默认女——没有男优行只说明
+  /// 没确认过性别，不等于女。
+  String sex = '';
 }
 
 /// 视频库（女优库.db）行 → 作品：id 用 videos.rowid；vod_id 作
@@ -634,6 +638,9 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
         // 或磁盘满时建不了就跳过，查询照样能跑。
         await _ensureVideoIndexes(db);
+        // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
+        // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
+        await _ensureActressSexColumn(db);
       } catch (_) {
         _videoLibraryMode = false;
         await db.close();
@@ -716,6 +723,16 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 全球丽影库首屏被它堵住；建索引后 0.05 秒。只加索引，
       // 不动任何一行数据；已存在时不建。
       'CREATE INDEX IF NOT EXISTS idx_moyi_v_play_from ON videos(vod_play_from)',
+      // 2026-11-23 v58 验机：全球丽影库读 videos 太慢——合并库的
+      // videos 表除主键外一个索引都没有，34 万行全表扫。补三条：
+      // vod_pubdate（点开一个人 ORDER BY vod_pubdate DESC 排序）、
+      // video_category(vod_id)（worksForPerson / listFilms 里
+      // LEFT JOIN video_category 的探针）、
+      // video_category(main_category)（categories() 的 GROUP BY）。
+      // 仍是只加索引、不动任何一行数据；已存在时不建。
+      'CREATE INDEX IF NOT EXISTS idx_moyi_v_pubdate ON videos(vod_pubdate)',
+      'CREATE INDEX IF NOT EXISTS idx_moyi_vc_vod ON video_category(vod_id)',
+      'CREATE INDEX IF NOT EXISTS idx_moyi_vc_cat ON video_category(main_category)',
     ]) {
       try {
         await db.execute(sql);
@@ -724,6 +741,32 @@ class SqfliteActressDatabase implements ActressDatabase {
       }
     }
     _scheduleVideoRollup(db);
+  }
+
+  /// actresses 补 sex 列（2026-11-23 v58 验机：合并版库与老库的
+  /// actresses 都没有 sex 列，读人时只能默认女，貞松大輔这样的男优
+  /// 全被标成女；名册同步要把性别写进来，先得有列可写）。
+  /// ALTER TABLE ADD COLUMN 是元数据操作，不重写表、不动任何一行
+  /// 数据；列已存在、库只读、磁盘满时跳过，读侧按无列走（性别未知）。
+  Future<void> _ensureActressSexColumn(Database db) async {
+    try {
+      if (await _hasActressSexColumn(db)) return;
+      await db.execute(
+        "ALTER TABLE actresses ADD COLUMN sex TEXT NOT NULL DEFAULT ''",
+      );
+    } catch (_) {
+      // 建不了就当没有，查询与同步照样跑（性别未知）。
+    }
+  }
+
+  /// 名册性别归一化（潮流实拉名册 s 字段就是 male/female；其它源
+  /// 可能给 m/f/男/女）：只认男/女两种确认值，其余一律未知（''），
+  /// 绝不猜。
+  static String _normalizeRosterSex(String value) {
+    final s = value.trim().toLowerCase();
+    if (s == 'male' || s == 'm' || s == '男') return 'male';
+    if (s == 'female' || s == 'f' || s == '女') return 'female';
+    return '';
   }
 
   /// 汇总表重建是否已排期（防重复排期）。
@@ -779,7 +822,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         'first_rowid INTEGER NOT NULL, '
         'avatar TEXT NOT NULL DEFAULT \'\', '
         'works INTEGER NOT NULL DEFAULT 0, '
-        'sex TEXT NOT NULL DEFAULT \'female\', '
+        'sex TEXT NOT NULL DEFAULT \'\', '
         'last_date TEXT NOT NULL DEFAULT \'\')',
       );
       await db.execute(
@@ -820,7 +863,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       final people = await db.rawQuery(
         'SELECT rowid AS rid, name AS name, cate_id AS cate_id, '
         "COALESCE(NULLIF(avatar,''),'') AS avatar, "
-        "${hasSex ? "COALESCE(NULLIF(sex,''),'female')" : "'female'"} AS sex "
+        "${hasSex ? "COALESCE(NULLIF(sex,''),'')" : "''"} AS sex "
         'FROM actresses',
       );
       final byName = <String, _RollupAcc>{};
@@ -848,7 +891,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         'first_rowid INTEGER NOT NULL, '
         'avatar TEXT NOT NULL DEFAULT \'\', '
         'works INTEGER NOT NULL DEFAULT 0, '
-        'sex TEXT NOT NULL DEFAULT \'female\', '
+        'sex TEXT NOT NULL DEFAULT \'\', '
         'last_date TEXT NOT NULL DEFAULT \'\')',
       );
       const batchSize = 2000;
@@ -1284,10 +1327,16 @@ class SqfliteActressDatabase implements ActressDatabase {
     if (_videoLibraryMode) {
       // 视频库模式：主名册就是 actresses 表（本地库是主库，不是
       // 兜底）。名册里有、本地没有的人补进本地库；已有的人（按
-      // 名字精确匹配）不重复建。只写 cate_id / name / avatar
-      // 三列（表里没有性别/标签/简介列）；作品由作品阶段
+      // 名字精确匹配）不重复建。2026-11-23 修复：名册是性别的权威
+      // （潮流实拉名册 roster_live.json：s 字段 male/female，
+      // 貞松大輔 male）——已有的人也按名册补性别（只在名册给了确认
+      // 性别、且库里还是空时写，名册没给的不动），新人建行时一起
+      // 写性别；sex 列由开库时 _ensureActressSexColumn 补上，
+      // 没有列就跳过不写。作品由作品阶段
       // （personsPendingFilms → upsertWorks）或现爬补。
       final name = variants.first;
+      final rosterSex = _normalizeRosterSex(roster.sex);
+      final hasSex = await _hasActressSexColumn(db);
       final existing = await db.query(
         'actresses',
         columns: ['rowid'],
@@ -1297,6 +1346,18 @@ class SqfliteActressDatabase implements ActressDatabase {
       );
       if (existing.isNotEmpty) {
         final id = (existing.first['rowid'] as num).toInt();
+        if (hasSex && rosterSex.isNotEmpty) {
+          try {
+            await db.update(
+              'actresses',
+              {'sex': rosterSex},
+              where: 'rowid = ? AND (sex IS NULL OR sex = \'\')',
+              whereArgs: [id],
+            );
+          } catch (_) {
+            // 性别写不进去不堵同步（人照样在）。
+          }
+        }
         return personById(id);
       }
       // 新人：INSERT 一条 actresses 行。cate_id 用来源 id 拼
@@ -1311,6 +1372,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         'cate_id': cateId,
         'name': name,
         'avatar': roster.avatarUrl,
+        if (hasSex && rosterSex.isNotEmpty) 'sex': rosterSex,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       final inserted = await db.query(
         'actresses',
@@ -1489,9 +1551,13 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<ActressPerson?> personById(int localId) async {
     final db = await _open();
     if (_videoLibraryMode) {
+      // 2026-11-23：sex 列存在时一起取出来（详情页头显性别靠它；
+      // 没这列时 videoLibraryPersonFromRow 按未知处理，不默认女）。
+      final hasSex = await _hasActressSexColumn(db);
       final rows = await db.rawQuery(
         'SELECT a.rowid AS id, a.name AS display_name, '
         'a.cate_id AS cate_id, a.avatar AS avatar_url, '
+        "${hasSex ? 'a.sex AS sex, ' : ''}"
         'COUNT(va.vod_id) AS works_count '
         'FROM actresses a '
         'LEFT JOIN video_actress va ON va.cate_id = a.cate_id '
@@ -1632,11 +1698,13 @@ class SqfliteActressDatabase implements ActressDatabase {
           ActressSort.nameAsc => 'r.name ASC',
           ActressSort.recentDesc => 'r.last_date DESC, r.name ASC',
         };
+        // 2026-11-23：性别未知不再冒充“女”——没有男优行只说明没确认
+        // 过，不等于女；女筛（见上）仍按“非男”留人，显示只认确认值。
         final sexExpr = hasSex
             ? "(SELECT CASE WHEN EXISTS(SELECT 1 FROM actresses a4 "
                   "WHERE a4.name = r.name AND a4.sex = 'male') "
-                  "THEN 'male' ELSE 'female' END) AS sex"
-            : "'female' AS sex";
+                  "THEN 'male' ELSE '' END) AS sex"
+            : "'' AS sex";
         final rows = await db.rawQuery(
           'SELECT r.first_rowid AS id, r.name AS display_name, '
           'r.name AS cate_id, r.avatar AS avatar_url, '
@@ -1688,7 +1756,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         'SELECT MIN(a.rowid) AS id, a.name AS display_name, '
         'a.name AS cate_id, '
         '${hasSex ? "CASE WHEN SUM(CASE WHEN a.sex='male' THEN 1 ELSE 0 END)>0 "
-            "THEN 'male' ELSE 'female' END" : "'female'"} AS sex, '
+            "THEN 'male' ELSE '' END" : "''"} AS sex, '
         "COALESCE(MAX(NULLIF(a.avatar,'')),'') AS avatar_url, "
         'SUM(COALESCE(pc.n,0)) AS works_count, '
         "COALESCE(MAX(COALESCE(pc.d,'')),'') AS last_date "

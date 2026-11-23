@@ -49,8 +49,10 @@ class LiveSource {
   final bool greenCategoryFilter;
 
   static const values = <LiveSource>[
-    // 内置片库：包里自带的 whos 条目（5 万+，全是 m3u8 直链），
-    // 走 whoslib:// 由本地库出频道，不联网、不用订阅。
+    // 内置片库：优先读本地数据库 MYTV/db/女优库.db（34 万+，全是
+    // m3u8 直链），没库才读 documents/actress_json/ 里的两个 JSON；
+    // 包里不带任何种子（2026-11-22 用户令）。走 whoslib:// 由本地
+    // 库出频道，不联网、不用订阅。
     LiveSource(
       id: whosLibSourceId,
       name: '🔞内置片库',

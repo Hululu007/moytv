@@ -436,7 +436,8 @@ class LiveRepository {
 
   Future<List<LivePlatform>> _whosLibPlatforms() async {
     final library = await _whosLib();
-    final platforms = whosLibPlatforms(library);
+    // 2026-11-23：数据库模式走异步查库（同步版只读内存，库模式下是空的）。
+    final platforms = await whosLibPlatformsAsync(library);
     if (platforms.isEmpty) throw AppFailure('内置片库暂时没有分类');
     return platforms;
   }
@@ -447,7 +448,7 @@ class LiveRepository {
     int page,
   ) async {
     final library = await _whosLib();
-    final channels = whosLibChannels(
+    final channels = await whosLibChannelsAsync(
       library,
       category: platform.id,
       page: page,

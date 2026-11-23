@@ -951,6 +951,134 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     return reader.countWorks(query: query);
   }
 
+  /// 直播内置片库（whos_lib）读库分页（2026-11-23 v58 验机）：
+  /// 内置片库原来只读 documents/actress_json/ 里的 whos.json /
+  /// mjv011.json，v58 删了包内 whos.json、用户又定 App 里不内置
+  /// 任何 JSON，没那两个文件就确定性播不了；改成优先读本地数据库
+  /// （MYTV/db/女优库.db，34 万部、地址封面都有），没库才读 JSON。
+  /// 只读严格结构库；打不开/非严格结构回空，不抛错。
+  /// 排序是最新在前（vod_pubdate 倒序，不是 listFilms 的 vod_id
+  /// 字典序）；brand 按番号前缀筛（`rki-%`，走 vod_id 主键前缀）；
+  /// query 搜标题/番号（前导 % LIKE，大库上本来就慢，只在用户
+  /// 主动搜时跑）。
+  Future<List<FilmLibraryEntry>> listLibraryFilms({
+    String brand = '',
+    String query = '',
+    required int offset,
+    required int limit,
+  }) async {
+    try {
+      if (!await _ensureFilmOpen() || !isStrict) return const [];
+      final db = _readDb;
+      if (db == null) return const [];
+      final where = <String>[];
+      final args = <Object?>[];
+      final cleanBrand = brand.trim().toLowerCase();
+      if (cleanBrand.isNotEmpty) {
+        where.add('v.vod_id LIKE ?');
+        args.add('$cleanBrand-%');
+      }
+      final q = query.trim();
+      if (q.isNotEmpty) {
+        final like = '%${q.replaceAll('%', '').replaceAll('_', '')}%';
+        where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
+        args.addAll([like, like]);
+      }
+      final rows = await db.rawQuery(
+        'SELECT v.vod_id, v.title, v.pic_url, v.m3u8_url, v.vod_play_url, '
+        'v.vod_play_from, v.vod_pubdate, v.vod_remarks, v.type_name, '
+        'v.vod_content, vc.main_category '
+        'FROM videos v LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
+        '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} '
+        'ORDER BY v.vod_pubdate DESC, v.vod_id ASC LIMIT ? OFFSET ?',
+        [...args, limit, offset],
+      );
+      return [for (final row in rows) _strictRowToEntry(row)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 直播内置片库计数（与 [listLibraryFilms] 同一过滤条件）。
+  Future<int> countLibraryFilms({
+    String brand = '',
+    String query = '',
+  }) async {
+    try {
+      if (!await _ensureFilmOpen() || !isStrict) return 0;
+      final db = _readDb;
+      if (db == null) return 0;
+      final where = <String>[];
+      final args = <Object?>[];
+      final cleanBrand = brand.trim().toLowerCase();
+      if (cleanBrand.isNotEmpty) {
+        where.add('v.vod_id LIKE ?');
+        args.add('$cleanBrand-%');
+      }
+      final q = query.trim();
+      if (q.isNotEmpty) {
+        final like = '%${q.replaceAll('%', '').replaceAll('_', '')}%';
+        where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
+        args.addAll([like, like]);
+      }
+      final rows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM videos v '
+        '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}',
+        args,
+      );
+      return (rows.first['c'] as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 直播内置片库厂牌维度：番号前缀（`rki-6042` → `rki`）分组计数，
+  /// 从多到少。一次全表聚合，调用方缓存着用，别每页都调。
+  Future<List<({String brand, int count})>> libraryBrandFacets({
+    int limit = 30,
+  }) async {
+    try {
+      if (!await _ensureFilmOpen() || !isStrict) return const [];
+      final db = _readDb;
+      if (db == null) return const [];
+      final rows = await db.rawQuery(
+        "SELECT SUBSTR(vod_id, 1, INSTR(vod_id, '-') - 1) AS brand, "
+        'COUNT(*) AS c FROM videos '
+        "WHERE INSTR(vod_id, '-') > 1 "
+        'GROUP BY brand ORDER BY c DESC, brand ASC LIMIT ?',
+        [limit],
+      );
+      return [
+        for (final row in rows)
+          if ((row['brand']?.toString() ?? '').length >= 2)
+            (
+              brand: row['brand'].toString().toLowerCase(),
+              count: (row['c'] as num?)?.toInt() ?? 0,
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 直播内置片库按 id 取一条（主键查；大小写两种写法都试）。
+  Future<FilmLibraryEntry?> libraryFilmById(String vodId) async {
+    try {
+      if (!await _ensureFilmOpen() || !isStrict) return null;
+      final key = vodId.trim();
+      if (key.isEmpty) return null;
+      final films = await _strictFilmsByIds([
+        key,
+        key.toLowerCase(),
+        key.toUpperCase(),
+      ]);
+      if (films.isEmpty) return null;
+      return films.first;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 兜底提供方实现（2026-11-20 18:57 全部使用数据库兜底）：
   /// 详情页/播放兜底先查本库，读不到再回退 json/m3u。永不抛错。
   /// 按女优名取作品：严格结构按归一化名匹配 video_actress 的

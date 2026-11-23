@@ -92,3 +92,40 @@ List<CatalogCategory> whosLocalCategories(WhosLocalLibrary library) => [
   for (final row in library.categories())
     CatalogCategory(row.id, '${row.name} · ${row.count}'),
 ];
+
+/// 本地分页结果（异步版，2026-11-23）：数据库模式按页查库。
+Future<CatalogPage> whosLocalPageAsync({
+  required WhosLocalLibrary library,
+  required String category,
+  required String query,
+  required int page,
+  int pageSize = 24,
+  String source = whosSourceId,
+}) async {
+  final total = await library.countForAsync(
+    category: category,
+    query: query,
+  );
+  final items = (await library.pageAsync(
+    category: category,
+    query: query,
+    page: page,
+    pageSize: pageSize,
+  ))
+      .map((work) => whosLocalToDrama(work, source: source))
+      .toList(growable: false);
+  return CatalogPage(
+    items,
+    hasMore: page * pageSize < total,
+    page: page,
+    warning: items.isEmpty ? '本地库里没有匹配的作品' : '',
+  );
+}
+
+/// 本地分类清单（异步版，2026-11-23）：数据库模式走库里聚合。
+Future<List<CatalogCategory>> whosLocalCategoriesAsync(
+  WhosLocalLibrary library,
+) async => [
+  for (final row in await library.categoriesAsync())
+    CatalogCategory(row.id, '${row.name} · ${row.count}'),
+];

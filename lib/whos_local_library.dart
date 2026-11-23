@@ -1,7 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+
+import 'actress/actress_database.dart';
+import 'actress/actress_film_library.dart';
+import 'actress/actress_json_fallback.dart';
+import 'actress/video_db_normalize.dart';
 
 /// whos 本地兜底库的一条作品。
 ///
@@ -138,13 +144,26 @@ class WhosLocalLibrary {
   final List<WhosLocalWork> _works;
   final String sourceNote;
 
+  /// 数据库模式（2026-11-23）：读本地数据库时不把 34 万行全读进内存，
+  /// 按页懒查（见 pageAsync / categoriesAsync / byIdAsync）。
+  FilmLibraryService? _dbService;
+
+  /// 数据库模式下的作品总数（打开时一次 COUNT 拿到，见 _loadFromDb）。
+  int? _dbTotal;
+
+  /// 数据库模式下的厂牌维度（一次聚合后缓存，见 _dbFacets）。
+  List<({String brand, int count})>? _dbFacets;
+
   Map<String, List<WhosLocalWork>>? _byBrand;
   Map<String, WhosLocalWork>? _byCode;
   Future<bool>? _loading;
 
-  bool get isLoaded => _works.isNotEmpty;
+  bool get isLoaded => _works.isNotEmpty || _dbService != null;
 
-  int get count => _works.length;
+  int get count => _dbService != null ? (_dbTotal ?? 0) : _works.length;
+
+  /// 是不是在读本地数据库（而不是 JSON 文件）。
+  bool get isDbBacked => _dbService != null;
 
   /// 首次调用时加载；已加载直接返回。失败（资源缺失之类）返回 false，
   /// 但不抛异常——降级失败也要让上层照常走在线报错，不掩盖真问题。
@@ -157,6 +176,13 @@ class WhosLocalLibrary {
   }
 
   Future<bool> _load() async {
+    // 2026-11-23 v58 验机：优先读本地数据库（MYTV/db/女优库.db）——
+    // 原来只读 documents/actress_json/ 里的 whos.json / mjv011.json，
+    // v58 删了包内 whos.json、用户 23:39 又定 App 里不内置任何 JSON，
+    // 没那两个文件就确定性播不了（直播里报“内置片库没读出来”）。
+    // 库里 34 万部、地址封面都有；没库/库打不开才读 JSON。
+    // 绝不往包里加回内置种子。
+    if (await _loadFromDb()) return true;
     final merged = <String, WhosLocalWork>{};
     void absorb(String? text, {required String origin}) {
       if (text == null || text.trim().isEmpty) return;
@@ -194,6 +220,164 @@ class WhosLocalLibrary {
     _byBrand = null;
     _byCode = null;
     return _works.isNotEmpty;
+  }
+
+  /// 读本地数据库模式：打开 MYTV/db/女优库.db（只读连接），成功且
+  /// 是严格结构、有作品就切到数据库模式（懒查，不把 34 万行全读进
+  /// 内存）；失败回 false，调用方再读 JSON。索引是快读的前提：
+  /// 主库开库时已补，别的库/还没跑过主库时在这里后台补一次。
+  Future<bool> _loadFromDb() async {
+    final service = FilmLibraryService(
+      database: SqfliteActressDatabase.instance,
+    );
+    try {
+      final opened = await service.open();
+      if (opened.error != null || !opened.strict || opened.total <= 0) {
+        await service.close();
+        return false;
+      }
+      unawaited(ensureVideoDbIndexes(service.dbPath));
+      _dbService = service;
+      _dbTotal = opened.total;
+      _dbFacets = null;
+      return true;
+    } catch (_) {
+      try {
+        await service.close();
+      } catch (_) {}
+      return false;
+    }
+  }
+
+  /// 数据库行 → 本地库条目。
+  static WhosLocalWork _dbWork(FilmLibraryEntry entry) {
+    final code = entry.code;
+    final year = entry.date.length >= 4 ? entry.date.substring(0, 4) : '';
+    return WhosLocalWork(
+      id: entry.vodId,
+      title: entry.title,
+      cover: entry.coverUrl,
+      playUrl: entry.playUrl,
+      code: code,
+      brand: WhosLocalWork.brandOfCode(code),
+      area: '',
+      year: year,
+    );
+  }
+
+  /// 兜底条目 → 本地库条目（byId 按番号回捞时用）。
+  static WhosLocalWork _entryWork(ActressJsonEntry entry) {
+    final code = entry.vodCode;
+    return WhosLocalWork(
+      id: entry.vodId,
+      title: entry.vodName,
+      cover: entry.vodPic,
+      playUrl: entry.playUrl,
+      code: code,
+      brand: WhosLocalWork.brandOfCode(code),
+      area: entry.vodArea,
+      year: entry.vodYear,
+    );
+  }
+
+  /// 取一页（异步版）：数据库模式按页查库，JSON 模式走内存同步取。
+  /// 同步版 page() 只服务 JSON 模式（测试与旧调用方），数据库模式
+  /// 下它回空——调用方一律用这个。
+  Future<List<WhosLocalWork>> pageAsync({
+    String category = '',
+    String query = '',
+    int page = 1,
+    int pageSize = 24,
+  }) async {
+    final db = _dbService;
+    if (db == null) {
+      // pageAsync 的 page 参数会遮住同名方法 page()，必须显式用 this.page。
+      return this.page(
+        category: category,
+        query: query,
+        page: page,
+        pageSize: pageSize,
+      );
+    }
+    if (page < 1 || pageSize <= 0) return const [];
+    var brand = '';
+    if (category.startsWith(whosLocalBrandPrefix)) {
+      brand = category
+          .substring(whosLocalBrandPrefix.length)
+          .trim()
+          .toLowerCase();
+    }
+    final entries = await db.listLibraryFilms(
+      brand: brand,
+      query: query,
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    );
+    return [for (final entry in entries) _dbWork(entry)];
+  }
+
+  /// 分类里有多少条（异步版，不含分页）。
+  Future<int> countForAsync({
+    String category = '',
+    String query = '',
+  }) async {
+    final db = _dbService;
+    if (db == null) return countFor(category: category, query: query);
+    var brand = '';
+    if (category.startsWith(whosLocalBrandPrefix)) {
+      brand = category
+          .substring(whosLocalBrandPrefix.length)
+          .trim()
+          .toLowerCase();
+    }
+    return db.countLibraryFilms(brand: brand, query: query);
+  }
+
+  /// 目录分类（异步版）：最新、排行榜、厂牌前缀。
+  Future<List<({String id, String name, int count})>> categoriesAsync({
+    int brandLimit = 30,
+  }) async {
+    final db = _dbService;
+    if (db == null) return categories(brandLimit: brandLimit);
+    final total = _dbTotal ?? 0;
+    final facets = await _dbBrandFacets();
+    return [
+      (id: whosLocalNewCategory, name: '最新作品', count: total),
+      (id: whosLocalRankCategory, name: '排行榜', count: total),
+      for (final facet in facets.take(brandLimit))
+        (
+          id: '$whosLocalBrandPrefix${facet.brand}',
+          name: whosBrandLabel(facet.brand),
+          count: facet.count,
+        ),
+    ];
+  }
+
+  /// 数据库模式的厂牌维度（一次聚合后缓存；只留 2 部以上的厂牌，
+  /// 与 JSON 模式的 brandFacets 口径一致）。
+  Future<List<({String brand, int count})>> _dbBrandFacets() async {
+    final cached = _dbFacets;
+    if (cached != null) return cached;
+    final db = _dbService;
+    if (db == null) return const [];
+    final facets = await db.libraryBrandFacets(limit: 40);
+    final kept = [
+      for (final facet in facets)
+        if (facet.count >= 2) facet,
+    ];
+    _dbFacets = kept;
+    return kept;
+  }
+
+  /// 按 id 取一条（异步版）：数据库模式先主键查，查不到再按番号回捞。
+  Future<WhosLocalWork?> byIdAsync(String id) async {
+    final db = _dbService;
+    if (db == null) return byId(id);
+    final entry = await db.libraryFilmById(id);
+    if (entry != null) return _dbWork(entry);
+    final byCode = await db.entriesForCode(id);
+    if (byCode.isEmpty) return null;
+    return _entryWork(byCode.first);
   }
 
   /// 解析一份 json 文本（数组，或 `{'list': [...]}` 包装）。

@@ -47,9 +47,15 @@ class LivePlaybackController extends ChangeNotifier {
   static const maxRetries = 3;
   static const _reconnectDelay = Duration(seconds: 2);
 
-  /// 起播后迟迟没有画面的判定时限。列表型直播源的代理线路会返回正常清单却
+  /// 起播后迟迟没有画面的判定时限。直播源的代理线路会返回正常清单却
   /// 一直卡在缓冲，不触发错误事件，只靠 error 回调永远等不到换线。
   static const _stallTimeout = Duration(seconds: 15);
+
+  /// 点播（m3u 文件型）源的起播判定时限：点播地址是整部影片的 HLS，
+  /// 清单本身 18–79KB、首个分片约 180KB，慢网下光取清单加首批分片
+  /// 就要 30–90 秒才出第一帧；15 秒会把能播的片也判成断流。
+  /// 直播源仍用 15 秒，死线路照旧快速换线。
+  static const _vodStallTimeout = Duration(seconds: 90);
 
   final LiveRepository repository;
   late final sleepTimer = SleepTimerController(
@@ -185,7 +191,12 @@ class LivePlaybackController extends ChangeNotifier {
 
   void _armStallWatch() {
     _stall?.cancel();
-    _stall = Timer(_stallTimeout, () {
+    // 点播源（m3u 文件型，整部影片 HLS）出第一帧本来就慢，15 秒
+    // 会把慢网下能播的片误判成断流；直播源保持 15 秒不变。
+    final timeout = _source?.protocol == LiveProtocol.list
+        ? _vodStallTimeout
+        : _stallTimeout;
+    _stall = Timer(timeout, () {
       if (_disposed || _error != null) return;
       // playing 事件与布防存在竞态：事件先到再布防时计时器无人取消，
       // 必须在触发时复核真实播放状态，避免正常播放被误判断流。

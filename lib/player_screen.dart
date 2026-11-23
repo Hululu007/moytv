@@ -336,6 +336,16 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   double _speed = 1;
   double _aspectRatio = 9 / 16;
+
+  /// 全屏方向判定用的宽高比：原生句柄（TVBox/Exo）与 IJK 不走
+  /// media_kit，videoParams 永远不到，_aspectRatio 恒等于初始 9/16；
+  /// 方向判定再拿它当竖屏片，就会把横屏片也锁竖屏（点全屏只剩
+  /// 竖屏上下黑边、看起来像“不能全屏”）。这两条核在宽高比未知
+  /// 时按 16/9 兜底，与直播侧默认一致；MPV 核仍用真实宽高比，
+  /// 竖屏片进全屏照旧锁竖屏。
+  double get _orientationAspectRatio =>
+      (_useNativeHandle || _useIjkCore) ? 16 / 9 : _aspectRatio;
+
   double _resumePosition = 0;
   bool _rotating = false;
   bool _backPending = false;
@@ -2077,8 +2087,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       PlaybackOrientationMode.portrait => orientation == Orientation.portrait,
       PlaybackOrientationMode.landscape => orientation == Orientation.landscape,
       PlaybackOrientationMode.auto =>
-        (_aspectRatio >= 1 && orientation == Orientation.landscape) ||
-            (_aspectRatio < 1 && orientation == Orientation.portrait),
+        (_orientationAspectRatio >= 1 &&
+                orientation == Orientation.landscape) ||
+            (_orientationAspectRatio < 1 &&
+                orientation == Orientation.portrait),
     };
   }
 
@@ -2109,14 +2121,14 @@ class _PlayerScreenState extends State<PlayerScreen>
         await (_orientationController?.setPlayback(
                   this,
                   fullscreen: fullscreen,
-                  aspectRatio: _aspectRatio,
+                  aspectRatio: _orientationAspectRatio,
                   mode: _orientationMode,
                 ) ??
                 SystemChrome.setPreferredOrientations(
                   AppOrientationController.orientations(
                     television: _television,
                     fullscreen: fullscreen,
-                    aspectRatio: _aspectRatio,
+                    aspectRatio: _orientationAspectRatio,
                     mode: _orientationMode,
                   ),
                 ))
@@ -2239,14 +2251,14 @@ class _PlayerScreenState extends State<PlayerScreen>
       await (_orientationController?.setPlayback(
             this,
             fullscreen: fullscreen,
-            aspectRatio: _aspectRatio,
+            aspectRatio: _orientationAspectRatio,
             mode: _orientationMode,
           ) ??
           SystemChrome.setPreferredOrientations(
             AppOrientationController.orientations(
               television: _television,
               fullscreen: fullscreen,
-              aspectRatio: _aspectRatio,
+              aspectRatio: _orientationAspectRatio,
               mode: _orientationMode,
             ),
           ));
@@ -2265,14 +2277,14 @@ class _PlayerScreenState extends State<PlayerScreen>
         await (_orientationController?.setPlayback(
               this,
               fullscreen: true,
-              aspectRatio: _aspectRatio,
+              aspectRatio: _orientationAspectRatio,
               mode: _orientationMode,
             ) ??
             SystemChrome.setPreferredOrientations(
               AppOrientationController.orientations(
                 television: _television,
                 fullscreen: true,
-                aspectRatio: _aspectRatio,
+                aspectRatio: _orientationAspectRatio,
                 mode: _orientationMode,
               ),
             ));

@@ -231,6 +231,25 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
 
   /// 体检修复当前库：逐条验活播放地址，确认打不开的行删掉，重建演员
   /// 汇总与分类计数。开修前自动备份一份 .bak，修完重开库刷新列表。
+  /// 库文件旁边的潮流名册（离线补性别/头像用）：roster_live.json
+  /// 或 actors.json，有就解析、没有/解析失败就回 null（走联网取）。
+  Future<Map<String, ({String avatar, String sex})>?>
+  _localRosterProfiles() async {
+    final dir = path.dirname(widget.filePath);
+    for (final name in const ['roster_live.json', 'actors.json']) {
+      try {
+        final file = File(path.join(dir, name));
+        if (!await file.exists()) continue;
+        final text = await file.readAsString();
+        final map = VideoDbNormalizer.parseChaoliuProfiles(text);
+        if (map.isNotEmpty) return map;
+      } catch (_) {
+        // 这个文件读不了就试下一个，没有就回 null。
+      }
+    }
+    return null;
+  }
+
   Future<void> _repairLibrary() async {
     if (_repairing) return;
     final confirmed = await showDialog<bool>(
@@ -363,10 +382,15 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
     try {
       // 第一步：结构对齐 + 头像 + 域名（快，几十秒）。
       progress.value = '按女优库结构整理…';
+      // 2026-11-23：名册是性别的权威——库旁边放了潮流名册
+      // （roster_live.json / actors.json）就用它离线补性别/头像，
+      // 不用再联网取；没放就走原来的联网取（取不到跳过这步）。
+      final rosterProfiles = await _localRosterProfiles();
       try {
         normalize = await VideoDbNormalizer.run(
           widget.filePath,
           schema: _schema,
+          profiles: rosterProfiles,
           onStage: (stage) => progress.value = stage,
         );
       } catch (e) {
@@ -442,6 +466,11 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
         });
         return;
       }
+      // 2026-11-23：先给这个库补索引（只加索引，不动行；后台跑不堵读）。
+      // 全球丽影库就是在这里 25 秒超时报“读这个库太慢”——videos 表
+      // 除主键外没有索引，首屏 ORDER BY/LIKE 全是全表扫；补上后
+      // 下次打开直接走索引。
+      unawaited(ensureVideoDbIndexes(widget.filePath));
       final db = await openDatabase(
         widget.filePath,
         readOnly: true,

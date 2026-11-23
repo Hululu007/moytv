@@ -203,6 +203,16 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   Animation<double>? _routeAnimation;
   double _speed = 1;
   double _aspectRatio = 9 / 16;
+
+  /// 全屏方向判定用的宽高比：原生句柄（Exo）与 IJK 不走 media_kit，
+  /// videoParams 永远不到，_aspectRatio 恒等于初始 9/16；方向判定
+  /// 再拿它当竖屏片，就会把横屏片也锁竖屏（点全屏只剩竖屏上下
+  /// 黑边、看起来像“不能全屏”）。这两条核在宽高比未知时按 16/9
+  /// 兜底，与直播侧默认一致；MPV 核仍用真实宽高比，竖屏片进全屏
+  /// 照旧锁竖屏。
+  double get _orientationAspectRatio =>
+      (_useNativeHandle || _useIjkCore) ? 16 / 9 : _aspectRatio;
+
   double _resumePosition = 0;
   bool _rotating = false;
   bool _fullscreenApplied = false;
@@ -1721,7 +1731,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       _fullscreen ||
       (_mobile &&
           !_automaticFullscreenSuppressed &&
-          _aspectRatio >= 1 &&
+          _orientationAspectRatio >= 1 &&
           MediaQuery.orientationOf(context) == Orientation.landscape);
 
   Future<void> _rotate() async {
@@ -1744,13 +1754,13 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         await (_orientationController?.setPlayback(
                   this,
                   fullscreen: fullscreen,
-                  aspectRatio: _aspectRatio,
+                  aspectRatio: _orientationAspectRatio,
                 ) ??
                 SystemChrome.setPreferredOrientations(
                   AppOrientationController.orientations(
                     television: _television,
                     fullscreen: fullscreen,
-                    aspectRatio: _aspectRatio,
+                    aspectRatio: _orientationAspectRatio,
                   ),
                 ))
             .timeout(const Duration(seconds: 2));

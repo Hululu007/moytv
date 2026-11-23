@@ -1021,7 +1021,7 @@ class NativeRepository extends AppRepository {
     final library = WhosLocalLibrary.shared;
     final loaded = await library.ensureLoaded();
     final local = loaded
-        ? whosLocalCategories(library)
+        ? await whosLocalCategoriesAsync(library)
         : const <CatalogCategory>[];
     final localById = {for (final row in local) row.id: row};
     final seen = <String>{};
@@ -1061,7 +1061,7 @@ class NativeRepository extends AppRepository {
     }
     final library = WhosLocalLibrary.shared;
     if (await library.ensureLoaded()) {
-      final local = whosLocalPage(
+      final local = await whosLocalPageAsync(
         library: library,
         category: category,
         query: query,
@@ -1080,7 +1080,7 @@ class NativeRepository extends AppRepository {
     if (!await library.ensureLoaded()) return null;
     final id = whosLocalWorkIdOf(drama);
     if (id.isNotEmpty) {
-      final work = library.byId(id);
+      final work = await library.byIdAsync(id);
       if (work != null) return work;
     }
     final code = drama.tags.firstWhere(
