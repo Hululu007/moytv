@@ -23,6 +23,7 @@ void main() {
       player: player,
       available: () => true,
       baseSpeed: () => 1,
+      swipeSeek: () => 60,
       onTogglePlayback: () {},
       onFullscreen: () {},
       onEpisode: (_) => '',

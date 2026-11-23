@@ -15,6 +15,7 @@ class PlayerInteractions extends ChangeNotifier {
     required this.player,
     required this.available,
     required this.baseSpeed,
+    required this.swipeSeek,
     required this.onTogglePlayback,
     required this.onFullscreen,
     required this.onEpisode,
@@ -30,6 +31,7 @@ class PlayerInteractions extends ChangeNotifier {
   final Player player;
   final bool Function() available;
   final double Function() baseSpeed;
+  final int Function() swipeSeek;
   final VoidCallback onTogglePlayback;
   final VoidCallback onFullscreen;
   final String Function(int direction) onEpisode;
@@ -245,14 +247,14 @@ class PlayerInteractions extends ChangeNotifier {
     _held = false;
   }
 
-  // 全屏横向拖完一整屏 ≈ 进度全幅；短剧时长普遍 < 1 小时，按 min(时长, 45 分钟)
-  // 缩放，保证小屏手机上能拖到位又不至于太灵敏。
+  // 左右滑动定位：拖满一屏 = 播放设置里的滑动秒数（播放设置 →
+  // 左右滑动快进/快退），与西瓜播放器同一口径。以前这里按
+  // min(总时长, 45 分钟) 缩放：2 小时片子拖满一屏是 45 分钟，
+  // 轻轻一滑（约 1/20 屏宽）就跳一百多秒，设置值根本不起作用。
   void _updateSeekDrag(Offset delta) {
     final duration = player.state.duration;
     if (duration <= Duration.zero || _paneWidth <= 0) return;
-    final span = duration > const Duration(minutes: 45)
-        ? const Duration(minutes: 45)
-        : duration;
+    final span = Duration(seconds: swipeSeek());
     final fraction = (delta.dx / _paneWidth).clamp(-1.0, 1.0);
     var target =
         _seekAnchor +

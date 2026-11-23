@@ -535,9 +535,18 @@ ActressWork videoLibraryWorkFromRow(
 
 /// sqflite 实现：独立 actress.db，不动 app.db 的版本与表结构。
 class SqfliteActressDatabase implements ActressDatabase {
-  SqfliteActressDatabase._();
+  SqfliteActressDatabase._({this.pathOverride});
 
   static final SqfliteActressDatabase instance = SqfliteActressDatabase._();
+
+  /// 多库勾选：按指定路径开一个只读库实例（不走 MYTV 绑定）。
+  /// 只读打开、不跑迁移、不补索引、不补列、不写汇总表，用户的
+  /// 外来库文件一个字都不动；读走与主库同一套 SQL。
+  factory SqfliteActressDatabase.forPath(String path) =>
+      SqfliteActressDatabase._(pathOverride: path);
+
+  /// 非空时 _openNow 不读绑定，直接开这个路径（只读）。
+  final String? pathOverride;
 
   Database? _db;
 
@@ -573,6 +582,17 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   Future<Database> _openNow() async {
+    // 2026-11-23 多库勾选：指定了路径就只读开那个文件，不读绑定、
+    // 不跑迁移、不补索引列，文件一个字都不动。
+    final override = pathOverride;
+    if (override != null && override.isNotEmpty) {
+      final db = await _openDbAt(override, readOnly: true);
+      _openedPath = override;
+      _openedSignature = _signatureOf(File(override));
+      _genericReaderCache = null;
+      _genericReaderKey = null;
+      return db;
+    }
     // 2026-11-22 用户令最终口径：女优库只读外置数据库
     // MYTV/db/女优库.db；绑定不到它（dbPath 为空）就抛
     // ActressNoExternalDbException，界面显示空态提示；外置库
@@ -602,7 +622,7 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 是女优库结构走建库/迁移路径；是用户视频库
   /// （女优库.db）走读写打开、置视频库标志；外来库直接打开，
   /// 不跑女优库迁移、不动用户的文件结构，读走通用映射层。
-  Future<Database> _openDbAt(String filePath) async {
+  Future<Database> _openDbAt(String filePath, {bool readOnly = false}) async {
     final file = File(filePath);
     if (!file.existsSync() || file.lengthSync() == 0) {
       _videoLibraryMode = false;
@@ -612,7 +632,11 @@ class SqfliteActressDatabase implements ActressDatabase {
     }
     if (await _looksLikeActressDb(filePath)) {
       _videoLibraryMode = false;
-      final db = await _openActressDb(filePath);
+      // 只读开外来库时不跑迁移（_openActressDb 会建表/升版写盘），
+      // 直接只读打开，结构不对读的时候再报错。
+      final db = readOnly
+          ? await openDatabase(filePath, readOnly: true)
+          : await _openActressDb(filePath);
       // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
       // 才抛；这里验出来就关掉重抛，不开坏库。
       try {
@@ -628,19 +652,23 @@ class SqfliteActressDatabase implements ActressDatabase {
     // 进去。标志由这里定，close() 时清掉；验头失败时标志清掉
     // 再重抛，不留错标志。
     if (await _looksLikeVideoLibraryDb(filePath)) {
-      final db = await openDatabase(filePath);
+      final db = readOnly
+          ? await openDatabase(filePath, readOnly: true)
+          : await openDatabase(filePath);
       _videoLibraryMode = true;
       try {
         await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
-        // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
-        // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
-        // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
-        // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
-        // 或磁盘满时建不了就跳过，查询照样能跑。
-        await _ensureVideoIndexes(db);
-        // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
-        // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
-        await _ensureActressSexColumn(db);
+        if (!readOnly) {
+          // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
+          // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
+          // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
+          // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
+          // 或磁盘满时建不了就跳过，查询照样能跑。
+          await _ensureVideoIndexes(db);
+          // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
+          // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
+          await _ensureActressSexColumn(db);
+        }
       } catch (_) {
         _videoLibraryMode = false;
         await db.close();
@@ -649,7 +677,9 @@ class SqfliteActressDatabase implements ActressDatabase {
       return db;
     }
     _videoLibraryMode = false;
-    final db = await openDatabase(filePath);
+    final db = readOnly
+        ? await openDatabase(filePath, readOnly: true)
+        : await openDatabase(filePath);
     // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
     // 才抛；这里验出来就关掉重抛，不开坏库。
     try {
@@ -1687,7 +1717,7 @@ class SqfliteActressDatabase implements ActressDatabase {
             'JOIN videos v2 ON v2.vod_id = va2.vod_id '
             'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
             'WHERE a2.name = r.name '
-            "AND COALESCE(vc2.main_category, v2.type_name, '') = ?)",
+            "AND COALESCE(vc2.main_category, '') = ?)",
           );
         }
         final where = conditions.isEmpty
@@ -1737,7 +1767,7 @@ class SqfliteActressDatabase implements ActressDatabase {
           'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
           'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
           'WHERE a3.name = a.name '
-          "AND COALESCE(vc2.main_category, v2.type_name, '') = ?)",
+          "AND COALESCE(vc2.main_category, '') = ?)",
         );
       }
       final where = conditions.isEmpty
@@ -1934,12 +1964,12 @@ class SqfliteActressDatabase implements ActressDatabase {
         'v.title AS title, v.vod_pubdate AS date, '
         'v.vod_play_from AS site, v.vod_play_from AS cover_source, '
         'v.pic_url AS cover_url, '
-        "COALESCE(vc.main_category, v.type_name, '') AS category "
+        "COALESCE(vc.main_category, '') AS category "
         'FROM videos v '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
         'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
         'WHERE cate_id IN ($inList)) '
-        "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ? " : ''}"
+        "${useCategory ? "AND COALESCE(vc.main_category, '') = ? " : ''}"
         'ORDER BY v.vod_pubdate DESC, v.vod_id ASC '
         'LIMIT ? OFFSET ?',
         useCategory
@@ -1975,7 +2005,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
         'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
         'WHERE cate_id IN ($inList)) '
-        "${useCategory ? "AND COALESCE(vc.main_category, v.type_name, '') = ?" : ''}",
+        "${useCategory ? "AND COALESCE(vc.main_category, '') = ?" : ''}",
         useCategory ? [...cateIds, category] : cateIds,
       );
       return (rows.first['c'] as num?)?.toInt() ?? 0;
@@ -1989,6 +2019,22 @@ class SqfliteActressDatabase implements ActressDatabase {
       useCategory ? [personId, category] : [personId],
     );
     return (rows.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 全库一级分类（video_category.main_category，去重计数）：
+  /// 多库勾选时列表页分类行取各库并集。只读查询，不写盘；
+  /// 没有 video_category 表的库直接抛错，调用方跳过。
+  Future<List<(String, int)>> dbCategories() async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      'SELECT main_category, COUNT(*) AS c FROM video_category '
+      "WHERE main_category IS NOT NULL AND main_category <> '' "
+      'GROUP BY main_category ORDER BY c DESC',
+    );
+    return [
+      for (final row in rows)
+        (row['main_category'].toString(), (row['c'] as num).toInt()),
+    ];
   }
 
   @override
@@ -2007,15 +2053,15 @@ class SqfliteActressDatabase implements ActressDatabase {
       if (cateIds.isEmpty) return const [];
       final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
-        "SELECT COALESCE(vc.main_category, v.type_name, '') AS name, "
+        "SELECT COALESCE(vc.main_category, '') AS name, "
         'COUNT(*) AS c FROM videos v '
         'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
         'WHERE v.vod_id IN (SELECT vod_id FROM video_actress '
         'WHERE cate_id IN ($inList)) '
-        "AND COALESCE(vc.main_category, v.type_name, '') <> '' "
+        "AND COALESCE(vc.main_category, '') <> '' "
         // GROUP BY 必须写完整表达式：写别名 name 有歧义（actresses
         // 表也有 name 列），SQLite 会按人名分组、全并成一组。
-        "GROUP BY COALESCE(vc.main_category, v.type_name, '') "
+        "GROUP BY COALESCE(vc.main_category, '') "
         'ORDER BY c DESC, name ASC',
         cateIds,
       );

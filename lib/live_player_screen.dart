@@ -29,11 +29,16 @@ class LivePlayerScreen extends StatefulWidget {
     required this.source,
     required this.store,
     this.videoBuilder,
+    this.swipeSeek,
   });
 
   final LivePlaybackController playback;
   final LiveSource source;
   final LiveStore store;
+
+  /// 左右滑动一屏的秒数：直播页没有设置入口，由调用方把播放设置
+  /// 里的值传进来；不传默认 60 秒（以前写死的值）。
+  final int Function()? swipeSeek;
 
   /// 测试注入：同 LiveScreen.videoBuilder，代替真实 Video。
   final Widget Function(LivePlaybackController playback, bool fullscreen)?
@@ -101,7 +106,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
       available: () => !_panel && _playback.error == null,
       baseSpeed: () => 1,
       holdSpeed: () => 1,
-      swipeSeek: () => 60,
+      swipeSeek: widget.swipeSeek ?? () => 60,
       onTogglePlayback: _toggle,
       onFullscreen: _exit,
       onEpisode: _switchHint,

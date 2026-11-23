@@ -41,7 +41,9 @@ void main() {
       });
       expect(person.localId, 7);
       expect(person.displayName, '今村由美');
-      expect(person.sex, 'female');
+      // 2026-11-23 v58 修复：老库行没有 sex 列时性别是未知（''），
+      // 不许再默认成“女”（貞松大輔是男优却显示“女”就是这么来的）。
+      expect(person.sex, '');
       expect(person.avatarUrl, 'https://example.com/a.jpg');
       expect(person.worksCount, 12);
       expect(person.rosterWorks, 12);

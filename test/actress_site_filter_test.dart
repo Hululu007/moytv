@@ -1,4 +1,6 @@
-// 女优库左上角站点筛选（2026-11-19）：默认全部，选站过滤列表并触发该站现爬。
+// 女优库左上角站点筛选（2026-11-19）：默认全部，选站过滤列表。
+// 2026-11-23 用户令：切站不再自动现爬，想爬去设置页“选站现爬”区
+// 点“爬当前选站”手动爬。
 import 'dart:convert';
 import 'dart:io';
 
@@ -174,7 +176,7 @@ void main() {
     });
   }
 
-  testWidgets('默认全部显示两人；选 mjv 只留 JSON 里有的人，并触发 mjv 现爬', (
+  testWidgets('默认全部显示两人；选 mjv 只留 JSON 里有的人，切站不自动现爬', (
     tester,
   ) async {
     await pumpPage(tester);
@@ -189,16 +191,30 @@ void main() {
 
     expect(find.text('八木奈奈'), findsOneWidget);
     expect(find.text('测试二号'), findsNothing);
+    // 2026-11-23 用户令：切站不再自动现爬。
+    expect(crawl.startedSite, isNull);
+
+    // 设置页“选站现爬”区点“爬当前选站”才爬当前选的站。
+    await tester.tap(find.byKey(const ValueKey('open-actress-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('爬当前选站'));
+    await tester.pumpAndSettle();
     expect(crawl.startedSite, 'mjv');
   });
 
-  testWidgets('选 whos 触发 whos 现爬（服务侧报缺口，不编假蜘蛛）', (
+  testWidgets('选 whos 不自动现爬，点“爬当前选站”才爬 whos', (
     tester,
   ) async {
     await pumpPage(tester);
     await tester.tap(find.byKey(const ValueKey('actress-site-filter')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('whos').last);
+    await tester.pumpAndSettle();
+    // 2026-11-23 用户令：切站不再自动现爬。
+    expect(crawl.startedSite, isNull);
+    await tester.tap(find.byKey(const ValueKey('open-actress-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('爬当前选站'));
     await tester.pumpAndSettle();
     expect(crawl.startedSite, 'whos');
   });

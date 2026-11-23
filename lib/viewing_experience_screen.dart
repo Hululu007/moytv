@@ -141,6 +141,15 @@ class _ViewingExperienceScreenState extends State<ViewingExperienceScreen> {
                             settings.copyWith(deepSniffer: value),
                           ),
                         ),
+                        SwitchListTile(
+                          key: const ValueKey('viewing-auto-write-site-db-switch'),
+                          title: const Text('自动写入站点库'),
+                          subtitle: const Text('播起来后把能播的片记进站点库，播不了的不记'),
+                          value: settings.autoWriteSiteDb,
+                          onChanged: (value) => _updateSettings(
+                            settings.copyWith(autoWriteSiteDb: value),
+                          ),
+                        ),
                       ],
                     ),
                   ),

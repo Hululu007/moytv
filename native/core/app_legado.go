@@ -1100,6 +1100,29 @@ func legadoContent(src LegadoSource, chapterURL string) (interface{}, error) {
 func legadoExploreCategories(src LegadoSource) interface{} {
 	out := []map[string]string{}
 	trimmed := strings.TrimSpace(src.ExploreURL)
+	// @js: 发现地址：先求值脚本（与 searchUrl 同一套上下文，source
+	// 已绑定），再按返回的 JSON 解析。以前这里没处理 @js:，脚本
+	// 原文被按行拆成“分类”，漫蛙这种全靠 @js: 拼分类的源，分类
+	// 页全是 @js:/var _o = {}; 之类的垃圾行，点进去也取不到数。
+	if strings.HasPrefix(trimmed, "@js:") || strings.HasPrefix(trimmed, "<js>") {
+		script := strings.TrimSpace(strings.TrimPrefix(trimmed, "@js:"))
+		if strings.HasPrefix(trimmed, "<js>") {
+			script = strings.TrimSpace(trimmed[4:])
+			script = strings.TrimSuffix(script, "</js>")
+		}
+		ctx := newLegadoJSCtx(src.URL)
+		ctx.setSource(src)
+		rt := ctx.runtime()
+		v, err := ctx.evalJSCur(script, "")
+		if err != nil {
+			return out
+		}
+		res := legadoJSValueString(rt, v)
+		if res == "" {
+			return out
+		}
+		trimmed = strings.TrimSpace(res)
+	}
 	if strings.HasPrefix(trimmed, "[") {
 		var arr []map[string]interface{}
 		if json.Unmarshal([]byte(trimmed), &arr) == nil {

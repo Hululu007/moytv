@@ -572,9 +572,15 @@ class FilmLibraryOpenResult {
 /// 同时是兜底提供方（implements FilmDbFallbackProvider）：详情页/
  /// 播放兜底先查本库。
 class FilmLibraryService implements FilmDbFallbackProvider {
-  FilmLibraryService({required this.database});
+  FilmLibraryService({required this.database, this.autoReplaceDomain = false});
 
   final ActressDatabase database;
+
+  /// 开库时域名变了要不要自动批量替换用户库里的播放地址。
+  /// 2026-11-23 用户令：不要全自动同步检查——默认关，只记不自动换；
+  /// 手动调 replaceDomain() 仍可换。一次误记观测域名能把 34 万条
+  /// 地址全改写到错域名上，自动跑的风险太大。
+  final bool autoReplaceDomain;
 
   Database? _readDb;
   GenericDbSchema? _schema;
@@ -599,8 +605,9 @@ class FilmLibraryService implements FilmDbFallbackProvider {
 
   /// 打开绑定的影视库文件（只读连接；换库后重读以绑定层为准）。
   /// 打开时比对域名：sidecar 里记的当前域名与库里实际主域名不一
-  /// 样时，批量替换库里全部播放地址的域名并记数（只在打开时做
-  /// 一次，不在列表滚动时反复做）。
+  /// 样时，默认只记不自动换（见 [autoReplaceDomain]）；开关开着
+  /// 才批量替换库里全部播放地址的域名并记数（只在打开时做一次，
+  /// 不在列表滚动时反复做）。
   Future<FilmLibraryOpenResult> open() async {
     await close();
     final bind = await ActressMytvBind.instance.ensureBound();
@@ -651,7 +658,8 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     final stored = state.currentDomain(schema.fingerprint);
     final observed = state.observedDomain(schema.fingerprint);
     final effective = observed.isNotEmpty ? observed : domain;
-    if (stored.isNotEmpty &&
+    if (autoReplaceDomain &&
+        stored.isNotEmpty &&
         effective.isNotEmpty &&
         stored != effective) {
       // 域名变了：批量替换后把新域名记为当前域名。

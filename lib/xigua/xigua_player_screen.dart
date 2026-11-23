@@ -76,6 +76,7 @@ class XiguaPlayerScreen extends StatefulWidget {
     this.startFullscreen = false,
     this.onPlaybackExhausted,
     this.onRetryProbe,
+    this.onPlaybackStarted,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -97,6 +98,12 @@ class XiguaPlayerScreen extends StatefulWidget {
   /// “重试播放”时调，返回 true 表示调用方已换新线起播（本页不
   /// 再原地重播），false 表示重探无果、本页原地重播。默认 null。
   final Future<bool> Function(BuildContext)? onRetryProbe;
+
+  /// 开始播放回调：与 guo 播放器同语义，第一次真播起来（playing
+  /// 为真且进度已走）时调一次，带当前取流方案与集序号；换集/换线
+  /// 重播时再调一次。默认 null；本地播放不调。
+  final void Function(BuildContext, PlaybackPlan, int episodeIndex)?
+  onPlaybackStarted;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -179,6 +186,30 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   String? _saveWarning;
   PlaybackPlan? _plan;
   NonVideoContent? _nonVideo;
+
+  /// 开始播放回调已通知过的（集序号|取流地址）：同一集同一地址只
+  /// 通知一次；换集/换线重播时地址变了再通知一次。
+  String? _playbackStartedKey;
+
+  /// 真播起来了就通知一次调用方：playing 为真且进度已走（帧真正在
+  /// 走，不是在缓冲），且取流方案在线（本地播放不通知）。
+  /// 进度监听、播放状态流、健康定时三处都调这里，以先到为准。
+  void _maybeNotifyPlaybackStarted() {
+    final callback = widget.onPlaybackStarted;
+    final plan = _plan;
+    if (callback == null ||
+        plan == null ||
+        plan.local ||
+        _closed ||
+        !mounted) {
+      return;
+    }
+    if (!_enginePlaying || _enginePosition <= Duration.zero) return;
+    final key = '$_index|${plan.url}';
+    if (_playbackStartedKey == key) return;
+    _playbackStartedKey = key;
+    callback(context, plan, _index);
+  }
   String _lastPageUrl = '';
   bool _sniffFallbackTried = false;
   bool _deepSniffer = true;
@@ -465,6 +496,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     );
     _subscriptions.add(
       _player.stream.position.listen((position) {
+        _maybeNotifyPlaybackStarted();
         if (!_closed && _openedIndex == _index && position > Duration.zero) {
           _resumePosition = position.inMilliseconds / 1000;
         }
@@ -481,6 +513,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     ]) {
       _subscriptions.add(
         stream.listen((_) {
+          _maybeNotifyPlaybackStarted();
           _coalesceTimer?.cancel();
           _coalesceTimer = null;
           _syncPlayback();
@@ -504,6 +537,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       (_) => _saveProgress(),
     );
     _healthTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _maybeNotifyPlaybackStarted();
       unawaited(_speedTracker.tick());
       if (!_closed &&
           _acceptErrors &&

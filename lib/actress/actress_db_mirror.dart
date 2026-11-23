@@ -377,6 +377,10 @@ List<File> collectDbMirrorTargets({
     if (path.equals(normalized, path.normalize(libraryPath))) return;
     final baseName = path.basename(file.path);
     if (baseName == '女优库应用.db' || baseName == 'actress.db') return;
+    // 2026-11-23 用户令：共用站点库（MYTV/db/站点库.db）只记播过的片，
+    // 绝不做镜像源——不加这一行，哪天镜像护栏一变，播放记录会被追加
+    // 进女优库.db。
+    if (baseName == '站点库.db') return;
     if (!seen.add(normalized)) return;
     targets.add(file);
   }

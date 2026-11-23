@@ -37,6 +37,7 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
+import 'actress/actress_site_db.dart';
 
 typedef DetailTagTap =
     void Function(String sourceId, String tagId, String tagName);
@@ -226,6 +227,31 @@ class _DetailScreenState extends State<DetailScreen> {
         _tmdbConfig = tmdb;
       });
     }
+  }
+
+  Future<void> _updateViewing(ViewingExperienceSettings next) async {
+    if (mounted) setState(() => _viewing = next);
+    await next.save();
+  }
+
+  /// 播放器第一次真播起来：开关开着才把这集记进共用站点库。
+  /// 开关以触发时的值为准（不在进页时缓存的值），写失败不挡播放。
+  void _handlePlaybackStarted(
+    DramaDetail detail,
+    PlaybackPlan plan,
+    int episodeIndex,
+  ) {
+    if (plan.local) return;
+    if (episodeIndex < 0 || episodeIndex >= detail.episodes.length) return;
+    unawaited(
+      ViewingExperienceSettings.load().then((settings) async {
+        if (!settings.autoWriteSiteDb) return;
+        await ActressSiteDb.instance.recordPlay(
+          drama: detail.drama,
+          playUrl: plan.url,
+        );
+      }),
+    );
   }
 
   Future<void> _loadTmdb(Drama drama) async {
@@ -593,6 +619,8 @@ class _DetailScreenState extends State<DetailScreen> {
         onPlaybackExhausted: widget.nextLineOnExhausted == null
             ? null
             : _onPushedPlayerExhausted,
+        onPlaybackStarted: (context, plan, episodeIndex) =>
+            _handlePlaybackStarted(detail, plan, episodeIndex),
       );
       if (mounted) {
         setState(() {});
@@ -665,6 +693,8 @@ class _DetailScreenState extends State<DetailScreen> {
           ? null
           : _onPushedPlayerExhausted,
       onRetryProbe: widget.onRetryProbe == null ? null : _onPlayerRetry,
+      onPlaybackStarted: (context, plan, episodeIndex) =>
+          _handlePlaybackStarted(detail, plan, episodeIndex),
     );
     if (mounted) {
       setState(() {});
@@ -821,6 +851,8 @@ class _DetailScreenState extends State<DetailScreen> {
       onPlaybackExhausted: widget.nextLineOnExhausted == null
           ? null
           : _onEmbeddedExhausted,
+      onPlaybackStarted: (context, plan, episodeIndex) =>
+          _handlePlaybackStarted(detail, plan, episodeIndex),
       playerFactory: widget.playerFactory,
       videoBuilder: widget.videoBuilder,
     );
@@ -1231,6 +1263,23 @@ class _DetailScreenState extends State<DetailScreen> {
                                     episodes,
                                     currentNumber: watched?.episode,
                                     expanded: showEpisodes,
+                                  ),
+                                ),
+                                SliverToBoxAdapter(
+                                  child: SwitchListTile(
+                                    key: const ValueKey(
+                                      'detail-auto-write-site-db-switch',
+                                    ),
+                                    title: const Text('自动写入站点库'),
+                                    subtitle: const Text(
+                                      '播起来后把能播的片记进站点库，播不了的不记',
+                                    ),
+                                    value: _viewing.autoWriteSiteDb,
+                                    onChanged: (value) => _updateViewing(
+                                      _viewing.copyWith(
+                                        autoWriteSiteDb: value,
+                                      ),
+                                    ),
                                   ),
                                 ),
                                 if (showEpisodes) ...[

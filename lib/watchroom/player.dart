@@ -13,6 +13,22 @@ import '../playback_preferences.dart';
 import '../tvbox_video_pane.dart';
 import '../widgets.dart';
 
+/// 播完判定（位置兜底）：播着、时长已知且不小于 5 秒、位置已到
+/// 时长前 1 秒内，就算播完。mpv 的 eof-reached 是主信号，但
+/// 有些 HLS 到尾不断流、eof-reached 迟迟不来，自动下一集就
+/// 卡死；位置到了就是到了，与主播放器“位置离时长不到 2 秒即
+/// 播完”的口径一致。
+bool roomPlayerReachedEnd({
+  required double positionSeconds,
+  required double durationSeconds,
+  required bool playing,
+}) {
+  if (!playing) return false;
+  if (durationSeconds < 5 || !durationSeconds.isFinite) return false;
+  if (positionSeconds < 0) return false;
+  return positionSeconds >= durationSeconds - 1;
+}
+
 class RoomPlayerHandle extends ChangeNotifier {
   Player? _player;
   VideoController? _videoController;
@@ -25,6 +41,7 @@ class RoomPlayerHandle extends ChangeNotifier {
       StreamController<double>.broadcast();
   Timer? _tvboxPollTimer;
   bool _subscribed = false;
+  String? _completedFiredKey;
 
   bool useTvbox = false;
   bool loading = false;
@@ -54,6 +71,16 @@ class RoomPlayerHandle extends ChangeNotifier {
 
   bool get hasVideo => _plan != null && error == null;
 
+  /// 完播回调的唯一入口：同一集（同一个 videoKey）只触发一次。
+  /// mpv 完播流、位置兜底、原生 completedStream 三路都走这里，
+  /// 防重复触发导致连播跳集。videoKey 随新一集打开而变，天然
+  /// 复位；videoKey 为空（未开播/已关闭）时不触发。
+  void fireCompleted() {
+    if (videoKey.isEmpty || _completedFiredKey == videoKey) return;
+    _completedFiredKey = videoKey;
+    onCompleted?.call();
+  }
+
   void _subscribePlayerStreams() {
     if (_subscribed || _player == null) return;
     _subscribed = true;
@@ -62,10 +89,17 @@ class RoomPlayerHandle extends ChangeNotifier {
       player.stream.playing.listen((_) => notifyListeners()),
       player.stream.position.listen((value) {
         _positionController.add(value.inMilliseconds / 1000);
+        if (roomPlayerReachedEnd(
+          positionSeconds: value.inMilliseconds / 1000,
+          durationSeconds: player.state.duration.inMilliseconds / 1000,
+          playing: player.state.playing,
+        )) {
+          fireCompleted();
+        }
       }),
       player.stream.duration.listen((_) => notifyListeners()),
       player.stream.completed.listen((completed) {
-        if (completed) onCompleted?.call();
+        if (completed) fireCompleted();
       }),
       player.stream.error.listen((message) {
         error = message;
@@ -79,6 +113,13 @@ class RoomPlayerHandle extends ChangeNotifier {
     _tvboxPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_positionController.isClosed) {
         _positionController.add(_tvboxHandle.positionSeconds);
+      }
+      if (roomPlayerReachedEnd(
+        positionSeconds: _tvboxHandle.positionSeconds,
+        durationSeconds: _tvboxHandle.durationSeconds,
+        playing: _tvboxHandle.playing,
+      )) {
+        fireCompleted();
       }
       notifyListeners();
     });
@@ -294,7 +335,7 @@ class RoomPlayerView extends StatelessWidget {
             autoplay: true,
             decoderMode: TelevisionDecoder.optimized,
             handle: handle.tvboxHandle,
-            onCompleted: onCompleted,
+            onCompleted: handle.fireCompleted,
             onError: onError,
             viewType: viewType,
             onFullscreen: onFullscreen,

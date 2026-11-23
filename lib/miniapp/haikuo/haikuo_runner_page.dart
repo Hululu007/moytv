@@ -4316,6 +4316,9 @@ class _HaikuoPlayerViewState extends State<HaikuoPlayerView> {
     player: _player,
     available: () => mounted && _error == null && !_panel,
     baseSpeed: () => _speed,
+    // 小程序宿主手里没有主站的 LocalStore，接不上播放设置里的
+    // 滑动秒数，先按 60 秒默认走（以前类里写死的行为）。
+    swipeSeek: () => 60,
     onTogglePlayback: _togglePlayback,
     onFullscreen: _toggleFullscreen,
     onEpisode: _episodeHint,

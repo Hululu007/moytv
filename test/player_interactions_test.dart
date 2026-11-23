@@ -15,6 +15,7 @@ void main() {
       player: player,
       available: () => true,
       baseSpeed: () => 1.5,
+      swipeSeek: () => 60,
       onTogglePlayback: () {},
       onFullscreen: () {},
       onEpisode: (_) => '',
@@ -61,6 +62,7 @@ void main() {
       player: player,
       available: () => true,
       baseSpeed: () => 1,
+      swipeSeek: () => 60,
       onTogglePlayback: () {},
       onFullscreen: () {},
       onEpisode: (_) => '',
@@ -107,6 +109,7 @@ void main() {
         player: player,
         available: () => true,
         baseSpeed: () => 1,
+      swipeSeek: () => 60,
         onTogglePlayback: () {},
         onFullscreen: () {},
         onEpisode: (_) => '',
@@ -138,6 +141,7 @@ void main() {
       player: player,
       available: () => true,
       baseSpeed: () => 1,
+      swipeSeek: () => 60,
       onTogglePlayback: () {},
       onFullscreen: () {},
       onEpisode: (_) => '',
@@ -178,8 +182,8 @@ void main() {
       ),
     );
     await Future<void>.delayed(Duration.zero);
-    // 向右拖 240/800 屏宽 → 全幅 2 分钟的 30% → 前进 36 秒。
-    expect(player.state.position, const Duration(seconds: 36));
+    // 向右拖 240/800 屏宽 → 一屏 60 秒的 30% → 前进 18 秒。
+    expect(player.state.position, const Duration(seconds: 18));
 
     interactions.pointerDown(
       PointerDownEvent(
@@ -212,8 +216,63 @@ void main() {
       ),
     );
     await Future<void>.delayed(Duration.zero);
-    // 向左拖 80/800 屏宽 → 后退 12 秒。
-    expect(player.state.position, const Duration(seconds: 24));
+    // 向左拖 80/800 屏宽 → 一屏 60 秒的 10% → 后退 6 秒。
+    expect(player.state.position, const Duration(seconds: 12));
+
+    interactions.dispose();
+    await player.dispose();
+  });
+
+  test('swipe seek setting drives the drag span', () async {
+    final platform = ScriptedPlayer();
+    final player = Player(platformPlayer: platform);
+    await platform.open(Media('https://media.test/working.mp4'));
+    final interactions = PlayerInteractions(
+      player: player,
+      available: () => true,
+      baseSpeed: () => 1,
+      swipeSeek: () => 120,
+      onTogglePlayback: () {},
+      onFullscreen: () {},
+      onEpisode: (_) => '',
+      onSeek: (target) async => player.seek(target),
+    );
+
+    interactions.pointerDown(
+      PointerDownEvent(
+        pointer: 1,
+        position: const Offset(400, 200),
+        buttons: kPrimaryButton,
+        kind: PointerDeviceKind.touch,
+        timeStamp: Duration.zero,
+      ),
+      swipeEnabled: true,
+      height: 400,
+      width: 800,
+    );
+    for (var step = 1; step <= 4; step++) {
+      interactions.pointerMove(
+        PointerMoveEvent(
+          pointer: 1,
+          position: Offset(400 + step * 60, 200),
+          buttons: kPrimaryButton,
+          kind: PointerDeviceKind.touch,
+          timeStamp: Duration(milliseconds: 100 * step),
+        ),
+      );
+    }
+    interactions.pointerUp(
+      PointerUpEvent(
+        pointer: 1,
+        position: const Offset(640, 200),
+        buttons: 0,
+        kind: PointerDeviceKind.touch,
+        timeStamp: const Duration(milliseconds: 420),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    // 同样拖 240/800 屏宽，设置 120 秒时前进 36 秒（60 秒设置只进 18 秒）。
+    expect(player.state.position, const Duration(seconds: 36));
 
     interactions.dispose();
     await player.dispose();
@@ -231,6 +290,7 @@ void main() {
         player: player,
         available: () => true,
         baseSpeed: () => 1,
+      swipeSeek: () => 60,
         onTogglePlayback: () {},
         onFullscreen: () {},
         onEpisode: (_) {

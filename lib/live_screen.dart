@@ -803,6 +803,8 @@ class _LiveScreenState extends State<LiveScreen> {
           source: source,
           store: widget.store,
           videoBuilder: widget.videoBuilder,
+          swipeSeek: () =>
+              widget.appStore?.playbackPreferences.swipeSeekSeconds ?? 60,
         ),
       ),
     );

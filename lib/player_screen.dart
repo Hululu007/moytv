@@ -93,6 +93,7 @@ class PlayerScreen extends StatefulWidget {
     this.onEmbeddedIndexChanged,
     this.onPlaybackExhausted,
     this.onRetryProbe,
+    this.onPlaybackStarted,
     this.liveSubtitleEngine,
     this.liveSubtitleAudioExtractor,
   });
@@ -121,6 +122,12 @@ class PlayerScreen extends StatefulWidget {
   /// true 表示调用方已换新线起播（本页不再原地重播），false
   /// 表示重探无果、本页原地重播。默认 null，现有行为一字不变。
   final Future<bool> Function(BuildContext)? onRetryProbe;
+
+  /// 开始播放回调：播放器第一次真播起来（playing 为真且进度已走）
+  /// 时调一次，带当前取流方案与集序号；换集/换线重播时再调一次。
+  /// 默认 null，现有行为一字不变；本地播放（plan.local）不调。
+  final void Function(BuildContext, PlaybackPlan, int episodeIndex)?
+  onPlaybackStarted;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -234,6 +241,31 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _saveWarning;
   PlaybackPlan? _plan;
   NonVideoContent? _nonVideo;
+
+  /// 开始播放回调已通知过的（集序号|取流地址）：同一集同一地址只
+  /// 通知一次；换集/换线重播时地址变了再通知一次。
+  String? _playbackStartedKey;
+
+  /// 真播起来了就通知一次调用方：playing 为真且进度已走（帧真正在
+  /// 走，不是在缓冲），且取流方案在线（本地播放不通知）。
+  /// playing 翻转时进度可能还是 0，进度推进时 playing 可能刚翻回来，
+  /// 所以 playing 监听、进度监听、健康定时三处都调这里，以先到为准。
+  void _maybeNotifyPlaybackStarted() {
+    final callback = widget.onPlaybackStarted;
+    final plan = _plan;
+    if (callback == null ||
+        plan == null ||
+        plan.local ||
+        _closed ||
+        !mounted) {
+      return;
+    }
+    if (!_enginePlaying || _enginePosition <= Duration.zero) return;
+    final key = '$_index|${plan.url}';
+    if (_playbackStartedKey == key) return;
+    _playbackStartedKey = key;
+    callback(context, plan, _index);
+  }
   bool _audioMode = false;
   OverlayEntry? _audioMiniBar;
 
@@ -515,6 +547,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _foreground &&
           !_panelOpen,
       baseSpeed: () => _speed,
+      swipeSeek: () => widget.store.playbackPreferences.swipeSeekSeconds,
       onTogglePlayback: _togglePlayback,
       onSeek: _seekTo,
       onFullscreen: widget.embedded ? _notifyEmbeddedFullscreen : _rotate,
@@ -573,6 +606,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _subscriptions.add(
       _player.stream.position.listen((position) {
+        _maybeNotifyPlaybackStarted();
         if (!_closed && _openedIndex == _index && position > Duration.zero) {
           _resumePosition = position.inMilliseconds / 1000;
         }
@@ -600,6 +634,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _subscriptions.add(
       _player.stream.playing.listen((playing) {
+        _maybeNotifyPlaybackStarted();
         _claimOrReportExternalAudio();
         final plan = _plan;
         if (!playing || plan == null || plan.routeIndex == _routeIndex) {
@@ -638,6 +673,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       (_) => _saveProgress(),
     );
     _healthTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _maybeNotifyPlaybackStarted();
       unawaited(_speedTracker.tick());
       if (!_closed &&
           _acceptErrors &&
