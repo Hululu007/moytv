@@ -6,7 +6,7 @@ class ViewingExperienceSettings {
     this.detailPosterBackground = true,
     this.m3u8DownloadWhilePlaying = false,
     this.deepSniffer = true,
-    this.autoWriteSiteDb = true,
+    this.autoWriteSiteDb = false,
   });
 
   static const String keyImmersive = 'moyi_viewing_immersive';
@@ -17,13 +17,20 @@ class ViewingExperienceSettings {
   static const String keyDeepSniffer = 'moyi_viewing_deep_sniffer';
   static const String keyAutoWriteSiteDb = 'moyi_viewing_auto_write_site_db';
 
+  /// 2026-11-24 数据自动变大修复用：一次性迁移标记。老版本默认开，
+  /// 已存的开要一次性关掉，否则已存的开会继续每播一部写一行、
+  /// 站点库.db 一直涨。迁完用户在设置里再手动打开仍有效。
+  static const String keyAutoWriteSiteDbOffMigrated =
+      'moyi_viewing_auto_write_site_db_off_migrated';
+
   final bool immersive;
   final bool detailPosterBackground;
   final bool m3u8DownloadWhilePlaying;
   final bool deepSniffer;
 
   /// 播起来后自动把能播的片写进共用站点库（MYTV/db/站点库.db）：
-  /// 默认开；播不了的不写，开关关了也不写。
+  /// 默认关（2026-11-24 改：默认开时每播一部新片写一行，站点库.db
+  /// 一直涨）；播不了的不写，开关关了也不写。
   final bool autoWriteSiteDb;
 
   bool get posterBackgroundActive => immersive && detailPosterBackground;
@@ -48,13 +55,22 @@ class ViewingExperienceSettings {
     SharedPreferences? prefs,
   ]) async {
     final store = prefs ?? await SharedPreferences.getInstance();
+    var autoWrite = store.getBool(keyAutoWriteSiteDb) ?? false;
+    // 2026-11-24 数据自动变大修复：默认改关后，老用户已存的开也
+    // 要一次性关掉（只迁一次），否则存的开继续每播一部写一行。
+    // 迁完用户在设置里再手动打开仍有效。
+    if (!(store.getBool(keyAutoWriteSiteDbOffMigrated) ?? false)) {
+      autoWrite = false;
+      await store.setBool(keyAutoWriteSiteDb, false);
+      await store.setBool(keyAutoWriteSiteDbOffMigrated, true);
+    }
     return ViewingExperienceSettings(
       immersive: store.getBool(keyImmersive) ?? true,
       detailPosterBackground: store.getBool(keyDetailPosterBackground) ?? true,
       m3u8DownloadWhilePlaying:
           store.getBool(keyM3u8DownloadWhilePlaying) ?? false,
       deepSniffer: store.getBool(keyDeepSniffer) ?? true,
-      autoWriteSiteDb: store.getBool(keyAutoWriteSiteDb) ?? true,
+      autoWriteSiteDb: autoWrite,
     );
   }
 

@@ -56,7 +56,13 @@ class GenericActressDatabase implements ActressDatabase {
     if (!file.existsSync() || file.lengthSync() == 0) return null;
     Database? db;
     try {
-      db = await openDatabase(filePath, readOnly: true);
+      // 2026-11-24 掉线修复：探库独立连接（singleInstance: false），
+      // 关完不拖主库的共享连接掉线。
+      db = await openDatabase(
+        filePath,
+        readOnly: true,
+        singleInstance: false,
+      );
       final schema = await probeGenericDbSchema(db);
       if (schema.worksTable == null) {
         await db.close();
@@ -504,7 +510,12 @@ class GenericActressDatabase implements ActressDatabase {
     }
     Database? next;
     try {
-      next = await openDatabase(path, readOnly: true);
+      // 2026-11-24 掉线修复：探库独立连接，关完不拖主库掉线。
+      next = await openDatabase(
+        path,
+        readOnly: true,
+        singleInstance: false,
+      );
       final schema = await probeGenericDbSchema(next);
       if (schema.worksTable == null) {
         await next.close();

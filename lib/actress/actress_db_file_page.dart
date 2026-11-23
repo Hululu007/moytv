@@ -471,9 +471,11 @@ class _ActressDbFilePageState extends State<ActressDbFilePage> {
       // 除主键外没有索引，首屏 ORDER BY/LIKE 全是全表扫；补上后
       // 下次打开直接走索引。
       unawaited(ensureVideoDbIndexes(widget.filePath));
+      // 2026-11-24 掉线修复：探库独立连接，关完不拖主库的共享连接掉线。
       final db = await openDatabase(
         widget.filePath,
         readOnly: true,
+        singleInstance: false,
       ).timeout(
         const Duration(seconds: 15),
         onTimeout: () => throw TimeoutException('打开库超时'),

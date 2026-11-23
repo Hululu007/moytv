@@ -286,6 +286,7 @@ class WhosLocalLibrary {
   Future<List<WhosLocalWork>> pageAsync({
     String category = '',
     String query = '',
+    String videoCategory = '',
     int page = 1,
     int pageSize = 24,
   }) async {
@@ -310,6 +311,7 @@ class WhosLocalLibrary {
     final entries = await db.listLibraryFilms(
       brand: brand,
       query: query,
+      videoCategory: videoCategory,
       offset: (page - 1) * pageSize,
       limit: pageSize,
     );
@@ -320,6 +322,7 @@ class WhosLocalLibrary {
   Future<int> countForAsync({
     String category = '',
     String query = '',
+    String videoCategory = '',
   }) async {
     final db = _dbService;
     if (db == null) return countFor(category: category, query: query);
@@ -330,7 +333,11 @@ class WhosLocalLibrary {
           .trim()
           .toLowerCase();
     }
-    return db.countLibraryFilms(brand: brand, query: query);
+    return db.countLibraryFilms(
+      brand: brand,
+      query: query,
+      videoCategory: videoCategory,
+    );
   }
 
   /// 目录分类（异步版）：最新、排行榜、厂牌前缀。
@@ -350,6 +357,18 @@ class WhosLocalLibrary {
           name: whosBrandLabel(facet.brand),
           count: facet.count,
         ),
+    ];
+  }
+
+  /// 视频主分类（异步版）：数据库模式走库里 video_category 聚合
+  /// （有码/无码/国产/4K…，按数量倒序）；JSON 模式没有主分类维度，
+  /// 返回空。供分类页在站点分类取不到时也能摆出全部主分类标签。
+  Future<List<({String name, int count})>> mainCategoriesAsync() async {
+    final db = _dbService;
+    if (db == null) return const [];
+    final rows = await db.categories();
+    return [
+      for (final (name, count) in rows) (name: name, count: count),
     ];
   }
 

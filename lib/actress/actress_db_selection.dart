@@ -99,7 +99,15 @@ class ActressDbSelection {
     try {
       final file = File(filePath);
       if (!file.existsSync() || file.lengthSync() == 0) return false;
-      db = await openDatabase(filePath, readOnly: true);
+      // 2026-11-24 掉线修复：探库必须 singleInstance: false——
+      // 默认单例下同路径 open 返回的是主库正在用的同一个连接，
+      // 这里 close() 会把主库的共享连接一起关掉，主库此后全掉线。
+      // 独立连接探完关自己的，不动主库。
+      db = await openDatabase(
+        filePath,
+        readOnly: true,
+        singleInstance: false,
+      );
       final schema = await probeGenericDbSchema(db);
       return filmIsStrictVideosSchema(schema);
     } catch (_) {
@@ -123,7 +131,12 @@ class ActressDbSelection {
     try {
       final file = File(filePath);
       if (!file.existsSync() || file.lengthSync() == 0) return -1;
-      db = await openDatabase(filePath, readOnly: true);
+      // 2026-11-24 掉线修复：同上，探库独立连接，关完不拖主库掉线。
+      db = await openDatabase(
+        filePath,
+        readOnly: true,
+        singleInstance: false,
+      );
       final schema = await probeGenericDbSchema(db);
       if (filmIsStrictVideosSchema(schema)) {
         final rows = await db.rawQuery('SELECT COUNT(*) AS c FROM videos');

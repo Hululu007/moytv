@@ -116,6 +116,19 @@ class ActressListPage extends StatefulWidget {
   State<ActressListPage> createState() => _ActressListPageState();
 }
 
+/// 列表第一页缓存项（2026-11-24 切换不重载）：第一页人物 + hasMore
+/// + 查库时的原始偏移（翻页用）+ 滚动偏移（切换回来恢复位置用）。
+class _CachedListPage {
+  _CachedListPage(this.persons, this.hasMore, this.rawOffset);
+
+  final List<ActressPerson> persons;
+  final bool hasMore;
+  final int rawOffset;
+
+  /// 切换前存的滚动偏移；恢复时等网格布局完再跳，越界时钳制。
+  double scrollOffset = 0;
+}
+
 class _ActressListPageState extends State<ActressListPage> {
   static const _pageSize = 60;
   // 进行中刷新节流：同步/现爬跑着、列表还空时，最多每 8 秒刷新
@@ -146,6 +159,35 @@ class _ActressListPageState extends State<ActressListPage> {
   var _loading = true;
   var _loadingMore = false;
   var _hasMore = true;
+
+  /// 刷新中（筛选切换时）：旧列表留着当底，只在列表顶露一条细进度条，
+  /// 不清列表、不转大圈，滚动位置天然保住。首屏第一次加载仍走
+  /// _loading 大转圈（2026-11-24 切换不重载）。
+  var _refreshing = false;
+
+  /// 第一页缓存（2026-11-24 切换不重载）：key = 筛选条件全维度，
+  /// 值 = 第一页人物 + hasMore + 查库时的原始偏移 + 滚动偏移。
+  /// 只缓存第一页（60 条），上限 8 个 key（LRU）。失效：热换库、
+  /// 同步/现爬/叠加/镜像完成、手动刷新时全清（见 _clearListCaches）。
+  final _pageCache = <String, _CachedListPage>{};
+  static const _pageCacheMaxKeys = 8;
+
+  /// 分类结果缓存（2026-11-24）：key = 主库路径+指纹 + 各外来库
+  /// 路径+指纹，值 = 合并后的分类列表。文件没变就不跑 GROUP BY。
+  String? _dbCategoriesCacheKey;
+  List<(String, int)>? _dbCategoriesCache;
+
+  /// 外来库连接的文件指纹（打开时记的 mtime + 大小）：复用连接前先
+  /// 比对，文件被用户在外面替换过就关掉重开，不能读旧文件句柄。
+  final _extraDbFingerprints = <String, (DateTime, int)>{};
+
+  /// 可播视频数缓存（2026-11-24）：按路径记（数量，mtime，大小）。
+  /// 文件没变直接用缓存数，变了才重数；-1（打不开）不缓存，下次重试。
+  final _playableCountCache = <String, (int, DateTime, int)>{};
+
+  /// 本会话已补过索引的外来库路径（ensureVideoDbIndexes 是
+  /// CREATE INDEX IF NOT EXISTS，重复调只是浪费一次开库 IO）。
+  final _indexedDbPaths = <String>{};
   var _sex = ActressSexFilter.all;
   var _tagFilter = ActressTagFilter.all;
   var _sort = ActressSort.worksDesc;
@@ -480,44 +522,113 @@ class _ActressListPageState extends State<ActressListPage> {
     }
   }
 
+  /// 外来库文件指纹（mtime + 大小）：复用连接/缓存可播数前先比对，
+  /// 文件被用户在外面替换过就当没见过、重开重数。文件没了返回 null。
+  (DateTime, int)? _dbFileFingerprint(String path) {
+    try {
+      final stat = File(path).statSync();
+      return (stat.modified, stat.size);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 外来库文件指纹字符串（分类缓存 key 用）：文件没了记 'missing'。
+  String _dbFileFingerprintKey(String path) {
+    final fp = _dbFileFingerprint(path);
+    if (fp == null) return 'missing';
+    return '${fp.$1.millisecondsSinceEpoch}|${fp.$2}';
+  }
+
+  /// 该库的可播视频数（带缓存）：文件没变直接用缓存数，变了才重数。
+  /// -1（打不开）不缓存，下次重试。缓存只活在本页实例里，
+  /// 文件变了（指纹变）自动失效。
+  Future<int> _countPlayableVideosCached(String path) async {
+    final fp = _dbFileFingerprint(path);
+    final cached = _playableCountCache[path];
+    if (cached != null &&
+        fp != null &&
+        cached.$2 == fp.$1 &&
+        cached.$3 == fp.$2) {
+      return cached.$1;
+    }
+    final count = await ActressDbSelection.countPlayableVideos(path);
+    if (count >= 0 && fp != null) {
+      _playableCountCache[path] = (count, fp.$1, fp.$2);
+    }
+    return count;
+  }
+
+  /// 外来库补索引（本会话每个路径只补一次）：ensureVideoDbIndexes
+  /// 是 CREATE INDEX IF NOT EXISTS，重复调只是浪费一次开库 IO。
+  void _ensureVideoDbIndexesOnce(String path) {
+    if (!_indexedDbPaths.add(path)) return;
+    unawaited(ensureVideoDbIndexes(path));
+  }
+
   Future<void> _loadDbSelectionUnsafe({bool reload = true}) async {
     final bind = _mytvBind;
     if (bind == null || !bind.bound) return;
     final choices = ActressDbSelection.availableChoices(bind: bind);
     final selected = await ActressDbSelection.loadSelectedPaths(bind.dbPath);
-    final extras = <String, ActressDatabase>{};
+    // 2026-11-24 切换不重载：按路径复用已打开的连接——只开新勾的、
+    // 只关取消的；勾选没变的库直接复用旧连接，不重数、不重开。
+    // 文件被用户在外面替换过（指纹变了）时旧连接读的是旧文件句柄，
+    // 必须关掉重开（见诊断 §7 风险 5）。
+    final keep = <String, ActressDatabase>{};
     for (final choice in choices) {
       if (choice.isMain || !selected.contains(choice.path)) continue;
+      final existing = _extraDbs[choice.path];
+      if (existing != null) {
+        final oldFp = _extraDbFingerprints[choice.path];
+        final newFp = _dbFileFingerprint(choice.path);
+        if (oldFp != null &&
+            newFp != null &&
+            oldFp.$1 == newFp.$1 &&
+            oldFp.$2 == newFp.$2) {
+          keep[choice.path] = existing;
+          continue;
+        }
+        // 文件变了或指纹丢了：关掉旧连接重开。
+        unawaited(existing.close());
+        _extraDbFingerprints.remove(choice.path);
+      }
       // 2026-11-23 用户令：数据库全部支持勾选——有可播视频的库
       // 都进合并；0 部可播视频 / 打不开的才不进（界面已如实写原因）。
-      final playable =
-          await ActressDbSelection.countPlayableVideos(choice.path);
+      final playable = await _countPlayableVideosCached(choice.path);
       if (playable <= 0) continue;
       if (await ActressDbSelection.isStrictVideoLibraryDbFile(choice.path)) {
-        extras[choice.path] = SqfliteActressDatabase.forPath(choice.path);
+        keep[choice.path] = SqfliteActressDatabase.forPath(choice.path);
         // 2026-11-23 转圈根因之三：外来库只读打开、不补索引，点人
         // ORDER BY vod_pubdate、分类 GROUP BY 都走全表扫；和
         // MultiDbFilmFallback 同口径，后台给外来库补同一套索引
         //（只加索引、不动任何一行数据；建不了就跳过，查询照样跑）。
-        unawaited(ensureVideoDbIndexes(choice.path));
+        // 本会话每个路径只补一次（见 _ensureVideoDbIndexesOnce）。
+        _ensureVideoDbIndexesOnce(choice.path);
+        final fp = _dbFileFingerprint(choice.path);
+        if (fp != null) _extraDbFingerprints[choice.path] = fp;
         continue;
       }
       // 非严格结构：通用读法进合并（按作品表女优列分组人物，
       // 见 GenericActressDatabase）；认不出作品表的库开不出来，
       // 跳过（界面上它仍显示可播数，播放池那条路还能用它）。
       final generic = await GenericActressDatabase.open(choice.path);
-      if (generic != null) extras[choice.path] = generic;
+      if (generic != null) {
+        keep[choice.path] = generic;
+        final fp = _dbFileFingerprint(choice.path);
+        if (fp != null) _extraDbFingerprints[choice.path] = fp;
+      }
     }
     if (!mounted) return;
     final oldExtras = Map<String, ActressDatabase>.from(_extraDbs);
     setState(() {
       _extraDbs
         ..clear()
-        ..addAll(extras);
+        ..addAll(keep);
       _personHomeDb.clear();
     });
     for (final entry in oldExtras.entries) {
-      if (!extras.containsKey(entry.key)) unawaited(entry.value.close());
+      if (!keep.containsKey(entry.key)) unawaited(entry.value.close());
     }
     // 勾选变了（勾上或取消）都要重读分类与列表：取消最后一个外来库
     // 也要回单库。启动时 reload 为 false，启动流程自己读。
@@ -772,7 +883,10 @@ class _ActressListPageState extends State<ActressListPage> {
         return;
       }
       // 重读成功：从单例重取绑定，显示行与实际落点一致；
-      // 之前没库、现在放进来了，空态也清掉。
+      // 之前没库、现在放进来了，空态也清掉。库文件可能换了，
+      // 旧缓存作废（下面非通用分支走 _refreshAfterSync 也会清，
+      // 通用分支不走那里，这里先清一次）。
+      _clearListCaches();
       setState(() {
         _mytvDbError = null;
         _noExternalDb = false;
@@ -981,6 +1095,18 @@ class _ActressListPageState extends State<ActressListPage> {
       _persons = persons;
       _hasMore = raw.length >= _pageSize;
     });
+    // 进行中刷新也写透缓存：否则缓存里还是同步前的旧第一页，
+    // 切换回来会显示旧数据（同步完成时 _refreshAfterSync 会全清，
+    // 这里写透是让同步进行中切换也不显示旧数据）。只存第一页；
+    // 只在主模式写（站源/通用模式各有自己的列表，不走这份缓存）。
+    // rawOffset 存缓存这页的人数（第一页），不能存已加载的总页数，
+    // 否则恢复后翻页会跳页。
+    if (!_genericMode && !_siteWorksMode) {
+      final firstPage = persons.length > _pageSize
+          ? persons.sublist(0, _pageSize)
+          : persons;
+      _storePageCache(firstPage, raw.length >= _pageSize, firstPage.length);
+    }
   }
 
   /// 本轮入库增长文案（2026-11-20 用户令：增长要看得见，按
@@ -1017,6 +1143,10 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   Future<void> _refreshAfterSync() async {
+    // 同步/现爬/叠加写了库：旧缓存作废，先清再重读（漏清会显示旧数据）。
+    // 所有完成路径都走这里（同步 done、叠加 done、现爬 done、重绑、
+    // 手动重载），一处清就全覆盖。
+    _clearListCaches();
     final overview = await _db.overview();
     if (!mounted) return;
     setState(() => _overview = overview);
@@ -1048,7 +1178,10 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   void _onScroll() {
-    if (_loadingMore || !_hasMore || _loading) return;
+    // 2026-11-24：刷新中也不触底加载（_refreshing 时 _loading 为假，
+    // 不加这道会在切换时误起翻页，代次守卫把它丢掉后 _loadingMore
+    // 还可能卡住）。
+    if (_loadingMore || !_hasMore || _loading || _refreshing) return;
     if (_scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 400) {
       unawaited(_loadPage());
@@ -1065,8 +1198,9 @@ class _ActressListPageState extends State<ActressListPage> {
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
       final query = _activeSearchController.text.trim();
       if (query == _query) return;
+      _saveScrollOffsetForCache();
       setState(() => _query = query);
-      unawaited(_loadPage(reset: true));
+      _reloadAfterFilterChange();
     });
   }
 
@@ -1197,6 +1331,7 @@ class _ActressListPageState extends State<ActressListPage> {
   /// “选站现爬”区点“爬当前选站”手动爬。
   void _setSiteFilter(ActressSiteFilter source) {
     if (source == _source) return;
+    _saveScrollOffsetForCache();
     setState(() {
       _source = source;
       _siteWorks = [];
@@ -1206,7 +1341,7 @@ class _ActressListPageState extends State<ActressListPage> {
     if (source.siteId == nvkuSourceId) {
       unawaited(_loadSiteCategories(source.siteId));
     }
-    unawaited(_loadPage(reset: true));
+    _reloadAfterFilterChange();
   }
 
   /// 站点自己的分类（nvku：最新/有码/无码/4K/其它，条数在名字里）。
@@ -1231,9 +1366,15 @@ class _ActressListPageState extends State<ActressListPage> {
   Future<void> _loadSiteWorks({bool reset = false}) async {
     if (reset) {
       final generation = ++_generation;
+      // 2026-11-24 切换不重载：同主列表，旧作品留着当底、只置细进度条。
+      final keepOld = _siteWorks.isNotEmpty;
       setState(() {
-        _loading = true;
-        _siteWorks = [];
+        if (keepOld) {
+          _refreshing = true;
+        } else {
+          _loading = true;
+        }
+        _loadingMore = false;
         _hasMore = true;
       });
       final page = await widget.repository.catalog(
@@ -1248,6 +1389,7 @@ class _ActressListPageState extends State<ActressListPage> {
         _siteWorksPage = 2;
         _hasMore = page.hasMore;
         _loading = false;
+        _refreshing = false;
       });
       return;
     }
@@ -1362,9 +1504,19 @@ class _ActressListPageState extends State<ActressListPage> {
     }
     if (reset) {
       final generation = ++_generation;
+      // 2026-11-24 切换不重载：列表非空时是筛选切换，旧列表留着当底，
+      // 只置细进度条（_refreshing），不清列表、不转大圈，滚动位置
+      // 天然保住；首屏第一次加载（列表空）才走大转圈。_hasMore 在
+      // 结果回来后再按新结果置；_loadingMore 一并清掉（重置使在途
+      // 的翻页失效，不清会卡住触底加载）。
+      final keepOld = _persons.isNotEmpty;
       setState(() {
-        _loading = true;
-        _persons = [];
+        if (keepOld) {
+          _refreshing = true;
+        } else {
+          _loading = true;
+        }
+        _loadingMore = false;
         _hasMore = true;
       });
       _rawOffset = 0;
@@ -1378,7 +1530,9 @@ class _ActressListPageState extends State<ActressListPage> {
           _persons = persons;
           _hasMore = _mergedHasMore;
           _loading = false;
+          _refreshing = false;
         });
+        _storePageCache(persons, _mergedHasMore, _rawOffset);
         return;
       }
       final raw = await _db.listPersons(
@@ -1397,7 +1551,9 @@ class _ActressListPageState extends State<ActressListPage> {
         _persons = persons;
         _hasMore = raw.length >= _pageSize;
         _loading = false;
+        _refreshing = false;
       });
+      _storePageCache(persons, raw.length >= _pageSize, _rawOffset);
       return;
     }
     if (_loadingMore || !_hasMore) return;
@@ -1436,15 +1592,110 @@ class _ActressListPageState extends State<ActressListPage> {
     });
   }
 
+  /// 第一页缓存的 key：筛选条件的全部维度 + 已勾选库路径（排好序）。
+  /// 任一维度变了就是另一个 key；数据库勾选变化时库路径段变了，
+  /// 旧 key 自然失效。只用于主模式（通用/站源模式各有自己的列表，
+  /// 不走这份缓存）。
+  String _pageCacheKey() {
+    final dbs = _extraDbs.keys.toList()..sort();
+    return [
+      _sex.name,
+      _category,
+      _tagFilter.name,
+      _sort.name,
+      _query,
+      _source.siteId,
+      ...dbs,
+    ].join('|');
+  }
+
+  /// 把刚查回的第一页写进缓存（key 是当前筛选条件）。超过上限时
+  /// 淘汰最久没用的 key（LinkedHashMap 按插入顺序，keys.first 是
+  /// 最旧的）。只在 reset 分支的结果回来后调；代次守卫已保证
+  /// 结果与当前筛选一致，key 不会写错。rawOffset 是缓存这页对
+  /// 应的原始偏移（翻页用）：只存第一页时就是第一页的人数，
+  /// 不能拿已加载的总页数来存，否则恢复后翻页会跳页。
+  void _storePageCache(
+    List<ActressPerson> persons,
+    bool hasMore,
+    int rawOffset,
+  ) {
+    final key = _pageCacheKey();
+    _pageCache.remove(key);
+    _pageCache[key] = _CachedListPage(persons, hasMore, rawOffset);
+    while (_pageCache.length > _pageCacheMaxKeys) {
+      _pageCache.remove(_pageCache.keys.first);
+    }
+  }
+
+  /// 切换前把当前滚动偏移存进当前 key 的缓存项（有缓存项才存）。
+  /// 只用于主模式（通用/站源模式不走这份缓存）。
+  void _saveScrollOffsetForCache() {
+    if (_genericMode || _siteWorksMode) return;
+    if (!_scrollController.hasClients) return;
+    final cached = _pageCache[_pageCacheKey()];
+    if (cached != null) {
+      cached.scrollOffset = _scrollController.offset;
+    }
+  }
+
+  /// 筛选值已变后的统一收尾（主模式）：先查缓存，命中直接恢复，
+  /// 未命中走 _loadPage(reset: true) 查库。通用/站源模式不走缓存，
+  /// 直接查库。
+  void _reloadAfterFilterChange() {
+    if (!_genericMode && !_siteWorksMode && _restorePageFromCache()) return;
+    unawaited(_loadPage(reset: true));
+  }
+
+  /// 筛选切换时先查缓存：命中就直接恢复列表 + 滚动偏移，不碰数据库；
+  /// 返回 true 表示已恢复、调用方不用再调 _loadPage。只用于主模式。
+  bool _restorePageFromCache() {
+    final key = _pageCacheKey();
+    final cached = _pageCache[key];
+    if (cached == null) return false;
+    final generation = ++_generation;
+    setState(() {
+      _persons = cached.persons;
+      _hasMore = cached.hasMore;
+      _rawOffset = cached.rawOffset;
+      _loading = false;
+      _refreshing = false;
+      _loadingMore = false;
+    });
+    // 恢复滚动偏移：等网格布局完再跳（post-frame），偏移越界时钳制。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _generation) return;
+      if (!_scrollController.hasClients) return;
+      final max = _scrollController.position.maxScrollExtent;
+      final target = cached.scrollOffset.clamp(0.0, max).toDouble();
+      if (target > 0) _scrollController.jumpTo(target);
+    });
+    return true;
+  }
+
+  /// 清掉全部易变缓存（列表第一页 + 分类）：库内容变了就调——热换库、
+  /// 同步/现爬/叠加完成、手动刷新。漏清会显示旧数据。
+  void _clearListCaches() {
+    _pageCache.clear();
+    _dbCategoriesCacheKey = null;
+    _dbCategoriesCache = null;
+  }
+
   /// 通用模式翻页：作品表按 rowid 顺序翻页，搜索走标题/番号 LIKE。
   Future<void> _loadGenericPage({bool reset = false}) async {
     final reader = _genericReader;
     if (reader == null) return;
     if (reset) {
       final generation = ++_generation;
+      // 2026-11-24 切换不重载：同主列表，旧作品留着当底、只置细进度条。
+      final keepOld = _genericWorks.isNotEmpty;
       setState(() {
-        _loading = true;
-        _genericWorks = [];
+        if (keepOld) {
+          _refreshing = true;
+        } else {
+          _loading = true;
+        }
+        _loadingMore = false;
         _hasMore = true;
       });
       final total = await reader.countWorks(
@@ -1463,6 +1714,7 @@ class _ActressListPageState extends State<ActressListPage> {
         _genericTotal = total;
         _hasMore = works.length >= _pageSize;
         _loading = false;
+        _refreshing = false;
       });
       return;
     }
@@ -1603,8 +1855,9 @@ class _ActressListPageState extends State<ActressListPage> {
             initialValue: _sort,
             onSelected: (sort) {
               if (sort == _sort) return;
+              _saveScrollOffsetForCache();
               setState(() => _sort = sort);
-              unawaited(_loadPage(reset: true));
+              _reloadAfterFilterChange();
             },
             itemBuilder: (_) => const [
               PopupMenuItem(
@@ -1791,7 +2044,22 @@ class _ActressListPageState extends State<ActressListPage> {
                 ),
               ),
             ),
-          Expanded(child: _buildList(colors)),
+          Expanded(
+            child: Stack(
+              children: [
+                _buildList(colors),
+                // 2026-11-24 切换不重载：筛选切换时旧列表留着当底，
+                // 只在列表顶露一条细进度条（_refreshing）。
+                if (_refreshing)
+                  const Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: LinearProgressIndicator(minHeight: 2),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1919,6 +2187,23 @@ class _ActressListPageState extends State<ActressListPage> {
       _ => null,
     };
     if (service == null) return;
+    // 2026-11-24 切换不重载：分类结果缓存——key = 主库路径+指纹 +
+    // 各外来库路径+指纹；文件没变就不跑 GROUP BY。库内容变了时
+    // _clearListCaches 会清掉这份缓存（热换/同步/现爬/手动刷新），
+    // 所以 key 里的指纹只是第二道防线（防文件在外面被换了）。
+    final keyParts = <String>[
+      _dbFileFingerprintKey(_mytvBind?.dbPath ?? ''),
+    ];
+    final extraPaths = _extraDbs.keys.toList()..sort();
+    for (final p in extraPaths) {
+      keyParts.add('$p|${_dbFileFingerprintKey(p)}');
+    }
+    final cacheKey = keyParts.join(';');
+    if (_dbCategoriesCacheKey == cacheKey && _dbCategoriesCache != null) {
+      if (!mounted) return;
+      setState(() => _dbCategories = _dbCategoriesCache!);
+      return;
+    }
     try {
       var categories = await service.categories();
       // 2026-11-23 多库去重：三个库是同一套合库的副本，分类数相加
@@ -1943,6 +2228,8 @@ class _ActressListPageState extends State<ActressListPage> {
         categories = [for (final e in merged) (e.key, e.value)];
       }
       if (!mounted) return;
+      _dbCategoriesCacheKey = cacheKey;
+      _dbCategoriesCache = categories;
       setState(() => _dbCategories = categories);
     } catch (_) {
       // 读不到分类就不显示这行，不影响列表。
@@ -1976,20 +2263,23 @@ class _ActressListPageState extends State<ActressListPage> {
 
   void _setCategory(String category) {
     if (category == _category) return;
+    _saveScrollOffsetForCache();
     setState(() => _category = category);
-    unawaited(_loadPage(reset: true));
+    _reloadAfterFilterChange();
   }
 
   void _setSex(ActressSexFilter sex) {
     if (sex == _sex) return;
+    _saveScrollOffsetForCache();
     setState(() => _sex = sex);
-    unawaited(_loadPage(reset: true));
+    _reloadAfterFilterChange();
   }
 
   void _setTagFilter(ActressTagFilter filter) {
     if (filter == _tagFilter) return;
+    _saveScrollOffsetForCache();
     setState(() => _tagFilter = filter);
-    unawaited(_loadPage(reset: true));
+    _reloadAfterFilterChange();
   }
 
   /// 2026-11-20 MYTV 绑定：绑定路径行（用户一眼看到库落在哪）。

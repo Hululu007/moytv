@@ -4,6 +4,8 @@
 // ③ 点作品卡快路径直取详情进页；
 // ④ 探活链总预算内收敛；
 // ⑤ MissAV 女优 folder 详情画作品卡片网格（多部与单部都不退回选集）。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
@@ -150,6 +152,22 @@ class _CardsRepository extends FixtureRepository {
 
   @override
   Future<String> cover(Drama drama, {bool force = false}) async => '';
+}
+
+/// resolve 永远不回的仓库（秒进测试用）：模拟竞速两路都被拖住，
+/// 证明点卡开页不等竞速。返回一个永远不完成的 Future，超时计时器
+/// 由调用方的 .timeout 负责。
+class _NeverResolveRepository extends _CardsRepository {
+  @override
+  Future<PlaybackPlan> resolve(
+    Drama drama,
+    Episode episode, {
+    bool adBlock = true,
+    int quality = 0,
+    int route = 0,
+  }) {
+    return Completer<PlaybackPlan>().future;
+  }
 }
 
 DramaDetail _cardsDetailFor(String dramaId, String source, String title) =>
@@ -463,6 +481,81 @@ void main() {
         repository.detailIds,
         contains('json:test-site-other:other-drama'),
       );
+    });
+
+    testWidgets('点卡秒进：竞速 resolve 永远不回，详情页仍在 1 秒内打开', (tester) async {
+      // 2026-11-24 秒进改法：点卡即推详情页播首条库地址，不等竞速。
+      // resolve 永远不回，模拟竞速两路都被拖住——旧流程要等 resolve
+      // 8 秒超时 × 3 条（约 24 秒）才开页；新流程点卡即开页。
+      repository = _NeverResolveRepository();
+      final person = (await db.upsertRosterPerson(
+        const RosterPerson(
+          source: ActressRosterSourceId.chaoliu,
+          sourceId: 'X1',
+          name: '女演员甲',
+          sex: 'female',
+        ),
+      ))!;
+      await db.upsertWorks(person.localId, const [
+        RosterFilm(
+          code: 'SSIS-00123',
+          coverUrl: 'https://cover/x.jpg',
+          detailUrl: 'other-drama',
+        ),
+      ], coverSource: 'test-site-other');
+      repository.detailsById['json:test-site-other:other-drama'] =
+          _cardsDetailFor(
+            'json:test-site-other:other-drama',
+            'test-site-other',
+            'SSIS-00123 其他标题',
+          );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ActressDetailPage(
+            localId: person.localId,
+            repository: repository,
+            store: store,
+            database: db,
+            filmDb: _CardsFilmDb({
+              'SSIS123': [
+                ActressJsonEntry(
+                  site: 'test-site-other',
+                  vodId: 'other-drama',
+                  vodName: 'SSIS-00123 其他标题',
+                  vodPic: '',
+                  vodActor: '女演员甲',
+                  vodDirector: '',
+                  vodRemarks: '',
+                  vodPubdate: '',
+                  vodArea: '',
+                  vodYear: '',
+                  vodContent: '',
+                  vodPlayFrom: 'test-site-other',
+                  vodPlayUrl: '正片\$https://example.test/other.mp4',
+                  typeName: '',
+                  vodCode: 'SSIS-00123',
+                  vodActressPic: '',
+                ),
+              ],
+            }),
+            verifyFetch: _alwaysPlayable,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DramaTile).first);
+      // 只 pump 1 秒（10 × 100ms）：旧流程此时竞速还在等 resolve
+      // 超时，详情页不可能出现；新流程点卡即推页，1 秒内必出现。
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find.byType(DetailScreen).evaluate().isNotEmpty) break;
+      }
+      expect(find.byType(DetailScreen), findsOneWidget);
+      expect(find.text('SSIS-00123 其他标题'), findsWidgets);
+      // 收尾：把后台竞速的超时计时器都放完（resolve 8 秒 × 3 条
+      // + MissAV 30 秒），否则 FakeAsync 里还有挂起的 Timer，
+      // 测试框架在树 dispose 时会报 Timer pending。
+      await tester.pump(const Duration(seconds: 60));
     });
   });
 

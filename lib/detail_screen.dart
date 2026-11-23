@@ -1103,8 +1103,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                             episodes: episodes,
                                             currentNumber: watched?.episode,
                                             autofocus: true,
-                                            onSelected: (index) =>
-                                                _play(index),
+                                            onSelected: (index) => _play(index),
                                           ),
                                         ),
                                       ],
@@ -1276,9 +1275,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                     ),
                                     value: _viewing.autoWriteSiteDb,
                                     onChanged: (value) => _updateViewing(
-                                      _viewing.copyWith(
-                                        autoWriteSiteDb: value,
-                                      ),
+                                      _viewing.copyWith(autoWriteSiteDb: value),
                                     ),
                                   ),
                                 ),
@@ -1948,6 +1945,10 @@ class _DetailScreenState extends State<DetailScreen> {
         target.id == (_detail?.drama.id ?? widget.drama.id)) {
       return;
     }
+    // 2026-11-23 播着片点推荐视频：先停当前这部（否则旧片音频继续、
+    // 画面不切），新详情页进页即播下一部；没在播时照旧只进详情页。
+    final wasPlaying = _embeddedIndex != null;
+    if (wasPlaying) _closeEmbedded();
     await Navigator.of(context).push(
       appPageRoute<void>(
         settings: const RouteSettings(name: 'detail'),
@@ -1957,6 +1958,7 @@ class _DetailScreenState extends State<DetailScreen> {
           store: widget.store,
           onTagTap: widget.onTagTap,
           queue: PlaybackQueue.around(related, target),
+          autoPlayOnOpen: wasPlaying,
         ),
       ),
     );

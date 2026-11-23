@@ -586,6 +586,14 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<Database> _open() async {
     final existing = _db;
     if (existing != null && existing.isOpen) return existing;
+    // 2026-11-24 掉线修复（自愈）：_db 已被从外面关掉（探库 close
+    // 误关共享连接）时，_openFuture 仍是旧的已完成 future，直接
+    // await 它会拿回已关闭的连接、此后全掉线还卡死。先把旧连接
+    // 与旧 future 都清掉，重新开库。
+    if (existing != null && !existing.isOpen) {
+      _db = null;
+      _openFuture = null;
+    }
     var pending = _openFuture;
     if (pending == null) {
       pending = _openNow();
