@@ -225,7 +225,13 @@ void main() {
     expect(find.byKey(const ValueKey('idj-install-url')), findsOneWidget);
     expect(find.byKey(const ValueKey('idj-install-file')), findsOneWidget);
     expect(find.byKey(const ValueKey('idj-install-paste')), findsOneWidget);
-    expect(find.text('订阅（0）'), findsOneWidget);
+    // 订阅区永远有内置远程仓库这一条（测试环境拉不到真索引，只留报错卡）。
+    expect(find.text('订阅（1）'), findsOneWidget);
+    expect(find.byKey(const ValueKey('idj-builtin-badge')), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('idj-sub-delete-$idjBuiltInSubscriptionUrl')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('idj-check-updates')), findsOneWidget);
     expect(find.byKey(const ValueKey('idj-add-subscription')), findsOneWidget);
   });
@@ -319,6 +325,49 @@ void main() {
     expect(find.text('只展示'), findsOneWidget);
     // 橙果已装同版：订阅行按钮是“已安装”且置灰。
     expect(find.text('已安装'), findsOneWidget);
+  });
+
+  testWidgets('内置远程仓库：打开即展开见 7 个插件，有“内置”徽标、无删除按钮', (tester) async {
+    final fixture = File(
+      '/home/hatch/workspace/moyi_idjplugin_fix_20261124/test/fixtures/idj_builtin_subscription.json',
+    ).readAsStringSync();
+    final subscription = IdjPluginStore.parseSubscriptionJson(
+      jsonDecode(fixture) as Map<String, dynamic>,
+      Uri.parse(idjBuiltInSubscriptionUrl),
+    );
+    await pumpTab(tester, subscriptions: [subscription]);
+
+    expect(find.text('订阅（1）'), findsOneWidget);
+    expect(find.text('魔蚁插件订阅'), findsOneWidget);
+    expect(find.byKey(const ValueKey('idj-builtin-badge')), findsOneWidget);
+    // 内置仓库不可删：没有删除按钮，刷新按钮还在。
+    expect(
+      find.byKey(ValueKey('idj-sub-delete-$idjBuiltInSubscriptionUrl')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(ValueKey('idj-sub-refresh-$idjBuiltInSubscriptionUrl')),
+      findsOneWidget,
+    );
+    // 默认展开：不用点就看到 7 个插件行（4 个已装同版 + 3 个新插件）。
+    expect(find.text('橙果短剧'), findsNWidgets(2));
+    expect(find.text('爱果短剧'), findsNWidgets(2));
+    expect(find.text('PornTube'), findsOneWidget);
+    expect(find.text('妻友社'), findsOneWidget);
+    expect(find.text('HQPorner'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('idj-sub-install-com.idj.ext.porntube')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('idj-sub-install-com.idj.ext.qiyoushe')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('idj-sub-install-com.idj.ext.hqporner')),
+      findsOneWidget,
+    );
+    expect(find.text('安装'), findsNWidgets(3));
   });
 
   testWidgets('更新候选：注入的候选逐条列出带“更新”按钮', (tester) async {

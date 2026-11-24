@@ -266,7 +266,9 @@ export default {
 		}
 	})
 
-	t.Run("禁发头剥离", func(t *testing.T) {
+	t.Run("禁发头剥离（Authorization 例外放行）", func(t *testing.T) {
+		// 用户 2026-11-24 18:40 令：宿主放行 Authorization 头（只放这一个头）。
+		// Cookie 等其余禁发头照旧剥离。
 		script := `
 export default {
   async req(arg) {
@@ -281,13 +283,16 @@ export default {
 			t.Fatalf("调用失败: %v", err)
 		}
 		cap.mu.Lock()
-		cookie, auth := cap.cookie, cap.auth
+		cookie, auth, xOk := cap.cookie, cap.auth, cap.xOk
 		cap.mu.Unlock()
 		if cookie != "" {
 			t.Fatalf("Cookie 请求头没被剥离，服务端收到 %q", cookie)
 		}
-		if auth != "" {
-			t.Fatalf("Authorization 请求头没被剥离，服务端收到 %q", auth)
+		if auth != "Bearer z" {
+			t.Fatalf("Authorization 请求头没放行，服务端收到 %q", auth)
+		}
+		if xOk != "yes" {
+			t.Fatalf("正常请求头没发过去：X-Ok=%q", xOk)
 		}
 	})
 

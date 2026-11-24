@@ -16,6 +16,9 @@
 //   5. library_with_idj.png —— 装好 4 个插件后片库里的站：真实
 //      SitePickerDialog，短剧类含橙果/爱果、午夜类含 🔞潮流AV/🔞2048AI，
 //      用假的已安装登记渲染，宿主顶栏注明是假登记示意。
+//   6. idj_builtin_repo.png —— 内置远程仓库：真实 IdjPluginTab，订阅区
+//      只有内置仓库一条（7 个插件：4 个原插件 + 3 个新插件），默认展开、
+//      带「内置」徽标、无删除按钮；图写到本工作树 preview/ 目录。
 // 假数据：站名取自树内真实站名；4 个插件的版本/id/域名取自设计文档 §2.6
 //（实施时以包文件为准）；插件脚本是新写的迷你合成脚本，绝不粘贴真实
 // main.js 片段。站 id 统一加 idj_/fake_ 前缀：SiteIcon 会按 id 查
@@ -143,6 +146,33 @@ Future<void> _shot(WidgetTester tester, GlobalKey key, String file) async {
   final bytes = data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
   Directory(_previewDir).createSync(recursive: true);
   File('$_previewDir/$file').writeAsBytesSync(bytes);
+}
+
+/// 图 6 专用：写到本工作树 preview/ 目录（旧 5 张图的目录是上一棵树）。
+Future<void> _shotHere(
+  WidgetTester tester,
+  GlobalKey key,
+  String file,
+) async {
+  final boundary =
+      key.currentContext!.findRenderObject() as RenderRepaintBoundary;
+  final image = await boundary.toImage(pixelRatio: 2.0);
+  const dir = '/home/hatch/workspace/moyi_idjplugin_fix_20261124/preview';
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  final bytes = data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  Directory(dir).createSync(recursive: true);
+  File('$dir/$file').writeAsBytesSync(bytes);
+}
+
+/// 图 6 的订阅：内置远程仓库测试索引（7 条，格式与转换工人产物一致）。
+IdjSubscription _builtinSubscription() {
+  final fixture = File(
+    '/home/hatch/workspace/moyi_idjplugin_fix_20261124/test/fixtures/idj_builtin_subscription.json',
+  ).readAsStringSync();
+  return IdjPluginStore.parseSubscriptionJson(
+    jsonDecode(fixture) as Map<String, dynamic>,
+    Uri.parse(idjBuiltInSubscriptionUrl),
+  );
 }
 
 ThemeData _lightTheme() {
@@ -315,7 +345,10 @@ IdjSubscription _previewSubscription() => IdjSubscription(
   ],
 );
 
-Widget _pluginTabHost(IdjPluginStore store) {
+Widget _pluginTabHost(
+  IdjPluginStore store, {
+  List<IdjSubscription>? subscriptions,
+}) {
   return DefaultTabController(
     length: 4,
     initialIndex: 3,
@@ -351,7 +384,7 @@ Widget _pluginTabHost(IdjPluginStore store) {
           const Center(child: Text('海阔 tab（示意）')),
           IdjPluginTab(
             store: store,
-            initialSubscriptions: [_previewSubscription()],
+            initialSubscriptions: subscriptions ?? [_previewSubscription()],
           ),
         ],
       ),
@@ -464,6 +497,28 @@ void main() {
     await tester.tap(subscriptionFinder);
     await tester.pumpAndSettle();
     await _shot(tester, key, 'miniapp_plugin_tab.png');
+  });
+
+  testWidgets('preview idj builtin repo', (tester) async {
+    // 内置仓库 7 个插件行比图 2 高：视口加高一次截全页。
+    tester.view.physicalSize = const Size(390, 2300);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final key = GlobalKey();
+    await tester.pumpWidget(
+      _wrap(key, _pluginTabHost(store, subscriptions: [_builtinSubscription()])),
+    );
+    await _drainUntil(
+      tester,
+      () => find.text('已安装（4）').evaluate().isNotEmpty,
+    );
+    // 内置仓库默认展开：不用点就看到 7 个插件行。
+    expect(find.text('魔蚁插件订阅'), findsOneWidget);
+    expect(find.byKey(const ValueKey('idj-builtin-badge')), findsOneWidget);
+    expect(find.text('PornTube'), findsOneWidget);
+    expect(find.text('HQPorner'), findsOneWidget);
+    await _shotHere(tester, key, 'idj_builtin_repo.png');
   });
 
   testWidgets('preview idj install confirm sheet', (tester) async {

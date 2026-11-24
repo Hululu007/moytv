@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -97,6 +98,105 @@ Future<Map<String, dynamic>> _fakeProbe({
   'ok': true,
   'capabilities': ['home', 'play'],
 };
+
+/// 只够覆盖下载器读取分支的假 HttpClient：按 URL 回固定正文或抛错。
+/// 真实下载校验（https / 域名解析 / 私网拒绝）照常走，不绕过。
+class _FakeHttpClient implements HttpClient {
+  _FakeHttpClient(this._handler);
+
+  final Future<String> Function(Uri url) _handler;
+
+  @override
+  Duration? connectionTimeout;
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) async =>
+      _FakeHttpClientRequest(await _handler(url));
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpClientRequest implements HttpClientRequest {
+  _FakeHttpClientRequest(this._body);
+
+  final String _body;
+
+  @override
+  bool followRedirects = true;
+
+  @override
+  HttpHeaders get headers => _FakeHttpHeaders();
+
+  @override
+  Future<HttpClientResponse> close() async => _FakeHttpClientResponse(_body);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpHeaders implements HttpHeaders {
+  final _values = <String, String>{};
+
+  @override
+  void set(String name, Object value, {bool preserveHeaderCase = false}) {
+    _values[name.toLowerCase()] = value.toString();
+  }
+
+  @override
+  String? value(String name) => _values[name.toLowerCase()];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpClientResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  _FakeHttpClientResponse(String body) : _bytes = utf8.encode(body);
+
+  final List<int> _bytes;
+
+  @override
+  int get statusCode => 200;
+
+  @override
+  HttpHeaders get headers => _FakeHttpHeaders();
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => Stream<List<int>>.value(
+    _bytes,
+  ).listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+
+  @override
+  Future<E> drain<E>([E? futureValue]) async => futureValue as E;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// 内置远程仓库测试索引（7 条：4 个原插件 + 3 个新插件，格式与
+/// 转换工人的订阅索引一致，manifest 是相对索引地址的包路径）。
+String _builtinFixture() => File(
+  '/home/hatch/workspace/moyi_idjplugin_fix_20261124/test/fixtures/idj_builtin_subscription.json',
+).readAsStringSync();
+
+IdjPluginStore _builtinStore(
+  Directory dir,
+  Future<String> Function(Uri url) handler,
+) => IdjPluginStore(
+  rootOverride: dir,
+  supportOverride: Directory('${dir.path}/support'),
+  probe: _fakeProbe,
+  httpClientFactory: () => _FakeHttpClient(handler),
+);
 
 void main() {
   late Directory tempDir;
@@ -360,6 +460,34 @@ void main() {
       await store.recordFailure('com.idj.ext.mini');
       await store.recordFailure('com.idj.ext.mini');
       await store.recordFailure('com.idj.ext.mini');
+      index = await store.readIndex();
+      expect(index['com.idj.ext.mini']!.enabled, isFalse);
+      expect(SourceSite.importedSites.containsKey('idj_mini'), isFalse);
+    });
+
+    test('看门狗：网络类错误不计数、不停用，插件本身错误仍停用', () async {
+      await store.installBundleText(_miniBundleText());
+      for (final code in [
+        'E_NET',
+        'E_NETWORK',
+        'E_TIMEOUT',
+        'E_CF_REQUIRED',
+        'E_DNS',
+        'E_RATE_LIMIT',
+        'E_BLOCKED',
+        'E_AUTH',
+      ]) {
+        await store.recordFailure('com.idj.ext.mini', code: code);
+        await store.recordFailure('com.idj.ext.mini', code: code);
+        await store.recordFailure('com.idj.ext.mini', code: code);
+      }
+      var index = await store.readIndex();
+      expect(index['com.idj.ext.mini']!.enabled, isTrue);
+      expect(index['com.idj.ext.mini']!.failures, 0);
+      expect(SourceSite.importedSites.containsKey('idj_mini'), isTrue);
+      await store.recordFailure('com.idj.ext.mini', code: 'E_PARSE');
+      await store.recordFailure('com.idj.ext.mini', code: 'E_PARSE');
+      await store.recordFailure('com.idj.ext.mini', code: 'E_EMPTY');
       index = await store.readIndex();
       expect(index['com.idj.ext.mini']!.enabled, isFalse);
       expect(SourceSite.importedSites.containsKey('idj_mini'), isFalse);
@@ -668,6 +796,97 @@ void main() {
     test('没有 update.url 的插件不查，直接回空', () async {
       await store.installBundleText(_miniBundleText());
       expect(await store.checkUpdates(), isEmpty);
+    });
+  });
+
+  group('内置远程仓库', () {
+    test('loadSubscriptions：内置永远排第一，7 个插件、包地址相对解析', () async {
+      final fake = _builtinStore(tempDir, (_) async => _builtinFixture());
+      final subs = await fake.loadSubscriptions();
+      expect(subs.length, 1);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
+      expect(subs.first.name, '魔蚁插件订阅');
+      expect(subs.first.error, isEmpty);
+      expect(
+        subs.first.plugins.map((plugin) => plugin.id),
+        containsAll([
+          'com.idj.ext.chengguo',
+          'com.idj.ext.chaoliu',
+          'com.idj.ext.aiguo',
+          'com.idj.ext.ai2048',
+          'com.idj.ext.porntube',
+          'com.idj.ext.qiyoushe',
+          'com.idj.ext.hqporner',
+        ]),
+      );
+      // manifest 相对路径按索引地址解析到分支根目录下。
+      expect(
+        subs.first.plugins.first.manifestUrl,
+        'https://raw.githubusercontent.com/hoyittvggfh45/moytv/plugins/chengguo/chengguo.idjplugin',
+      );
+    });
+
+    test('用户订阅排在内置后面，自己贴内置地址不重复', () async {
+      const userUrl = 'https://example.com/my.json';
+      const userJson = '{"name": "我的订阅", "plugins": [], "cms": []}';
+      final fake = _builtinStore(tempDir, (url) async {
+        if (url.toString() == idjBuiltInSubscriptionUrl) {
+          return _builtinFixture();
+        }
+        return userJson;
+      });
+      await fake.addSubscription(userUrl);
+      var subs = await fake.loadSubscriptions();
+      expect(subs.length, 2);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
+      expect(subs.last.url, userUrl);
+      expect(subs.last.name, '我的订阅');
+      // 用户又手动贴了内置地址：只存一次，加载仍是两条。
+      await fake.addSubscription(idjBuiltInSubscriptionUrl);
+      subs = await fake.loadSubscriptions();
+      expect(subs.length, 2);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
+    });
+
+    test('内置拉取失败只记 error、不拦用户订阅', () async {
+      const userUrl = 'https://example.com/my.json';
+      const userJson = '{"name": "我的订阅", "plugins": [], "cms": []}';
+      final fake = _builtinStore(tempDir, (url) async {
+        if (url.toString() == idjBuiltInSubscriptionUrl) {
+          throw const SocketException('断网');
+        }
+        return userJson;
+      });
+      await fake.addSubscription(userUrl);
+      final subs = await fake.loadSubscriptions();
+      expect(subs.length, 2);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
+      expect(subs.first.plugins, isEmpty);
+      expect(subs.first.error, isNotEmpty);
+      expect(subs.last.url, userUrl);
+      expect(subs.last.name, '我的订阅');
+    });
+
+    test('removeSubscription：内置删不掉，用户订阅照常删', () async {
+      const userUrl = 'https://example.com/my.json';
+      const userJson = '{"name": "我的订阅", "plugins": [], "cms": []}';
+      final fake = _builtinStore(tempDir, (url) async {
+        if (url.toString() == idjBuiltInSubscriptionUrl) {
+          return _builtinFixture();
+        }
+        return userJson;
+      });
+      await fake.addSubscription(userUrl);
+      await fake.removeSubscription(idjBuiltInSubscriptionUrl);
+      var subs = await fake.loadSubscriptions();
+      expect(subs.length, 2);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getStringList(idjSubscriptionsPrefsKey), [userUrl]);
+      await fake.removeSubscription(userUrl);
+      subs = await fake.loadSubscriptions();
+      expect(subs.length, 1);
+      expect(subs.first.url, idjBuiltInSubscriptionUrl);
     });
   });
 }

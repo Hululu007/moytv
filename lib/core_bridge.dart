@@ -871,6 +871,7 @@ class NativeRepository extends AppRepository {
   /// play 的传参修复（`play({id: episodeId, episodeId, line})`）由 Go 侧
   /// `idjParseArg` 组装，Dart 侧不要再包一层。
   /// 每次调用后调看门狗：成功清零、失败 +1（连续 3 次自动停用；
+  /// 网络类错误不计数，见 `IdjPluginStore.recordFailure`；
   /// Go 只原样返回带码错误，计数与停用都在 Dart 这边做）。
   Future<Map<String, dynamic>> _idjCall(
     String source,
@@ -894,7 +895,10 @@ class NativeRepository extends AppRepository {
       if (inner is Map) return Map<String, dynamic>.from(inner);
       return {};
     } catch (error) {
-      await store.recordFailure(bundle.manifest.id);
+      await store.recordFailure(
+        bundle.manifest.id,
+        code: error is AppFailure ? error.code : '',
+      );
       rethrow;
     }
   }

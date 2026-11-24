@@ -50,6 +50,7 @@ import 'hongguo_drama_home.dart';
 import 'import_file_store.dart';
 
 import 'imported_site_record.dart';
+import 'idj_plugin_store.dart';
 import 'py_bridge.dart';
 import 'vod_detail_route.dart';
 import 'settings_screen.dart';
@@ -622,37 +623,74 @@ class _HomeScreenState extends State<HomeScreen>
   bool get _canSwitchSource =>
       _librarySources.length + (_sourceGroups.length > 1 ? 1 : 0) > 1;
 
-  /// 片库站点切换弹窗的分组数据：按内容类别分（短剧类/视频类/午夜类，
-  /// 见 `SourceGroup.pickerCategoryGroups`，设计 §5.3），不再按
-  /// 内置/导入来源分。`__all__` 特殊条目置顶单独一行（全宽），
+  /// 片库站点切换弹窗的分组数据：先按区（内置区 / 导入区 / 插件区，
+  /// 见 `_zoneIndexForSite`）分三区，每区里面再按内容类别分
+  ///（短剧类/视频类/午夜类，见 `SourceGroup.pickerCategoryGroups`，
+  /// 设计 §5.3）。`__all__` 特殊条目置顶在内置区单独一行（全宽），
   /// 不计入任何组的数量与副标题总数。
-  List<SourcePickerGroup> _sourcePickerGroups() => [
-    if (_sourceGroups.length > 1)
-      const SourcePickerGroup(
-        title: '',
-        entries: [SourcePickerEntry(id: _allSourcesEntryId, name: '全部站源')],
-      ),
-    for (final group in SourceGroup.pickerCategoryGroups(_librarySources))
-      SourcePickerGroup(
-        title: group.name,
-        entries: [
+  List<SourcePickerGroup> _sourcePickerGroups() {
+    final groups = <SourcePickerGroup>[];
+    if (_sourceGroups.length > 1) {
+      groups.add(
+        const SourcePickerGroup(
+          title: '',
+          entries: [SourcePickerEntry(id: _allSourcesEntryId, name: '全部站源')],
+          zone: SourcePickerGroup.zoneBuiltin,
+        ),
+      );
+    }
+    const zones = [
+      SourcePickerGroup.zoneBuiltin,
+      SourcePickerGroup.zoneImport,
+      SourcePickerGroup.zonePlugin,
+    ];
+    final categories = SourceGroup.pickerCategoryGroups(_librarySources);
+    for (var zoneIndex = 0; zoneIndex < zones.length; zoneIndex++) {
+      for (final group in categories) {
+        final entries = [
           for (final site in group.sources)
-            SourcePickerEntry(
-              id: site.id,
-              name: site.name,
-              deletable:
-                  SourceSite.importedSites.containsKey(site.id) ||
-                  site.origin == SourceSite.originBuiltin,
-            ),
-        ],
-      ),
-  ];
+            if (_zoneIndexForSite(site) == zoneIndex)
+              SourcePickerEntry(
+                id: site.id,
+                name: site.name,
+                deletable:
+                    SourceSite.importedSites.containsKey(site.id) ||
+                    site.origin == SourceSite.originBuiltin,
+              ),
+        ];
+        if (entries.isEmpty) continue;
+        groups.add(
+          SourcePickerGroup(
+            title: group.name,
+            entries: entries,
+            zone: zones[zoneIndex],
+          ),
+        );
+      }
+    }
+    return groups;
+  }
+
+  /// 站点所属分区（与弹窗区号一致）：2 插件区、1 导入区、0 内置区。
+  /// 插件站认 `idj_` 前缀 + JS 导入 + importExt 里记着插件 id
+  ///（`IdjPluginRegistry.siteKeyForPluginId` 的站 key 形态）；
+  /// 其余非内置来源（导入站、导入配置站）进导入区。
+  static int _zoneIndexForSite(SourceSite site) {
+    if (site.id.startsWith('idj_') &&
+        site.importType == 'js' &&
+        site.importExt.isNotEmpty) {
+      return 2;
+    }
+    if (site.origin != SourceSite.originBuiltin) return 1;
+    return 0;
+  }
 
   String _sourcePickerSectionName() => '片库';
 
   Future<void> _pickSource({
     bool editMode = false,
     String? scrollToId,
+    int? initialZoneIndex,
   }) async {
     final picked = await showSitePickerDialog(
       context,
@@ -662,8 +700,8 @@ class _HomeScreenState extends State<HomeScreen>
       initialEditMode: editMode,
       onDeleteSite: _deleteSourceEntry,
       onImport: () async {
-        // 导入成功后重开弹窗：没有导入区了，改为自动滚到新装的站
-        // （导入前后比对站 id，取新出现的那一个定位）。
+        // 导入成功后重开弹窗：落到新装站所在的区（插件站进插件区、
+        // 导入站进导入区），再自动滚到新装的站。
         final before = _librarySources.map((site) => site.id).toSet();
         final imported = await showSiteImportFlow(
           context: context,
@@ -676,13 +714,24 @@ class _HomeScreenState extends State<HomeScreen>
               .map((site) => site.id)
               .where((id) => !before.contains(id))
               .toList();
+          final addedSite = added.isEmpty
+              ? null
+              : _librarySources
+                    .where((site) => site.id == added.first)
+                    .firstOrNull;
           unawaited(
-            _pickSource(scrollToId: added.isEmpty ? null : added.first),
+            _pickSource(
+              scrollToId: added.isEmpty ? null : added.first,
+              initialZoneIndex: addedSite == null
+                  ? null
+                  : _zoneIndexForSite(addedSite),
+            ),
           );
         }
       },
-      // 分组改按内容后内置区/导入区翻页失去意义，片库调用取消
-      // enableZoneFlip；参数与区签实现保留在弹窗里不删。
+      // 三区分区翻页：内置区 / 导入区 / 插件区，3D 翻页切换。
+      enableZoneFlip: true,
+      initialZoneIndex: initialZoneIndex ?? 0,
       scrollToId: scrollToId,
     );
     if (picked == null || !mounted) return;
@@ -701,6 +750,71 @@ class _HomeScreenState extends State<HomeScreen>
     final imported = widget.store.importedSiteRecords
         .where((record) => record.id == entry.id)
         .firstOrNull;
+    // 插件站：不进导入记录，以安装索引为准（siteKey → pluginId）。
+    // 长按卸载：确认框里可勾“同时清除插件数据”；卸载调
+    // `IdjPluginStore.uninstall`——清索引 + 删包文件 + 注销站点登记，
+    // 片库与市场已安装列表（都读同一份索引/登记）一起消失。
+    // 索引里没有该站 key 时不认插件，往下走普通导入站/内置站流程，
+    // 绝不凭站名猜着卸。
+    final pluginIndex = await IdjPluginStore().readIndex();
+    // 索引读完才用 context 弹确认框：先确认 State 还在，
+    // 否则后面三处 showDialog 都会落在异步间隙后。
+    if (!mounted) return false;
+    final pluginEntry = pluginIndex.values
+        .where((item) => item.siteKey == entry.id)
+        .firstOrNull;
+    if (pluginEntry != null) {
+      var clearData = false;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('卸载插件'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('确定卸载「${pluginEntry.name}」吗？卸载后该站从片库消失。'),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('同时清除插件数据'),
+                  subtitle: const Text('勾选后插件的存储与 Cookie 一并删除'),
+                  value: clearData,
+                  onChanged: (value) =>
+                      setDialogState(() => clearData = value ?? false),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('卸载'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (confirmed != true) return false;
+      try {
+        await IdjPluginStore().uninstall(
+          pluginEntry.pluginId,
+          clearData: clearData,
+        );
+      } on AppFailure catch (error) {
+        if (!mounted) return false;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+        return false;
+      }
+      _afterSourceDeleted(entry.id);
+      return true;
+    }
     if (imported != null) {
       final confirmed = await showDialog<bool>(
         context: context,

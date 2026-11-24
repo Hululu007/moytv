@@ -33,11 +33,12 @@ class SourcePickerGroup {
   final String title;
   final List<SourcePickerEntry> entries;
 
-  /// 双区翻页分区：builtin=内置区，import=导入区（本地导入 +
-  /// 远程配置）。默认 builtin；直播/阅读弹窗不分区，不传即全进
-  /// 内置区、不翻页。
+  /// 三区翻页分区：builtin=内置区，import=导入区（本地导入 +
+  /// 远程配置），plugin=插件区（已安装的 idj 插件站）。默认 builtin；
+  /// 直播/阅读弹窗不分区，不传即全进内置区、不翻页。
   static const zoneBuiltin = 'builtin';
   static const zoneImport = 'import';
+  static const zonePlugin = 'plugin';
 
   final String zone;
 }
@@ -63,12 +64,12 @@ Future<String?> showSitePickerDialog(
   /// （直播/阅读区不传，只在片库区接导入）。
   Future<void> Function()? onImport,
 
-  /// 双区开关（只在片库区传 true）：内置区 / 导入区
-  /// 用淡入淡出切换；不传时保持原来的单列表。
+  /// 三区开关（只在片库区传 true）：内置区 / 导入区 / 插件区
+  /// 用 3D 翻页切换；不传时保持原来的单列表。
   bool enableZoneFlip = false,
 
-  /// 打开时默认显示的区：0 内置区，1 导入区。导入成功后调用方
-  /// 重开弹窗传 1，列表自动落到导入区。
+  /// 打开时默认显示的区：0 内置区，1 导入区，2 插件区。导入成功后
+  /// 调用方重开弹窗传对应区号，列表自动落到新装站所在的区。
   int initialZoneIndex = 0,
 
   /// 打开时自动滚到的站 id（不传则滚到当前站）。导入成功后调用方
@@ -132,18 +133,33 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   late bool _editMode;
   late List<_EditableGroup> _groups;
 
-  /// 双区：0 内置区，1 导入区；每区一个滚动控制器（切换过渡
-  /// 期两区列表同时在树里，共用一个控制器会断言失败）。
+  /// 三区：0 内置区，1 导入区，2 插件区；每区一个滚动控制器
+  ///（切换过渡期两区列表同时在树里，共用一个控制器会断言失败）。
   late int _zoneIndex;
-  final _zoneScrollControllers = [ScrollController(), ScrollController()];
+  final _zoneScrollControllers = [
+    ScrollController(),
+    ScrollController(),
+    ScrollController(),
+  ];
+
+  /// 最近一次翻页方向：+1 往后翻（内置→导入→插件），-1 往前翻。
+  /// 3D 过渡按这个方向转，翻页才有“往哪边翻”的感觉。
+  int _flipDirection = 1;
 
   /// 翻页只在片库区开：调用方传 enableZoneFlip 才翻；直播/阅读
   /// 弹窗不传，永远是原来的单列表。
   bool get _flipEnabled => widget.enableZoneFlip;
 
+  /// 区号 → 区签：0 内置，1 导入，2 插件。
+  static const _zoneNames = [
+    SourcePickerGroup.zoneBuiltin,
+    SourcePickerGroup.zoneImport,
+    SourcePickerGroup.zonePlugin,
+  ];
+
   List<_EditableGroup> _zoneGroups(int zone) => [
     for (final group in _groups)
-      if ((zone == 1) == (group.zone == SourcePickerGroup.zoneImport)) group,
+      if (group.zone == _zoneNames[zone]) group,
   ];
 
   int _zoneEntryCount(int zone) =>
@@ -156,19 +172,25 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   void initState() {
     super.initState();
     _editMode = widget.initialEditMode && widget.onDeleteSite != null;
-    _zoneIndex = widget.initialZoneIndex == 1 ? 1 : 0;
+    _zoneIndex = widget.initialZoneIndex.clamp(0, 2);
     _groups = [
       for (final group in widget.groups)
-        _EditableGroup(group.title, List.of(group.entries), zone: group.zone),
+        _EditableGroup(
+          group.title,
+          List.of(group.entries),
+          // 没写区签的组（旧调用方）一律算内置区，不丢进任何区外。
+          zone: group.zone.isEmpty ? SourcePickerGroup.zoneBuiltin : group.zone,
+        ),
     ];
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
   /// 切区：点区签或左右滑触发；切完重定位当前站（在新区里才滚）。
   void _setZone(int index) {
-    if (!_flipEnabled || index == _zoneIndex || index < 0 || index > 1) {
+    if (!_flipEnabled || index == _zoneIndex || index < 0 || index > 2) {
       return;
     }
+    _flipDirection = index > _zoneIndex ? 1 : -1;
     setState(() {
       _zoneIndex = index;
       _scrolledToCurrent = false;
@@ -361,10 +383,10 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
               Expanded(
                 child: _flipEnabled
                     ? GestureDetector(
-                        // 左右滑切区：左滑进导入区，右滑回内置区。
+                        // 左右滑切区：左滑进下一区（内置→导入→插件），
+                        // 右滑回上一区；到头再滑不翻。
                         onHorizontalDragEnd: (details) {
-                          final velocity =
-                              details.primaryVelocity ?? 0;
+                          final velocity = details.primaryVelocity ?? 0;
                           if (velocity < -80) {
                             _setZone(_zoneIndex + 1);
                           } else if (velocity > 80) {
@@ -372,10 +394,28 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                           }
                         },
                         child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
+                          duration: const Duration(milliseconds: 280),
                           transitionBuilder: (child, animation) =>
-                              FadeTransition(
-                                opacity: animation,
+                              AnimatedBuilder(
+                                animation: animation,
+                                builder: (context, child) {
+                                  // 3D 翻页：带透视绕 Y 轴转进/转出，
+                                  // 往后翻从右侧转进来、往前翻从左侧。
+                                  // 进场 animation 0→1、出场 1→0，
+                                  // 同一个方向量让两页转得一致。
+                                  final t = animation.value;
+                                  final angle = (1 - t) * 0.55 * _flipDirection;
+                                  return Transform(
+                                    transform: Matrix4.identity()
+                                      ..setEntry(3, 2, 0.0012)
+                                      ..rotateY(angle),
+                                    alignment: Alignment.center,
+                                    child: Opacity(
+                                      opacity: 0.35 + 0.65 * t,
+                                      child: child,
+                                    ),
+                                  );
+                                },
                                 child: child,
                               ),
                           child: KeyedSubtree(
@@ -419,8 +459,12 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     if (visible.isEmpty) {
-      final emptyText = _flipEnabled && _zoneIndex == 1 && !searching
-          ? '导入区还没有站，点右上角 + 导入一个'
+      final emptyText = _flipEnabled && !searching
+          ? switch (_zoneIndex) {
+              1 => '导入区还没有站，点右上角 + 导入一个',
+              2 => '插件区还没有站，去小程序「插件」tab 安装一个',
+              _ => '没有匹配的站点',
+            }
           : '没有匹配的站点';
       return Center(
         child: Text(
@@ -447,20 +491,22 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
-  /// 区签栏：内置区 / 导入区（带站数），在翻页区外面——翻页时
-  /// 区签与顶栏 + 号都不动，只有下面的列表翻。
+  /// 区签栏：内置区 / 导入区 / 插件区（带站数），在翻页区外面——
+  /// 翻页时区签与顶栏 + 号都不动，只有下面的列表翻。
   Widget _zoneTabs(ThemeData theme, ColorScheme colors) {
+    const labels = ['内置区', '导入区', '插件区'];
+    const keys = [
+      'site-picker-zone-builtin',
+      'site-picker-zone-import',
+      'site-picker-zone-plugin',
+    ];
     final config = AppThemeConfig.of(context);
     Widget tab(int index, String label) {
       final selected = _zoneIndex == index;
       final count = _zoneEntryCount(index);
       return Expanded(
         child: InkWell(
-          key: ValueKey(
-            index == 0
-                ? 'site-picker-zone-builtin'
-                : 'site-picker-zone-import',
-          ),
+          key: ValueKey(keys[index]),
           borderRadius: BorderRadius.circular(10),
           onTap: () => _setZone(index),
           child: Container(
@@ -486,9 +532,10 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
 
     return Row(
       children: [
-        tab(0, '内置区'),
-        const SizedBox(width: 8),
-        tab(1, '导入区'),
+        for (var i = 0; i < labels.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          tab(i, labels[i]),
+        ],
       ],
     );
   }
