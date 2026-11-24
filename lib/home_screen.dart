@@ -13,6 +13,7 @@ import 'auto_refresh_gate.dart';
 import 'back_history.dart';
 import 'liquid_glass.dart';
 import 'site_icon.dart';
+import 'site_thumb_cache.dart';
 import 'home_zone.dart';
 import 'app_theme_config.dart';
 import 'content_tier_filter.dart';
@@ -687,6 +688,27 @@ class _HomeScreenState extends State<HomeScreen>
 
   String _sourcePickerSectionName() => '片库';
 
+  /// 站点列表缩图：拉该站首页目录，随机取一张有封面的视频封面。
+  /// 拉不到、超时、首页为空、没封面的一律回 null（调用方回落站标），
+  /// 绝不抛错、绝不编假地址。`__all__` 不是真站，直接回 null。
+  Future<String?> _fetchSiteThumb(String siteId) async {
+    if (siteId == _allSourcesEntryId) return null;
+    try {
+      final page = await widget.repository
+          .catalog(siteId)
+          .timeout(const Duration(seconds: 15));
+      final covers = [
+        for (final item in page.items)
+          if (item.cover.isNotEmpty) item.cover,
+      ];
+      if (covers.isEmpty) return null;
+      covers.shuffle();
+      return covers.first;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _pickSource({
     bool editMode = false,
     String? scrollToId,
@@ -729,10 +751,13 @@ class _HomeScreenState extends State<HomeScreen>
           );
         }
       },
-      // 三区分区翻页：内置区 / 导入区 / 插件区，3D 翻页切换。
+      // 三区分区翻页：内置区 / 导入区 / 插件区，翻页滑动切换。
       enableZoneFlip: true,
       initialZoneIndex: initialZoneIndex ?? 0,
       scrollToId: scrollToId,
+      // 站点图卡缩图：站内随机视频封面（懒加载 + 按站缓存）。
+      thumbCache: SiteThumbCache.instance,
+      thumbFetcher: _fetchSiteThumb,
     );
     if (picked == null || !mounted) return;
     _applySourcePick(picked);
