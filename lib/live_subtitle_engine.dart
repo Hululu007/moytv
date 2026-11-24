@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:whisper_cpp_flutter_plus/whisper_cpp_flutter_plus.dart';
 
-/// 实时翻译字幕的识别引擎接口：服务层只认这套类型，不直接碰插件，
+/// 实时字幕的识别引擎接口：服务层只认这套类型，不直接碰插件，
 /// 测试时注入假引擎；真机上由 [PluginLiveSubtitleEngine] 接插件。
 ///
 /// 音频约定：16kHz 单声道 s16le 原始字节块（A 路取流由 FFmpeg 解出），
@@ -69,12 +69,10 @@ abstract class LiveSubtitleEngine {
   Future<void> loadModel(String modelId);
 
   /// 流式识别：喂 s16le 音频块，出新确认的段与暂定文本。
-  /// [language] 为 auto/ja/en/ko；[translate] 为真时 Whisper
-  /// 直接出英文翻译（自带翻译只出英文，日→中仍需翻译段）。
+  /// [language] 为 auto/ja/en/ko；只出原文，不做翻译。
   Stream<LiveSubtitleEngineUpdate> transcribeStream(
     Stream<Uint8List> pcm16Chunks, {
     required String language,
-    required bool translate,
   });
 
   Future<void> dispose();
@@ -144,7 +142,7 @@ class PluginLiveSubtitleEngine implements LiveSubtitleEngine {
     String? mirrorBaseUrl,
   }) async {
     if (!liveSubtitleEngineSupported) {
-      throw const LiveSubtitleEngineException('实时翻译字幕仅支持安卓与 iOS');
+      throw const LiveSubtitleEngineException('实时字幕仅支持安卓与 iOS');
     }
     final manager = WhisperModelManager();
     try {
@@ -191,7 +189,7 @@ class PluginLiveSubtitleEngine implements LiveSubtitleEngine {
   @override
   Future<void> loadModel(String modelId) async {
     if (!liveSubtitleEngineSupported) {
-      throw const LiveSubtitleEngineException('实时翻译字幕仅支持安卓与 iOS');
+      throw const LiveSubtitleEngineException('实时字幕仅支持安卓与 iOS');
     }
     if (_engine != null) return;
     final manager = WhisperModelManager();
@@ -213,7 +211,6 @@ class PluginLiveSubtitleEngine implements LiveSubtitleEngine {
   Stream<LiveSubtitleEngineUpdate> transcribeStream(
     Stream<Uint8List> pcm16Chunks, {
     required String language,
-    required bool translate,
   }) {
     final engine = _engine;
     if (engine == null) {
@@ -230,7 +227,7 @@ class PluginLiveSubtitleEngine implements LiveSubtitleEngine {
       chunkStream,
       options: TranscribeOptions(
         language: language,
-        translate: translate,
+        translate: false,
         tokenTimestamps: true,
       ),
       config: const WhisperStreamConfig(

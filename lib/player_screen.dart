@@ -133,7 +133,7 @@ class PlayerScreen extends StatefulWidget {
   @visibleForTesting
   final Widget Function(Widget controls)? videoBuilder;
 
-  /// 测试用注入：实时翻译字幕的识别引擎与音频取流器。生产环境不传，
+  /// 测试用注入：实时字幕的识别引擎与音频取流器。生产环境不传，
   /// 服务用默认插件引擎与 FFmpeg 取流；测试注入假实现以便出字幕行。
   @visibleForTesting
   final LiveSubtitleEngine? liveSubtitleEngine;
@@ -152,7 +152,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// （setSubtitleViewPadding）。非 media_kit 核（Exo/IJK/TVBox）与
   /// 测试桩视频路径下不走 Video，这里保持 null，回调空操作。
   VideoState? _videoState;
-  // 实时翻译字幕（MPV 核）：TVBox 面在 TvboxVideoPane 里自带接线，
+  // 实时字幕（MPV 核）：TVBox 面在 TvboxVideoPane 里自带接线，
   // 这里给 media_kit 路径补一份——服务只在 MPV 核启动；Exo 核走
   // TvboxVideoPane 里那份，IJK 核暂未接。
   LiveSubtitleSettings? _liveSettings;
@@ -1479,7 +1479,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     unawaited(_saveProgress());
   }
 
-  /// 实时翻译字幕设置：initState 里异步加载；_startLiveSubtitle 里
+  /// 实时字幕设置：initState 里异步加载；_startLiveSubtitle 里
   /// 设置还没到时会当场再读一次，免得 _play 先跑、设置后到导致
   /// 首集漏启动。
   Future<void> _loadLiveSubtitleSettings() async {
@@ -1487,7 +1487,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) setState(() => _liveSettings = settings);
   }
 
-  /// 实时翻译字幕：只在总开关开着、平台支持（或测试注入了引擎）、
+  /// 实时字幕：只在总开关开着、平台支持（或测试注入了引擎）、
   /// 源不是播放器侧内存密钥解密时才启动。只给 MPV 核用——Exo 核
   /// 走 TvboxVideoPane 里那份，TVBox 核同理；IJK 核暂未接。
   /// 调用方不 await：模型首次加载要十几秒，服务在后台起，字幕行
@@ -1530,7 +1530,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// 停掉实时翻译字幕服务并清掉行：换集、换核、切非视频内容、
+  /// 停掉实时字幕服务并清掉行：换集、换核、切非视频内容、
   /// 退出播放页时调用。不在这里 setState——调用方随后自有一次
   /// setState（_play 的加载态、dispose 不需要）；位置 tick 与
   /// cue 流也会把行刷回空。
@@ -1554,9 +1554,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (service == null || !service.isRunning) return const [];
     final cue = service.cueAt(position);
     if (cue != null) {
-      return cue.displayLines(
-        showOriginal: _liveSettings?.showOriginal ?? true,
-      );
+      return cue.displayLines();
     }
     if (_livePartial.isNotEmpty) return [_livePartial];
     return const [];
@@ -1950,7 +1948,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
             play: _foreground && _playIntent,
           );
-          // MPV 核：播放器打开后在后台起实时翻译字幕（不 await，
+          // MPV 核：播放器打开后在后台起实时字幕（不 await，
           // 模型加载不拖住加载态）；Exo/TVBox 核走 TvboxVideoPane
           // 里那份，不在这里起。
           unawaited(_startLiveSubtitle(plan, position));
@@ -3792,7 +3790,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     return layeredControls;
                   },
                 ),
-              // 实时翻译字幕（MPV 核）：画在视频层之上、控制层之下，
+              // 实时字幕（MPV 核）：画在视频层之上、控制层之下，
               // 底边距 72 逻辑像素盖过底部控制条；画中画时不画。
               if (!_sniffEmbedded &&
                   !_useNativeHandle &&

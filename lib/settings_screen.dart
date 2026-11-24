@@ -315,8 +315,8 @@ class _SettingsScreenState extends State<SettingsScreen>
             keyName: 'live-subtitle-entry',
             icon: Icons.subtitles_outlined,
             lucide: LucideIcons.captions,
-            title: '实时翻译字幕',
-            detail: '播放时识别语音并翻译成中文字幕',
+            title: '实时字幕',
+            detail: '播放时识别语音并显示原文字幕',
             onTap: () => _push(const LiveSubtitleSettingsScreen()),
           ),
         if (Platform.isAndroid)

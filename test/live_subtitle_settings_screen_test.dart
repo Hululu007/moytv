@@ -15,10 +15,9 @@ void main() {
       const MaterialApp(home: LiveSubtitleSettingsScreen()),
     );
     await tester.pumpAndSettle();
-    expect(find.text('实时翻译字幕'), findsWidgets);
+    expect(find.text('实时字幕'), findsWidgets);
     expect(find.text('源语言'), findsOneWidget);
     expect(find.text('识别模型'), findsOneWidget);
-    expect(find.text('翻译服务'), findsOneWidget);
     expect(find.textContaining('一般慢 4–7 秒'), findsOneWidget);
     // Linux 测试机上插件不支持：应显示“本机不支持”，总开关禁用。
     expect(find.text('本机不支持'), findsOneWidget);

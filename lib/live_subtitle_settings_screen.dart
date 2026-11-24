@@ -6,8 +6,8 @@ import 'live_subtitle_engine.dart';
 import 'live_subtitle_service.dart';
 import 'live_subtitle_settings.dart';
 
-/// 实时翻译字幕设置页：总开关、源语言、识别模型（按需下载）、
-/// 双语显示、翻译服务器地址、模型下载镜像、延迟提示。
+/// 实时字幕设置页：总开关、源语言、识别模型（按需下载）、
+/// 模型下载镜像、延迟提示。
 ///
 /// 模型不内置进安装包，在这里按需下载到应用私有目录。
 /// 非安卓/iOS 上只展示、不提供下载（插件只支持安卓与 iOS）。
@@ -30,37 +30,19 @@ class _LiveSubtitleSettingsScreenState
   final _modelBytes = <String, int?>{};
   String? _downloadingModelId;
   double _downloadProgress = 0;
-  late final TextEditingController _translatorController;
   late final TextEditingController _mirrorController;
-  late final TextEditingController _llmBaseController;
-  late final TextEditingController _llmKeyController;
-  late final TextEditingController _llmModelController;
-  late final TextEditingController _mtranUrlController;
-  late final TextEditingController _mtranTokenController;
   StreamSubscription<double>? _downloadSubscription;
 
   @override
   void initState() {
     super.initState();
-    _translatorController = TextEditingController();
     _mirrorController = TextEditingController();
-    _llmBaseController = TextEditingController();
-    _llmKeyController = TextEditingController();
-    _llmModelController = TextEditingController();
-    _mtranUrlController = TextEditingController();
-    _mtranTokenController = TextEditingController();
     unawaited(_load());
   }
 
   @override
   void dispose() {
-    _translatorController.dispose();
     _mirrorController.dispose();
-    _llmBaseController.dispose();
-    _llmKeyController.dispose();
-    _llmModelController.dispose();
-    _mtranUrlController.dispose();
-    _mtranTokenController.dispose();
     unawaited(_downloadSubscription?.cancel());
     // 服务是本页新建的才释放；外部注入的不归本页管。
     if (widget.service == null) unawaited(_service?.dispose());
@@ -75,13 +57,7 @@ class _LiveSubtitleSettingsScreenState
     setState(() {
       _settings = settings;
       _service = service;
-      _translatorController.text = settings.libreTranslateUrl;
       _mirrorController.text = settings.modelMirrorUrl;
-      _llmBaseController.text = settings.llmBaseUrl;
-      _llmKeyController.text = settings.llmApiKey;
-      _llmModelController.text = settings.llmModel;
-      _mtranUrlController.text = settings.mtranUrl;
-      _mtranTokenController.text = settings.mtranToken;
     });
     _downloadSubscription = service.downloadProgress.listen((progress) {
       if (mounted) setState(() => _downloadProgress = progress);
@@ -107,8 +83,6 @@ class _LiveSubtitleSettingsScreenState
     await next.save();
     if (!mounted) return;
     setState(() => _settings = next);
-    // 注意：本页的服务实例只负责模型下载/删除，不负责翻译；
-    // 翻译器在每次播放时按最新设置新建，不用在这里重建服务。
   }
 
   Future<void> _downloadModel(String modelId) async {
@@ -160,20 +134,20 @@ class _LiveSubtitleSettingsScreenState
     final settings = _settings;
     if (settings == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('实时翻译字幕')),
+        appBar: AppBar(title: const Text('实时字幕')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
     final supported = liveSubtitleEngineSupported;
     return Scaffold(
-      appBar: AppBar(title: const Text('实时翻译字幕')),
+      appBar: AppBar(title: const Text('实时字幕')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
         children: [
           SwitchListTile(
             key: const ValueKey('live-subtitle-enabled'),
-            title: const Text('实时翻译字幕'),
-            subtitle: const Text('开启后播放时自动识别语音并显示翻译字幕'),
+            title: const Text('实时字幕'),
+            subtitle: const Text('开启后播放时自动识别语音并显示原文字幕'),
             value: settings.enabled,
             onChanged: supported
                 ? (value) => _update(settings.copyWith(enabled: value))
@@ -182,7 +156,7 @@ class _LiveSubtitleSettingsScreenState
           if (!supported)
             const ListTile(
               title: Text('本机不支持'),
-              subtitle: Text('实时翻译字幕仅支持安卓与 iOS'),
+              subtitle: Text('实时字幕仅支持安卓与 iOS'),
             ),
           const Divider(),
           const ListTile(title: Text('源语言')),
@@ -210,189 +184,11 @@ class _LiveSubtitleSettingsScreenState
             _modelTile(settings, option),
           const Divider(),
           SwitchListTile(
-            title: const Text('双语对照'),
-            subtitle: const Text('同时显示原文与译文；关闭则只显示译文'),
-            value: settings.showOriginal,
-            onChanged: (value) =>
-                _update(settings.copyWith(showOriginal: value)),
-          ),
-          SwitchListTile(
             title: const Text('仅在 Wi-Fi 下下载模型'),
             subtitle: const Text('模型几十 MB，默认只在 Wi-Fi 下下载'),
             value: settings.wifiOnlyDownload,
             onChanged: (value) =>
                 _update(settings.copyWith(wifiOnlyDownload: value)),
-          ),
-          const Divider(),
-          const ListTile(title: Text('翻译服务')),
-          RadioGroup<String>(
-            groupValue: settings.translationProvider,
-            onChanged: (value) {
-              if (value != null) {
-                _update(settings.copyWith(translationProvider: value));
-              }
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const RadioListTile<String>(
-                  value: 'builtin',
-                  title: Text('内置翻译（无需配置）'),
-                  subtitle: Text('谷歌免费端点，选它就不用填任何东西'),
-                ),
-                const RadioListTile<String>(
-                  value: 'llm',
-                  title: Text('大模型翻译'),
-                  subtitle: Text('DeepSeek / 任意 OpenAI 兼容接口，最通顺，要 API Key'),
-                ),
-                const RadioListTile<String>(
-                  value: 'mtran',
-                  title: Text('MTranServer'),
-                  subtitle: Text('自建离线翻译服务，填地址即可'),
-                ),
-                const RadioListTile<String>(
-                  value: 'libre',
-                  title: Text('LibreTranslate'),
-                  subtitle: Text('自建翻译服务，填地址即可'),
-                ),
-              ],
-            ),
-          ),
-          if (settings.translationProvider == 'llm') ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-llm-base'),
-                controller: _llmBaseController,
-                decoration: const InputDecoration(
-                  labelText: '接口地址',
-                  hintText: '默认 https://api.deepseek.com',
-                  helperText: '任意 OpenAI 兼容地址都行，末尾带不带 /v1 都可以',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.url,
-                onSubmitted: (value) => _update(
-                  settings.copyWith(
-                    llmBaseUrl: value.trim().isEmpty
-                        ? LiveSubtitleSettings.defaultLlmBaseUrl
-                        : value.trim(),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-llm-key'),
-                controller: _llmKeyController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'API Key',
-                  hintText: 'sk-...',
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: (value) =>
-                    _update(settings.copyWith(llmApiKey: value.trim())),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-llm-model'),
-                controller: _llmModelController,
-                decoration: const InputDecoration(
-                  labelText: '模型名',
-                  hintText: 'deepseek-chat',
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: (value) => _update(
-                  settings.copyWith(
-                    llmModel: value.trim().isEmpty
-                        ? LiveSubtitleSettings.defaultLlmModel
-                        : value.trim(),
-                  ),
-                ),
-              ),
-            ),
-            SwitchListTile(
-              title: const Text('思考模式'),
-              subtitle: const Text('更准，但每条字幕要多等一两秒'),
-              value: settings.llmThinking,
-              onChanged: (value) =>
-                  _update(settings.copyWith(llmThinking: value)),
-            ),
-            SwitchListTile(
-              title: const Text('带上文'),
-              subtitle: const Text('把前几条字幕一起给模型，人名和代词更连贯'),
-              value: settings.llmContext,
-              onChanged: (value) =>
-                  _update(settings.copyWith(llmContext: value)),
-            ),
-          ],
-          if (settings.translationProvider == 'mtran') ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-mtran-url'),
-                controller: _mtranUrlController,
-                decoration: const InputDecoration(
-                  labelText: 'MTranServer 地址',
-                  hintText: '例如 http://192.168.1.10:8989',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.url,
-                onSubmitted: (value) => _update(
-                  settings.copyWith(
-                    mtranUrl: value.trim().isEmpty
-                        ? LiveSubtitleSettings.defaultMtranUrl
-                        : value.trim(),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-mtran-token'),
-                controller: _mtranTokenController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Token（可选）',
-                  hintText: '服务端没设 token 就留空',
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: (value) =>
-                    _update(settings.copyWith(mtranToken: value.trim())),
-              ),
-            ),
-          ],
-          if (settings.translationProvider == 'libre')
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: TextField(
-                key: const ValueKey('live-subtitle-translator-url'),
-                controller: _translatorController,
-                decoration: const InputDecoration(
-                  labelText: 'LibreTranslate 服务器地址',
-                  hintText: '例如 http://192.168.1.10:5000',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.url,
-                onSubmitted: (value) => _update(
-                  settings.copyWith(libreTranslateUrl: value.trim()),
-                ),
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Text(
-              settings.translationRouteLabel,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
-            child: Text('选定的通道失败时会自动回落到内置翻译，字幕不会断。'),
           ),
           const Divider(),
           const ListTile(title: Text('模型下载镜像（可选）')),

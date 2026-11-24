@@ -31,7 +31,6 @@ class _FakeLiveSubtitleEngine implements LiveSubtitleEngine {
   Stream<LiveSubtitleEngineUpdate> transcribeStream(
     Stream<Uint8List> pcm16Chunks, {
     required String language,
-    required bool translate,
   }) {
     unawaited(pcm16Chunks.listen((_) {}).asFuture<void>());
     return updates.stream;
@@ -83,8 +82,7 @@ class _FakeLiveSubtitleAudioExtractor implements LiveSubtitleAudioExtractor {
 // 测试里不让任何真实 HTTP 跑起来：302 预解析（playback_redirect）
 // 在 testWidgets 的假时钟下等不到 mock HttpClient 的响应流关闭，
 // _play 会一直卡在“正在准备播放”；这里让请求直接抛错，探头
-// fail-open 回原地址，播放链路继续走。翻译的 Google 请求抛错
-// 也一样被服务层吞掉，不影响断言。
+// fail-open 回原地址，播放链路继续走。
 class _ThrowingHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) =>
@@ -172,7 +170,6 @@ void main() {
       'appThemeMode': 'purpleNeon',
       'moyi_live_subtitle_enabled': true,
       'moyi_live_subtitle_model': 'tiny',
-      'moyi_live_subtitle_show_original': true,
     });
     final engine = _FakeLiveSubtitleEngine();
     final extractor = _FakeLiveSubtitleAudioExtractor();

@@ -6,7 +6,6 @@ import 'package:moyi/live_subtitle_audio.dart';
 import 'package:moyi/live_subtitle_engine.dart';
 import 'package:moyi/live_subtitle_service.dart';
 import 'package:moyi/live_subtitle_settings.dart';
-import 'package:moyi/live_subtitle_translator.dart';
 
 class FakeLiveSubtitleEngine implements LiveSubtitleEngine {
   FakeLiveSubtitleEngine({this.loadThrows});
@@ -26,7 +25,6 @@ class FakeLiveSubtitleEngine implements LiveSubtitleEngine {
   Stream<LiveSubtitleEngineUpdate> transcribeStream(
     Stream<Uint8List> pcm16Chunks, {
     required String language,
-    required bool translate,
   }) {
     // 把音频消费掉，避免服务侧背压；测试只关心段更新。
     unawaited(pcm16Chunks.listen((_) {}).asFuture<void>());
@@ -77,15 +75,6 @@ class FakeLiveSubtitleAudioExtractor implements LiveSubtitleAudioExtractor {
   }
 }
 
-class FakeLiveSubtitleTranslator implements LiveSubtitleTranslator {
-  @override
-  Future<String?> translate(
-    String text, {
-    required String source,
-    required String target,
-  }) async => '译：$text';
-}
-
 const _testSegment = LiveSubtitleRawSegment(
   text: 'こんにちは',
   start: Duration(seconds: 1),
@@ -96,13 +85,11 @@ LiveSubtitleService _buildService({
   LiveSubtitleSettings settings = const LiveSubtitleSettings(enabled: true),
   LiveSubtitleEngine? engine,
   LiveSubtitleAudioExtractor? extractor,
-  LiveSubtitleTranslator? translator,
 }) {
   return LiveSubtitleService(
     settings: settings,
     engine: engine ?? FakeLiveSubtitleEngine(),
     extractor: extractor ?? FakeLiveSubtitleAudioExtractor(),
-    translator: translator ?? FakeLiveSubtitleTranslator(),
   );
 }
 
@@ -113,7 +100,7 @@ Future<void> _start(LiveSubtitleService service) => service.start(
 );
 
 void main() {
-  test('确认段出字幕并异步翻成中文，播放进度按锚点取字幕', () async {
+  test('确认段出原文字幕，播放进度按锚点取字幕', () async {
     final engine = FakeLiveSubtitleEngine();
     final service = _buildService(engine: engine);
     final cues = <LiveSubtitleCue>[];
@@ -129,15 +116,9 @@ void main() {
       ),
     );
     await Future<void>.delayed(const Duration(milliseconds: 200));
-    expect(cues.length, 2);
-    expect(cues.first.translated, isNull);
-    expect(cues.last.translated, '译：こんにちは');
-    expect(cues.last.englishOnly, isFalse);
-    expect(
-      cues.last.displayLines(showOriginal: true),
-      ['こんにちは', '译：こんにちは'],
-    );
-    expect(cues.last.displayLines(showOriginal: false), ['译：こんにちは']);
+    expect(cues.length, 1);
+    expect(cues.single.original, 'こんにちは');
+    expect(cues.single.displayLines(), ['こんにちは']);
 
     // 起始 0，音频 1~3 秒：播放 2 秒时有字幕，10 秒时没有。
     expect(service.cueAt(const Duration(seconds: 2))?.original, 'こんにちは');
@@ -150,39 +131,6 @@ void main() {
     expect(service.state, LiveSubtitleRunState.idle);
     await service.dispose();
     expect(engine.disposed, isTrue);
-  });
-
-  test('没配翻译服务时走 Whisper 英文翻译并标英译', () async {
-    final engine = FakeLiveSubtitleEngine();
-    // 不传 translator，且设置里没填地址：服务默认 translator 为 null，
-    // 走 Whisper 自带英文翻译，字幕标英译。
-    final noTranslatorService = LiveSubtitleService(
-      settings: const LiveSubtitleSettings(enabled: true),
-      engine: engine,
-      extractor: FakeLiveSubtitleAudioExtractor(),
-    );
-    final cues = <LiveSubtitleCue>[];
-    noTranslatorService.cueStream.listen(cues.add);
-    await _start(noTranslatorService);
-    expect(noTranslatorService.state, LiveSubtitleRunState.running);
-    engine.updates.add(
-      const LiveSubtitleEngineUpdate(
-        newConfirmed: [
-          LiveSubtitleRawSegment(
-            text: 'Hello world',
-            start: Duration(seconds: 1),
-            end: Duration(seconds: 2),
-          ),
-        ],
-        partialText: '',
-      ),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    expect(cues.length, 1);
-    expect(cues.single.englishOnly, isTrue);
-    expect(cues.single.translated, isNull);
-    expect(cues.single.displayLines(showOriginal: true), ['Hello world']);
-    await noTranslatorService.dispose();
   });
 
   test('总开关关闭时不启动、不加载模型', () async {

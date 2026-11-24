@@ -93,7 +93,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
   // 时间轴自动对齐，偏移逻辑在 ExoSubtitleBuffer 里，入口待拍板。
   static const _subtitleOffsetMs = 0;
 
-  // 实时翻译字幕：与内嵌字幕共用同一个叠加层，有实时字幕时优先
+  // 实时字幕：与内嵌字幕共用同一个叠加层，有实时字幕时优先
   // 显示实时字幕，没有时回落到内嵌字幕，不另起一层叠画。
   LiveSubtitleSettings? _liveSettings;
   LiveSubtitleService? _liveSubtitle;
@@ -217,7 +217,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     await _startLiveSubtitle(plan, startPosition);
   }
 
-  /// 实时翻译字幕：只在总开关开着、平台支持、源不是播放器侧内存
+  /// 实时字幕：只在总开关开着、平台支持、源不是播放器侧内存
   /// 密钥解密时才启动（内存密钥解密的源后台取不到音轨）。
   Future<void> _startLiveSubtitle(PlaybackPlan plan, double startPosition) async {
     final settings = _liveSettings;
@@ -263,9 +263,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     if (service == null || !service.isRunning) return const [];
     final cue = service.cueAt(position);
     if (cue != null) {
-      return cue.displayLines(
-        showOriginal: _liveSettings?.showOriginal ?? true,
-      );
+      return cue.displayLines();
     }
     if (_livePartial.isNotEmpty) return [_livePartial];
     return const [];
@@ -273,7 +271,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
 
   /// 按当前位置刷新应显示的字幕行；行内容变化时返回 true。
   /// 位置 tick 与 cue 到达两路都走这里，偏移只影响取组不影响 tick。
-  /// 有实时翻译字幕时优先显示实时行，否则回落到内嵌字幕。
+  /// 有实时字幕时优先显示实时行，否则回落到内嵌字幕。
   bool _updateSubtitleLines() {
     final liveLines = _liveLinesAt(widget.handle.position);
     final lines = liveLines.isNotEmpty
