@@ -280,6 +280,29 @@ class RosterFilm {
   String get titleKey => actressTitleKey(title.isEmpty ? code : title);
 }
 
+/// 头像地址是否“像能加载”：非空、http(s)、有 host、路径不是根。
+/// 裸域名（`https://v.hersav.me/`、`https://v.hersav.me`）没有可请求
+/// 的图片路径，Image.network 必失败——这种地址不许占住归并里的坑位。
+bool isLoadableAvatarUrl(String url) {
+  final trimmed = url.trim();
+  if (trimmed.isEmpty) return false;
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null) return false;
+  if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+  if (uri.host.isEmpty) return false;
+  final path = uri.path;
+  if (path.isEmpty || path == '/') return false;
+  return true;
+}
+
+/// 头像归并：现有已有效时保留；现有无效、新候选有效时取新候选；
+/// 两个都无效时保留现有（调用方决定留空还是旧值）。
+String preferLoadableAvatar(String current, String candidate) {
+  if (isLoadableAvatarUrl(current)) return current;
+  if (isLoadableAvatarUrl(candidate)) return candidate;
+  return current;
+}
+
 /// 本地库里合并后的一位演员：三家来源合并为一条，来源身份只存内部
 /// 字段，界面只显示名字、头像、标签与作品数。
 class ActressPerson {
@@ -495,9 +518,7 @@ ActressPerson mergeRosterIntoPerson(
     displayName: displayName,
     aliases: aliases,
     sex: existing.sex.isNotEmpty ? existing.sex : roster.sex,
-    avatarUrl: existing.avatarUrl.isNotEmpty
-        ? existing.avatarUrl
-        : roster.avatarUrl,
+    avatarUrl: preferLoadableAvatar(existing.avatarUrl, roster.avatarUrl),
     tags: tags,
     rosterWorks: roster.worksHint > existing.rosterWorks
         ? roster.worksHint

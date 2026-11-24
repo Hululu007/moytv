@@ -560,7 +560,7 @@ ActressPerson videoLibraryPersonFromRow(Map<String, Object?> row) {
 }
 
 /// 名册汇总累加器（见 [_ensureVideoRollup]）：同一个人被拆成多行时，
-/// 作品数相加、头像取第一条非空、最新作品日期取最大。
+/// 作品数相加、头像取第一条能加载的（裸域名跳过）、最新作品日期取最大。
 class _RollupAcc {
   _RollupAcc(this.firstRowid);
 
@@ -991,7 +991,10 @@ class SqfliteActressDatabase implements ActressDatabase {
       );
       final aCount = (sourceCounts.first['a'] as num?)?.toInt() ?? 0;
       final vCount = (sourceCounts.first['v'] as num?)?.toInt() ?? 0;
-      final signature = '$aCount/$vCount';
+      // 汇总表版本 v2：2026-11-24 头像归并改只接受能加载的地址后，
+      // 旧版汇总表里已存的裸域名头像必须重建一次才掉；只比行数
+      // 的旧签名认不出代码改了，版本号写进签名强制重建一次。
+      final signature = 'v2:$aCount/$vCount';
 
       await db.execute(
         'CREATE TABLE IF NOT EXISTS actress_rollup ('
@@ -1053,7 +1056,9 @@ class SqfliteActressDatabase implements ActressDatabase {
           () => _RollupAcc((row['rid'] as num).toInt()),
         );
         final avatar = row['avatar']?.toString() ?? '';
-        if (acc.avatar.isEmpty && avatar.isNotEmpty) acc.avatar = avatar;
+        // 第一批有效头像才占坑：裸域名行在前也不赢，后面的完整
+        // 头像照样能补进来；同名全是坏地址时留空（列表画圆圈）。
+        acc.avatar = preferLoadableAvatar(acc.avatar, avatar);
         if ((row['sex']?.toString() ?? '') == 'male') acc.sex = 'male';
         acc.works += works[cateId] ?? 0;
         final d = dates[cateId];
@@ -1688,9 +1693,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         merged = existing.copyWith(
           aliases: [...existing.aliases, ...extra],
           sex: existing.sex.isNotEmpty ? existing.sex : sex,
-          avatarUrl: existing.avatarUrl.isNotEmpty
-              ? existing.avatarUrl
-              : avatarUrl,
+          avatarUrl: preferLoadableAvatar(existing.avatarUrl, avatarUrl),
           tags: <String>{...existing.tags, ...tags}.toList(),
         );
       }
@@ -2093,7 +2096,10 @@ class SqfliteActressDatabase implements ActressDatabase {
         'a.name AS cate_id, '
         '${hasSex ? "CASE WHEN SUM(CASE WHEN a.sex='male' THEN 1 ELSE 0 END)>0 "
             "THEN 'male' ELSE '' END" : "''"} AS sex, '
-        "COALESCE(MAX(NULLIF(a.avatar,'')),'') AS avatar_url, "
+        // 回退也只认能加载的头像：裸域名（以 / 结尾、无路径）不进
+        // MAX 的候选，跨站时 MAX 也不会把裸域名挑出来。
+        "COALESCE(MAX(CASE WHEN a.avatar LIKE '%://%/%' "
+        "AND a.avatar NOT LIKE '%/' THEN a.avatar END),'') AS avatar_url, "
         'SUM(COALESCE(pc.n,0)) AS works_count, '
         "COALESCE(MAX(COALESCE(pc.d,'')),'') AS last_date "
         'FROM actresses a LEFT JOIN per_cate pc ON pc.cate_id = a.cate_id '
@@ -3661,9 +3667,7 @@ class MemoryActressDatabase implements ActressDatabase {
       merged = existing.copyWith(
         aliases: [...existing.aliases, ...extra],
         sex: existing.sex.isNotEmpty ? existing.sex : sex,
-        avatarUrl: existing.avatarUrl.isNotEmpty
-            ? existing.avatarUrl
-            : avatarUrl,
+        avatarUrl: preferLoadableAvatar(existing.avatarUrl, avatarUrl),
         tags: <String>{...existing.tags, ...tags}.toList(),
       );
     }

@@ -723,9 +723,10 @@ class _ActressListPageState extends State<ActressListPage> {
           sex: existing.sex == 'male' || person.sex == 'male'
               ? 'male'
               : existing.sex,
-          avatarUrl: existing.avatarUrl.isNotEmpty
-              ? existing.avatarUrl
-              : person.avatarUrl,
+          avatarUrl: preferLoadableAvatar(
+            existing.avatarUrl,
+            person.avatarUrl,
+          ),
           tags: existing.tags,
           worksCount: existing.worksCount + person.worksCount,
           rosterWorks: existing.rosterWorks + person.rosterWorks,
