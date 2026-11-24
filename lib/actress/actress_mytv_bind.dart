@@ -192,6 +192,19 @@ class ActressMytvBind {
     });
   }
 
+  /// 启动时自动生成 MYTV/db 与 MYTV/m3u（2026-11-24 用户令）：
+  /// 以前只在进演员库时才调 ensureBound 顺带建目录，不进演员库
+  /// 文件夹就一直没有；现在启动先建一次。任何失败自己吞掉，
+  /// 不阻塞启动、不抛错（没权限时等用户授权后点“重新绑定”再建）。
+  /// [bind] 仅供测试注入，正常调用传空、用单例。
+  static Future<void> ensureFoldersAtStartup([
+    ActressMytvBind? bind,
+  ]) async {
+    try {
+      await (bind ?? instance).ensureBound();
+    } catch (_) {}
+  }
+
   /// 打开系统“所有文件访问权限”设置页（走平台通道；打不开
   /// 也不抛错，列表页只弹提示）。
   Future<void> requestPermission() async {

@@ -153,6 +153,23 @@ void main() {
       expect(result.bound, isTrue);
       expect(File('${ext.path}/MYTV/db/mjv011.json').existsSync(), isTrue);
     });
+
+    test('启动自动建目录：没库也建出 MYTV/db 与 MYTV/m3u', () async {
+      // 2026-11-24 用户令：软件启动就自动生成文件夹和路径
+      // MYTV/db，不等进演员库。helper 只是调 ensureBound，
+      // 这里验它在空目录上建出两个子文件夹且不抛错。
+      await ActressMytvBind.ensureFoldersAtStartup(bind());
+      expect(Directory('${ext.path}/MYTV/db').existsSync(), isTrue);
+      expect(Directory('${ext.path}/MYTV/m3u').existsSync(), isTrue);
+    });
+
+    test('启动自动建目录：解析抛错也不抛到启动流程', () async {
+      final throwing = ActressMytvBind(
+        externalRoot: () async => throw StateError('boom'),
+        documentsDir: () async => docs,
+      );
+      await ActressMytvBind.ensureFoldersAtStartup(throwing);
+    });
   });
 
   group('用户 m3u 兜底', () {

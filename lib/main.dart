@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'core_bridge.dart';
+import 'actress/actress_mytv_bind.dart';
 import 'app_update.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
@@ -45,6 +46,13 @@ Future<void> main(List<String> arguments) async {
   // 自定义连接。先装覆盖、再读配置，首批请求就按用户配置走。
   HttpOverrides.global = NexHubHttpOverrides();
   await NetworkConfigService.instance.load();
+  // 启动就自动生成 MYTV/db 与 MYTV/m3u（2026-11-24 用户令）：
+  // 以前只在进演员库时才建目录，不进演员库文件夹就一直没有；
+  // 启动先建一次，不等启动、不抛错，没权限时等用户授权后
+  // 点“重新绑定”再建。
+  if (Platform.isAndroid) {
+    unawaited(ActressMytvBind.ensureFoldersAtStartup());
+  }
   // 网络直连：应用内代理机件已删，所有请求走直连（手机系统 VPN 在系统层
   // 生效，不受影响）。海阔规则自带 proxy 字段的仍由规则自己的客户端处理。
   unawaited(PlaybackForeground.clearStaleFlag());
