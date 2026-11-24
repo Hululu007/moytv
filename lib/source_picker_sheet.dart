@@ -395,27 +395,18 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                         },
                         child: AnimatedSwitcher(
                           duration: const Duration(milliseconds: 280),
+                          // 翻页滑动：新区从行进方向那侧滑进来、
+                          // 旧区向反方向滑出去（AnimatedSwitcher
+                          // 对出场子项反向跑同一 builder）。
+                          // 前翻（_flipDirection=1）新区从右侧滑入，
+                          // 后翻从左侧滑入；时长 280ms 不变。
                           transitionBuilder: (child, animation) =>
-                              AnimatedBuilder(
-                                animation: animation,
-                                builder: (context, child) {
-                                  // 3D 翻页：带透视绕 Y 轴转进/转出，
-                                  // 往后翻从右侧转进来、往前翻从左侧。
-                                  // 进场 animation 0→1、出场 1→0，
-                                  // 同一个方向量让两页转得一致。
-                                  final t = animation.value;
-                                  final angle = (1 - t) * 0.55 * _flipDirection;
-                                  return Transform(
-                                    transform: Matrix4.identity()
-                                      ..setEntry(3, 2, 0.0012)
-                                      ..rotateY(angle),
-                                    alignment: Alignment.center,
-                                    child: Opacity(
-                                      opacity: 0.35 + 0.65 * t,
-                                      child: child,
-                                    ),
-                                  );
-                                },
+                              SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: Offset(
+                                      _flipDirection.toDouble(), 0),
+                                  end: Offset.zero,
+                                ).animate(animation),
                                 child: child,
                               ),
                           child: KeyedSubtree(

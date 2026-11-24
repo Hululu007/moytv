@@ -138,25 +138,27 @@ void main() {
     expect(find.byKey(const ValueKey('site-picker-add')), findsOneWidget);
   });
 
-  testWidgets('翻页带 3D 透视：过渡中 Transform 矩阵含透视项', (tester) async {
+  testWidgets('翻页滑动：过渡中 SlideTransition 有非零位移', (tester) async {
     await _open(tester, onImport: () async {});
 
     await tester.tap(find.byKey(const ValueKey('site-picker-zone-import')));
     // 动画 280ms：中途抽一帧断言（动画跑完后 AnimatedSwitcher
     // 会去掉过渡包装，settle 后就找不到了）。
     await tester.pump(const Duration(milliseconds: 120));
-    // 3D 翻页的 Transform 包在活动区外面：从区子树往上找，
-    // 透视项 (3,2) 非 0 即带了 Matrix4.setEntry(3, 2, …)。
-    // 列主序 storage 里 (行 3, 列 2) 在下标 2*4+3=11。
-    final flips = find.ancestor(
+    // 滑动翻页的 SlideTransition 包在活动区外面：从区子树往上找，
+    // 中途位移非零即正在滑动（进场从行进方向那侧滑入，
+    // 出场向反方向滑出，两者位移都非零）。
+    final slides = find.ancestor(
       of: find.byKey(const ValueKey('site-picker-zone-1')),
-      matching: find.byType(Transform),
+      matching: find.byType(SlideTransition),
     );
-    expect(flips, findsWidgets);
-    final hasPerspective = flips.evaluate().any(
-      (element) => (element.widget as Transform).transform.storage[11] != 0,
+    expect(slides, findsWidgets);
+    final isSliding = slides.evaluate().any(
+      (element) =>
+          (element.widget as SlideTransition).position.value !=
+          Offset.zero,
     );
-    expect(hasPerspective, isTrue);
+    expect(isSliding, isTrue);
     await tester.pumpAndSettle();
     expect(find.text('C站'), findsOneWidget);
   });
