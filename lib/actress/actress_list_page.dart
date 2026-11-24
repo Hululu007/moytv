@@ -26,6 +26,7 @@ import 'actress_search.dart';
 import 'actress_site_crawl.dart';
 import 'actress_stacking.dart';
 import 'actress_sync.dart';
+import 'actress_tag_sheet.dart';
 import 'actress_widgets.dart';
 import 'video_db_normalize.dart';
 import '../content_http.dart';
@@ -199,6 +200,24 @@ class _ActressListPageState extends State<ActressListPage> {
   var _dbCategories = <(String, int)>[];
   var _query = '';
   var _generation = 0;
+
+  /// 作品标签筛选（2026-11-24 用户令：who's.json 分类是日本AV，
+  /// 标签在数据库里，底部弹窗显示里面的标签）：默认全部；选标签
+  /// 后列表只留有该标签作品的人（人物列表页的诚实语义：标签是按
+  /// 作品的，人只按“有没有该标签的作品”留，不把人本身算成有标签）。
+  /// 与分类是 AND 关系（既是该分类、又有该标签的作品才留人）。
+  /// 标签列表只在打开弹窗时才查库（GROUP BY 一次），之后走缓存；
+  /// 换库时清空（标签是旧库的数据），切分类/搜词/换排序时保留。
+  var _videoTag = '';
+  String? _dbTagsCacheKey;
+  List<(String, int)>? _dbTagsCache;
+
+  /// 通用模式标签筛选：与 [_videoTag] 同一口径，筛的是当前通用库
+  /// 的作品；[_genericTagKey] 是筛选键（`video_tag.tag_name` 或
+  /// 作品表里的标签列，见 GenericDbReader.tagFacet），空 = 该库
+  /// 没有标签维度，弹窗如实显示“暂无标签”。
+  var _genericTag = '';
+  var _genericTagKey = '';
 
   /// 顶栏站点筛选：默认全部；选站后列表只留该站有 JSON 兜底条目的
   /// 人（按女优名或本地作品番号对），详情页兜底与现爬也只走该站。
@@ -621,11 +640,22 @@ class _ActressListPageState extends State<ActressListPage> {
     }
     if (!mounted) return;
     final oldExtras = Map<String, ActressDatabase>.from(_extraDbs);
+    // 2026-11-24 标签筛选：勾选的库变了，旧标签是旧库的数据，新库
+    // 未必有——清空已选标签与标签缓存（切分类/搜词/换排序时保留，
+    // 只在换库时清）。
+    final selectionChanged =
+        oldExtras.keys.toSet().difference(keep.keys.toSet()).isNotEmpty ||
+        keep.keys.toSet().difference(oldExtras.keys.toSet()).isNotEmpty;
     setState(() {
       _extraDbs
         ..clear()
         ..addAll(keep);
       _personHomeDb.clear();
+      if (selectionChanged) {
+        _videoTag = '';
+        _dbTagsCacheKey = null;
+        _dbTagsCache = null;
+      }
     });
     for (final entry in oldExtras.entries) {
       if (!keep.containsKey(entry.key)) unawaited(entry.value.close());
@@ -666,6 +696,7 @@ class _ActressListPageState extends State<ActressListPage> {
       query: _query,
       tag: _tagFilter.tagValue,
       category: _category,
+      videoTag: _videoTag,
       offset: 0,
       limit: window,
     );
@@ -846,6 +877,11 @@ class _ActressListPageState extends State<ActressListPage> {
       _mytvRowDismissed = false;
       _mytvDbError = null;
       _noExternalDb = false;
+      // 2026-11-24 标签筛选：重新绑定可能换了库文件，旧标签作废。
+      _videoTag = '';
+      _genericTag = '';
+      _dbTagsCacheKey = null;
+      _dbTagsCache = null;
     });
     if (_ownsFallback) {
       _fallback.bindLocalDirs(
@@ -891,6 +927,9 @@ class _ActressListPageState extends State<ActressListPage> {
         _mytvDbError = null;
         _noExternalDb = false;
         _mytvBind = ActressMytvBind.instance.current ?? _mytvBind;
+        // 2026-11-24 标签筛选：重读可能换了库文件，旧标签作废。
+        _videoTag = '';
+        _genericTag = '';
       });
       final generic = await _db.genericReader();
       if (!mounted) return;
@@ -1086,6 +1125,7 @@ class _ActressListPageState extends State<ActressListPage> {
       query: _query,
       tag: _tagFilter.tagValue,
       category: _category,
+      videoTag: _videoTag,
       offset: 0,
       limit: limit,
     );
@@ -1534,6 +1574,7 @@ class _ActressListPageState extends State<ActressListPage> {
         query: _query,
         tag: _tagFilter.tagValue,
         category: _category,
+        videoTag: _videoTag,
         offset: 0,
         limit: _pageSize,
       );
@@ -1572,6 +1613,7 @@ class _ActressListPageState extends State<ActressListPage> {
       query: _query,
       tag: _tagFilter.tagValue,
       category: _category,
+      videoTag: _videoTag,
       offset: _rawOffset,
       limit: _pageSize,
     );
@@ -1594,6 +1636,7 @@ class _ActressListPageState extends State<ActressListPage> {
     return [
       _sex.name,
       _category,
+      _videoTag,
       _tagFilter.name,
       _sort.name,
       _query,
@@ -1666,13 +1709,23 @@ class _ActressListPageState extends State<ActressListPage> {
     return true;
   }
 
-  /// 清掉全部易变缓存（列表第一页 + 分类）：库内容变了就调——热换库、
-  /// 同步/现爬/叠加完成、手动刷新。漏清会显示旧数据。
+  /// 清掉全部易变缓存（列表第一页 + 分类 + 标签）：库内容变了就调——热换库、
+  /// 同步/现爬/叠加完成、手动刷新。漏清会显示旧数据。只清缓存，不清
+  /// 已选的标签（同库内容更新，标签筛选本身还有效）。
   void _clearListCaches() {
     _pageCache.clear();
     _dbCategoriesCacheKey = null;
     _dbCategoriesCache = null;
+    _dbTagsCacheKey = null;
+    _dbTagsCache = null;
   }
+
+  /// 通用模式的标签筛选条件（2026-11-24 标签筛选）：空 = 不筛；
+  /// 否则按 tagFacet 给的键筛（`video_tag.tag_name` 或作品表标签列）。
+  Map<String, List<String>> get _genericTagFilters =>
+      _genericTag.isEmpty || _genericTagKey.isEmpty
+      ? const {}
+      : {_genericTagKey: [_genericTag]};
 
   /// 通用模式翻页：作品表按 rowid 顺序翻页，搜索走标题/番号 LIKE。
   Future<void> _loadGenericPage({bool reset = false}) async {
@@ -1694,12 +1747,14 @@ class _ActressListPageState extends State<ActressListPage> {
       final total = await reader.countWorks(
         query: _query,
         category: _genericCategory,
+        filters: _genericTagFilters,
       );
       final works = await reader.works(
         offset: 0,
         limit: _pageSize,
         query: _query,
         category: _genericCategory,
+        filters: _genericTagFilters,
       );
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -1719,6 +1774,7 @@ class _ActressListPageState extends State<ActressListPage> {
       limit: _pageSize,
       query: _query,
       category: _genericCategory,
+      filters: _genericTagFilters,
     );
     if (!mounted || generation != _generation) return;
     setState(() {
@@ -1763,6 +1819,8 @@ class _ActressListPageState extends State<ActressListPage> {
   void _openPerson(ActressPerson person) {
     // 2026-11-23 多库勾选：合并列表里的人按所在库进详情（主库优先，
     // 主库没有这个人才指外来库）；单库时 _personHomeDb 为空，走主库。
+    // 2026-11-24 标签筛选：列表页选了标签时，详情页的作品列表也只
+    // 留带该标签的作品（initialTag 传进去）。
     final homeDb = _personHomeDb[person.displayName] ?? _db;
     Navigator.push<void>(
       context,
@@ -1773,6 +1831,7 @@ class _ActressListPageState extends State<ActressListPage> {
           store: widget.store,
           database: homeDb,
           siteFilter: _source,
+          initialTag: _videoTag,
           fallback: _fallback,
         ),
       ),
@@ -2016,6 +2075,23 @@ class _ActressListPageState extends State<ActressListPage> {
                       ),
                     ),
             ),
+          // 2026-11-24 标签筛选：分类行下面独立一行放“标签”入口，
+          // 不依赖分类行——库没有分类时入口也在；没选时只显示“标签”，
+          // 选了显示“标签：<名>”高亮 + “清除”一键清掉。站源作品
+          // 模式（nvku 作品网格）不走数据库筛选，不显示。
+          if (!_siteWorksMode)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+              child: Row(
+                children: _buildTagPills(
+                  selected: _genericMode ? _genericTag : _videoTag,
+                  onOpen: _openTagSheet,
+                  onClear: _genericMode
+                      ? () => _setGenericTag('')
+                      : () => _setVideoTag(''),
+                ),
+              ),
+            ),
           if (_siteWorksMode && _siteCategories.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -2170,6 +2246,20 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
+  /// 列表/分类/标签缓存的 key：主库路径+指纹 + 各外来库路径+指纹；
+  /// 文件没变就不跑 GROUP BY。库内容变了时 _clearListCaches 清掉
+  /// 缓存，指纹只是第二道防线（防文件在外面被换了）。
+  String _dbListCacheKey() {
+    final keyParts = <String>[
+      _dbFileFingerprintKey(_mytvBind?.dbPath ?? ''),
+    ];
+    final extraPaths = _extraDbs.keys.toList()..sort();
+    for (final p in extraPaths) {
+      keyParts.add('$p|${_dbFileFingerprintKey(p)}');
+    }
+    return keyParts.join(';');
+  }
+
   /// 读数据库里的分类（video_category 主分类 + 作品数）：影视库
   /// 没接上、没分类时返回空，这行不显示；读失败也不崩、不影响列表。
   Future<void> _loadDbCategories() async {
@@ -2180,18 +2270,8 @@ class _ActressListPageState extends State<ActressListPage> {
       _ => null,
     };
     if (service == null) return;
-    // 2026-11-24 切换不重载：分类结果缓存——key = 主库路径+指纹 +
-    // 各外来库路径+指纹；文件没变就不跑 GROUP BY。库内容变了时
-    // _clearListCaches 会清掉这份缓存（热换/同步/现爬/手动刷新），
-    // 所以 key 里的指纹只是第二道防线（防文件在外面被换了）。
-    final keyParts = <String>[
-      _dbFileFingerprintKey(_mytvBind?.dbPath ?? ''),
-    ];
-    final extraPaths = _extraDbs.keys.toList()..sort();
-    for (final p in extraPaths) {
-      keyParts.add('$p|${_dbFileFingerprintKey(p)}');
-    }
-    final cacheKey = keyParts.join(';');
+    // 2026-11-24 切换不重载：分类结果缓存（见 _dbListCacheKey）。
+    final cacheKey = _dbListCacheKey();
     if (_dbCategoriesCacheKey == cacheKey && _dbCategoriesCache != null) {
       if (!mounted) return;
       setState(() => _dbCategories = _dbCategoriesCache!);
@@ -2270,6 +2350,101 @@ class _ActressListPageState extends State<ActressListPage> {
     unawaited(_loadPage(reset: true));
   }
 
+  /// 读数据库里的标签（video_tag.tag_name + 作品数，按作品数倒序）：
+  /// 只在打开标签弹窗时调（懒加载），之后走缓存；多库勾选时取各库
+  /// 并集（同一标签取最大单库数，与分类合并同一口径）。读不到
+  /// （没有 video_tag 表的库）回空，弹窗如实显示“暂无标签”。
+  Future<List<(String, int)>> _loadDbTags() async {
+    final cacheKey = _dbListCacheKey();
+    if (_dbTagsCacheKey == cacheKey && _dbTagsCache != null) {
+      return _dbTagsCache!;
+    }
+    var tags = <(String, int)>[];
+    try {
+      tags = await _db.dbTags();
+      if (_hasExtraDbs) {
+        final counts = <String, int>{
+          for (final t in tags) t.$1: t.$2,
+        };
+        for (final extra in _extraDbs.values) {
+          try {
+            for (final t in await extra.dbTags()) {
+              final prev = counts[t.$1];
+              if (prev == null || t.$2 > prev) counts[t.$1] = t.$2;
+            }
+          } catch (_) {}
+        }
+        final merged = counts.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        tags = [for (final e in merged) (e.key, e.value)];
+      }
+    } catch (_) {
+      tags = const [];
+    }
+    _dbTagsCacheKey = cacheKey;
+    _dbTagsCache = tags;
+    return tags;
+  }
+
+  /// 读通用库里的标签（见 GenericDbReader.tagFacet）：没有标签维度
+  /// 时 key 为空、列表为空，弹窗如实显示“暂无标签”。
+  Future<List<(String, int)>> _loadGenericTags() async {
+    final reader = _genericReader;
+    if (reader == null) return const [];
+    try {
+      final tag = await reader.tagFacet();
+      if (!mounted) return const [];
+      setState(() {
+        _genericTagKey = tag.key;
+      });
+      return tag.values;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 打开标签筛选底部弹窗（2026-11-24 用户令）：列出数据库里的
+  /// 全部标签（带作品数），点标签即筛，点“全部”即清空。弹窗打开
+  /// 前先查好标签（首次查库，之后走缓存）；没有标签也照常打开，
+  /// 如实显示“暂无标签”，不拦。
+  Future<void> _openTagSheet() async {
+    final tags = _genericMode ? await _loadGenericTags() : await _loadDbTags();
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: ActressTagSheet(
+          tags: tags,
+          selected: _genericMode ? _genericTag : _videoTag,
+          onSelected: (tag) => Navigator.of(sheetContext).pop(tag),
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    if (_genericMode) {
+      _setGenericTag(selected);
+    } else {
+      _setVideoTag(selected);
+    }
+  }
+
+  void _setVideoTag(String tag) {
+    if (tag == _videoTag) return;
+    _saveScrollOffsetForCache();
+    setState(() => _videoTag = tag);
+    _reloadAfterFilterChange();
+  }
+
+  void _setGenericTag(String tag) {
+    if (tag == _genericTag) return;
+    setState(() => _genericTag = tag);
+    unawaited(_loadPage(reset: true));
+  }
+
   void _setCategory(String category) {
     if (category == _category) return;
     _saveScrollOffsetForCache();
@@ -2289,6 +2464,34 @@ class _ActressListPageState extends State<ActressListPage> {
     _saveScrollOffsetForCache();
     setState(() => _tagFilter = filter);
     _reloadAfterFilterChange();
+  }
+
+  /// 标签入口药丸（2026-11-24 标签筛选）：分类行下面独立一行；
+  /// 没选时只显示“标签”，点了开底部弹窗；选了显示“标签：<名>”高亮，
+  /// 旁边再给一个“清除”一键清掉（页内可见、可一键清除）。
+  List<Widget> _buildTagPills({
+    required String selected,
+    required VoidCallback onOpen,
+    required VoidCallback onClear,
+  }) {
+    return [
+      ActressNeonPill(
+        key: const ValueKey('actress-tag-open'),
+        label: selected.isEmpty ? '标签' : '标签：$selected',
+        selected: selected.isNotEmpty,
+        onTap: onOpen,
+      ),
+      const SizedBox(width: 8),
+      if (selected.isNotEmpty) ...[
+        ActressNeonPill(
+          key: const ValueKey('actress-tag-clear'),
+          label: '清除',
+          selected: false,
+          onTap: onClear,
+        ),
+        const SizedBox(width: 8),
+      ],
+    ];
   }
 
   /// 2026-11-20 MYTV 绑定：绑定路径行（用户一眼看到库落在哪）。
