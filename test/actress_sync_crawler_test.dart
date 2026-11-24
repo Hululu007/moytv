@@ -30,6 +30,21 @@ Future<LocalStore> _makeStore() async {
   return store;
 }
 
+/// 只失败一次的内存库：第一次 upsertRosterPerson 抛错，之后照常。
+/// 验名册写锁：一次写失败不能毒死整条写链。
+class _FailOnceDb extends MemoryActressDatabase {
+  var _failed = false;
+
+  @override
+  Future<ActressPerson?> upsertRosterPerson(RosterPerson roster) async {
+    if (!_failed) {
+      _failed = true;
+      throw StateError('模拟写库失败一次');
+    }
+    return super.upsertRosterPerson(roster);
+  }
+}
+
 /// 计数同步服务：只记 run() 被调了几次（不自动爬断言用）。
 class _CountingSyncService extends ActressSyncService {
   _CountingSyncService({required super.db, required super.sources})
@@ -625,6 +640,52 @@ void main() {
         expect(latest.dx, lessThan(second.dx));
         expect(second.dx, lessThan(older.dx));
       });
+    });
+  });
+
+  group('名册写锁不断链', () {
+    test('一次写库失败后，后面的人照常入库（写锁不中毒）', () async {
+      final db = _FailOnceDb();
+      final source = FakeRosterSource(
+        sourceId: ActressRosterSourceId.whos,
+        rosterPages: [
+          [
+            const RosterPerson(
+              source: ActressRosterSourceId.whos,
+              sourceId: 'A',
+              name: '演员甲',
+              sex: 'female',
+            ),
+            const RosterPerson(
+              source: ActressRosterSourceId.whos,
+              sourceId: 'B',
+              name: '演员乙',
+              sex: 'female',
+            ),
+          ],
+        ],
+      );
+      final sync = ActressSyncService(
+        db: db,
+        sources: [source],
+        fetch: _unusedFetch,
+      );
+      addTearDown(sync.dispose);
+      final result = await sync.run();
+      expect(result.hasFailures, isFalse);
+      // 演员甲那次写库失败被按人跳过；演员乙必须照常入库——
+      // 旧写锁实现一次失败就毒死整条链，乙也丢了（2026-11-24
+      // 同步卡顿顺查发现：同步走完进度、但再无新人入库）。
+      final overview = await db.overview();
+      expect(overview.persons, 1);
+      final found = await db.listPersons(
+        sex: ActressSexFilter.all,
+        sort: ActressSort.nameAsc,
+        query: '演员乙',
+        offset: 0,
+        limit: 10,
+      );
+      expect(found.length, 1);
     });
   });
 }

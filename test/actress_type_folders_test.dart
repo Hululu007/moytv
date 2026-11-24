@@ -19,6 +19,7 @@ import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_film_library.dart';
 import 'package:moyi/actress/actress_generic_db.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
+import 'package:moyi/actress/actress_nvku_cache.dart';
 import 'package:moyi/actress/actress_nvku_page.dart';
 import 'package:moyi/actress/actress_type_folders.dart';
 import 'package:moyi/app_theme_config.dart';
@@ -449,6 +450,9 @@ void main() {
 
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
+      // 进库会话缓存是进程级静态：每个测试用全新假服务，必须先清，
+      // 否则上一个测试的假数据会串到下一个测试里（2026-11-24）。
+      NvkuEntryCache.clearForTest();
       store = LocalStore(await SharedPreferences.getInstance());
       db = MemoryActressDatabase();
       service = _FakeFilmService(database: db);
