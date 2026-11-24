@@ -180,6 +180,33 @@
       "adult": true,
       "description": "【本插件由TG频道〖多多纯净软件分享〗提供，频道号@yydsys】\n\n2048AI（2048ai4.com）：麻豆传媒系站点，AV中文字幕、国产自拍、无码流出、探花大神、91大神、麻豆原创AI、黑料吃瓜等全部分区，关键词搜索、翻页都支持。\n\n取流走站点自己的 HLS 代理，AES-128 加密清单，分片都是完整带签名的地址，播放器直接放，不中转不卡。",
       "manifest": "ai2048/ai2048.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.vjav",
+      "name": "VJAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "VJAV（vjav.com）。162 个分类，全走 JSON 接口，播放走 videofile.php 解码取 MP4 直链。由 CatVod 蜘蛛 vjav.py v2 改写。2026-11-24 复核。",
+      "manifest": "vjav/vjav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.pornhub",
+      "name": "Pornhub",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Pornhub（pornhub.com）。245 个分类，列表/搜索走官方 webmasters API，详情取 mediaDefinitions 签名 HLS。2026-11-24 摸站。API taxonomy 里没有 bare teen 分类。",
+      "manifest": "pornhub/pornhub.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.xvideos",
+      "name": "XVIDEOS",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "XVIDEOS（xvideos.com）。46 个分类，列表纯 HTML 解析，详情取 setVideoHLS / JSON-LD contentUrl 全片。由 CatVod 蜘蛛 xvideos.py 改写。2026-11-24 复核，卡片链接已按 4 段式改版。",
+      "manifest": "xvideos/xvideos.idjplugin"
     }
   ],
   "cms": []
