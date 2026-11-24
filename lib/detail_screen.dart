@@ -10,6 +10,7 @@ import 'adult_scrape_service.dart';
 import 'app_layout.dart';
 import 'atmosphere_background.dart';
 import 'catalog_browser.dart';
+import 'content_crypto.dart';
 import 'crosssite_probe.dart';
 import 'crosssite_probe_section.dart';
 import 'ios_dialogs.dart';
@@ -38,6 +39,9 @@ import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
 import 'actress/actress_site_db.dart';
+import 'actress/actress_widgets.dart';
+import 'actress/code_meta_section.dart';
+import 'actress/jav_code_meta.dart';
 
 typedef DetailTagTap =
     void Function(String sourceId, String tagId, String tagName);
@@ -146,6 +150,11 @@ class _DetailScreenState extends State<DetailScreen> {
   TmdbConfig _tmdbConfig = const TmdbConfig();
   TmdbMetadata? _tmdb;
 
+  /// 头区演员行匹配结果（番号 → 演员与导演）：详情加载后按番号查
+  /// 三站元数据 + who's 索引（与 CodeMetaSection 同一份匹配）。
+  /// null = 未匹配到或尚未查完，头区不画演员行。
+  CodeMeta? _codeMeta;
+
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
 
@@ -229,9 +238,18 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
-  Future<void> _updateViewing(ViewingExperienceSettings next) async {
-    if (mounted) setState(() => _viewing = next);
-    await next.save();
+  /// 头区演员行：按番号查三站元数据 + who's 索引（与 CodeMetaSection
+  /// 同一份匹配，见 code_meta_section.dart）。代次守卫：刷新后旧
+  /// 结果不再写回。查不到时 _codeMeta 为 null，头区不画演员行、
+  /// 标签照常显示。
+  Future<void> _refreshCodeMeta(Drama drama, int generation) async {
+    final meta = await loadCodeMetaForDrama(
+      dramaId: drama.id,
+      title: drama.title,
+      sourceId: drama.sourceId,
+    );
+    if (!mounted || generation != _generation) return;
+    setState(() => _codeMeta = meta);
   }
 
   /// 播放器第一次真播起来：开关开着才把这集记进共用站点库。
@@ -286,8 +304,9 @@ class _DetailScreenState extends State<DetailScreen> {
     var picked = <Drama>[];
     try {
       var categoryId = '';
+      var menus = <CatalogCategory>[];
       try {
-        final menus = await widget.repository.categories(drama.source);
+        menus = await widget.repository.categories(drama.source);
         final want = categoryName(drama.category);
         for (final menu in menus) {
           if (menu.id.isNotEmpty && categoryName(menu.name) == want) {
@@ -313,6 +332,27 @@ class _DetailScreenState extends State<DetailScreen> {
         for (final item in fallback.items) {
           if (picked.length >= 6) break;
           if (seen.add(item.id)) picked.add(item);
+        }
+      }
+      // 2026-11-24 推荐区修回来：分类匹配不到时（如潮流“成人影片”
+      // 不在导航里）第一轮 category='' 对部分蜘蛛回空，之前到此
+      // 就认空、推荐区直接消失。仍空时用导航第一个分类再补一轮，
+      // 再空才认空。
+      if (picked.isEmpty && menus.isNotEmpty) {
+        final firstMenu = menus.firstWhere(
+          (menu) => menu.id.isNotEmpty && menu.id != categoryId,
+          orElse: () => menus.first,
+        );
+        if (firstMenu.id.isNotEmpty && firstMenu.id != categoryId) {
+          final fallback = await widget.repository.catalog(
+            drama.source,
+            category: firstMenu.id,
+            page: 1,
+          );
+          for (final item in fallback.items) {
+            if (picked.length >= 6) break;
+            if (seen.add(item.id)) picked.add(item);
+          }
         }
       }
       picked = picked.take(6).toList();
@@ -444,6 +484,7 @@ class _DetailScreenState extends State<DetailScreen> {
       _loading = true;
       _error = null;
       _recommended = const [];
+      _codeMeta = null;
       _apiRelated = const [];
       _folderItems = const [];
       _folderLoading = false;
@@ -489,6 +530,7 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_loadTmdb(merged));
       unawaited(_loadRecommended(merged, generation));
       unawaited(_loadSeriesApi(merged, generation));
+      unawaited(_refreshCodeMeta(merged, generation));
       if (_isFolderDrama(merged)) {
         unawaited(_loadFolder(reset: true));
       }
@@ -1095,17 +1137,19 @@ class _DetailScreenState extends State<DetailScreen> {
                                       if (!_embeddedFullscreen) ...[
                                         if (_isFolderDrama(drama) &&
                                             _folderFailed)
-                                          _folderErrorBanner(),
+                                          _folderErrorBanner(episodes),
                                         _seriesSelector(drama),
                                         _lineSelector(),
-                                        Expanded(
-                                          child: EpisodeBrowser(
-                                            episodes: episodes,
-                                            currentNumber: watched?.episode,
-                                            autofocus: true,
-                                            onSelected: (index) => _play(index),
+                                        // 2026-11-24 用户令：只有一集时不画选集区。
+                                        if (episodes.length > 1)
+                                          Expanded(
+                                            child: EpisodeBrowser(
+                                              episodes: episodes,
+                                              currentNumber: watched?.episode,
+                                              autofocus: true,
+                                              onSelected: (index) => _play(index),
+                                            ),
                                           ),
-                                        ),
                                       ],
                                     ],
                                   ),
@@ -1251,7 +1295,7 @@ class _DetailScreenState extends State<DetailScreen> {
                               ] else ...[
                                 if (_isFolderDrama(drama) && _folderFailed)
                                   SliverToBoxAdapter(
-                                    child: _folderErrorBanner(),
+                                    child: _folderErrorBanner(episodes),
                                   ),
                                 SliverToBoxAdapter(
                                   child: _seriesSelector(drama),
@@ -1264,22 +1308,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                     expanded: showEpisodes,
                                   ),
                                 ),
-                                SliverToBoxAdapter(
-                                  child: SwitchListTile(
-                                    key: const ValueKey(
-                                      'detail-auto-write-site-db-switch',
-                                    ),
-                                    title: const Text('自动写入站点库'),
-                                    subtitle: const Text(
-                                      '播起来后把能播的片记进站点库，播不了的不记',
-                                    ),
-                                    value: _viewing.autoWriteSiteDb,
-                                    onChanged: (value) => _updateViewing(
-                                      _viewing.copyWith(autoWriteSiteDb: value),
-                                    ),
-                                  ),
-                                ),
-                                if (showEpisodes) ...[
+                                // 2026-11-24 用户令：详情页自动写入开关隐藏
+                                // （功能默认开，开关只留在设置页）。
+                                if (showEpisodes && episodes.length > 1) ...[
                                   SliverToBoxAdapter(
                                     child: EpisodeRangeBar(
                                       key: _episodeAnchor,
@@ -1566,9 +1597,21 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  /// 详情页是不是短剧站的（短剧区登记 SourceSite.section == 'drama'）：
+  /// 短剧站不插演员区、不做番号匹配；其余站（视频区/未注册/自定义）都插。
+  bool _isShortDramaSource(Drama drama) {
+    final id = drama.sourceId;
+    if (id.isEmpty || !SourceSite.isKnown(id)) return false;
+    return SourceSite.byId(id).isDramaSection;
+  }
+
   Widget _descriptionSection(Drama drama) {
     final tmdbOverview = _tmdb?.overview ?? '';
-    final overview = tmdbOverview.isNotEmpty ? tmdbOverview : drama.description;
+    final rawOverview =
+        tmdbOverview.isNotEmpty ? tmdbOverview : drama.description;
+    // 站点简介常带 HTML（女优库 vod_content 如 <p>...</p>），直接显示会露出标签；
+    // 先拆段去标签再显示，纯文本简介不受影响。
+    final overview = htmlToParagraphs(rawOverview).join('\n');
     final fromTmdb = tmdbOverview.isNotEmpty;
     if (overview.isEmpty) return const SizedBox.shrink();
     final colors = Theme.of(context).colorScheme;
@@ -1777,7 +1820,9 @@ class _DetailScreenState extends State<DetailScreen> {
           const SizedBox(height: 12),
           LayoutBuilder(
             builder: (context, constraints) {
-              final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
+              // 2026-11-24 用户令：推荐视频卡片小一半——列宽档 150→85，
+              // 390 宽手机 4 列（单卡约 90 宽，原 2 列约 175 宽）。
+              final columns = (constraints.maxWidth / 85).floor().clamp(2, 6);
               final tileWidth =
                   (constraints.maxWidth - (columns - 1) * 10) / columns;
               return GridView.builder(
@@ -1855,8 +1900,10 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   /// 文件夹目录失败横条：目录失败/回空时退回选集 UI，本横条留在
-  /// 选集区上方提示重试，不留空白页。
-  Widget _folderErrorBanner() {
+  /// 选集区上方提示重试，不留空白页。只有一集时选集区本身不画
+  /// （2026-11-24 用户令），文案不说“已显示选集”。
+  Widget _folderErrorBanner(List<Episode> episodes) {
+    final shown = episodes.length > 1 ? '，已显示选集' : '';
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
       child: Material(
@@ -1866,7 +1913,7 @@ class _DetailScreenState extends State<DetailScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              const Expanded(child: Text('作品列表加载失败，已显示选集')),
+              Expanded(child: Text('作品列表加载失败$shown')),
               TextButton(
                 key: const ValueKey('folder-retry'),
                 onPressed: () => unawaited(_loadFolder(reset: true)),
@@ -1913,7 +1960,9 @@ class _DetailScreenState extends State<DetailScreen> {
           const SizedBox(height: 12),
           LayoutBuilder(
             builder: (context, constraints) {
-              final columns = (constraints.maxWidth / 150).floor().clamp(2, 6);
+              // 2026-11-24 用户令：相关推荐卡片小一半——与推荐视频同一档
+              // （列宽档 150→85，390 宽手机 4 列，单卡约 90 宽）。
+              final columns = (constraints.maxWidth / 85).floor().clamp(2, 6);
               final tileWidth =
                   (constraints.maxWidth - (columns - 1) * 10) / columns;
               return GridView.builder(
@@ -1987,6 +2036,9 @@ class _DetailScreenState extends State<DetailScreen> {
     required int? currentNumber,
     required bool expanded,
   }) {
+    // 2026-11-24 用户令：只有一集时不画选集区（选集超过 1 集才出现）；
+    // 单集点海报播。
+    if (episodes.length <= 1) return const SizedBox.shrink();
     final colors = Theme.of(context).colorScheme;
     final current = currentNumber == null ? '' : ' · 当前第 $currentNumber 集';
     return Padding(
@@ -2120,9 +2172,83 @@ class _DetailScreenState extends State<DetailScreen> {
     ).showSnackBar(const SnackBar(content: Text('标签浏览入口待接入')));
   }
 
+  /// 头区演员行是否显示：非短剧、非文件夹，且匹配到了演员或导演。
+  bool _showCastRow(Drama drama) {
+    final meta = _codeMeta;
+    if (meta == null || drama.isFolder || _isShortDramaSource(drama)) {
+      return false;
+    }
+    return meta.cast.isNotEmpty || meta.director.isNotEmpty;
+  }
+
+  /// 演员小头像 + 名字横排（2026-11-24 用户令：显示在“成人影片”
+  /// 下面这一行）。点头像名字走标签搜索（与原来文字标签同一入口）。
+  Widget _castChipsRow(Drama drama) {
+    final meta = _codeMeta!;
+    final cast = meta.castWithAvatars;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final actor in cast)
+            ActionChip(
+              key: ValueKey('cast-${actor.name}'),
+              avatar: ActressAvatar(
+                avatarUrl: actor.avatarUrl,
+                name: actor.name,
+                radius: 12,
+              ),
+              label: Text(actor.name),
+              onPressed: () => _onTagPressed(
+                drama,
+                DetailTag(id: actor.name, name: actor.name),
+              ),
+            ),
+          if (meta.director.isNotEmpty)
+            Chip(label: Text('导演：${meta.director}')),
+        ],
+      ),
+    );
+  }
+
+  /// 标签行：演员行已显示时，把演员标签藏掉（不与头像行重复显示
+  /// 同一个人）。标签名常把多人用“、”拼成一个（如“佐佐木明希、岸和水”），
+  /// 拆开后任一部分对上演员名即算演员标签。名字比对先把“々”展开
+  /// （佐々木 → 佐佐木）。
+  List<DetailTag> _visibleTags(Drama drama) {
+    final tags = _effectiveTags(drama);
+    final meta = _codeMeta;
+    if (meta == null || meta.cast.isEmpty) return tags;
+    final castNames = meta.cast.map(_normalizeName).toSet();
+    return tags.where((tag) {
+      final parts = tag.name
+          .split(RegExp(r'[、，,;；\s]+'))
+          .where((s) => s.isNotEmpty);
+      return !parts.any((p) => castNames.contains(_normalizeName(p)));
+    }).toList();
+  }
+
+  /// 名字归一：去首尾空白；“々”展开成前一字。
+  String _normalizeName(String name) {
+    final out = StringBuffer();
+    var prev = '';
+    for (final ch in name.trim().split('')) {
+      if (ch == '々' && prev.isNotEmpty) {
+        out.write(prev);
+      } else {
+        out.write(ch);
+        prev = ch;
+      }
+    }
+    return out.toString();
+  }
+
   Widget _overview(Drama drama) {
     final colors = Theme.of(context).colorScheme;
     final shown = _tmdbPosterDrama(drama);
+    final visibleTags = _visibleTags(drama);
     final meta = [
       SourceSite.byId(drama.source).name,
       if (drama.episodes > 0) '共 ${drama.episodes} 集',
@@ -2184,6 +2310,7 @@ class _DetailScreenState extends State<DetailScreen> {
             ),
           ],
         ),
+        if (_showCastRow(drama)) _castChipsRow(drama),
         const SizedBox(height: 12),
         _sourceSwitcher(drama),
         if (drama.onlineDate.isNotEmpty ||
@@ -2200,14 +2327,14 @@ class _DetailScreenState extends State<DetailScreen> {
               style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
             ),
           ),
-        if (_effectiveTags(drama).isNotEmpty)
+        if (visibleTags.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                for (final tag in _effectiveTags(drama).take(12))
+                for (final tag in visibleTags.take(12))
                   ActionChip(
                     key: ValueKey('detail-tag-${tag.id}'),
                     label: Text(tag.name),

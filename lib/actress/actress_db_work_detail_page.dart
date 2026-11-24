@@ -5,6 +5,7 @@ import '../core_bridge.dart';
 import '../local_store.dart';
 import '../player_picker.dart';
 import 'actress_generic_db.dart';
+import 'code_meta_section.dart';
 
 /// 外来库作品详情页（2026-11-22 用户令）：
 /// 浏览链是 分类卡片 → 子分类卡片 → 视频卡片 → 这里 → 播放。
@@ -166,6 +167,10 @@ class ActressDbWorkDetailPage extends StatelessWidget {
                         ),
                     ],
                   ),
+                CodeMetaSection(
+                  dramaId: work.code,
+                  title: work.displayTitle,
+                ),
                 const SizedBox(height: 18),
                 Text(
                   '播放地址',

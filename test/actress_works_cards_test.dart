@@ -702,8 +702,10 @@ void main() {
 
     testWidgets('目录失败退回选集 UI 并提示重试，重试后出网格', (tester) async {
       await pumpFolderDetail(tester, items: folderItems(3), failCatalog: true);
-      expect(find.text('选集 · 1 集'), findsOneWidget);
-      expect(find.text('作品列表加载失败，已显示选集'), findsOneWidget);
+      // 2026-11-24 用户令：只有一集时不画选集区（文件夹这部只有 1 集），
+      // 只留失败横条（文案不说“已显示选集”）与重试。
+      expect(find.text('选集 · 1 集'), findsNothing);
+      expect(find.text('作品列表加载失败'), findsOneWidget);
       repository.catalogFail = false;
       await tester.tap(find.byKey(const ValueKey('folder-retry')));
       for (var i = 0; i < 60; i++) {

@@ -9,6 +9,7 @@ import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_neon.dart';
 import 'actress_widgets.dart';
+import 'whos_json_index.dart';
 import '../app_page_route.dart';
 import '../core_bridge.dart';
 import '../detail_screen.dart';
@@ -90,6 +91,18 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// 某番号竞速赢过一次后，下次点同一番号直接用缓存的已验活
   /// 地址开页，不再等竞速。只活在 App 本次运行里，重启即清空。
   static final Map<String, DramaDetail> _verifiedDetailCache = {};
+
+  /// 已加载的数据库作品数（翻页 offset 用它，不用 _works.length——
+  /// _works 里还混着 json 补的作品，用它当 offset 会跳过数据库作品）。
+  var _dbWorksCount = 0;
+
+  /// json 补的作品数（只在无分类筛选时补，见 _supplementJsonWorks）。
+  var _jsonWorksCount = 0;
+
+  /// 头顶“作品 N 部”显示的总数：数据库入库数 + json 补的数（无筛选时）。
+  /// 选了分类也不变（只算入库总数，不受筛选影响）；json 没补上之前
+  /// 先显示数据库数，补上后再加。0 表示还没算出来，用人物行的数兜底。
+  var _headerTotal = 0;
 
   /// 分类筛选：null = 全部；其余为该女优作品里实际存在的分类名。
   /// 头顶“作品 N 部”总数不受筛选影响；进出详情页即重置（状态只
@@ -309,6 +322,46 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     } catch (_) {
       // 第二段失败不丢第一段的池子。
     }
+
+    // 第三段：who's.json 内置索引（用户 2026-11-23 21:50 令：女优用 json+db，
+    // db 数据库兜底播放）——库里没有的番号补一条 who's 直链（不过期）。
+    // 放在数据库两段之后：同一番号库里已有地址时去重保留数据库那条，
+    // json 只补库里没有的。失败（索引没建好）不堵池子。
+    try {
+      final index = await WhosJsonIndex.instance;
+      if (!index.isEmpty) {
+        final codes = <String>{};
+        for (final name in [person.displayName, ...person.aliases]) {
+          codes.addAll(index.codesForActor(name));
+        }
+        for (final code in codes) {
+          final video = index.videoForCode(code);
+          if (video == null) continue;
+          addAll([
+            ActressJsonEntry(
+              site: 'whos',
+              vodId: video.code,
+              vodName: video.title,
+              vodPic: video.pic,
+              vodActor: person.displayName,
+              vodDirector: '',
+              vodRemarks: '高清',
+              vodPubdate: '',
+              vodArea: '日本',
+              vodYear: '',
+              vodContent: '',
+              vodPlayFrom: 'whos',
+              vodPlayUrl: '正片\$${video.m3u8}',
+              typeName: '日本AV',
+              vodCode: video.code,
+              vodActressPic: '',
+            ),
+          ]);
+        }
+      }
+    } catch (_) {
+      // json 索引失败不丢数据库池子。
+    }
     if (!mounted) return;
     setState(() => _fallbackEntries = merged);
     // 数据库封面兜底（2026-11-21，DB 行不是 json/m3u）：无封面作品
@@ -368,8 +421,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final person = _person;
     if (person == null) return;
     final generation = _generation;
-    final count = _works.length;
-    if (count == 0) return;
+    final count = _dbWorksCount;
+    if (count == 0 && _works.isEmpty) return;
     final works = await widget.database.worksForPerson(
       person.localId,
       offset: 0,
@@ -384,11 +437,15 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (!mounted || generation != _generation) return;
     setState(() {
       _works = works;
+      _dbWorksCount = works.length;
+      _jsonWorksCount = 0;
       _filteredTotal = filteredTotal;
       _hasMore = works.length < filteredTotal;
       if (freshPerson != null) _person = freshPerson;
     });
     await _loadCategories();
+    // json 补的作品重新补（封面刷新不丢 json 行）。
+    unawaited(_supplementJsonWorks());
   }
 
   void _onScroll() {
@@ -427,10 +484,17 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       if (!mounted || generation != _generation) return;
       setState(() {
         _works = works;
+        _dbWorksCount = works.length;
+        _jsonWorksCount = 0;
         _filteredTotal = filteredTotal;
+        // 无筛选时头顶总数就是数据库总数（json 补上后在 _supplementJsonWorks
+        // 里再加）；选了分类不改头顶总数。
+        if (_selectedCategory == null) _headerTotal = filteredTotal;
         _hasMore = works.length < filteredTotal;
         _loading = false;
       });
+      // 首屏先出数据库作品，json 补的作品后台接上（不 await，不堵首屏）。
+      unawaited(_supplementJsonWorks());
       return;
     }
     if (_loadingMore || !_hasMore) return;
@@ -438,20 +502,168 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     setState(() => _loadingMore = true);
     final works = await widget.database.worksForPerson(
       person.localId,
-      offset: _works.length,
+      offset: _dbWorksCount,
       limit: _pageSize,
       category: _selectedCategory,
     );
     if (!mounted || generation != _generation) return;
     setState(() {
       _works = [..._works, ...works];
+      _dbWorksCount += works.length;
       _hasMore = _works.length < _filteredTotal;
       _loadingMore = false;
     });
   }
 
+  /// who's.json 内置索引补作品（用户 2026-11-23 21:50 令：女优用 json+db）：
+  /// 首屏先显示数据库作品，索引在后台建好后把 json 里有、库里没有的
+  /// 作品补到列表末尾（json 没有日期，排在数据库作品后面）。
+  /// 只在无分类筛选时补——json 视频没有分类（type_name 全是日本AV），
+  /// 选了分类时只显示数据库里有真实分类的作品，不硬凑。
+  /// 不堵首屏：调用方先 setState 显示数据库作品，再调这里（不 await），
+  /// 索引建好后补进来再 setState 一次。
+  Future<void> _supplementJsonWorks() async {
+    final person = _person;
+    if (person == null) return;
+    // 选了分类不补；已补过不再补（翻页不重复）。
+    if (_selectedCategory != null || _jsonWorksCount > 0) return;
+    final generation = _generation;
+    WhosJsonIndex index;
+    try {
+      index = await WhosJsonIndex.instance;
+    } catch (_) {
+      return;
+    }
+    if (!mounted || generation != _generation) return;
+    if (index.isEmpty) return;
+    // 该演员在索引里的全部番号（人名 + 别名都查，合并去重）。
+    final codes = <String>{};
+    for (final name in [person.displayName, ...person.aliases]) {
+      codes.addAll(index.codesForActor(name));
+    }
+    if (codes.isEmpty) return;
+    // 库里已有的番号不重复补（按归一化番号比）。
+    final inDb = <String>{
+      for (final work in _works)
+        if (work.codeKey.isNotEmpty) normalizeAvCode(work.codeKey),
+    };
+    final missing = <String>[
+      for (final code in codes)
+        if (!inDb.contains(normalizeAvCode(code))) code,
+    ];
+    if (missing.isEmpty) return;
+    // 先按 JSON 番号查本地库（2026-11-24 用户令：内置 JSON 索引本地库，
+    // 不同步也能出片播放）：库里有行就按本地库行出片（本地封面/分类/
+    // 播放地址），库里没有才落到 who's 在线目录。素人标签下有番号的
+    // 作品已按番号归到真女优名下（合并映射），这里按番号取库行时只认
+    // 番号、不认 video_actress 的素人标签。分批查（每批 100 个番号），
+    // 避免一次 IN 太大撞上 SQLite 变量上限。
+    final extra = <ActressWork>[];
+    final resolved = <String>{};
+    try {
+      final fallback = widget.fallback ?? ActressJsonFallback();
+      final injectedFilmDb = widget.filmDb;
+      if (injectedFilmDb != null) {
+        fallback.filmDb = injectedFilmDb;
+      } else if (widget.fallback == null) {
+        fallback.filmDb ??=
+            _multiDb ??= MultiDbFilmFallback(database: widget.database);
+      }
+      final site = widget.siteFilter == ActressSiteFilter.all
+          ? null
+          : widget.siteFilter.siteId;
+      final entries = <ActressJsonEntry>[];
+      for (var i = 0; i < missing.length; i += 100) {
+        final end = (i + 100).clamp(0, missing.length);
+        entries.addAll(
+          await _dbEntriesForCodes(
+            fallback,
+            missing.sublist(i, end),
+            site: site,
+          ),
+        );
+      }
+      final seenKeys = <String>{};
+      for (final entry in entries) {
+        final key = normalizeAvCode(entry.vodId);
+        if (key.isEmpty) continue;
+        // 同番号两站各留一条（与列表去重口径一致）；同一站内只留一条。
+        if (!seenKeys.add('${entry.site}|$key')) continue;
+        resolved.add(key);
+        extra.add(_dbEntryToWork(entry, person.localId));
+      }
+    } catch (_) {
+      // 本地库查不到不堵 who's 兜底。
+    }
+    // 库里没有的行才走 who's 在线目录。
+    for (final code in missing) {
+      if (resolved.contains(normalizeAvCode(code))) continue;
+      final video = index.videoForCode(code);
+      if (video == null) continue;
+      extra.add(_whosVideoToWork(video, person.localId));
+    }
+    if (extra.isEmpty) return;
+    if (!mounted || generation != _generation) return;
+    // 再确认一次筛选没变（用户可能在索引加载时切了分类）。
+    if (_selectedCategory != null) return;
+    setState(() {
+      _works = [..._works, ...extra];
+      _jsonWorksCount = extra.length;
+      _filteredTotal += extra.length;
+      _headerTotal = _filteredTotal;
+      _hasMore = _works.length < _filteredTotal;
+    });
+  }
+
+  /// 本地库行（按 JSON 番号查到）转作品卡片（对照 videoLibraryWorkFromRow）：
+  /// id 留 0（不是人物关联表的行，热换库时 _refetchWork 直接留原样）；
+  /// 封面/分类/日期都取本地库行，不走 who's 目录。
+  ActressWork _dbEntryToWork(ActressJsonEntry entry, int personId) {
+    final code = entry.vodId;
+    return ActressWork(
+      id: 0,
+      personId: personId,
+      codeKey: code,
+      titleKey: code,
+      site: entry.site,
+      codeDisplay: code,
+      title: entry.vodName,
+      date: entry.vodPubdate,
+      coverSource: entry.site,
+      coverDramaId: code,
+      coverUrl: entry.vodPic,
+      category: entry.typeName,
+    );
+  }
+
+  /// who's 视频行转 ActressWork（对照 videoLibraryWorkFromRow）：
+  /// id 为 0（不在库里），site/coverSource 记 'whos'，分类为空
+  /// （json 没有分类），日期为空（json 没有日期）。
+  ActressWork _whosVideoToWork(WhosVideo video, int personId) {
+    return ActressWork(
+      id: 0,
+      personId: personId,
+      codeKey: video.code,
+      titleKey: video.code,
+      site: 'whos',
+      codeDisplay: video.code,
+      title: video.title,
+      date: '',
+      coverSource: 'whos',
+      coverDramaId: video.code,
+      coverUrl: video.pic,
+      category: '',
+    );
+  }
+
   /// 按 id 在当前库里重取一部作品（热换库后用）：新库里没有了返回 null。
+  /// id 为 0 的作品都来自 JSON 补充（who's 在线目录，或按 JSON 番号
+  /// 查到的本地库行），直接返回原作品，不按“新库里没有了”处理。
   Future<ActressWork?> _refetchWork(ActressWork work) async {
+    // id 为 0 的作品都来自 JSON 补充（who's 在线目录，或按 JSON 番号
+    // 查到的本地库行）：它们不在人物关联表里，按人重取查不到，留原样；
+    // 播放地址由重建的地址池按番号兜底，不在这里丢掉。
+    if (work.id == 0) return work;
     final person = _person;
     if (person == null) return null;
     final works = await widget.database.worksForPerson(
@@ -926,7 +1138,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '作品 ${person.displayWorks} 部'
+                  '作品 ${_headerTotal > 0 ? _headerTotal : person.displayWorks} 部'
                   '${sexLabel.isEmpty ? '' : ' · $sexLabel'}',
                   style: TextStyle(color: colors.onSurfaceVariant),
                 ),

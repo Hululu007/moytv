@@ -1533,6 +1533,36 @@ void main() {
       expect(find.text('演员排行榜'), findsOneWidget);
     });
 
+    testWidgets('详情页 json 索引补库里没有的作品', (tester) async {
+      // 星冬香在 who's 演员映射里有 JUR-487 / JUVR-316 等番号，
+      // 但库里只给她 1 部测试作品：详情页首屏先出库里那部，
+      // 索引建好后把 json 里有、库里没有的作品补到列表末尾。
+      // 索引加载是真异步（26MB 目录解压 + 解析要数秒），
+      // pumpAndSettle 不等它：用真时间轮询等补充作品出现。
+      final person = await seedPerson('星冬香', works: 1);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ActressDetailPage(
+            localId: person.localId,
+            repository: repository,
+            store: store,
+            database: db,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('TST-1'), findsOneWidget);
+      for (var i = 0; i < 60; i++) {
+        if (find.text('JUR-487').evaluate().isNotEmpty) break;
+        await tester.runAsync(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        });
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.text('JUR-487'), findsOneWidget);
+      expect(find.text('JUVR-316'), findsOneWidget);
+    });
+
     testWidgets('详情页作品按卡片网格展示', (tester) async {
       final person = await seedPerson('女演员甲', works: 0);
       await db.upsertWorks(person.localId, const [
