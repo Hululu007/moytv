@@ -853,6 +853,9 @@ class SourceSite {
     // 不是访问控制（导入站走 allowsSource 直接放行）。
     'idj_chaoliu',
     'idj_ai2048',
+    'idj_porntube',
+    'idj_qiyoushe',
+    'idj_hqporner',
   };
 }
 

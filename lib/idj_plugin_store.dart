@@ -1518,12 +1518,16 @@ class IdjPluginRegistry {
   /// 调用方（插件 tab）自己调刷新。测试可直接置这个回调断言刷新被调到。
   static void Function()? onRegistryChanged;
 
-  /// 显示名加 🔞 前缀的插件 id（用户定的分区：潮流AV、2048AI）。
+  /// 显示名加 🔞 前缀的插件 id（用户定的分区：潮流AV、2048AI，
+  /// 2026-11-24 新增 PornTube、妻友社、HQPorner 三站）。
   /// 注意不是按 `manifest.adult` 判定——4 个 manifest 的 adult 全是
   /// true，按它推会把短剧站也判成人。
   static const Set<String> adultDisplayPluginIds = {
     'com.idj.ext.chaoliu',
     'com.idj.ext.ai2048',
+    'com.idj.ext.porntube',
+    'com.idj.ext.qiyoushe',
+    'com.idj.ext.hqporner',
   };
 
   /// 短剧分区的插件 id（用户定的分区：橙果短剧、爱果短剧）。
