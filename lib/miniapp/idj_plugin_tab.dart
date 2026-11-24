@@ -798,7 +798,8 @@ class IdjPluginTabState extends State<IdjPluginTab> {
   bool _busyInstalling = false;
   bool _checkingUpdates = false;
   final Set<String> _installingIds = {};
-  final Set<String> _expandedSubs = {};
+  // 内置远程仓库默认展开：打开市场直接看到远程插件列表，不用再点一下。
+  final Set<String> _expandedSubs = {idjBuiltInSubscriptionUrl};
 
   @override
   void initState() {
@@ -1439,6 +1440,7 @@ class IdjPluginTabState extends State<IdjPluginTab> {
 
   Widget _subscriptionCard(IdjSubscription subscription, ColorScheme colors) {
     final expanded = _expandedSubs.contains(subscription.url);
+    final builtIn = idjIsBuiltInSubscription(subscription.url);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -1465,12 +1467,40 @@ class IdjPluginTabState extends State<IdjPluginTab> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        subscription.name.isEmpty ? '订阅' : subscription.name,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              subscription.name.isEmpty
+                                  ? '订阅'
+                                  : subscription.name,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          if (builtIn)
+                            Container(
+                              key: const ValueKey('idj-builtin-badge'),
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colors.primaryContainer,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '内置',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: colors.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       Text(
                         subscription.url,
@@ -1490,12 +1520,14 @@ class IdjPluginTabState extends State<IdjPluginTab> {
                   tooltip: '刷新订阅',
                   onPressed: _refreshSubscriptions,
                 ),
-                IconButton(
-                  key: ValueKey('idj-sub-delete-${subscription.url}'),
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  tooltip: '删除订阅',
-                  onPressed: () => _removeSubscription(subscription),
-                ),
+                // 内置远程仓库不可删：只给刷新，不给删除按钮。
+                if (!builtIn)
+                  IconButton(
+                    key: ValueKey('idj-sub-delete-${subscription.url}'),
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    tooltip: '删除订阅',
+                    onPressed: () => _removeSubscription(subscription),
+                  ),
                 Icon(
                   expanded ? Icons.expand_less : Icons.expand_more,
                   size: 20,

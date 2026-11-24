@@ -33,6 +33,19 @@ const String idjPluginsPrefsKey = 'moyi_idj_plugins';
 /// 订阅地址列表的 SharedPreferences 键：只存地址，订阅内容不持久化。
 const String idjSubscriptionsPrefsKey = 'moyi_idj_subscriptions';
 
+/// 内置远程仓库（用户 18:10 令）：moytv 仓库 `plugins` 分支的订阅索引。
+/// 打开市场自动拉取，不用手动贴订阅地址；插件本身仍不预装、不预注册，
+/// 只展示、逐个点安装。分支还没推上去时拉取失败只记 error、不拦市场。
+/// 索引格式与转换工人的产物对齐：`{"name", "plugins": [...], "cms": []}`，
+/// 插件条目的 `manifest` 是相对索引地址的包路径（如 `porntube/porntube.idjplugin`），
+/// 索引在分支根目录（地址经转换工人 2026-11-24 交卷确认）。
+const String idjBuiltInSubscriptionUrl =
+    'https://raw.githubusercontent.com/hoyittvggfh45/moytv/plugins/index.json';
+
+/// 内置订阅不可删：[IdjPluginStore.removeSubscription] 遇到它直接返回。
+bool idjIsBuiltInSubscription(String url) =>
+    url.trim() == idjBuiltInSubscriptionUrl;
+
 /// 安装器下载的 UA：`Moyi/<App 真实版本> plugin-installer`。
 /// 版本号与 `pubspec.yaml` 的 `version` 保持一致，改版时同步改这里。
 const String idjInstallerAppVersion = '1.0.9+34';
@@ -945,7 +958,28 @@ class IdjPluginStore {
 
   /// 看门狗（设计 §2.3）：连续 3 次失败自动停用并记日志，
   /// 用户在插件 tab 里可手动再启用（计数随启用清零）。
-  Future<void> recordFailure(String pluginId) async {
+  ///
+  /// 网络/环境类错误不计数：它们是出口、站方或限流问题，不是插件坏了。
+  /// 进站一次要调分类 + 列表，失败时界面还会自动补拉 2 次，一次断网
+  /// 就能烧掉 3 次计数——按老规则一次断网就把插件悄悄停用、站点从
+  /// 片库消失（2026-11-24 用户报 4 个插件都拿不到数据后复查发现）。
+  /// 只有插件/站点本身的错误（解析、空数据、404、HTTP 异常等）才计数。
+  /// 注意插件侧的网络码是 E_NET（Go 侧是 E_NETWORK），两个都要认；
+  /// E_BLOCKED/E_AUTH 也是出口相关（站方拦了当前出口、要登录/过年龄
+  /// 确认），同样不计数。
+  static const _transientFailureCodes = {
+    'E_NET',
+    'E_NETWORK',
+    'E_TIMEOUT',
+    'E_CF_REQUIRED',
+    'E_DNS',
+    'E_RATE_LIMIT',
+    'E_BLOCKED',
+    'E_AUTH',
+  };
+
+  Future<void> recordFailure(String pluginId, {String code = ''}) async {
+    if (_transientFailureCodes.contains(code)) return;
     final index = await readIndex();
     final entry = index[pluginId];
     if (entry == null) return;
@@ -1358,8 +1392,14 @@ class IdjPluginStore {
   }
 
   /// 订阅内容不持久化：每次打开 tab 时重拉；失败只记 error 不丢旧列表。
+  /// 内置远程仓库永远排第一（用户自己又贴了同一地址也不重复拉）。
   Future<List<IdjSubscription>> loadSubscriptions() async {
-    final urls = await _subscriptionUrls();
+    final userUrls = await _subscriptionUrls();
+    final urls = <String>[
+      idjBuiltInSubscriptionUrl,
+      for (final url in userUrls)
+        if (url != idjBuiltInSubscriptionUrl) url,
+    ];
     final result = <IdjSubscription>[];
     for (final url in urls) {
       final uri = Uri.tryParse(url);
@@ -1430,7 +1470,9 @@ class IdjPluginStore {
   }
 
   /// 删除订阅只删地址，不卸载已装插件（已装插件独立存在）。
+  /// 内置远程仓库不可删：删它直接返回，[loadSubscriptions] 下次照样拉它。
   Future<void> removeSubscription(String url) async {
+    if (idjIsBuiltInSubscription(url)) return;
     final urls = await _subscriptionUrls();
     await _saveSubscriptionUrls(urls.where((item) => item != url).toList());
     _subscriptionCache.remove(url);

@@ -250,7 +250,7 @@ host 注入方式：iDuanJu 是 `globalThis.__host(name, json)` + prelude 拼对
 | `timeout` 单位毫秒 | 每插件建 client 时 `Timeout = timeout`（插件用 15000/20000/25000）；无 timeout 时默认 25 秒；**不得超过 Dart 70 秒总预算** |
 | 响应头键小写 | 返回前把键统一 `strings.ToLower`（2048 的 `follow()` 读 `location` 就靠这个） |
 | `body` 是字符串 | 保持；非 UTF-8 体按原字节转字符串，不做转码 |
-| 禁发头剥离 | 发请求前删掉：`cookie`、`cookie2`、`host`、`authorization` 及 iDuanJu 禁发表其余项（以 `repo/STV/Plugins/PluginNet.swift:207-208` 的 12 项为准抄全表，**不要猜**）。**这是潮流年龄验证的前提**：插件自带的 `Cookie:` 头必须剥掉，改由 Cookie 罐自动带 |
+| 禁发头剥离 | 发请求前删掉：`cookie`、`cookie2`、`host` 及 iDuanJu 禁发表其余项（以 `repo/STV/Plugins/PluginNet.swift:207-208` 的 12 项为准抄全表，**不要猜**——唯独 `authorization` 不在内，用户 2026-11-24 18:40 令宿主放行它，妻友社站方要这个头）。**这是潮流年龄验证的前提**：插件自带的 `Cookie:` 头必须剥掉，改由 Cookie 罐自动带 |
 | 每插件独立 Cookie 罐自动带 Cookie | 见 §2.4（持久化设计） |
 | 域名白名单（manifest.http，含 `*.` 通配；跳转落点也查） | 见 §2.6 |
 | 单次调用请求数上限 | 每调用计数，上限 60，超了返回 `host.error('E_RATE_LIMIT', …)`（信息带插件名与已用次数，方便定位；潮流最坏情况会撞线，见 §9） |
@@ -583,7 +583,7 @@ iDuanJu 仓库（`my-name-is-alan/iDuanJu`）是 GPL-3.0。魔蚁只按**接口�
 | `repo/STVTests/PluginTests.swift` 的契约 | 宿主测试里的契约断言 | 安装校验、host 行为、错误映射的期望（读断言，不抄实现） |
 | `repo/scripts/pack-plugins.py`（29 行打包算法） | 打包算法 | integrity 哈希算法：entry 脚本 SHA-256 + base64 → `manifest.integrity.files[entry]`（算法本身，不是代码复制） |
 | RE 报告 §2–§9 观测到的行为 | 逆向观测 | 4 个插件实际用的入口、真实返回形状、真实传参差异（§9.7）、限额数值 |
-| `repo/STV/Plugins/PluginNet.swift:207-208` 的禁发头表 | 12 项禁发头清单 | `host.http.request` 发请求前删哪些头（抄**清单**，不抄 `perform()` 实现） |
+| `repo/STV/Plugins/PluginNet.swift:207-208` 的禁发头表 | 11 项禁发头清单（原 12 项减 `authorization`，用户 2026-11-24 18:40 令放行） | `host.http.request` 发请求前删哪些头（抄**清单**，不抄 `perform()` 实现） |
 | `repo` 的 `DomainPolicy` 源码 | 白名单匹配语义 | `*.example.com` 匹配几层子域（实施时读一次，不要猜） |
 
 ### 7.2 必须自己重写的实现（不得粘贴 iDuanJu 的 Kotlin/Swift 代码）

@@ -1199,10 +1199,13 @@ func idjStorageValueString(v goja.Value) string {
 // host.http：request/get/post/allowed
 // ---------------------------------------------------------------------------
 
-// idjForbiddenHeaders 是禁发头精确 12 项，照抄
-// PluginNet.swift:207-208 的清单，不许猜。
+// idjForbiddenHeaders 是禁发头精确 11 项：照抄
+// PluginNet.swift:207-208 的清单，不许猜——唯独 `authorization` 不在内：
+// 用户 2026-11-24 18:40 令宿主放行 Authorization 头（妻友社站方列表 / 详情 /
+// 搜索 / 播放全要这个头，token 是插件自己游客登录拿到的，宿主只放行、不碰
+// 别的鉴权逻辑）。其余 11 项（Cookie、Host、代理相关、连接控制类）照旧剥离。
 var idjForbiddenHeaders = map[string]bool{
-	"cookie": true, "cookie2": true, "host": true, "authorization": true,
+	"cookie": true, "cookie2": true, "host": true,
 	"proxy-authorization": true, "connection": true, "content-length": true,
 	"transfer-encoding": true, "te": true, "upgrade": true,
 	"proxy-connection": true, "keep-alive": true,
