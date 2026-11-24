@@ -15,7 +15,6 @@ import 'package:moyi/actress/actress_roster_sources.dart';
 import 'package:moyi/actress/actress_site_crawl.dart';
 import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/local_store.dart';
-import 'package:moyi/models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';

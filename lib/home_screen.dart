@@ -622,13 +622,17 @@ class _HomeScreenState extends State<HomeScreen>
   bool get _canSwitchSource =>
       _librarySources.length + (_sourceGroups.length > 1 ? 1 : 0) > 1;
 
+  /// 片库站点切换弹窗的分组数据：按内容类别分（短剧类/视频类/午夜类，
+  /// 见 `SourceGroup.pickerCategoryGroups`，设计 §5.3），不再按
+  /// 内置/导入来源分。`__all__` 特殊条目置顶单独一行（全宽），
+  /// 不计入任何组的数量与副标题总数。
   List<SourcePickerGroup> _sourcePickerGroups() => [
     if (_sourceGroups.length > 1)
       const SourcePickerGroup(
         title: '',
         entries: [SourcePickerEntry(id: _allSourcesEntryId, name: '全部站源')],
       ),
-    for (final group in SourceGroup.sectionGroups(_librarySources))
+    for (final group in SourceGroup.pickerCategoryGroups(_librarySources))
       SourcePickerGroup(
         title: group.name,
         entries: [
@@ -641,10 +645,6 @@ class _HomeScreenState extends State<HomeScreen>
                   site.origin == SourceSite.originBuiltin,
             ),
         ],
-        // 双区翻页分区：内置组进内置区，导入/导入配置组进导入区。
-        zone: group.origin == SourceSite.originBuiltin
-            ? SourcePickerGroup.zoneBuiltin
-            : SourcePickerGroup.zoneImport,
       ),
   ];
 
@@ -652,7 +652,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _pickSource({
     bool editMode = false,
-    int initialZoneIndex = 0,
+    String? scrollToId,
   }) async {
     final picked = await showSitePickerDialog(
       context,
@@ -662,6 +662,9 @@ class _HomeScreenState extends State<HomeScreen>
       initialEditMode: editMode,
       onDeleteSite: _deleteSourceEntry,
       onImport: () async {
+        // 导入成功后重开弹窗：没有导入区了，改为自动滚到新装的站
+        // （导入前后比对站 id，取新出现的那一个定位）。
+        final before = _librarySources.map((site) => site.id).toSet();
         final imported = await showSiteImportFlow(
           context: context,
           repository: widget.repository,
@@ -669,12 +672,18 @@ class _HomeScreenState extends State<HomeScreen>
         );
         if (imported && mounted) {
           setState(() {});
-          // 导入成功自动进导入区：重开弹窗并切到导入区。
-          unawaited(_pickSource(initialZoneIndex: 1));
+          final added = _librarySources
+              .map((site) => site.id)
+              .where((id) => !before.contains(id))
+              .toList();
+          unawaited(
+            _pickSource(scrollToId: added.isEmpty ? null : added.first),
+          );
         }
       },
-      enableZoneFlip: true,
-      initialZoneIndex: initialZoneIndex,
+      // 分组改按内容后内置区/导入区翻页失去意义，片库调用取消
+      // enableZoneFlip；参数与区签实现保留在弹窗里不删。
+      scrollToId: scrollToId,
     );
     if (picked == null || !mounted) return;
     _applySourcePick(picked);

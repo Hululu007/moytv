@@ -127,7 +127,13 @@ class CatalogBrowser {
     for (final source in group.sources) {
       for (final category in _menus[source.id] ?? const <CatalogCategory>[]) {
         if (category.id.isEmpty) continue;
-        final name = categoryName(category.name);
+        // idj 站的分类绕过 categoryName() 归一化：合并键与显示名都用
+        // 插件返回的原名（用户令：分类名不写死、不改名）；本地分类仍走
+        // categoryName() 不动。
+        final rawName = category.name.trim();
+        final name = NativeRepository.isIdjSource(source.id)
+            ? (rawName.isEmpty ? category.id : rawName)
+            : categoryName(category.name);
         final choice = choices.putIfAbsent(
           name,
           () => _CatalogChoice(CatalogCategory('category:$name', name)),

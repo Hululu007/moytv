@@ -21,6 +21,8 @@ import 'jar_youtube_takeover.dart';
 import 'danmaku_models.dart';
 import 'hongguo_comment.dart';
 import 'import_file_store.dart';
+import 'idj_contract.dart';
+import 'idj_plugin_store.dart';
 import 'js_lazy_fetch.dart';
 import 'py_bridge.dart';
 import 'py_lazy_fetch.dart';
@@ -837,6 +839,88 @@ class NativeRepository extends AppRepository {
       SourceSite.importedSites[source]?.importType == 'jsonlist';
   static bool isJsSource(String source) =>
       SourceSite.importedSites[source]?.importType == 'js';
+
+  /// idj 插件站：站 key 以 `idj_` 开头（`idj_chengguo` 等），
+  /// 在 `isJsSource` 的分支内再分流，走 `_idjCall` + `IdjContract`。
+  static bool isIdjSource(String source) => source.startsWith('idj_');
+
+  /// idj 插件包（唯一事实来源）：按登记的 `importExt`（插件 id）
+  /// 从包文件读 manifest + 入口脚本。
+  Future<IdjPluginBundle> _idjBundle(String source) async {
+    final pluginId = SourceSite.importedSites[source]?.importExt ?? '';
+    if (pluginId.isEmpty) {
+      throw AppFailure('插件未注册，请重新安装');
+    }
+    final bundle = await IdjPluginStore().readBundle(pluginId);
+    if (bundle == null) {
+      throw AppFailure('插件包文件已损坏，请重新安装');
+    }
+    return bundle;
+  }
+
+  Future<IdjPluginManifest> _idjManifest(String source) async =>
+      (await _idjBundle(source)).manifest;
+
+  /// idj 调用（照抄 `_jsCall` 结构，action 改 `'idjCall'`）：
+  /// 信封按 Go 工人落定的 `nativeInput` 字段走——脚本走 `content`，
+  /// manifest 走已有的 `manifest`（JSON 字符串），`pluginId` / `fn` /
+  /// `args` 走新增的三个字段（全是字符串，`args` 是 JSON 编码后的
+  /// 单对象参数）；返回 `{"result": …}`。
+  /// `fn` 是插件入口名（`home` / `category` / `search` / `detail` /
+  /// `player` / `__probe` / `__has`）。`player` 只传 `flag` 与 `playId`，
+  /// play 的传参修复（`play({id: episodeId, episodeId, line})`）由 Go 侧
+  /// `idjParseArg` 组装，Dart 侧不要再包一层。
+  /// 每次调用后调看门狗：成功清零、失败 +1（连续 3 次自动停用；
+  /// Go 只原样返回带码错误，计数与停用都在 Dart 这边做）。
+  Future<Map<String, dynamic>> _idjCall(
+    String source,
+    String fn, {
+    Map<String, dynamic> args = const {},
+  }) async {
+    _authorize(source);
+    final bundle = await _idjBundle(source);
+    final store = IdjPluginStore();
+    try {
+      final result = await _call({
+        'action': 'idjCall',
+        'pluginId': bundle.manifest.id,
+        'content': bundle.script,
+        'manifest': jsonEncode(bundle.manifest.raw),
+        'fn': fn,
+        'args': jsonEncode(args),
+      });
+      await store.recordSuccess(bundle.manifest.id);
+      final inner = result['result'];
+      if (inner is Map) return Map<String, dynamic>.from(inner);
+      return {};
+    } catch (error) {
+      await store.recordFailure(bundle.manifest.id);
+      rethrow;
+    }
+  }
+
+  /// probe 试加载入口（供 `IdjPluginStore.probeHandler` 接线，
+  /// `main.dart` 里接到这里）：安装时包还没落盘，所以不走 `_idjBundle`，
+  /// 脚本与 manifest 由调用方直接传进来；Go 侧以 `fn: '__probe'`
+  /// 新建 runtime 跑 prelude、加载入口脚本、调一次 `init({})`（若导出）、
+  /// 检查能力函数是否齐全（缺失报错写明缺哪个函数）。
+  Future<Map<String, dynamic>> idjProbe(
+    String pluginId,
+    String script,
+    Map<String, dynamic> manifest,
+  ) async {
+    final result = await _call({
+      'action': 'idjCall',
+      'pluginId': pluginId,
+      'content': script,
+      'manifest': jsonEncode(manifest),
+      'fn': '__probe',
+      'args': '{}',
+    });
+    final inner = result['result'];
+    if (inner is Map) return Map<String, dynamic>.from(inner);
+    return {};
+  }
 
   Future<String> _jsSpiderScript(String source) async {
     final fileName = SourceSite.importedJsFiles[source];
@@ -2296,6 +2380,10 @@ class NativeRepository extends AppRepository {
       return PyContract.categoriesFromHome(home);
     }
     if (isJsSource(source)) {
+      if (isIdjSource(source)) {
+        final home = await _idjCall(source, 'home');
+        return IdjContract.categoriesFromHome(home);
+      }
       final home = await _jsCall(source, 'home');
       return PyContract.categoriesFromHome(home);
     }
@@ -2386,6 +2474,32 @@ class NativeRepository extends AppRepository {
       return result;
     }
     if (isJsSource(source)) {
+      if (isIdjSource(source)) {
+        if (query.isNotEmpty) {
+          final result = await _idjCall(
+            source,
+            'search',
+            args: {'keyword': query, 'page': page},
+          );
+          return IdjContract.pageFromResult(source, result, page: page);
+        }
+        if (category.isEmpty) {
+          // 空分类拦截保留：不调 `category({id: ''})`（潮流会抛 E_ARGS），
+          // 改调 `home()` 取首页内容；2048 的 home hasMore 恒 true，
+          // 只取第一页、不追翻页。
+          if (page > 1) {
+            return CatalogPage(const [], hasMore: false, page: page);
+          }
+          final home = await _idjCall(source, 'home');
+          return IdjContract.pageFromResult(source, home, page: page);
+        }
+        final result = await _idjCall(
+          source,
+          'category',
+          args: {'id': category, 'page': page},
+        );
+        return IdjContract.pageFromResult(source, result, page: page);
+      }
       if (query.isNotEmpty) {
         final result = await _jsCall(
           source,
@@ -2814,6 +2928,14 @@ class NativeRepository extends AppRepository {
           : drama.id.startsWith('${drama.source}:')
           ? drama.id.substring(drama.source.length + 1)
           : drama.id;
+      if (isIdjSource(drama.source)) {
+        final result = await _idjCall(
+          drama.source,
+          'detail',
+          args: {'id': vodId},
+        );
+        return IdjContract.detailFromResult(drama.source, drama, result);
+      }
       final result = await _jsCall(drama.source, 'detail', vodId: vodId);
       return PyContract.detailFromResult(drama.source, drama, result);
     }
@@ -2974,6 +3096,25 @@ class NativeRepository extends AppRepository {
       }
     }
     if (isJsSource(drama.source)) {
+      if (isIdjSource(drama.source)) {
+        // play 传参：只传 `flag`（线路显示名）与 `playId`（分集键），
+        // Go 侧 `idjParseArg` 组装 `play({id: episodeId, episodeId,
+        // line})`。不这样传橙果 / 爱果会恒播第 1 集、潮流会丢线路选择。
+        final playId = episode.raw['id'] as String? ?? episode.id;
+        final manifest = await _idjManifest(drama.source);
+        final result = await _idjCall(
+          drama.source,
+          'player',
+          args: {
+            'flag': episode.raw['flag'] as String? ?? '',
+            'playId': playId,
+          },
+        );
+        return IdjContract.planFromResult(
+          result,
+          mediaAllowlist: manifest.mediaDomains,
+        );
+      }
       final result = await _jsCall(
         drama.source,
         'player',
@@ -3229,6 +3370,25 @@ class NativeRepository extends AppRepository {
       );
     }
     if (isJsSource(drama.source)) {
+      if (isIdjSource(drama.source)) {
+        // play 传参：只传 `flag`（线路显示名）与 `playId`（分集键），
+        // Go 侧 `idjParseArg` 组装 `play({id: episodeId, episodeId,
+        // line})`。不这样传橙果 / 爱果会恒播第 1 集、潮流会丢线路选择。
+        final playId = episode.raw['id'] as String? ?? episode.id;
+        final manifest = await _idjManifest(drama.source);
+        final result = await _idjCall(
+          drama.source,
+          'player',
+          args: {
+            'flag': episode.raw['flag'] as String? ?? '',
+            'playId': playId,
+          },
+        );
+        return IdjContract.planFromResult(
+          result,
+          mediaAllowlist: manifest.mediaDomains,
+        );
+      }
       final result = await _jsCall(
         drama.source,
         'player',

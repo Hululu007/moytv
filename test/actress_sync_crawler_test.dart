@@ -90,7 +90,6 @@ class _LegRepository extends FixtureRepository {
 class _TrackingRosterSource implements ActressRosterSource {
   _TrackingRosterSource({required this.sourceId, required this.pages});
 
-  @override
   final ActressRosterSourceId sourceId;
   final int pages;
   var inFlight = 0;
