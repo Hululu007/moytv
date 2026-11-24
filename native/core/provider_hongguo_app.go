@@ -135,6 +135,12 @@ type hongguoAppClient struct {
 	cookieExpires map[string]map[string]time.Time
 	// upcoming：批量多取的后续集模型缓存，60 秒有效、领取即删，上限 6 条。
 	upcoming map[string]hongguoUpcomingModel
+	// playbackRoutes：番茄/红果取流梯子各门的冷却与轮换节奏（anon→v5→
+	// model-a→model-c→tab-b），每 Downloader 一份；零值可用、方法内懒初始化。
+	playbackRoutes hongguoPlaybackRouteState
+	// anonIdentity：AnonymousV5 匿名设备注册与缓存（2 小时），只供取流梯子
+	// 首门用；零值可用、方法内懒初始化。
+	anonIdentity hongguoAnonIdentityState
 	// account：账号会话槽，Dart 侧登录成功后经 setter 交进来；账号接口调用时带上。
 	account hongguoAccountSession
 	// qrToken：扫码登录当前二维码的轮询 token；appTicket/appMobile：App 短信登录的会话；

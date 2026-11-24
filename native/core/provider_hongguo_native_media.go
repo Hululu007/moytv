@@ -28,14 +28,14 @@ var hongguoSpadeDerivationConstants = func() []byte {
 	return decoded
 }()
 
-// hongguoAppMediaBudget：一次 App 取流的总预算，V5 单腿链（设备重试与
+// hongguoAppMediaBudget：一次 App 取流的总预算，取流梯子（门内设备重试与
 // 暂态重试）全部包在里面；预算耗尽即交给网页兜底，不再无尽重试拖住播放页。
 // var 供测试收紧预算验证截止行为，生产值不动。
 var hongguoAppMediaBudget = 90 * time.Second
 
 // hongguoAppMediaRotationBackoff：轮换重试间的退避：1s、2s、4s 封顶，
 // 避免新身份立即重撞同一面限流墙。attempt 为轮换次数（从 1 起）。
-// V5 单腿链不再用它（暂态退避走上游 200ms 起翻倍、封顶 5s）；
+// V5 梯子不再用它（暂态退避走上游 200ms 起翻倍、封顶 5s）；
 // 番茄 feed 恢复环仍用它，函数与测试保留。
 func hongguoAppMediaRotationBackoff(attempt int) time.Duration {
 	if attempt < 1 {
@@ -68,10 +68,11 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 }
 
 // resolveHongguoAppMediaWithUpcoming：upcoming 为当前集之后的最多 2 个分集 ID，
-// V5 单腿一次取回后进预取缓存；单集调用传 nil 即可。
-// 链路形态（V5 统一后）：总预算 + 设备续新 + V5 单腿。旧的三腿轮换环、
-// 设备被拒单次重试、海外线重试已随 V5 单腿设计撤掉：V5 端点本身就在
-// 海外 host 上，401/403 才换设备、空回包直接报错（见 provider_hongguo_v5_media.go）。
+// V5 门一次取回后进预取缓存；单集调用传 nil 即可。
+// 链路形态（梯子）：总预算 + 设备续新 + 取流梯子 anon→v5→model-a→model-c→
+// tab-b。旧的三腿轮换环、设备被拒单次重试、海外线重试已随 V5 设计撤掉；
+// 空回包不再直接报错——先同门重探、再降级下一门、至多一次身份轮换后重跑
+// （见 provider_hongguo_v5_media.go）。
 func (downloader *Downloader) resolveHongguoAppMediaWithUpcoming(ctx context.Context, videoID string, upcoming []string) (providerMedia, error) {
 	if !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, errors.New("红果视频 ID 无效")

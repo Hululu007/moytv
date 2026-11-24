@@ -1,8 +1,8 @@
 package core
 
 // 番茄取流：与红果(新)相同的三段链——App 模型 → 网页兜底 → 网页取流。
-// App 模型链就是红果槽的 resolveHongguoAppMedia（V5 单腿：90 秒总预算、
-// 401/403 换设备≤3 次、429/5xx 同设备重签名重试、空回包直接报错），
+// App 模型链就是红果槽的 resolveHongguoAppMedia（取流梯子 anon→v5→
+// model-a→model-c→tab-b：90 秒总预算、门冷却、空包同门重探、至多一次身份轮换），
 // 本文件只做番茄槽分发，不重复造轮子。
 // 免登入原则：取流链不带任何账号会话（回归测试 TestHongguoMediaIgnoresLoginSession
 // 已覆盖），登入状态不影响播放。

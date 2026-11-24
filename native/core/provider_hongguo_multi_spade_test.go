@@ -130,9 +130,11 @@ func gzipDecompress(raw []byte) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
-// V5 单腿取代了旧的三腿：一次 POST 到 player 端点即取回模型，没有
-// tab 首选、multi、single 三腿的先后顺序可言；以下测试钉住单次请求与
-// 请求体形状（mixed_video_id_map + need_all_video_definition）。
+// The ladder replaced the old single V5 leg: the anonymous door runs
+// first and its registration fails on this fixture (the model body carries
+// no device id), so the v5 door answers with one player request. The test
+// pins that exactly one v5 player request goes out and that its body keeps
+// the mixed_video_id_map shape.
 func TestHongguoV5ModelSingleRequest(t *testing.T) {
 	multiBody := `{"code":0,"data":{"12345":{"video_model":{"video_list":[{"main_url":"https://media.example.test/multi1080.mp4","video_meta":{"codec_type":"h264","definition":"1080p"}}],"video_duration":"60"}}}}`
 	d, paths, bodies := hongguoMultiFixture(t, multiBody)
@@ -143,10 +145,16 @@ func TestHongguoV5ModelSingleRequest(t *testing.T) {
 	if media.URL != "https://media.example.test/multi1080.mp4" {
 		t.Fatal("V5 model did not win", media.URL)
 	}
-	if len(*paths) != 1 || !strings.Contains((*paths)[0], "multi_video_model/player/v1") {
-		t.Fatal("V5 must issue exactly one player request", *paths)
+	if len(*paths) != 2 || !strings.Contains((*paths)[0], "device_register") || (*paths)[1] != "/novel/player/multi_video_model/player/v1" {
+		t.Fatal("ladder must register the anonymous identity, then issue exactly one v5 player request", *paths)
 	}
-	if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "1004") || !strings.Contains((*bodies)[0], "12345") || !strings.Contains((*bodies)[0], "need_all_video_definition") {
+	var playerBody string
+	for _, body := range *bodies {
+		if strings.Contains(body, "1004") {
+			playerBody = body
+		}
+	}
+	if playerBody == "" || !strings.Contains(playerBody, "12345") || !strings.Contains(playerBody, "need_all_video_definition") {
 		t.Fatal("V5 payload must carry mixed_video_id_map and need_all_video_definition", *bodies)
 	}
 }

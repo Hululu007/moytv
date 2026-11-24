@@ -94,8 +94,9 @@ func TestHongguoV5SignPlaybackBranch12(t *testing.T) {
 	if parsed.Scheme != "https" || parsed.Host != "api5-normal-sinfonlinea.fqnovel.com" || parsed.Path != "/novel/player/multi_video_model/player/v1" {
 		t.Fatalf("signed URL shape wrong: %s", signed.URL)
 	}
-	// Query pairs in the upstream order.
-	wantOrder := []string{"aid=", "app_name=", "version_code=", "version_name=", "channel=", "device_platform=", "device_type=", "os_version=", "update_version_code=", "iid=", "cdid=", "device_id=", "_rticket="}
+	// Query pairs in the upstream order: the 12 legacy fields, then the 16
+	// fields added by 2f31ba83, then the ticket last.
+	wantOrder := []string{"aid=", "app_name=", "version_code=", "version_name=", "channel=", "device_platform=", "device_type=", "os_version=", "update_version_code=", "iid=", "cdid=", "device_id=", "ac=", "os=", "ssmix=", "device_brand=", "language=", "os_api=", "manifest_version_code=", "resolution=", "dpi=", "host_abi=", "dragon_device_type=", "pv_player=", "compliance_status=", "need_personal_recommend=", "player_so_load=", "is_android_pad_screen=", "_rticket="}
 	raw := parsed.RawQuery
 	last := -1
 	for _, key := range wantOrder {
@@ -112,6 +113,18 @@ func TestHongguoV5SignPlaybackBranch12(t *testing.T) {
 		query.Get("os_version") != "12" || query.Get("update_version_code") != "74332" ||
 		query.Get("iid") != identity.InstallID || query.Get("cdid") != identity.CDID || query.Get("device_id") != identity.DeviceID {
 		t.Fatalf("query values wrong: %s", raw)
+	}
+	if query.Get("ac") != "wifi" || query.Get("os") != "android" || query.Get("ssmix") != "a" ||
+		query.Get("device_brand") != "HONOR" || query.Get("language") != "zh" || query.Get("os_api") != "31" ||
+		query.Get("manifest_version_code") != "74332" || query.Get("resolution") != "1312*2848" ||
+		query.Get("dpi") != "480" || query.Get("host_abi") != "arm64-v8a" || query.Get("dragon_device_type") != "phone" ||
+		query.Get("pv_player") != "74332" || query.Get("compliance_status") != "0" ||
+		query.Get("need_personal_recommend") != "1" || query.Get("player_so_load") != "1" ||
+		query.Get("is_android_pad_screen") != "0" {
+		t.Fatalf("envelope extension values wrong: %s", raw)
+	}
+	if !hongguoV5PlaybackEnvelopeIsFull(raw) {
+		t.Fatal("28-field envelope must pass the full-envelope check")
 	}
 	ticket, err := strconv.ParseInt(query.Get("_rticket"), 10, 64)
 	if err != nil || ticket < nowMS || ticket >= nowMS+1024 {
@@ -206,7 +219,7 @@ func TestHongguoV5MedusaStructure(t *testing.T) {
 	ts := uint32(nowMS / 1000)
 	identity := hongguoV5TestIdentity()
 	compressed := hongguoV5TestBody()
-	query := hongguoV5PlaybackQuery(identity, nowMS, "8662")
+	query := hongguoV5PlaybackQuery(identity, nowMS, "8662", nil)
 	queryHash := hongguoSM3([]byte(query))
 	bodyMD5 := hongguoV5MD5(compressed)
 	entropy := hongguoV5TestEntropy()
@@ -371,22 +384,50 @@ func TestHongguoV5ParseRetryAfter(t *testing.T) {
 	}
 }
 
-// hongguoV5PolicyFixture: model requests are answered per device id; register
-// requests mint sequential ids. The transport records every model request's
-// device id in order.
-func hongguoV5PolicyFixture(t *testing.T, answer func(device string) (int, string)) (*Downloader, *[]string) {
+// hongguoV5PolicyFixture: every request is answered per door and device id.
+// Register requests mint sequential ids from one shared counter so the
+// request log reads as one timeline. Tags recorded in order:
+//
+//	"anon-register"  anonymous registration (log5-applog-lq)
+//	"register"       pooled-device registration (log.snssdk.com)
+//	"activate"       anonymous activation ping (log5-applog-lf, result ignored)
+//	"<door>@<device>" playback requests, door in anon/v5/model-a/model-c/tab-b
+func hongguoV5PolicyFixture(t *testing.T, answer func(door, device string) (int, string)) (*Downloader, *[]string) {
 	var requests []string
 	registered := 0
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
 		if strings.Contains(request.URL.Path, "device_register") {
 			registered++
-			requests = append(requests, "register")
 			id := strconv.Itoa(1000 + registered)
+			if request.URL.Host == "log5-applog-lq.fqnovel.com" {
+				requests = append(requests, "anon-register")
+			} else {
+				requests = append(requests, "register")
+			}
 			return sourceFixtureResponse(request, http.StatusOK, `{"device_id_str":"`+id+`","install_id_str":"`+id+`9"}`), nil
 		}
+		if request.URL.Host == "log5-applog-lf.fqnovel.com" {
+			requests = append(requests, "activate")
+			return sourceFixtureResponse(request, http.StatusOK, `{}`), nil
+		}
 		device := request.URL.Query().Get("device_id")
-		requests = append(requests, "model@"+device)
-		status, body := answer(device)
+		door := "v5"
+		switch {
+		case request.URL.Path == "/novel/player/multi_video_model/player/v1/":
+			door = "anon"
+		case request.URL.Path == "/novel/player/multi_video_model/player/v1":
+			door = "v5"
+		case request.URL.Path == "/novel/player/video_model/v1/":
+			if request.URL.Host == "api5-normal-sinfonlinec.fqnovel.com" {
+				door = "model-c"
+			} else {
+				door = "model-a"
+			}
+		case request.URL.Path == "/reading/bookapi/video_tab/multi_video_model/v1/":
+			door = "tab-b"
+		}
+		requests = append(requests, door+"@"+device)
+		status, body := answer(door, device)
 		return sourceFixtureResponse(request, status, body), nil
 	})
 	d.cfg.Retries = 1
@@ -395,9 +436,26 @@ func hongguoV5PolicyFixture(t *testing.T, answer func(device string) (int, strin
 	return d, &requests
 }
 
+func hongguoV5RequestsEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("request sequence length: got %d want %d\n got %v\nwant %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("request %d: got %q want %q\n got %v\nwant %v", i, got[i], want[i], got, want)
+		}
+	}
+}
+
 func TestHongguoV5DeviceSwapOnAuthFailure(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
-		d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+		d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
+			// The anonymous door fails too, so the ladder reaches the v5
+			// door where the swap happens.
+			if door == "anon" {
+				return status, ""
+			}
 			if device == "7" {
 				return status, ""
 			}
@@ -410,37 +468,45 @@ func TestHongguoV5DeviceSwapOnAuthFailure(t *testing.T) {
 		if !strings.HasSuffix(media.URL, "high.mp4") {
 			t.Fatalf("status %d: swapped device did not return media: %v", status, media)
 		}
-		if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1001" {
+		if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1002" {
 			t.Fatalf("status %d: device was not swapped: %v", status, state)
 		}
 		if d.hongguoPlayerSuspended() {
 			t.Fatalf("status %d: successful swap must not suspend the player", status)
 		}
-		if got := *requests; len(got) != 3 || got[0] != "model@7" || got[1] != "register" || got[2] != "model@1001" {
-			t.Fatalf("status %d: unexpected request sequence %v", status, got)
-		}
+		hongguoV5RequestsEqual(t, *requests, []string{"anon-register", "activate", "anon@1001", "v5@7", "register", "v5@1002"})
 	}
 }
 
 func TestHongguoV5DeviceAttemptsExhausted(t *testing.T) {
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		return http.StatusUnauthorized, ""
 	})
 	_, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if err == nil || !strings.Contains(err.Error(), "换设备 3 次") {
 		t.Fatal("exhausted device attempts must report the swap budget", err)
 	}
-	models, registers := 0, 0
+	models, registers, anonRegisters := 0, 0, 0
 	for _, r := range *requests {
-		if strings.HasPrefix(r, "model@") {
+		if strings.HasPrefix(r, "anon@") || strings.HasPrefix(r, "v5@") || strings.HasPrefix(r, "model-") || strings.HasPrefix(r, "tab-") {
 			models++
 		}
 		if r == "register" {
 			registers++
 		}
+		if r == "anon-register" {
+			anonRegisters++
+		}
 	}
-	if models != 3 || registers != 2 {
-		t.Fatal("exactly 3 device attempts and 2 swaps expected", *requests)
+	// First pass: anon + v5 (4 attempts, 3 swaps) + model-a + model-c + tab.
+	// The second fetch call finds every door already skipped, so no door
+	// is re-probed; the rotation branch then stops the ladder because the
+	// failures were not empty (not exhausted) and the empty streak is 0.
+	if models != 8 || registers != 3 || anonRegisters != 1 {
+		t.Fatalf("expected 8 door attempts, 3 pool swaps, 1 anon register, got %v", *requests)
+	}
+	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1004" {
+		t.Fatalf("device must end on the third swap: %v", state)
 	}
 	if d.hongguoPlayerSuspended() {
 		t.Fatal("auth exhaustion must not suspend the player (suspension is for empty bodies)")
@@ -449,7 +515,7 @@ func TestHongguoV5DeviceAttemptsExhausted(t *testing.T) {
 
 func TestHongguoV5TransientRetrySameDevice(t *testing.T) {
 	calls := 0
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		calls++
 		if calls == 1 {
 			return http.StatusInternalServerError, "boom"
@@ -469,13 +535,13 @@ func TestHongguoV5TransientRetrySameDevice(t *testing.T) {
 	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "7" {
 		t.Fatal("transient retries must stay on the same device", state)
 	}
-	if got := *requests; len(got) != 3 || got[0] != "model@7" || got[1] != "model@7" || got[2] != "model@7" {
-		t.Fatal("unexpected request sequence", got)
-	}
+	// Call 1 is the anonymous door (no transient retry there); calls 2-3
+	// are the v5 door's same-device retries.
+	hongguoV5RequestsEqual(t, *requests, []string{"anon-register", "activate", "anon@1001", "v5@7", "v5@7"})
 }
 
 func TestHongguoV5TransientExhaustionDoesNotSwapDevice(t *testing.T) {
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		return http.StatusInternalServerError, "boom"
 	})
 	_, err := d.resolveHongguoAppMedia(context.Background(), "12345")
@@ -485,70 +551,105 @@ func TestHongguoV5TransientExhaustionDoesNotSwapDevice(t *testing.T) {
 	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "7" {
 		t.Fatal("transient exhaustion must not swap the device", state)
 	}
-	if got := *requests; len(got) != 3 {
-		t.Fatal("initial attempt + 2 transient retries expected", got)
-	}
+	counts := map[string]int{}
 	for _, r := range *requests {
 		if r == "register" {
-			t.Fatal("transient exhaustion must not register", *requests)
+			t.Fatal("transient exhaustion must not register a pool device", *requests)
 		}
+		door := strings.SplitN(r, "@", 2)[0]
+		counts[door]++
+	}
+	// First pass only: anon x1 + v5/model-a/model-c/tab x3 transient
+	// attempts. The second fetch call finds every door already skipped
+	// and the rotation branch stops the ladder (failures are not empty).
+	if counts["anon"] != 1 || counts["v5"] != 3 || counts["model-a"] != 3 || counts["model-c"] != 3 || counts["tab-b"] != 3 {
+		t.Fatalf("unexpected per-door request counts %v in %v", counts, *requests)
 	}
 }
 
 func TestHongguoV5EmptyBodyFailsWithoutSwap(t *testing.T) {
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		return http.StatusOK, ""
 	})
 	_, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if !errors.Is(err, errHongguoAppEmptyBody) || !strings.Contains(err.Error(), "限流") {
 		t.Fatal("empty body must surface the rate-limit error", err)
 	}
-	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "7" {
-		t.Fatal("empty body must not swap the device", state)
+	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1003" {
+		t.Fatalf("all-empty rotation must re-register the pool device once: %v", state)
 	}
-	if got := *requests; len(got) != 1 || got[0] != "model@7" {
-		t.Fatal("empty body must cost exactly one request", got)
-	}
+	// The anonymous door empties three times in the first pass (initial
+	// send, the internal refresh-and-resend, then the ladder's same-door
+	// reprobe); every other door fails once. The second fetch call finds
+	// every door already skipped, so the rotation branch runs: the round
+	// was all-empty, so the identity rotates once (pool re-register +
+	// anonymous refresh) and the ladder re-runs until the 8-attempt cap.
+	// The second-pass anon send does not refresh again: the 10-minute
+	// throttle blocks it.
+	hongguoV5RequestsEqual(t, *requests, []string{
+		"anon-register", "activate", "anon@1001",
+		"anon-register", "activate", "anon@1002", "anon@1002",
+		"v5@7", "model-a@7", "model-c@7", "tab-b@7",
+		"register", "anon-register", "activate",
+		"anon@1004", "v5@1003",
+	})
 	if !d.hongguoPlayerSuspended() {
 		t.Fatal("empty body must open the suspend window for the next call")
 	}
 }
 
-func TestHongguoV5EmptyModelFailsWithoutSwap(t *testing.T) {
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+func TestHongguoV5EmptyModelRotatesOnce(t *testing.T) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		return http.StatusOK, `{"code":0,"data":{}}`
 	})
 	_, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if !errors.Is(err, errHongguoAppEmptyBody) {
 		t.Fatal("empty model must surface the empty-body error", err)
 	}
-	if got := *requests; len(got) != 1 {
-		t.Fatal("empty model must cost exactly one request", got)
+	// Every door returns a body with no model (the rejected case): the
+	// ladder walks all five doors, rotates identity once (pool re-register
+	// + anonymous refresh), and re-runs until the 8-attempt cap.
+	hongguoV5RequestsEqual(t, *requests, []string{
+		"anon-register", "activate", "anon@1001",
+		"v5@7", "model-a@7", "model-c@7", "tab-b@7",
+		"register", "anon-register", "activate",
+		"anon@1003", "v5@1002", "model-a@1002",
+	})
+	if state := d.hongguoCatalogSnapshot(); state.DeviceID != "1002" {
+		t.Fatalf("rotation must swap the pool device: %v", state)
 	}
-	if !d.hongguoPlayerSuspended() {
-		t.Fatal("empty model must open the suspend window")
+	if d.hongguoPlayerSuspended() {
+		t.Fatal("an empty model is not an empty body and must not suspend the player")
 	}
 }
 
 func TestHongguoV5NonRetryableStatusFailsFast(t *testing.T) {
-	d, requests := hongguoV5PolicyFixture(t, func(device string) (int, string) {
+	d, requests := hongguoV5PolicyFixture(t, func(door, device string) (int, string) {
 		return http.StatusBadRequest, "nope"
 	})
 	_, err := d.resolveHongguoAppMedia(context.Background(), "12345")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 400") {
 		t.Fatal("non-retryable status must fail fast", err)
 	}
-	if got := *requests; len(got) != 1 {
-		t.Fatal("non-retryable status must cost exactly one request", got)
-	}
+	// One attempt per door. The second fetch call finds every door already
+	// skipped and the rotation branch stops the ladder (failures are not
+	// empty, the empty streak is 0).
+	hongguoV5RequestsEqual(t, *requests, []string{
+		"anon-register", "activate", "anon@1001",
+		"v5@7", "model-a@7", "model-c@7", "tab-b@7",
+	})
 }
 
 func TestHongguoV5RequestWireShape(t *testing.T) {
-	var seen *http.Request
-	var rawBody []byte
+	var seen []*http.Request
+	var rawBodies [][]byte
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		seen = request
-		rawBody, _ = io.ReadAll(request.Body)
+		seen = append(seen, request)
+		var rawBody []byte
+		if request.Body != nil {
+			rawBody, _ = io.ReadAll(request.Body)
+		}
+		rawBodies = append(rawBodies, rawBody)
 		return sourceFixtureResponse(request, http.StatusOK, hongguoRotationModelOK), nil
 	})
 	d.cfg.Retries = 1
@@ -557,22 +658,36 @@ func TestHongguoV5RequestWireShape(t *testing.T) {
 	if _, err := d.resolveHongguoAppMedia(context.Background(), "12345"); err != nil {
 		t.Fatal(err)
 	}
-	if seen.Method != http.MethodPost || seen.URL.Host != "api5-normal-sinfonlinea.fqnovel.com" || seen.URL.Path != "/novel/player/multi_video_model/player/v1" {
-		t.Fatalf("V5 request must POST to the player endpoint, got %s %s", seen.Method, seen.URL)
+	// The fixture answers the anonymous registration with the model body,
+	// which carries no device id, so the anonymous door fails and the
+	// ladder falls through to the v5 door: assert the v5 POST wire shape.
+	var v5Request *http.Request
+	var v5Body []byte
+	for i, request := range seen {
+		if request.URL.Path == "/novel/player/multi_video_model/player/v1" {
+			v5Request, v5Body = request, rawBodies[i]
+			break
+		}
 	}
-	if seen.Header.Get("X-Gorgon") != "" || seen.Header.Get("X-Argus") != "" || seen.Header.Get("X-Ladon") != "" {
-		t.Fatal("V5 request must not carry legacy signing headers", seen.Header)
+	if v5Request == nil {
+		t.Fatalf("no v5 request seen in %v", seen)
 	}
-	if seen.Header.Get("Cookie") != "" {
-		t.Fatal("V5 request must not carry cookies", seen.Header)
+	if v5Request.Method != http.MethodPost || v5Request.URL.Host != "api5-normal-sinfonlinea.fqnovel.com" {
+		t.Fatalf("V5 request must POST to the player endpoint, got %s %s", v5Request.Method, v5Request.URL)
 	}
-	if seen.Header.Get("X-Khronos") == "" || seen.Header.Get("X-Helios") == "" || seen.Header.Get("X-Medusa") == "" || seen.Header.Get("X-Ss-Stub") == "" {
-		t.Fatal("V5 request must carry the V5 signature headers", seen.Header)
+	if v5Request.Header.Get("X-Gorgon") != "" || v5Request.Header.Get("X-Argus") != "" || v5Request.Header.Get("X-Ladon") != "" {
+		t.Fatal("V5 request must not carry legacy signing headers", v5Request.Header)
 	}
-	if seen.Header.Get("Content-Encoding") != "gzip" {
-		t.Fatal("V5 request must be gzip-encoded", seen.Header)
+	if v5Request.Header.Get("Cookie") != "" {
+		t.Fatal("V5 request must not carry cookies", v5Request.Header)
 	}
-	reader, err := gzip.NewReader(bytes.NewReader(rawBody))
+	if v5Request.Header.Get("X-Khronos") == "" || v5Request.Header.Get("X-Helios") == "" || v5Request.Header.Get("X-Medusa") == "" || v5Request.Header.Get("X-Ss-Stub") == "" {
+		t.Fatal("V5 request must carry the V5 signature headers", v5Request.Header)
+	}
+	if v5Request.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatal("V5 request must be gzip-encoded", v5Request.Header)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(v5Body))
 	if err != nil {
 		t.Fatal(err)
 	}
