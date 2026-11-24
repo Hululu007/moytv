@@ -1,0 +1,33 @@
+{
+  "name": "魔蚁插件订阅",
+  "plugins": [
+    {
+      "id": "com.idj.ext.porntube",
+      "name": "PornTube",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "PornTube（porntube.cool）。32 个分类，接口 AES 加密，播放走临时签名 m3u8 直链。由 CatVod 蜘蛛 v1.0.2 改写。",
+      "manifest": "porntube/porntube.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.qiyoushe",
+      "name": "妻友社",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "妻友社。13 个分类，游客登录 + 请求签名，播放走签名 m3u8。服务端要认 Authorization 头（宿主 2026-11-24 18:40 起放行，插件随请求发游客 token）；封面异或加密，列表无封面。由 CatVod 蜘蛛 v1.0.0 改写。",
+      "manifest": "qiyoushe/qiyoushe.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hqporner",
+      "name": "HQPorner",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "HQPorner（hqporner.com）。64 个分类 + 最新 / 热门 / 月榜 / 周榜 / 女优，详情嵌 mydaddy.cc 取最高画质 mp4。由 CatVod 蜘蛛 v1.0.1 改写。",
+      "manifest": "hqporner/hqporner.idjplugin"
+    }
+  ],
+  "cms": []
+}
