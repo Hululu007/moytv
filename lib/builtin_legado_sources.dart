@@ -136,7 +136,7 @@ final List<ContentSource> builtinLegadoSources = [
   ),
   JsonContentSource(
     id: "legado_8058_0",
-    name: "📖书海阁",
+    name: "书海阁",
     assetPath: 'assets/legado_sources/legado_8058_0.json',
     section: ContentSection.novel,
     sourceType: 0,
