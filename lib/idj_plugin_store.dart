@@ -35,7 +35,7 @@ const String idjSubscriptionsPrefsKey = 'moyi_idj_subscriptions';
 
 /// 安装器下载的 UA：`Moyi/<App 真实版本> plugin-installer`。
 /// 版本号与 `pubspec.yaml` 的 `version` 保持一致，改版时同步改这里。
-const String idjInstallerAppVersion = '1.0.8+33';
+const String idjInstallerAppVersion = '1.0.9+34';
 
 /// probe 试加载的回调：Dart 侧把包里的脚本与 manifest 随请求传给 Go 核，
 /// Go 核新建 runtime 跑 prelude、加载入口脚本、调一次 `init({})`（若导出）、
