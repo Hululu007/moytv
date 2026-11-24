@@ -293,7 +293,7 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 视频库模式：当前库是用户视频库（MYTV/db/女优库.db，
   /// actresses/videos/video_actress/video_category 四张表）时为
   /// true。主名册就是 actresses 表（本地库是主库，不是兜底）；
-  /// 名册同步与选站现爬照常跑（往本地库补新人/补视频），自动生成/
+  /// 名册同步照常跑（往本地库补新人/补视频），自动生成/
   /// 全站叠加/数据库镜像/新 json 同步禁掉（它们写 persons/works）。
   var _videoLibraryMode = false;
   GenericDbReader? _genericReader;
@@ -1300,13 +1300,6 @@ class _ActressListPageState extends State<ActressListPage> {
   List<ActressSiteFilter> _siteFilterOptions() =>
       actressSiteFilterOptions(widget.store);
 
-  /// 选站后触发该站分类现爬（mjv 现爬、whos 走 validator.nu 列表通道、
-  /// 片库站走本站蜘蛛分类现爬）。
-  Future<void> _runSiteCrawl() async {
-    if (_crawl.running) return;
-    await _crawl.start(site: _source.siteId);
-  }
-
   /// 任意站点现爬（2026-11-21 用户令）：粘一个站点列表页/分类页地址就爬。
   /// 不认站点名：列表结构、翻页规律、详情字段全部按页面实测识别。
   Future<void> _runGenericCrawl() async {
@@ -1327,8 +1320,8 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 切换站点筛选：只重读列表与分类。2026-11-23 用户令：女优库不要
-  /// 全自动同步检查——切站不再自动起一次选站现爬，想爬去设置页
-  /// “选站现爬”区点“爬当前选站”手动爬。
+  /// 全自动同步检查——切站不再自动现爬，想爬去设置页“任意站点爬取”
+  /// 粘地址手动爬（2026-11-24 选站现爬已删）。
   void _setSiteFilter(ActressSiteFilter source) {
     if (source == _source) return;
     _saveScrollOffsetForCache();
@@ -1799,7 +1792,7 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 有任一路在跑（名册同步、全站叠加、选站现爬、数据库镜像）：
+  /// 有任一路在跑（名册同步、全站叠加、任意站点爬取、数据库镜像）：
   /// 齿轮图标换成小转圈，顶栏不占位也能看出在动。
   bool get _anyRunning =>
       _progress.running ||
@@ -1808,7 +1801,7 @@ class _ActressListPageState extends State<ActressListPage> {
       _mirrorRunning;
 
   /// 设置弹窗（2026-11-21 用户令）：把原来排在顶栏的同步横幅、全站
-  /// 叠加横幅、选站现爬横幅、数据库镜像横幅全收进这一个 ⚙️ 弹窗；
+  /// 叠加横幅、现爬横幅、数据库镜像横幅全收进这一个 ⚙️ 弹窗；
   /// 弹窗里的“同步爬取”小窗点标题即可收起（收回），只留一行摘要。
   Future<void> _openSettingsSheet() async {
     await showModalBottomSheet<void>(
@@ -2227,6 +2220,14 @@ class _ActressListPageState extends State<ActressListPage> {
           ..sort((a, b) => b.value.compareTo(a.value));
         categories = [for (final e in merged) (e.key, e.value)];
       }
+      // 2026-11-24 用户令：第三行不显示数据库名称分类——外来库把库名
+      // 写成了 video_category 的主分类，合并后滤掉（库名取自当前已勾
+      // 的 .db 文件名去后缀；真分类不在库名集合里，原样保留）。
+      final libNames = <String>{
+        for (final p in [_mytvBind?.dbPath ?? '', ..._extraDbs.keys])
+          if (p.isNotEmpty) path.basenameWithoutExtension(p),
+      };
+      categories = filterLibraryNameCategories(categories, libNames);
       if (!mounted) return;
       _dbCategoriesCacheKey = cacheKey;
       _dbCategoriesCache = categories;
@@ -2779,7 +2780,7 @@ class _GenericWorkCard extends StatelessWidget {
 }
 
 /// 女优库设置弹窗（2026-11-21 用户令）：原来排在顶栏的同步、全站叠加、
-/// 选站现爬、数据库镜像四块状态与操作全收进这里；弹窗内的“同步爬取”
+/// 数据库镜像四块状态与操作全收进这里；弹窗内的“同步爬取”
 /// 小窗点标题即可收起（收回），只留一行摘要，随时再展开。
 class _ActressSettingsSheet extends StatefulWidget {
   const _ActressSettingsSheet({required this.host});
@@ -3030,30 +3031,8 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                     ),
                 ],
               ),
-              section(
-                title: '选站现爬',
-                body: host._crawlProgress.label,
-                spinning: host._crawlProgress.running,
-                actions: [
-                  if (host._crawlProgress.running)
-                    button('取消', host._crawl.cancel)
-                  else if (host._crawlProgress.done)
-                    button(
-                      '导出合并 JSON',
-                      host._exportingJson ? null : host._exportMergedJson,
-                    ),
-                  // 2026-11-23 用户令：切站不再自动现爬，手动点这里才爬
-                  // 当前选的站（选了“全部”或 nvku 时不可点）。
-                  if (!host._crawlProgress.running)
-                    button(
-                      '爬当前选站',
-                      host._source == ActressSiteFilter.all ||
-                              host._source.siteId == nvkuSourceId
-                          ? null
-                          : host._runSiteCrawl,
-                    ),
-                ],
-              ),
+              // 2026-11-24 用户令：选站现爬已删（详情页自动写入站点库
+              // 已能回写数据库，不用再现爬补库）；任意站点爬取留着。
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
                 child: Row(
@@ -3096,6 +3075,44 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                               ),
                             ),
                           ),
+                          // 现爬进度行（原在“选站现爬”区，2026-11-24
+                          // 删区后挪到这里）：跑着显示进度 + 取消，
+                          // 跑完显示导出合并 JSON。
+                          if (host._crawlProgress.running ||
+                              host._crawlProgress.done)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Row(
+                                children: [
+                                  if (host._crawlProgress.running)
+                                    const Padding(
+                                      padding: EdgeInsets.only(right: 8),
+                                      child: SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                    ),
+                                  Expanded(
+                                    child: Text(
+                                      host._crawlProgress.label,
+                                      style: textStyle.bodySmall,
+                                    ),
+                                  ),
+                                  if (host._crawlProgress.running)
+                                    button('取消', host._crawl.cancel)
+                                  else if (host._crawlProgress.done)
+                                    button(
+                                      '导出合并 JSON',
+                                      host._exportingJson
+                                          ? null
+                                          : host._exportMergedJson,
+                                    ),
+                                ],
+                              ),
+                            ),
                         ],
                       ),
                     ),

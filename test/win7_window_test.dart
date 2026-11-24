@@ -319,21 +319,6 @@ void main() {
     expect(win7Key('win7-taskbar-entry-actress'), findsOneWidget);
   });
 
-  testWidgets('Win7 片库窗顶栏女优库钮开女优库窗口', (tester) async {
-    await pumpWin7Home(tester, registerHuangdou: true);
-    await tester.tap(win7Key('win7-desktop-icon-library'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('open-actress-library')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('open-actress-library')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(tester.widget<Text>(win7Key('win7-window-title')).data, '演员库');
-    expect(find.byType(ActressListPage), findsOneWidget);
-    expect(win7Key('win7-taskbar-entry-actress'), findsOneWidget);
-    expect(win7Key('win7-taskbar-entry-library'), findsOneWidget);
-  });
-
   testWidgets('Win7 女优库窗前台时切回普通主题仍是女优库区', (tester) async {
     final store = await pumpWin7Home(tester);
     await tester.tap(win7Key('win7-desktop-icon-actress'));

@@ -255,4 +255,68 @@ void main() {
       expect(entry.playable, isFalse);
     });
   });
+
+  group('isVideoLibrarySchemaWithoutActresses（2026-11-24 外来库回退）', () {
+    test('videos + video_actress + video_category 三张表就认', () {
+      expect(
+        isVideoLibrarySchemaWithoutActresses(
+          {'videos', 'video_actress', 'video_category'},
+        ),
+        isTrue,
+      );
+    });
+    test('缺一张就不认', () {
+      expect(
+        isVideoLibrarySchemaWithoutActresses(
+          {'videos', 'video_actress'},
+        ),
+        isFalse,
+      );
+      expect(
+        isVideoLibrarySchemaWithoutActresses(
+          {'videos', 'video_category'},
+        ),
+        isFalse,
+      );
+      expect(
+        isVideoLibrarySchemaWithoutActresses(
+          {'actresses', 'videos', 'video_actress'},
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('filterLibraryNameCategories（2026-11-24 第三行去库名）', () {
+    const cats = [
+      ('有码', 251867),
+      ('无码', 86936),
+      ('东瀛丽库1', 1220932),
+      ('东瀛丽库1/综合合集', 500),
+      ('全球丽影', 300),
+      ('国产', 35365),
+    ];
+    test('库名与“库名/分类”都滤掉，真分类保留', () {
+      expect(
+        filterLibraryNameCategories(cats, {'东瀛丽库1', '全球丽影', '女优库'}),
+        [
+          ('有码', 251867),
+          ('无码', 86936),
+          ('国产', 35365),
+        ],
+      );
+    });
+    test('库名集合为空时原样返回', () {
+      expect(filterLibraryNameCategories(cats, {}), cats);
+    });
+    test('名字只是库名前缀、不是“库名/”开头的不滤', () {
+      expect(
+        filterLibraryNameCategories(
+          [('东瀛丽库12', 10), ('有码', 5)],
+          {'东瀛丽库1'},
+        ),
+        [('东瀛丽库12', 10), ('有码', 5)],
+      );
+    });
+  });
 }

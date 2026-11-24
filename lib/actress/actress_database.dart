@@ -365,6 +365,35 @@ bool isVideoLibrarySchema(Set<String> tableNames) =>
     tableNames.contains('videos') &&
     tableNames.contains('video_actress');
 
+/// 没有 actresses 表的视频库（2026-11-24 用户报“切换其他数据库
+/// 没有显示数据”）：只有 videos + video_actress + video_category
+/// 三张表，人物按 video_actress.cate_id（人名）分组现算（见
+/// listPersons / countPersons / worksForPerson 的回退），同样认
+/// 作视频库，不走通用读法、也不当成空库。
+bool isVideoLibrarySchemaWithoutActresses(Set<String> tableNames) =>
+    tableNames.contains('videos') &&
+    tableNames.contains('video_actress') &&
+    tableNames.contains('video_category');
+
+/// 第三行分类里去掉数据库名称分类（2026-11-24 用户令）：外来库把
+/// 库名写成了 video_category 的主分类，合并后行 3 会冒出“东瀛丽库
+/// 1 / 综合合集”这种库名项。类别名等于任一已知 .db 文件名（去后
+/// 缀），或以“<库名>/”开头的，一律不进第三行；真分类（有码/无码/
+/// 国产……不在库名集合里）原样保留。库名集合为空时原样返回。
+List<(String, int)> filterLibraryNameCategories(
+  List<(String, int)> categories,
+  Set<String> libraryNames,
+) {
+  if (libraryNames.isEmpty) return categories;
+  return [
+    for (final c in categories)
+      if (!libraryNames.any(
+        (name) => c.$1 == name || c.$1.startsWith('$name/'),
+      ))
+        c,
+  ];
+}
+
 String _sourceIdColumn(ActressRosterSourceId source) => switch (source) {
   ActressRosterSourceId.chaoliu => 'chaoliu_id',
   ActressRosterSourceId.whos => 'whos_slug',
@@ -759,6 +788,53 @@ class SqfliteActressDatabase implements ActressDatabase {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 库里有没有 actresses 表（2026-11-24 用户报“切换其他数据库
+  /// 没有显示数据”）：外来库可能只有 videos + video_actress +
+  /// video_category，没有这张表；没它时人物查询走 video_actress
+  /// 分组回退（见 listPersons / countPersons），不抛错。
+  Future<bool> _hasActressesTable(Database db) async {
+    try {
+      final rows = await db.rawQuery('PRAGMA table_info(actresses)');
+      return rows.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 没有 actresses 表时按 video_actress 的 rowid 反查 cate_id
+  ///（人名）：回退人物的 localId 就是该人 video_actress 行里最小
+  /// 的 rowid（与通用库同一口径，见 GenericActressDatabase）。
+  Future<String?> _cateIdOfVideoActressRow(
+    Database db,
+    int rowId,
+  ) async {
+    try {
+      final rows = await db.rawQuery(
+        'SELECT cate_id FROM video_actress WHERE rowid = ? LIMIT 1',
+        [rowId],
+      );
+      if (rows.isEmpty) return null;
+      final name = rows.first['cate_id']?.toString().trim() ?? '';
+      return name.isEmpty ? null : name;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 视频库里一个人名的 cate_id 集合：先按 actresses.rowid 取同名
+  /// cate_id；没有 actresses 表的外来库按 rowid 反查 cate_id 再取
+  /// 作品（worksForPerson / countWorks / workCategories 共用）。
+  Future<List<String>> _videoCateIdsForPerson(
+    Database db,
+    int personId,
+  ) async {
+    final cateIds = await _videoCateIdsOf(db, personId);
+    if (cateIds.isNotEmpty) return cateIds;
+    final name = await _cateIdOfVideoActressRow(db, personId);
+    if (name == null) return const [];
+    return [name];
   }
 
   static String _placeholders(int n) =>
@@ -1216,12 +1292,16 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 已打开的库是不是用户视频库：sqlite_master 里同时有
   /// actresses、videos、video_actress 三张表即 true（video_category
   /// 是分类表，有没有不影响判定，读分类时 LEFT JOIN 即可）。
+  /// 没有 actresses 表、只有 videos + video_actress +
+  /// video_category 的外来库同样认（人物按 video_actress.cate_id
+  /// 分组现算，见 listPersons 等方法的回退）。
   Future<bool> _isVideoLibraryDb(Database db) async {
     final tables = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type='table'",
     );
     final names = {for (final row in tables) row['name'].toString()};
-    return isVideoLibrarySchema(names);
+    return isVideoLibrarySchema(names) ||
+        isVideoLibrarySchemaWithoutActresses(names);
   }
 
   /// 验一个已打开的候选库：女优库结构核对 works.code_key；用户
@@ -1619,6 +1699,23 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<ActressPerson?> personById(int localId) async {
     final db = await _open();
     if (_videoLibraryMode) {
+      // 没有 actresses 表的外来库：人物 id 是 video_actress 的
+      // rowid，按它反查人名再现算作品数。
+      if (!await _hasActressesTable(db)) {
+        final name = await _cateIdOfVideoActressRow(db, localId);
+        if (name == null) return null;
+        final rows = await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM video_actress WHERE cate_id = ?',
+          [name],
+        );
+        return videoLibraryPersonFromRow({
+          'id': localId,
+          'display_name': name,
+          'cate_id': name,
+          'avatar_url': '',
+          'works_count': (rows.first['c'] as num?)?.toInt() ?? 0,
+        });
+      }
       // 2026-11-23：sex 列存在时一起取出来（详情页头显性别靠它；
       // 没这列时 videoLibraryPersonFromRow 按未知处理，不默认女）。
       final hasSex = await _hasActressSexColumn(db);
@@ -1724,6 +1821,59 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 过滤；老库没有 sex 列时保持改前行为（male 无结果）。
       final hasSex = await _hasActressSexColumn(db);
       if (sex != ActressSexFilter.all && !hasSex) return const [];
+      // 没有 actresses 表的外来库（只有 videos + video_actress +
+      // video_category）：直接按 video_actress.cate_id（人名）分组
+      // 现算人物——头像与性别未知（空），作品数按组计数，localId 取
+      // 该人 video_actress 行里最小的 rowid（worksForPerson 按它
+      // 反查人名，与通用库同一口径）。没有这条回退时旧的两条路都
+      // 会抛错、被调用方静默跳过，人物列表永远是主库数据。
+      if (!await _hasActressesTable(db)) {
+        final trimmedQuery = query.trim();
+        final args = <Object?>[];
+        final conditions = <String>[];
+        if (trimmedQuery.isNotEmpty) {
+          args.add('%$trimmedQuery%');
+          conditions.add('pc.cate_id LIKE ?');
+        }
+        if (category.isNotEmpty) {
+          args.add(category);
+          conditions.add(
+            'EXISTS (SELECT 1 FROM video_actress va2 '
+            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+            'WHERE va2.cate_id = pc.cate_id '
+            "AND COALESCE(vc2.main_category, '') = ?)",
+          );
+        }
+        final where = conditions.isEmpty
+            ? ''
+            : 'WHERE ${conditions.join(' AND ')}';
+        final order = switch (sort) {
+          ActressSort.worksDesc => 'pc.n DESC, pc.cate_id ASC',
+          ActressSort.nameAsc => 'pc.cate_id ASC',
+          ActressSort.recentDesc => 'pc.d DESC, pc.cate_id ASC',
+        };
+        // 最近更新排序才 join videos 取 MAX(vod_pubdate)，平时纯走
+        // video_actress(cate_id) 分组（与回退路同一优化，见下）。
+        final perCateSql = sort == ActressSort.recentDesc
+            ? 'SELECT va.cate_id AS cate_id, COUNT(*) AS n, '
+                'MAX(v.vod_pubdate) AS d, MIN(va.rowid) AS first_rowid '
+                'FROM video_actress va '
+                'LEFT JOIN videos v ON v.vod_id = va.vod_id '
+                'GROUP BY va.cate_id'
+            : 'SELECT cate_id AS cate_id, COUNT(*) AS n, '
+                "'' AS d, MIN(rowid) AS first_rowid "
+                'FROM video_actress GROUP BY cate_id';
+        final rows = await db.rawQuery(
+          'WITH per_cate AS ($perCateSql) '
+          'SELECT pc.first_rowid AS id, pc.cate_id AS display_name, '
+          "pc.cate_id AS cate_id, '' AS avatar_url, "
+          "pc.n AS works_count, '' AS sex "
+          'FROM per_cate pc $where ORDER BY $order LIMIT ? OFFSET ?',
+          [...args, limit, offset],
+        );
+        return rows.map(videoLibraryPersonFromRow).toList();
+      }
       final trimmedQuery = query.trim();
       final args = <Object?>[];
       final conditions = <String>[];
@@ -1868,6 +2018,21 @@ class SqfliteActressDatabase implements ActressDatabase {
     if (_videoLibraryMode) {
       final hasSex = await _hasActressSexColumn(db);
       if (sex != ActressSexFilter.all && !hasSex) return 0;
+      // 没有 actresses 表的外来库：按 video_actress.cate_id 分组计数
+      //（与 listPersons 的回退同一口径）。
+      if (!await _hasActressesTable(db)) {
+        final trimmedQuery = query.trim();
+        final args = <Object?>[];
+        final where =
+            trimmedQuery.isEmpty ? '' : 'WHERE cate_id LIKE ?';
+        if (trimmedQuery.isNotEmpty) args.add('%$trimmedQuery%');
+        final rows = await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM '
+          '(SELECT cate_id FROM video_actress $where GROUP BY cate_id)',
+          args,
+        );
+        return (rows.first['c'] as num?)?.toInt() ?? 0;
+      }
       final args = <Object?>[];
       final conditions = <String>[];
       final trimmedQuery = query.trim();
@@ -2003,7 +2168,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 反查作品。原来一条大 JOIN（videos × video_actress × actresses）
       // 再 ORDER BY 排序，32 万视频的库在手机上点一下要转半天，
       // 看着就是「点了头像没作品」。
-      final cateIds = await _videoCateIdsOf(db, personId);
+      final cateIds = await _videoCateIdsForPerson(db, personId);
       if (cateIds.isEmpty) return const [];
       final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
@@ -2044,7 +2209,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     final db = await _open();
     if (_videoLibraryMode) {
       final useCategory = category != null && category.isNotEmpty;
-      final cateIds = await _videoCateIdsOf(db, personId);
+      final cateIds = await _videoCateIdsForPerson(db, personId);
       if (cateIds.isEmpty) return 0;
       final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(
@@ -2126,7 +2291,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       // 原来的 videos × video_actress × actresses 三表 JOIN 再
       // GROUP BY，34 万行库上实测 0.9~6.3 秒、抖动大，详情页首屏
       // 被它堵住一直转圈；改后同量级实测 0.02 秒（热缓存）。
-      final cateIds = await _videoCateIdsOf(db, personId);
+      final cateIds = await _videoCateIdsForPerson(db, personId);
       if (cateIds.isEmpty) return const [];
       final inList = _placeholders(cateIds.length);
       final rows = await db.rawQuery(

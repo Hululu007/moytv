@@ -993,17 +993,6 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 女优库区入口（用户 2026-11-17 令）：女优库是独立区域、像片库
-  /// 那样进区，不再 push 路由。普通壳模式切到底部标签“女优库”；
-  /// Win7/XP 桌面壳模式开女优库窗口（与桌面图标同一入口）。
-  void _openActressLibrary() {
-    if (_inWin7Shell) {
-      _win7Open(Win7WindowKind.actress);
-      return;
-    }
-    _onBottomTab(5);
-  }
-
   /// 游戏区点卡进游戏（普通壳，用户 2026-11-19 令）：推全屏游戏
   /// 路由，进来即沉浸式、系统栏与底部标签栏一起藏；退出路由即恢复。
   void _openGameZoneGame(GameZoneGame game) {
@@ -2181,13 +2170,6 @@ class _HomeScreenState extends State<HomeScreen>
         onPressed: widget.store.visibleSources.isEmpty ? null : _openRankings,
         icon: const Icon(Icons.leaderboard_outlined),
       ),
-      // 女优库入口：与榜单钮并列，只在片库顶栏出现。
-      IconButton(
-        key: const ValueKey('open-actress-library'),
-        tooltip: '演员库',
-        onPressed: _openActressLibrary,
-        icon: const Icon(Icons.people_alt_outlined),
-      ),
       IconButton(
         key: const ValueKey('open-fullscreen-feed'),
         tooltip: '全屏流',
@@ -2309,13 +2291,6 @@ class _HomeScreenState extends State<HomeScreen>
           icon: LucideIcons.trophy,
           tooltip: '榜单',
           onPressed: widget.store.visibleSources.isEmpty ? null : _openRankings,
-        ),
-        // 女优库入口：与榜单钮并列，只在片库顶栏胶囊里出现。
-        GlassGroupItem(
-          key: const ValueKey('open-actress-library'),
-          icon: LucideIcons.users,
-          tooltip: '演员库',
-          onPressed: _openActressLibrary,
         ),
         GlassGroupItem(
           key: const ValueKey('open-fullscreen-feed'),

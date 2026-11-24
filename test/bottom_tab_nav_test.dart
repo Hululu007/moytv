@@ -357,19 +357,6 @@ void main() {
     expect(find.byType(ActressListPage), findsNothing);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('片库顶栏女优库钮进女优库区（普通壳，不 push 路由）', (tester) async {
-    await pumpHome(tester);
-    await tester.tap(find.byKey(const ValueKey('open-actress-library')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byType(ActressListPage), findsOneWidget);
-    // 仍在首页路由内：底部标签还在，点片库能回目录。
-    expect(find.byType(NeonCapsuleBar), findsOneWidget);
-    await tapShellTab(tester, 0);
-    expect(find.byType(ActressListPage), findsNothing);
-    expect(find.byKey(const ValueKey('source-switch')), findsOneWidget);
-  }, skip: !allSourcesEnabled);
-
   testWidgets('短剧首页默认页签不是我的页', (tester) async {
     final store = await _makeStore();
     final searchController = TextEditingController();
