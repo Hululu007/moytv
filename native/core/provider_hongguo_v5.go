@@ -42,6 +42,20 @@ const (
 	hongguoV5OSVersion   = "12"
 	hongguoV5License     = 646637794
 	hongguoV5UserAgent   = "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
+	// hongguoV5DeviceBrand / hongguoV5OSAPI / hongguoV5Resolution /
+	// hongguoV5DPI: the official capture values folded into the 28-field
+	// playback envelope (upstream 2f31ba83). The anonymous door uses its own
+	// resolution/DPI/ROM values below.
+	hongguoV5DeviceBrand = "HONOR"
+	hongguoV5OSAPI       = "31"
+	hongguoV5Resolution  = "1312*2848"
+	hongguoV5DPI         = "480"
+	// hongguoAnonResolution / hongguoAnonDPI / hongguoAnonROMVersion: the
+	// anonymous enhanced door's own values (upstream bef83c90, lvguo-tv
+	// v2.0.8 reference vectors).
+	hongguoAnonResolution = "1920*1080"
+	hongguoAnonDPI        = "280"
+	hongguoAnonROMVersion = "V417IR+release-keys"
 )
 
 var hongguoV5Magic = [16]byte{
@@ -137,12 +151,18 @@ func hongguoV5Zigzag(value int64) uint64 {
 type hongguoV5Field struct {
 	tag     uint32
 	sint    int64
+	float   float32
 	bytes   []byte
 	isBytes bool
+	isFloat bool
 }
 
 func hongguoV5SintField(tag uint32, value int64) hongguoV5Field {
 	return hongguoV5Field{tag: tag, sint: value}
+}
+
+func hongguoV5FloatField(tag uint32, value float32) hongguoV5Field {
+	return hongguoV5Field{tag: tag, float: value, isFloat: true}
 }
 
 func hongguoV5BytesField(tag uint32, value []byte) hongguoV5Field {
@@ -156,6 +176,12 @@ func hongguoV5StringField(tag uint32, value string) hongguoV5Field {
 func hongguoV5Proto(fields []hongguoV5Field) []byte {
 	var out []byte
 	for _, field := range fields {
+		if field.isFloat {
+			out = hongguoV5AppendVarint(out, uint64(field.tag)<<3|5)
+			bits := hongguoV5LE32(math.Float32bits(field.float))
+			out = append(out, bits[:]...)
+			continue
+		}
 		if field.isBytes {
 			if len(field.bytes) == 0 {
 				continue
@@ -638,7 +664,11 @@ func hongguoV5EncodeComponent(value string) string {
 	return out.String()
 }
 
-func hongguoV5PlaybackQuery(identity hongguoV5Identity, ticket int64, appID string) string {
+// hongguoV5PlaybackQuery: the shared playback query bag. The 12 identity
+// fields come first, then the 16 official-capture fields (upstream 2f31ba83),
+// then the door's own fields (extra), then _rticket last. The query hash and
+// the _rticket branch are computed over the whole 28-field string.
+func hongguoV5PlaybackQuery(identity hongguoV5Identity, ticket int64, appID string, extra [][2]string) string {
 	pairs := [][2]string{
 		{"aid", appID},
 		{"app_name", "novelread"},
@@ -652,7 +682,24 @@ func hongguoV5PlaybackQuery(identity hongguoV5Identity, ticket int64, appID stri
 		{"iid", identity.InstallID},
 		{"cdid", identity.CDID},
 		{"device_id", identity.DeviceID},
+		{"ac", "wifi"},
+		{"os", "android"},
+		{"ssmix", "a"},
+		{"device_brand", hongguoV5DeviceBrand},
+		{"language", "zh"},
+		{"os_api", hongguoV5OSAPI},
+		{"manifest_version_code", hongguoV5VersionCode},
+		{"resolution", hongguoV5Resolution},
+		{"dpi", hongguoV5DPI},
+		{"host_abi", "arm64-v8a"},
+		{"dragon_device_type", "phone"},
+		{"pv_player", hongguoV5VersionCode},
+		{"compliance_status", "0"},
+		{"need_personal_recommend", "1"},
+		{"player_so_load", "1"},
+		{"is_android_pad_screen", "0"},
 	}
+	pairs = append(pairs, extra...)
 	var query strings.Builder
 	for _, pair := range pairs {
 		if query.Len() > 0 {
@@ -665,6 +712,31 @@ func hongguoV5PlaybackQuery(identity hongguoV5Identity, ticket int64, appID stri
 	query.WriteString("&_rticket=")
 	query.WriteString(fmt.Sprintf("%d", ticket))
 	return query.String()
+}
+
+// hongguoV5PlaybackEnvelopeIsFull: the 16 official-capture fields must all be
+// present with a non-empty value (upstream playback_envelope_is_full).
+func hongguoV5PlaybackEnvelopeIsFull(query string) bool {
+	expected := []string{
+		"ac", "os", "ssmix", "device_brand", "language", "os_api",
+		"manifest_version_code", "resolution", "dpi", "host_abi",
+		"dragon_device_type", "pv_player", "compliance_status",
+		"need_personal_recommend", "player_so_load", "is_android_pad_screen",
+	}
+	for _, name := range expected {
+		found := false
+		for _, pair := range strings.Split(query, "&") {
+			key, value, ok := strings.Cut(pair, "=")
+			if ok && key == name && value != "" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // hongguoV5SignPlayback signs one request for
@@ -681,6 +753,27 @@ func hongguoV5SignPlayback(base string, compressedBody []byte, identity hongguoV
 // fixes the clock, the process state and the entropy. Production callers use
 // hongguoV5SignPlayback.
 func hongguoV5SignPlaybackAt(base string, compressedBody []byte, identity hongguoV5Identity, nowMS int64, state hongguoV5ProcessState, entropy hongguoV5Entropy) (hongguoV5Request, error) {
+	return hongguoV5SignRequestAt(base, nil, compressedBody, identity, nowMS, state, entropy, false)
+}
+
+// hongguoV5SignPlaybackGet signs a GET for a door of the same family, e.g.
+// the video_tab model door (upstream sign_playback_v5_get). extra carries
+// the door's own query fields. A GET carries no body, so the branch is
+// selected by the digest of zero bytes and the body-describing headers
+// (Content-Type, Content-Encoding, X-Ss-Stub) are omitted.
+func hongguoV5SignPlaybackGet(base string, extra [][2]string, identity hongguoV5Identity) (hongguoV5Request, error) {
+	nowMS := time.Now().UnixMilli()
+	return hongguoV5SignPlaybackGetAt(base, extra, identity, nowMS, hongguoV5LoadProcessState(nowMS), hongguoV5RandomEntropy())
+}
+
+// hongguoV5SignPlaybackGetAt is the deterministic seam for the GET form.
+func hongguoV5SignPlaybackGetAt(base string, extra [][2]string, identity hongguoV5Identity, nowMS int64, state hongguoV5ProcessState, entropy hongguoV5Entropy) (hongguoV5Request, error) {
+	return hongguoV5SignRequestAt(base, extra, nil, identity, nowMS, state, entropy, true)
+}
+
+// hongguoV5SignRequestAt: the shared ticket loop for the POST and GET forms.
+// For the GET form the body digest is the digest of zero bytes.
+func hongguoV5SignRequestAt(base string, extra [][2]string, compressedBody []byte, identity hongguoV5Identity, nowMS int64, state hongguoV5ProcessState, entropy hongguoV5Entropy, isGet bool) (hongguoV5Request, error) {
 	if base == "" {
 		return hongguoV5Request{}, errors.New("V5 playback base URL is empty")
 	}
@@ -703,7 +796,7 @@ func hongguoV5SignPlaybackAt(base string, compressedBody []byte, identity honggu
 		if ticket < nowMS {
 			return hongguoV5Request{}, errors.New("V5 playback request ticket overflow")
 		}
-		query := hongguoV5PlaybackQuery(identity, ticket, appID)
+		query := hongguoV5PlaybackQuery(identity, ticket, appID, extra)
 		queryHash := hongguoSM3([]byte(query))
 		if hongguoV5BranchIV(queryHash, bodyMD5, ts)&15 != 12 {
 			continue
@@ -713,16 +806,336 @@ func hongguoV5SignPlaybackAt(base string, compressedBody []byte, identity honggu
 			return hongguoV5Request{}, err
 		}
 		headers := http.Header{
-			"X-Khronos":        {fmt.Sprintf("%d", ts)},
-			"X-Helios":         {hongguoV5Helios(ts, entropy.helios)},
-			"X-Medusa":         {medusa},
-			"User-Agent":       {hongguoV5UserAgent},
-			"Accept":           {"application/json"},
-			"Content-Type":     {"application/json; charset=utf-8"},
-			"Content-Encoding": {"gzip"},
-			"X-Ss-Stub":        {strings.ToUpper(hex.EncodeToString(bodyMD5[:]))},
+			"X-Khronos":  {fmt.Sprintf("%d", ts)},
+			"X-Helios":   {hongguoV5Helios(ts, entropy.helios)},
+			"X-Medusa":   {medusa},
+			"User-Agent": {hongguoV5UserAgent},
+			"Accept":     {"application/json"},
+		}
+		if !isGet {
+			headers["Content-Type"] = []string{"application/json; charset=utf-8"}
+			headers["Content-Encoding"] = []string{"gzip"}
+			headers["X-Ss-Stub"] = []string{strings.ToUpper(hex.EncodeToString(bodyMD5[:]))}
 		}
 		return hongguoV5Request{URL: base + "?" + query, Headers: headers}, nil
 	}
 	return hongguoV5Request{}, errors.New("V5 playback signing could not find the branch-12 ticket")
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous enhanced V5 door (upstream bef83c90).
+//
+// Ported field-for-field from Amor5207/lvguo-tv v2.0.8 commit 32fcdfdb
+// (web/internal/sign/v5.go::medusaV5 / SignMobileV5 and
+// web/internal/lvguoplay/legacy.go::requestLegacy), via upstream fqapp
+// sign/v5.rs (anonymous_medusa / anonymous_playback_query /
+// sign_anonymous_playback_v5). The legacy medusa above stays untouched
+// because the legacy playback door still depends on its profile.
+// ---------------------------------------------------------------------------
+
+// hongguoAnonV5Identity: anonymous registration identity used only by the
+// enhanced playback door. EGDI is empty until the register response returns
+// one (klink_egdi); the query omits it while empty.
+type hongguoAnonV5Identity struct {
+	DeviceID  string
+	InstallID string
+	CDID      string
+	EGDI      string
+}
+
+type hongguoAnonEntropy struct {
+	gorgon      uint16
+	helios      uint32
+	envLaunch   int64
+	envPID      int64
+	message     uint32
+	medusaNonce uint32
+	packed      uint32
+}
+
+func hongguoAnonRandomEntropy() hongguoAnonEntropy {
+	var raw [22]byte
+	_, _ = rand.Read(raw[:])
+	return hongguoAnonEntropy{
+		gorgon:      binary.LittleEndian.Uint16(raw[0:2]),
+		helios:      binary.LittleEndian.Uint32(raw[2:6]),
+		envLaunch:   100 + int64(raw[6])%21,
+		envPID:      10001 + int64(binary.LittleEndian.Uint16(raw[7:9]))%2000,
+		message:     binary.LittleEndian.Uint32(raw[9:13]),
+		medusaNonce: binary.LittleEndian.Uint32(raw[13:17]),
+		packed:      binary.LittleEndian.Uint32(raw[17:21]),
+	}
+}
+
+func hongguoAnonymousMedusaToken(nonce string) string {
+	if len(nonce) == 25 && strings.HasPrefix(nonce, "A") {
+		return nonce
+	}
+	if len(nonce) >= 24 {
+		return "A" + nonce[:24]
+	}
+	return "A" + nonce + strings.Repeat("A", 24-len(nonce))
+}
+
+// hongguoAnonymousMedusa: the enhanced Medusa envelope for the anonymous
+// playback route. Field-for-field port of upstream anonymous_medusa.
+func hongguoAnonymousMedusa(queryHash [32]byte, bodyMD5 [16]byte, ts uint32, nowMS int64, identity hongguoAnonV5Identity, state hongguoV5ProcessState, entropy hongguoAnonEntropy) (string, error) {
+	flags := [8]byte{0x44, 0x80, 0, 0, 0, 0, 0, 0}
+	const anonEnv13 = -2
+	const anonEnv14 = 200
+	nestedPairs := [][2]int64{{1, 305}, {2, 4}, {3, 694367}, {5, 1621072674}}
+
+	appID := "8662"
+	license := "646637794"
+	f13 := hongguoV5HashF13(queryHash, bodyMD5, ts)
+	secToken := hongguoAnonymousMedusaToken(state.nonce)
+
+	device := hongguoV5Proto([]hongguoV5Field{
+		hongguoV5SintField(1, 1),
+		hongguoV5SintField(2, 2),
+		hongguoV5StringField(3, appID),
+		hongguoV5StringField(4, identity.DeviceID),
+		hongguoV5StringField(5, secToken),
+		hongguoV5StringField(6, "!noperm!"),
+		hongguoV5SintField(7, -888888),
+		hongguoV5SintField(8, -888888),
+		hongguoV5SintField(9, 3),
+		hongguoV5SintField(10, -888888),
+		hongguoV5StringField(11, "!notset!"),
+		hongguoV5StringField(12, "Asia/Shanghai,8"),
+		hongguoV5StringField(13, "zh_CN"),
+		hongguoV5SintField(14, 4),
+		hongguoV5FloatField(16, 0),
+		hongguoV5FloatField(17, 0),
+		hongguoV5FloatField(18, 0),
+		hongguoV5FloatField(19, 0),
+		hongguoV5FloatField(20, 0),
+		hongguoV5FloatField(21, 0),
+		hongguoV5StringField(22, hongguoV5OSVersion),
+		hongguoV5SintField(23, 41),
+		hongguoV5SintField(24, 36),
+		hongguoV5SintField(25, state.startedMS),
+		hongguoV5SintField(26, state.startedMS),
+		hongguoV5SintField(27, state.startedMS),
+		hongguoV5SintField(28, nowMS),
+		hongguoV5SintField(29, -1),
+		hongguoV5StringField(30, hongguoV5DeviceType),
+		hongguoV5StringField(31, hongguoV5DeviceBrand),
+		hongguoV5StringField(32, hongguoV5DeviceType),
+		hongguoV5StringField(33, hongguoV5DeviceType),
+		hongguoV5StringField(34, hongguoV5DeviceBrand),
+		hongguoV5StringField(35, hongguoV5DeviceBrand),
+		hongguoV5StringField(36, hongguoV5DeviceBrand),
+		hongguoV5SintField(38, 31),
+	})
+
+	env13 := hongguoV5Proto([]hongguoV5Field{
+		hongguoV5SintField(1, int64(ts)),
+		hongguoV5SintField(2, anonEnv13),
+		hongguoV5SintField(4, anonEnv14),
+	})
+	environment := hongguoV5Proto([]hongguoV5Field{
+		hongguoV5SintField(1, entropy.envLaunch),
+		hongguoV5SintField(2, 247235599),
+		hongguoV5SintField(3, 247235596),
+		hongguoV5SintField(5, 7),
+		hongguoV5StringField(6, "v04.10.03.04-bugfix"),
+		hongguoV5SintField(7, entropy.envPID),
+		hongguoV5StringField(8, hongguoV5Channel),
+		hongguoV5BytesField(12, device),
+		hongguoV5BytesField(13, env13),
+		hongguoV5StringField(14, hongguoV5VersionName),
+	})
+	var nestedFields []hongguoV5Field
+	for _, pair := range nestedPairs {
+		nestedFields = append(nestedFields, hongguoV5SintField(uint32(pair[0]), pair[1]))
+	}
+	nested := hongguoV5Proto(nestedFields)
+
+	message := hongguoV5Proto([]hongguoV5Field{
+		hongguoV5BytesField(1, hongguoV5Magic[:]),
+		hongguoV5SintField(2, 5),
+		hongguoV5SintField(3, int64(entropy.message)),
+		hongguoV5StringField(4, appID),
+		hongguoV5StringField(5, identity.DeviceID),
+		hongguoV5StringField(6, license),
+		hongguoV5StringField(7, hongguoV5VersionName),
+		hongguoV5StringField(8, "v04.10.03-ml-android"),
+		hongguoV5SintField(9, 0x040a0300),
+		hongguoV5BytesField(10, flags[:]),
+		hongguoV5SintField(12, int64(ts)),
+		hongguoV5BytesField(13, f13[:]),
+		hongguoV5BytesField(14, queryHash[:6]),
+		hongguoV5BytesField(15, nested),
+		hongguoV5StringField(16, secToken),
+		hongguoV5SintField(17, int64(ts)),
+		hongguoV5StringField(20, "none"),
+		hongguoV5SintField(21, 312),
+		hongguoV5BytesField(23, environment),
+		hongguoV5StringField(24, `{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}`),
+	})
+	if len(message) < 4 {
+		return "", errors.New("V5 medusa message is too short")
+	}
+
+	seedInput := make([]byte, 0, 68)
+	seedInput = append(seedInput, hongguoV5SignKey[:]...)
+	nonceBytes := hongguoV5LE32(entropy.medusaNonce)
+	seedInput = append(seedInput, nonceBytes[:]...)
+	seedInput = append(seedInput, hongguoV5SignKey[:]...)
+	seedHash := hongguoSM3(seedInput)
+
+	high := (entropy.medusaNonce >> 16) & 0xff
+	seedWord := (high<<11 | (entropy.medusaNonce >> 24)) ^ (high >> 5) ^ high
+	seed := hongguoV5LE32(^seedWord)
+
+	transformed := append(append([]byte(nil), flags[:]...), hongguoV5XMXOR(message, seedHash[:])...)
+	for left, right := 0, len(transformed)-1; left < right; left, right = left+1, right-1 {
+		transformed[left], transformed[right] = transformed[right], transformed[left]
+	}
+	for index := range transformed {
+		transformed[index] ^= seed[3-(index&3)]
+	}
+
+	check := uint32(0x18000001) | ((uint32(queryHash[0]) & 63) << 14) | ((uint32(f13[0]) & 63) << 8)
+	packed := make([]byte, 0, 11+len(transformed))
+	packed = append(packed, 0xca)
+	packedEntropy := hongguoV5LE32(entropy.packed)
+	packed = append(packed, packedEntropy[:]...)
+	checkBytes := hongguoV5LE32(check)
+	packed = append(packed, checkBytes[:]...)
+	packed = append(packed, transformed...)
+	packed = append(packed, byte(entropy.medusaNonce>>16), byte(entropy.medusaNonce>>24))
+
+	key := hongguoV5MD5(hongguoV5SignKey[:16])
+	iv := hongguoV5MD5(hongguoV5SignKey[16:])
+	encrypted, err := hongguoV5NewAES(key, ts).encrypt(packed, iv)
+	if err != nil {
+		return "", err
+	}
+
+	prefix := hongguoV5LE32(5)
+	prefixBytes := append(append([]byte(nil), prefix[:]...), hongguoV5Magic[:]...)
+	timestamp := hongguoV5LE32(ts)
+	for index := range prefixBytes {
+		prefixBytes[index] ^= timestamp[index&3]
+	}
+
+	output := append([]byte(nil), prefixBytes...)
+	output = append(output, byte(entropy.medusaNonce), byte(entropy.medusaNonce>>8), 0, 1)
+	output = append(output, encrypted...)
+	return base64.StdEncoding.EncodeToString(output), nil
+}
+
+// hongguoAnonymousPlaybackQuery: the ordered query envelope used by the
+// anonymous enhanced V5 route. _rticket keeps its early position; the
+// signing loop only changes its value. klink_egdi rides last, only when the
+// registered identity returned one.
+func hongguoAnonymousPlaybackQuery(identity hongguoAnonV5Identity, ticket int64) string {
+	pairs := [][2]string{
+		{"device_platform", "android"},
+		{"os", "android"},
+		{"ssmix", "a"},
+		{"_rticket", fmt.Sprintf("%d", ticket)},
+		{"cdid", identity.CDID},
+		{"channel", hongguoV5Channel},
+		{"aid", "8662"},
+		{"app_name", "novelread"},
+		{"version_code", hongguoV5VersionCode},
+		{"version_name", hongguoV5VersionName},
+		{"manifest_version_code", hongguoV5VersionCode},
+		{"update_version_code", hongguoV5VersionCode},
+		{"resolution", hongguoAnonResolution},
+		{"dpi", hongguoAnonDPI},
+		{"device_type", hongguoV5DeviceType},
+		{"device_brand", hongguoV5DeviceBrand},
+		{"language", "zh"},
+		{"os_api", hongguoV5OSAPI},
+		{"os_version", hongguoV5OSVersion},
+		{"ac", "wifi"},
+		{"host_abi", "arm64-v8a"},
+		{"dragon_device_type", "phone"},
+		{"pv_player", hongguoV5VersionCode},
+		{"compliance_status", "0"},
+		{"need_personal_recommend", "1"},
+		{"player_so_load", "1"},
+		{"is_android_pad_screen", "0"},
+		{"rom_version", hongguoAnonROMVersion},
+		{"iid", identity.InstallID},
+		{"device_id", identity.DeviceID},
+	}
+	if identity.EGDI != "" {
+		pairs = append(pairs, [2]string{"klink_egdi", identity.EGDI})
+	}
+	var query strings.Builder
+	for _, pair := range pairs {
+		if query.Len() > 0 {
+			query.WriteByte('&')
+		}
+		query.WriteString(hongguoV5EncodeComponent(pair[0]))
+		query.WriteByte('=')
+		query.WriteString(hongguoV5EncodeComponent(pair[1]))
+	}
+	return query.String()
+}
+
+// hongguoAnonSignPlayback signs the enhanced anonymous playback POST.
+// The caller supplies the exact gzip bytes that will be sent.
+func hongguoAnonSignPlayback(base string, compressedBody []byte, identity hongguoAnonV5Identity) (hongguoV5Request, error) {
+	nowMS := time.Now().UnixMilli()
+	return hongguoAnonSignPlaybackAt(base, compressedBody, identity, nowMS, hongguoV5LoadProcessState(nowMS), hongguoAnonRandomEntropy())
+}
+
+// hongguoAnonSignPlaybackAt is the deterministic seam for tests.
+func hongguoAnonSignPlaybackAt(base string, compressedBody []byte, identity hongguoAnonV5Identity, nowMS int64, state hongguoV5ProcessState, entropy hongguoAnonEntropy) (hongguoV5Request, error) {
+	if base == "" {
+		return hongguoV5Request{}, errors.New("anonymous V5 playback base URL is empty")
+	}
+	if strings.ContainsAny(base, "?#") {
+		return hongguoV5Request{}, errors.New("anonymous V5 playback base URL must not contain a query or fragment")
+	}
+	if identity.DeviceID == "" || identity.InstallID == "" || identity.CDID == "" {
+		return hongguoV5Request{}, errors.New("anonymous V5 playback identity is incomplete")
+	}
+	seconds := nowMS / 1000
+	if seconds < 0 || seconds > math.MaxUint32 {
+		return hongguoV5Request{}, errors.New("anonymous V5 timestamp is outside the protocol range")
+	}
+	ts := uint32(seconds)
+	bodyMD5 := hongguoV5MD5(compressedBody)
+
+	for offset := int64(0); offset < 1024; offset++ {
+		ticket := nowMS + offset
+		if ticket < nowMS {
+			return hongguoV5Request{}, errors.New("anonymous V5 request ticket overflow")
+		}
+		query := hongguoAnonymousPlaybackQuery(identity, ticket)
+		queryHash := hongguoSM3([]byte(query))
+		if hongguoV5BranchIV(queryHash, bodyMD5, ts)&15 != 12 {
+			continue
+		}
+		medusa, err := hongguoAnonymousMedusa(queryHash, bodyMD5, ts, nowMS, identity, state, entropy)
+		if err != nil {
+			return hongguoV5Request{}, err
+		}
+		argusBytes := hongguoV5LE32(ts)
+		var ladonBytes [4]byte
+		binary.BigEndian.PutUint32(ladonBytes[:], ts)
+		headers := http.Header{
+			"X-Khronos":        {fmt.Sprintf("%d", ts)},
+			"X-Gorgon":         {hongguoV5GenerateGorgon(query, compressedBody, ts, entropy.gorgon)},
+			"X-Argus":          {base64.StdEncoding.EncodeToString(argusBytes[:])},
+			"X-Ladon":          {base64.StdEncoding.EncodeToString(ladonBytes[:])},
+			"X-Helios":         {hongguoV5Helios(ts, entropy.helios)},
+			"X-Medusa":         {medusa},
+			"X-Xs-From-Web":    {"0"},
+			"X-Ss-Stub":        {strings.ToUpper(hex.EncodeToString(bodyMD5[:]))},
+			"Content-Type":     {"application/json; charset=utf-8"},
+			"Content-Encoding": {"gzip"},
+			"User-Agent":       {hongguoV5UserAgent},
+			"Accept":           {"application/json"},
+		}
+		return hongguoV5Request{URL: base + "?" + query, Headers: headers}, nil
+	}
+	return hongguoV5Request{}, errors.New("anonymous V5 playback signing could not find the branch-12 ticket")
 }

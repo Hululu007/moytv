@@ -8,9 +8,9 @@ package core
 //   - 路由 fanqie-plan / fanqie-feed：huoyi_juhe rust/src/endpoints/router.rs
 //   - plan 取种 + cell/change 合并：rust/src/endpoints/home.rs（fanqie_plan_params、
 //     fanqie_video_plan、fanqie_video_feed），2026-11-08 活体实测能通。
-//   - 取流三腿（video_tab / multi_video_model / video_model）与红果槽同一批接口，
-//     本槽不另写，直接复用 resolveHongguoAppMedia（含刚落树的恢复环：90 秒总预算、
-//     三腿同乘一轮换环、轮换退避）；详情复用红果(新)的 SSR 详情；搜索复用红果(新)
+//   - 取流与红果槽同一批接口，本槽不另写，直接复用 resolveHongguoAppMedia
+//     （取流梯子 anon→v5→model-a→model-c→tab-b，90 秒总预算、门冷却、
+//     空包同门重探、至多一次身份轮换）；详情复用红果(新)的 SSR 详情；搜索复用红果(新)
 //     的 JSON 搜索接口。本槽新增的只是发现流路与分发外壳。
 //
 // 身份口径（2026-11-17 活站探针实证）：plan/v 与 cell/change/v 用现有凤凰身份
