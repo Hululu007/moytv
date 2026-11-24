@@ -61,6 +61,7 @@ class ActressSyncResult {
     required this.works,
     required this.failedSources,
     required this.cancelled,
+    this.budgetExpired = false,
   });
 
   final int persons;
@@ -68,7 +69,21 @@ class ActressSyncResult {
   final List<ActressRosterSourceId> failedSources;
   final bool cancelled;
 
+  /// 本轮是否因阶段总预算到时停下（不是用户取消）：断点已记，
+  /// 下次继续跑，未跑完的人仍在待取清单里。
+  final bool budgetExpired;
+
   bool get hasFailures => failedSources.isNotEmpty;
+}
+
+/// 取消中断：在途取数不等它超时、立刻停等（见 [_raceCancel]）。
+/// 只表示“不等了”，底层的取数 future 本身停不下来（Dart future
+/// 不可撤），它的结果被丢弃、不再写库。
+class _SyncCancelled implements Exception {
+  const _SyncCancelled();
+
+  @override
+  String toString() => '同步已取消';
 }
 
 /// 一次性修复检查点的阶段名：每源一条，修复跑完即记完成。
@@ -105,8 +120,23 @@ const _filmsRepairPhase = 'films_repair_v1';
 ///   3 个分类工人并行爬分类）；在途请求有界：每源每阶段不超过
 ///   对应工人数，两源并行时全轮在途不超过 8 路、每站不超过 4 路；
 ///   失败重试是各工人自己的事（_withRetry 最多 3 次、600ms 起
-///   指数退避），不堵住其他工人；名册按名合并是读-改-写，入库
+///   指数退避），不堵住其他工人；作品旧路按页重试（2026-11-24
+///   同步卡顿修复：一页失败只重试这一页，不把整人全部页重取；
+///   旧的整人重试是一页失败就把整人多页全重取 3 遍，作品多的
+///   演员单人最坏 300 秒以上）；名册按名合并是读-改-写，入库
 ///   写操作串在一条互斥链上（取页仍并行），不并出重名。
+/// - 取消真中断（2026-11-24 同步卡顿修复）：cancel() 完成一次
+///   run 内有效的取消信号，在途取数用 [_raceCancel] 与信号竞跑，
+///   点取消后不等在途单元超时（最长 70 秒 py 调用、140 秒补流）
+///   立刻停等；在途请求本身停不下来，只是不再等它，结果丢弃
+///   不写库；重试退避的等待同样可撤。
+/// - 进度（2026-11-24 同步卡顿修复）：名册每存一人、作品每取一页
+///   都报一次真实 detail（面板 600ms 轮询看到的数字会动）；名册/
+///   排行取页单元最长 60–135 秒无新进度时，每秒发一次“第 X 页
+///   取数中，已等 N 秒”心跳，只报存活、不伪造进度。
+/// - 阶段总预算（2026-11-24 同步卡顿修复）：作品阶段一轮最多
+///   [filmsPhaseBudget]（默认 60 分钟），到时停下、断点记未完成，
+///   下次继续跑，不把一轮拖成几小时到几天；爬虫腿走同一预算。
 class ActressSyncService {
   ActressSyncService({
     required this.db,
@@ -115,6 +145,7 @@ class ActressSyncService {
     this.filmsConcurrency = 4,
     this.maxAttempts = 3,
     this.crawlService,
+    this.filmsPhaseBudget = const Duration(minutes: 60),
   });
 
   /// 名册阶段取页工人数（页与页之间并行；页码靠 hasMore 探知，
@@ -131,6 +162,9 @@ class ActressSyncService {
   final int filmsConcurrency;
   final int maxAttempts;
 
+  /// 作品阶段一轮的总预算：到时停下记断点，下次继续跑。
+  final Duration filmsPhaseBudget;
+
   /// 潮流源作品阶段的爬虫腿（不传时潮流作品走旧的逐人取流；
   /// 列表页必传——同步作品改为爬虫逻辑就靠它）。
   final ActressSiteCrawlService? crawlService;
@@ -141,6 +175,14 @@ class ActressSyncService {
 
   bool _running = false;
   bool _cancelled = false;
+
+  /// 本轮是否因作品阶段总预算到时停下（不是用户取消）。
+  bool _budgetExpired = false;
+
+  /// 一次 run() 内有效的取消信号：cancel() 完成它，[_raceCancel]
+  /// 听到就立刻停等。run 开始时重建，跑完不复用。
+  Completer<void>? _cancelSignal;
+
   Future<ActressSyncResult>? _currentRun;
   DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -163,8 +205,49 @@ class ActressSyncService {
 
   void cancel() {
     _cancelled = true;
+    // 完成本次 run 的取消信号：在途的取数听到就立刻停等，不用
+    // 等它超时；信号只完成一次，重复点取消不抛错。
+    final signal = _cancelSignal;
+    if (signal != null && !signal.isCompleted) signal.complete();
     // 取消透传给爬虫腿：同步停了，现爬也要停，不留后台继续爬。
     crawlService?.cancel();
+  }
+
+  /// 等一个取数 future，但取消时不等它超时、立刻抛 [_SyncCancelled]。
+  /// 底层的取数本身停不下来（Dart future 不可撤）：竞跑输了的那
+  /// 一方结果被丢弃——取数晚回来时它的完成/错误回调都已挂上，
+  /// 不会变成未处理异常；写库在 await 之后，抛错即跳过，不写库。
+  Future<T> _raceCancel<T>(Future<T> future) {
+    if (_cancelled) throw const _SyncCancelled();
+    final signal = _cancelSignal;
+    if (signal == null) return future;
+    final completer = Completer<T>();
+    var settled = false;
+    future.then(
+      (value) {
+        if (!settled) {
+          settled = true;
+          completer.complete(value);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!settled) {
+          settled = true;
+          completer.completeError(error, stack);
+        }
+      },
+    );
+    // 取消信号只完成一次；没取消时这个监听永不触发，run 结束
+    // 信号被替换后随旧信号一起回收。
+    unawaited(
+      signal.future.then((_) {
+        if (!settled) {
+          settled = true;
+          completer.completeError(const _SyncCancelled());
+        }
+      }),
+    );
+    return completer.future;
   }
 
   void dispose() {
@@ -185,6 +268,8 @@ class ActressSyncService {
   Future<ActressSyncResult> _run({required bool refresh}) async {
     _running = true;
     _cancelled = false;
+    _budgetExpired = false;
+    _cancelSignal = Completer<void>();
     try {
       // 两源并行：源与源之间不互相等，一个慢源不把整轮拖成串行；
       // 各源的三阶段仍按名册→作品→排行顺序跑；单源失败只记进
@@ -215,6 +300,7 @@ class ActressSyncService {
         works: overview.works,
         failedSources: failedSources,
         cancelled: _cancelled,
+        budgetExpired: _budgetExpired,
       );
     } finally {
       _running = false;
@@ -262,7 +348,10 @@ class ActressSyncService {
       } catch (_) {
         attempt++;
         if (attempt >= maxAttempts || _cancelled) rethrow;
-        await Future<void>.delayed(Duration(milliseconds: 600 * attempt));
+        // 退避等待也可撤：取消时不等完这几百毫秒。
+        await _raceCancel(
+          Future<void>.delayed(Duration(milliseconds: 600 * attempt)),
+        );
       }
     }
   }
@@ -303,10 +392,16 @@ class ActressSyncService {
         nextPage++;
         ActressRosterPage result;
         try {
-          result = await _withRetry(
-            () => source.fetchRosterPage(page, fetch: fetch),
+          // 取消时不等这页取完（最坏 3 次重试 × 45 秒）立刻停等。
+          result = await _raceCancel(
+            _withRetry(() => source.fetchRosterPage(page, fetch: fetch)),
           );
+        } on _SyncCancelled {
+          return;
         } catch (error) {
+          // 取消竞跑赢了但信号还没来得及置位时同样直接停，
+          // 不把取消记成页失败。
+          if (_cancelled) return;
           // 单页取失败（重试 3 次仍失败）：记失败，不再领新页，
           // 其他工人把手头的页跑完就停；本页下次断点续跑。
           failed++;
@@ -322,6 +417,24 @@ class ActressSyncService {
           } catch (_) {
             // 单人入库失败只跳过这一个人，不掀翻整页。
           }
+          // 每存一人报一次：慢站取一页要几十秒时，面板在存库
+          // 期间也能看到数字在走。不走 _emit 的 300ms 限流：
+          // 存库是成批爆发的（几人连续入库），限流会把整批
+          // “已存”全吞掉，面板反而看不到存库进度；面板本身
+          // 600ms 才轮询一次，多报几条无害。
+          _emit(
+            ActressSyncProgress(
+              phase: 'roster',
+              sourceIndex: sourceIndex,
+              sourceCount: sources.length,
+              done: pagesDone,
+              total: 0,
+              failed: failed,
+              running: true,
+              detail: '第 $page 页 · 已存 ${stored + pageStored} 人',
+            ),
+            force: true,
+          );
         }
         stored += pageStored;
         completed.add(page);
@@ -359,11 +472,36 @@ class ActressSyncService {
       }
     }
 
+    // 取数心跳：单页最坏 3 次重试 × 45 秒无新进度时，面板每秒
+    // 刷新一次“第 X 页取数中，已等 N 秒”，只报存活、不伪造进度；
+    // 阶段一结束就停，不留定时器。
+    final phaseStarted = DateTime.now();
+    final heartbeat = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_cancelled) return;
+      _emit(
+        ActressSyncProgress(
+          phase: 'roster',
+          sourceIndex: sourceIndex,
+          sourceCount: sources.length,
+          done: pagesDone,
+          total: 0,
+          failed: failed,
+          running: true,
+          detail:
+              '第 ${pagesDone + 1} 页取数中，已等 '
+              '${DateTime.now().difference(phaseStarted).inSeconds} 秒',
+        ),
+      );
+    });
     final workers = List.generate(
       rosterPageConcurrency,
       (_) => worker(),
     );
-    await Future.wait(workers);
+    try {
+      await Future.wait(workers);
+    } finally {
+      heartbeat.cancel();
+    }
     final finished = !_cancelled && phaseError == null && stopPage >= 0;
     if (finished) {
       await db.saveCheckpoint(
@@ -452,9 +590,17 @@ class ActressSyncService {
     var failed = 0;
     var nextIndex = 0;
     var lastCompletedId = 0;
+    // 阶段总预算：本阶段一轮最多 filmsPhaseBudget，到时停下、
+    // 断点记未完成，下次继续跑，不把一轮拖成几小时到几天。
+    final deadline = DateTime.now().add(filmsPhaseBudget);
 
     Future<void> worker() async {
       while (!_cancelled) {
+        // 预算到时停下：不领新人，断点留在最后完成的人。
+        if (DateTime.now().isAfter(deadline)) {
+          _budgetExpired = true;
+          return;
+        }
         if (nextIndex >= pending.length) return;
         final person = pending[nextIndex++];
         // 单人异常绝不掀翻工人：取流/写库抛错只记这一个人失败，
@@ -464,7 +610,28 @@ class ActressSyncService {
         // 疑似链路之一）。
         var ok = false;
         try {
-          ok = await _syncOnePersonFilms(source, person);
+          ok = await _syncOnePersonFilms(
+            source,
+            person,
+            deadline: deadline,
+            // 每取完一页报一次：作品多的演员单人要翻几十页时，
+            // 面板能看到“某人 第 X 页 · 已取 N 部”在走，而不是
+            // 几分钟只跳一个“已完成人数”。
+            onPage: (page, films) {
+              _emit(
+                ActressSyncProgress(
+                  phase: 'films',
+                  sourceIndex: sourceIndex,
+                  sourceCount: sources.length,
+                  done: done,
+                  total: total,
+                  failed: failed,
+                  running: true,
+                  detail: '${person.displayName} 第 $page 页 · 已取 $films 部',
+                ),
+              );
+            },
+          );
         } catch (_) {
           ok = false;
         }
@@ -500,11 +667,12 @@ class ActressSyncService {
         phase: 'films',
         cursor: '$lastCompletedId',
         total: total,
-        // 还有没跑完/失败的人，下次刷新继续补，不记完成。
-        finished: remaining.isEmpty && !_cancelled,
+        // 还有没跑完/失败的人，下次刷新继续补，不记完成；
+        // 预算到时同样不记完成，下次从断点续跑。
+        finished: remaining.isEmpty && !_cancelled && !_budgetExpired,
       ),
     );
-    if (repairOpen && !_cancelled) {
+    if (repairOpen && !_cancelled && !_budgetExpired) {
       await _saveRepairCheckpoint(source, repairCount);
     }
   }
@@ -523,16 +691,64 @@ class ActressSyncService {
     );
   }
 
+  /// 单人作品清单（2026-11-24 同步卡顿修复：按页取、按页重试）。
+  ///
+  /// 旧写法整人重试：`fetchFilms` 内部翻完全部页，一页失败就把
+  /// 整人全部页重取 3 遍，作品多的演员单人最坏 300 秒以上、进度
+  /// 几分钟不动；新写法每次只取一页，某一页 3 次重试仍失败时只
+  /// 记这个人失败、不重取已取到的页，下次断点续跑再补这个人。
+  /// 每取完一页调一次 [onPage]（页码，累计部数），面板按页推进。
+  /// [deadline] 是本阶段总预算的截止点，到时停下（不记这个人失败，
+  /// 下次继续）；取消时同样停下不等在途页取完。
+  ///
+  /// 跨轮边界：本轮只记“整人完成/失败”，不记“取到第几页”——
+  /// 下次续跑失败的人从第 1 页重取（页内重试已保证单轮内不重复
+  /// 拉已取到的页；入库 upsert 幂等，重取不重复入库）。
+  static const maxFilmsPagesPerPerson = 5000;
+
   Future<bool> _syncOnePersonFilms(
     ActressRosterSource source,
-    ActressPerson person,
-  ) async {
+    ActressPerson person, {
+    required DateTime deadline,
+    required void Function(int page, int films) onPage,
+  }) async {
     final sourceId = person.sourceIdFor(source.id);
     if (sourceId.isEmpty) return true;
+    final films = <RosterFilm>[];
     try {
-      final films = await _withRetry(
-        () => source.fetchFilms(sourceId, fetch: fetch),
-      );
+      for (var page = 1; page <= maxFilmsPagesPerPerson; page++) {
+        // 取消/预算到时：停下，不记这个人失败，下次继续。
+        if (_cancelled) return false;
+        if (DateTime.now().isAfter(deadline)) {
+          _budgetExpired = true;
+          return false;
+        }
+        late final List<RosterFilm> pageFilms;
+        try {
+          // 这一页单独重试 3 次：重试的只是这一页，已取到的页
+          // 不重取；取消时不等这页超时立刻停等。
+          pageFilms = await _raceCancel(
+            _withRetry(
+              () => source.fetchFilmsPage(sourceId, page, fetch: fetch),
+            ),
+          );
+        } on _SyncCancelled {
+          return false;
+        } catch (_) {
+          // 这一页 3 次重试仍失败：只记这个人失败，不重取已取到
+          // 的页，下次断点续跑再补这个人。
+          try {
+            await db.markFilmsState(person.localId, source.id, ok: false);
+          } catch (_) {
+            // 写失败状态失败：下次刷新靠 films 检查点未完成继续补。
+          }
+          return false;
+        }
+        // 空页即到头（与旧 fetchFilms 的循环同义）。
+        if (pageFilms.isEmpty) break;
+        films.addAll(pageFilms);
+        onPage(page, films.length);
+      }
       if (films.isEmpty) {
         // 拉回来了但为空：不是成功，记失败等下次刷新补。空结果
         // 绝不能记 ok，否则断点与刷新永不再重取，中毒永久化。
@@ -574,6 +790,11 @@ class ActressSyncService {
     final crawl = crawlService;
     if (crawl == null) return;
     final sub = crawl.progress.listen((crawlProgress) {
+      // 透传不走 _emit 的 300ms 限流：爬虫腿本身逐条报进度
+      // （每页/每条补流各一次），假源快跑时整轮不到 300ms，
+      // 限流会把全部“现爬…”文案吞掉，面板在作品阶段看不到
+      // 任何进度（与名册每存一人报数的 force:true 同一毛病）；
+      // 面板本身 600ms 才轮询一次，多报几条无害。
       _emit(
         ActressSyncProgress(
           phase: 'films',
@@ -585,17 +806,21 @@ class ActressSyncService {
           running: true,
           detail: crawlProgress.label,
         ),
+        force: true,
       );
       if (_cancelled) crawl.cancel();
     });
     try {
-      await crawl.start(site: 'mjv');
+      // 爬虫腿走作品阶段同一总预算：到时停下、断点记未完成，
+      // 下次继续跑。
+      await crawl.start(site: 'mjv', timeBudget: filmsPhaseBudget);
     } catch (_) {
       // 现爬内部已把失败写进 progress.error；这里不抛错，
       // films 检查点按未完成记，下次刷新断点续跑。
     } finally {
       await sub.cancel();
     }
+    if (crawl.budgetExpired) _budgetExpired = true;
     final current = crawl.current;
     final done = current.done && current.error.isEmpty;
     await db.saveCheckpoint(
@@ -604,10 +829,10 @@ class ActressSyncService {
         phase: 'films',
         cursor: '',
         total: current.items,
-        finished: done && !_cancelled,
+        finished: done && !_cancelled && !_budgetExpired,
       ),
     );
-    if (done && !_cancelled) {
+    if (done && !_cancelled && !_budgetExpired) {
       // 爬虫腿不产生逐人 films 状态，旧的逐人修复检查点一并
       // 收口（不留永远未完成的修复态）。
       await _saveRepairCheckpoint(source, 0);
@@ -634,6 +859,26 @@ class ActressSyncService {
     }
     var failed = false;
     String? phaseError;
+    // 取数心跳（与名册阶段同一口径）：一组并行取最坏 2 页 × 3 次
+    // 重试 × 20 秒无新进度时，面板每秒刷新一次存活文案。
+    final phaseStarted = DateTime.now();
+    final heartbeat = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_cancelled) return;
+      _emit(
+        ActressSyncProgress(
+          phase: 'ranking',
+          sourceIndex: sourceIndex,
+          sourceCount: sources.length,
+          done: page,
+          total: 0,
+          failed: 0,
+          running: true,
+          detail:
+              '排行 第 $page 页取数中，已等 '
+              '${DateTime.now().difference(phaseStarted).inSeconds} 秒',
+        ),
+      );
+    });
     try {
       while (!_cancelled && !failed) {
         // 一组并行取（窗口内页码连续），取完按页顺序提交。
@@ -642,13 +887,16 @@ class ActressSyncService {
         ];
         final results = await Future.wait([
           for (final p in window)
-            _withRetry(() => source.fetchRankingPage(p, fetch: fetch))
+            _raceCancel(
+                  _withRetry(() => source.fetchRankingPage(p, fetch: fetch)),
+                )
                 .then<({int page, ActressRosterPage result})>(
                   (r) => (page: p, result: r),
                 )
                 .catchError(
                   (Object e) => (page: -1, result: const ActressRosterPage(persons: [], hasMore: false)),
-                  test: (_) => true,
+                  // 取消不记成页失败：直接抛给外层按取消收口。
+                  test: (Object e) => e is! _SyncCancelled,
                 ),
         ]);
         // 按页顺序提交：窗口里某页失败时，只提交它之前的页，
@@ -733,6 +981,10 @@ class ActressSyncService {
         );
       }
       return false;
+    } on _SyncCancelled {
+      // 取消：本组已提交的页检查点已在循环内写过，直接收口，
+      // 不记成阶段失败、不写失败检查点。
+      return false;
     } catch (error) {
       await db.saveCheckpoint(
         ActressSyncCheckpoint(
@@ -745,6 +997,8 @@ class ActressSyncService {
         ),
       );
       return false;
+    } finally {
+      heartbeat.cancel();
     }
   }
 

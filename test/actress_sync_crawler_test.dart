@@ -141,6 +141,13 @@ class _TrackingRosterSource implements ActressRosterSource {
   }
 
   @override
+  Future<List<RosterFilm>> fetchFilmsPage(
+    String sourceId,
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async => const [];
+
+  @override
   Future<List<RosterFilm>> fetchFilms(
     String sourceId, {
     required ActressHttpFetch fetch,
