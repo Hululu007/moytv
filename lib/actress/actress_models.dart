@@ -155,13 +155,24 @@ class ActressSiteFilter {
   int get hashCode => siteId.hashCode;
 }
 
-/// 第二排册别筛选：按名册自带的标签字段筛（潮流名册 c 字段）。
+/// 第二排册别筛选：名册库按名册自带的标签字段筛（潮流名册 c 字段）；
+/// 视频库（女优库.db）没有名册标签列，按视频主分类筛人（见
+/// ActressDatabase.listPersons 视频库分支：tag 值当 main_category 用）。
 /// 无标签的人物（whos/MissAV 名册不带标签）只进 [all]，不进分册。
+/// 2026-11-24 用户令：数据库里有的分类全进这排，接在欧美后面平铺
+/// （国产/4K/动漫/三级/其他，值取自 video_category.main_category
+/// 在重合并库里的 DISTINCT 值，空值不单独成类）；名册里没有这些
+/// 标签，名册库上点它们是空列表（不是 bug，是名册没这个维度）。
 enum ActressTagFilter {
   all('三册全部', ''),
   coded('有码', '有码'),
   uncoded('无码', '无码'),
-  western('欧美', '欧美');
+  western('欧美', '欧美'),
+  domestic('国产', '国产'),
+  fourK('4K', '4K'),
+  anime('动漫', '动漫'),
+  sanji('三级', '三级'),
+  other('其他', '其他');
 
   const ActressTagFilter(this.label, this.tagValue);
 

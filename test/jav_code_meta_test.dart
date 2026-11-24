@@ -314,7 +314,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('演员与导演'), findsOneWidget);
       expect(find.text('あやみ旬果'), findsOneWidget);
-      expect(find.text('主演'), findsOneWidget);
+      // 2026-11-24 用户令：演员行只显示名字，主演/配角去掉。
+      expect(find.text('主演'), findsNothing);
+      expect(find.text('配角'), findsNothing);
       expect(find.textContaining('导演：サマンサ☆田畑'), findsOneWidget);
       // 番号只作匹配键、不显示；厂商、年份不显示
       expect(find.textContaining('番号：'), findsNothing);

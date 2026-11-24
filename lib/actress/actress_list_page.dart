@@ -173,11 +173,6 @@ class _ActressListPageState extends State<ActressListPage> {
   final _pageCache = <String, _CachedListPage>{};
   static const _pageCacheMaxKeys = 8;
 
-  /// 分类结果缓存（2026-11-24）：key = 主库路径+指纹 + 各外来库
-  /// 路径+指纹，值 = 合并后的分类列表。文件没变就不跑 GROUP BY。
-  String? _dbCategoriesCacheKey;
-  List<(String, int)>? _dbCategoriesCache;
-
   /// 外来库连接的文件指纹（打开时记的 mtime + 大小）：复用连接前先
   /// 比对，文件被用户在外面替换过就关掉重开，不能读旧文件句柄。
   final _extraDbFingerprints = <String, (DateTime, int)>{};
@@ -193,11 +188,6 @@ class _ActressListPageState extends State<ActressListPage> {
   var _tagFilter = ActressTagFilter.all;
   var _sort = ActressSort.worksDesc;
 
-  /// 数据库分类筛选：默认全部；选分类后列表只留该分类里有作品的
-  /// 人。分类来自用户库 video_category 主分类（FilmLibraryService
-  /// .categories，带作品数）；没接上库、没有分类时这行不显示。
-  var _category = '';
-  var _dbCategories = <(String, int)>[];
   var _query = '';
   var _generation = 0;
 
@@ -516,7 +506,6 @@ class _ActressListPageState extends State<ActressListPage> {
     if (!mounted) return;
     // 数据库里的分类读一次挂上行：同步跑完分类变了走
     // _refreshAfterSync 再刷。
-    unawaited(_loadDbCategories());
     // 不自动爬取（2026-11-20 用户令）：打开只读本地，不自动起爬、
     // 不后台自动续爬、不自动生成；只等用户手动点刷新/重试/同步。
     // 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件有作品就
@@ -663,7 +652,6 @@ class _ActressListPageState extends State<ActressListPage> {
     // 勾选变了（勾上或取消）都要重读分类与列表：取消最后一个外来库
     // 也要回单库。启动时 reload 为 false，启动流程自己读。
     if (reload) {
-      unawaited(_loadDbCategories());
       unawaited(_loadPage(reset: true));
     }
   }
@@ -695,7 +683,6 @@ class _ActressListPageState extends State<ActressListPage> {
       sort: _sort,
       query: _query,
       tag: _tagFilter.tagValue,
-      category: _category,
       videoTag: _videoTag,
       offset: 0,
       limit: window,
@@ -1124,7 +1111,6 @@ class _ActressListPageState extends State<ActressListPage> {
       sort: _sort,
       query: _query,
       tag: _tagFilter.tagValue,
-      category: _category,
       videoTag: _videoTag,
       offset: 0,
       limit: limit,
@@ -1192,7 +1178,6 @@ class _ActressListPageState extends State<ActressListPage> {
     setState(() => _overview = overview);
     await _loadPage(reset: true);
     if (!mounted) return;
-    unawaited(_loadDbCategories());
   }
 
   /// 只断点续跑：永远不从头重拉（refresh 恒为 false）。手动点一次
@@ -1573,7 +1558,6 @@ class _ActressListPageState extends State<ActressListPage> {
         sort: _sort,
         query: _query,
         tag: _tagFilter.tagValue,
-        category: _category,
         videoTag: _videoTag,
         offset: 0,
         limit: _pageSize,
@@ -1612,7 +1596,6 @@ class _ActressListPageState extends State<ActressListPage> {
       sort: _sort,
       query: _query,
       tag: _tagFilter.tagValue,
-      category: _category,
       videoTag: _videoTag,
       offset: _rawOffset,
       limit: _pageSize,
@@ -1635,7 +1618,6 @@ class _ActressListPageState extends State<ActressListPage> {
     final dbs = _extraDbs.keys.toList()..sort();
     return [
       _sex.name,
-      _category,
       _videoTag,
       _tagFilter.name,
       _sort.name,
@@ -1714,8 +1696,6 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 已选的标签（同库内容更新，标签筛选本身还有效）。
   void _clearListCaches() {
     _pageCache.clear();
-    _dbCategoriesCacheKey = null;
-    _dbCategoriesCache = null;
     _dbTagsCacheKey = null;
     _dbTagsCache = null;
   }
@@ -1985,51 +1965,28 @@ class _ActressListPageState extends State<ActressListPage> {
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
               child: _buildSearchField(),
             ),
+          // 2026-11-24 第二排就是视频分类：三册全部/有码/无码/欧美/
+          // 国产/4K/动漫/三级/其他，值取自数据库 video_category
+          // 主分类（见 ActressTagFilter），接在欧美后面同一排平铺；
+          // 9 个胶囊排不下就横向滑，不另起一排。
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-            child: Row(
-              children: [
-                for (final filter in ActressTagFilter.values) ...[
-                  ChoiceChip(
-                    label: Text(filter.label),
-                    selected: _tagFilter == filter,
-                    onSelected: (_) => _setTagFilter(filter),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-              ],
-            ),
-          ),
-          // 数据库里的分类（video_category 主分类）：横向滑，点分类
-          // 只留该分类里有作品的人；无分类时不占地方。
-          // chips 照活树改版换成霓虹药丸钮。
-          if (_dbCategories.isNotEmpty && !_genericMode)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    ActressNeonPill(
-                      key: const ValueKey('actress-category-all'),
-                      label: '全部',
-                      selected: _category.isEmpty,
-                      onTap: () => _setCategory(''),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final filter in ActressTagFilter.values) ...[
+                    ChoiceChip(
+                      label: Text(filter.label),
+                      selected: _tagFilter == filter,
+                      onSelected: (_) => _setTagFilter(filter),
                     ),
                     const SizedBox(width: 8),
-                    for (final category in _dbCategories) ...[
-                      ActressNeonPill(
-                        key: ValueKey('actress-category-${category.$1}'),
-                        label: '${category.$1}（${category.$2}）',
-                        selected: _category == category.$1,
-                        onTap: () => _setCategory(category.$1),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
                   ],
-                ),
+                ],
               ),
             ),
+          ),
           // 通用模式分类（2026-11-22：外来库视频列表页顶部的分类行，
           // 照活树改版）：从当前库自身的 video_category 表取分类
           // （见 GenericDbReader.categories），点分类只筛当前这个
@@ -2260,63 +2217,6 @@ class _ActressListPageState extends State<ActressListPage> {
     return keyParts.join(';');
   }
 
-  /// 读数据库里的分类（video_category 主分类 + 作品数）：影视库
-  /// 没接上、没分类时返回空，这行不显示；读失败也不崩、不影响列表。
-  Future<void> _loadDbCategories() async {
-    final provider = _fallback.filmDb;
-    final FilmLibraryService? service = switch (provider) {
-      FilmLibraryService p => p,
-      MultiDbFilmFallback p => p.primary,
-      _ => null,
-    };
-    if (service == null) return;
-    // 2026-11-24 切换不重载：分类结果缓存（见 _dbListCacheKey）。
-    final cacheKey = _dbListCacheKey();
-    if (_dbCategoriesCacheKey == cacheKey && _dbCategoriesCache != null) {
-      if (!mounted) return;
-      setState(() => _dbCategories = _dbCategoriesCache!);
-      return;
-    }
-    try {
-      var categories = await service.categories();
-      // 2026-11-23 多库去重：三个库是同一套合库的副本，分类数相加
-      // 会翻倍（有码 22 万计成 44 万）。分类的精确并集要拉全库
-      //（番号，播放链接）集合，太贵；取最大单库数——并集 ≈ 最大库数
-      //（副本之间几乎全重叠），误差 <1%。人物计数走精确并集，见
-      // _dedupMergedWorksCounts。
-      if (_hasExtraDbs) {
-        final counts = <String, int>{
-          for (final c in categories) c.$1: c.$2,
-        };
-        for (final extra in _extraDbs.values) {
-          try {
-            for (final c in await extra.dbCategories()) {
-              final prev = counts[c.$1];
-              if (prev == null || c.$2 > prev) counts[c.$1] = c.$2;
-            }
-          } catch (_) {}
-        }
-        final merged = counts.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value));
-        categories = [for (final e in merged) (e.key, e.value)];
-      }
-      // 2026-11-24 用户令：第三行不显示数据库名称分类——外来库把库名
-      // 写成了 video_category 的主分类，合并后滤掉（库名取自当前已勾
-      // 的 .db 文件名去后缀；真分类不在库名集合里，原样保留）。
-      final libNames = <String>{
-        for (final p in [_mytvBind?.dbPath ?? '', ..._extraDbs.keys])
-          if (p.isNotEmpty) path.basenameWithoutExtension(p),
-      };
-      categories = filterLibraryNameCategories(categories, libNames);
-      if (!mounted) return;
-      _dbCategoriesCacheKey = cacheKey;
-      _dbCategoriesCache = categories;
-      setState(() => _dbCategories = categories);
-    } catch (_) {
-      // 读不到分类就不显示这行，不影响列表。
-    }
-  }
-
   /// 通用模式分类：从当前库自身的 video_category 表读（见
   /// [GenericDbReader.categories]）；读失败也不崩、不影响列表，
   /// 只按“暂无分类”显示。切库/重读时由调用方先清掉旧分类再调。
@@ -2443,13 +2343,6 @@ class _ActressListPageState extends State<ActressListPage> {
     if (tag == _genericTag) return;
     setState(() => _genericTag = tag);
     unawaited(_loadPage(reset: true));
-  }
-
-  void _setCategory(String category) {
-    if (category == _category) return;
-    _saveScrollOffsetForCache();
-    setState(() => _category = category);
-    _reloadAfterFilterChange();
   }
 
   void _setSex(ActressSexFilter sex) {

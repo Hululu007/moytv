@@ -94,21 +94,55 @@ class _NoopCrawl extends ActressSiteCrawlService {
 ThemeData _previewTheme(AppThemeMode mode) {
   final base = AppThemeConfig.forTheme(mode).toThemeData();
   TextStyle? cjk(TextStyle? style) => style?.copyWith(fontFamily: 'PreviewCJK');
+  // ChoiceChip/TextButton 这类控件会把主题里的 labelStyle/textStyle
+  // 当整套 DefaultTextStyle 装上去（不继承外层的 PreviewCJK），
+  // 主题里那些样式又没写 fontFamily，测试环境没有系统字体兜底，
+  // 中文就变方框；真机上有系统字体兜底不会这样。这里只改预览
+  // 主题，给这些样式也补上 PreviewCJK，产品代码不动。
+  ButtonStyle cjkButton(ButtonStyle? style) {
+    final s = style ?? const ButtonStyle();
+    final resolved = s.textStyle?.resolve({}) ?? const TextStyle();
+    return s.copyWith(
+      textStyle: WidgetStatePropertyAll(
+        resolved.copyWith(fontFamily: 'PreviewCJK'),
+      ),
+    );
+  }
+
   return base.copyWith(
     textTheme: base.textTheme.apply(fontFamily: 'PreviewCJK'),
     primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'PreviewCJK'),
     appBarTheme: base.appBarTheme.copyWith(
       titleTextStyle: cjk(base.appBarTheme.titleTextStyle),
     ),
+    chipTheme: base.chipTheme.copyWith(
+      labelStyle: cjk(base.chipTheme.labelStyle),
+      secondaryLabelStyle: cjk(base.chipTheme.secondaryLabelStyle),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: cjkButton(base.textButtonTheme.style),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: cjkButton(base.filledButtonTheme.style),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: cjkButton(base.outlinedButtonTheme.style),
+    ),
   );
 }
 
 Future<void> _settle(WidgetTester tester) async {
-  for (var i = 0; i < 10; i++) {
-    try {
-      await tester.pump(const Duration(milliseconds: 100));
-    } catch (_) {}
-  }
+  // 首屏 _bootstrap 里有真异步文件 IO，FakeAsync 定步 pump 等不到它
+  // 完成（见 AGENTS.md 2026-11-18 条）；runAsync 里用真时间轮询、
+  // 块内 pump，否则截出来的是转圈。
+  await tester.runAsync(() async {
+    for (var i = 0; i < 30; i++) {
+      try {
+        await Future.delayed(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 100));
+      } catch (_) {}
+    }
+  });
   for (var i = 0; i < 10; i++) {
     try {
       if (tester.takeException() == null) break;

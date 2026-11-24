@@ -1883,6 +1883,20 @@ class SqfliteActressDatabase implements ActressDatabase {
             "AND COALESCE(vc2.main_category, '') = ?)",
           );
         }
+        if (tag.isNotEmpty) {
+          // 2026-11-24 册别筛按视频主分类筛人（guochang 口径）：
+          // 视频库没有名册标签列，tag 值本身就是主分类名（有码/
+          // 无码/国产/4K/动漫/三级/欧美/其他）；为空（全部）时不加
+          // 条件，默认列表性能不变。
+          args.add(tag);
+          conditions.add(
+            'EXISTS (SELECT 1 FROM video_actress va2 '
+            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+            'WHERE va2.cate_id = pc.cate_id '
+            "AND COALESCE(vc2.main_category, '') = ?)",
+          );
+        }
         if (useVideoTag) {
           args.add(videoTag);
           conditions.add(
@@ -1955,6 +1969,19 @@ class SqfliteActressDatabase implements ActressDatabase {
             "AND COALESCE(vc2.main_category, '') = ?)",
           );
         }
+        if (tag.isNotEmpty) {
+          // 2026-11-24 册别筛按视频主分类筛人（guochang 口径，
+          // 见无 actresses 表分支的注释）；tag 值就是主分类名。
+          args.add(tag);
+          conditions.add(
+            'EXISTS (SELECT 1 FROM actresses a2 '
+            'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
+            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+            'WHERE a2.name = r.name '
+            "AND COALESCE(vc2.main_category, '') = ?)",
+          );
+        }
         if (useVideoTag) {
           args.add(videoTag);
           conditions.add(
@@ -2006,6 +2033,19 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 一份（COALESCE(main_category, type_name, '')），点分类
         // 标签筛出来的人与标签数一致。
         args.add(category);
+        conditions.add(
+          'EXISTS (SELECT 1 FROM video_actress va2 '
+          'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+          'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+          'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
+          'WHERE a3.name = a.name '
+          "AND COALESCE(vc2.main_category, '') = ?)",
+        );
+      }
+      if (tag.isNotEmpty) {
+        // 2026-11-24 册别筛按视频主分类筛人（guochang 口径，
+        // 见无 actresses 表分支的注释）；tag 值就是主分类名。
+        args.add(tag);
         conditions.add(
           'EXISTS (SELECT 1 FROM video_actress va2 '
           'JOIN videos v2 ON v2.vod_id = va2.vod_id '
@@ -2104,6 +2144,18 @@ class SqfliteActressDatabase implements ActressDatabase {
           args.add('%$trimmedQuery%');
           conditions.add('cate_id LIKE ?');
         }
+        if (tag.isNotEmpty) {
+          // 2026-11-24 册别筛按视频主分类计数（guochang 口径，
+          // 见 listPersons 无 actresses 表分支的注释）。
+          args.add(tag);
+          conditions.add(
+            'EXISTS (SELECT 1 FROM video_actress va2 '
+            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+            'WHERE va2.cate_id = video_actress.cate_id '
+            "AND COALESCE(vc2.main_category, '') = ?)",
+          );
+        }
         if (useVideoTag) {
           args.add(videoTag);
           conditions.add(
@@ -2134,6 +2186,19 @@ class SqfliteActressDatabase implements ActressDatabase {
         conditions.add("sex = 'male'");
       } else if (sex == ActressSexFilter.female) {
         conditions.add("COALESCE(NULLIF(sex,''),'female') = 'female'");
+      }
+      if (tag.isNotEmpty) {
+        // 2026-11-24 册别筛按视频主分类计数（guochang 口径，
+        // 见 listPersons 无 actresses 表分支的注释）。
+        args.add(tag);
+        conditions.add(
+          'EXISTS (SELECT 1 FROM actresses a2 '
+          'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
+          'JOIN videos v2 ON v2.vod_id = va2.vod_id '
+          'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
+          'WHERE a2.name = actresses.name '
+          "AND COALESCE(vc2.main_category, '') = ?)",
+        );
       }
       if (useVideoTag) {
         args.add(videoTag);
