@@ -119,7 +119,7 @@
 
 ## 六、合树注意点
 
-- 主树 main 正被 tag-filter 合并推进（合树工人在 `~/workspace/moyi_main_checkout` 里），合树时需 rebase 到新 main；本分支只碰 Go 核取流文件，与 tag-filter 的 Dart 改动无交集，冲突面小。
-- 本分支基线 `8a501e4`；合树前重跑 `go test ./core/`（或全量）确认。
+- 主树 main 已从基线 `8a501e4` 推进到 `b51e55d`（tag-filter 合并 ce5c23d + 女优 tab 改动 b51e55d），合树时需 rebase 到新 main；本分支只碰 Go 核取流文件，与 tag-filter 的 Dart 改动无交集，冲突面小。
+- 本分支已提交：`71f9312`（fanqie-v5）。合树前重跑 `go test ./core/ -run 'TestHongguoV5'`（或全量）确认。
 - `provider_hongguo_v5_test.go` 的夹具已改签名（answer 按门打 tag），若合树时别的分支也在改同一夹具，以本版为准。
 - 不要把本分支的改动与修仙树 `~/workspace/huoyi_juhe` 的 Rust 版混淆：两者是同一修复的两种语言实现，Go 版以上游为准，修仙版 5 处偏离已在对照节列明。
