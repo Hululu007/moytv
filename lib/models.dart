@@ -84,40 +84,45 @@ class SourceSite {
   String get coreSlotId => slotId.isEmpty ? id : slotId;
   bool get onlineSearch =>
       isVideoSection || id == 'hongguo' || pagedSearch || duanjuOnlineSearch;
-  bool get duanjuOnlineSearch => const {
-    'yaguo',
-    'maoguo',
-    'fanguo',
-    'guanguo',
-    'heguo',
-    'xingguo',
-    'huaguo',
-    'niuguo',
-    'wangguo',
-    'faguo',
-    'wuguo',
-    'huangdou_yh',
-    'ai2026',
-    'ai4k',
-    'aidj',
-    'aiduanju',
-    'aimove',
-    'aisxpc',
-    'danai',
-    'dj69',
-    'dj91',
-    'djwo',
-    'duanjuone',
-    'aihi',
-    'ficeforand',
-    'aipornx',
-    'aiyinhang',
-    'sexaix',
-    'aiwu',
-    'youzidj',
-    'jinguo',
-    'jinguo_jg',
-  }.contains(id);
+  bool get duanjuOnlineSearch =>
+      // 动态安装的 idj 短剧站没有字面量可补，改规则式：
+      // 短剧分区 + js 导入站自动获得在线搜索（现有 JS 站全是视频分区，
+      // 不受影响）。
+      (isDramaSection && importType == 'js') ||
+      const {
+        'yaguo',
+        'maoguo',
+        'fanguo',
+        'guanguo',
+        'heguo',
+        'xingguo',
+        'huaguo',
+        'niuguo',
+        'wangguo',
+        'faguo',
+        'wuguo',
+        'huangdou_yh',
+        'ai2026',
+        'ai4k',
+        'aidj',
+        'aiduanju',
+        'aimove',
+        'aisxpc',
+        'danai',
+        'dj69',
+        'dj91',
+        'djwo',
+        'duanjuone',
+        'aihi',
+        'ficeforand',
+        'aipornx',
+        'aiyinhang',
+        'sexaix',
+        'aiwu',
+        'youzidj',
+        'jinguo',
+        'jinguo_jg',
+      }.contains(id);
   bool get pagedSearch =>
       isVideoSection ||
       id == 'huangju' ||
@@ -128,36 +133,38 @@ class SourceSite {
       id == 'ikanbot' ||
       id == 'a123' ||
       duanjuPaged;
-  bool get duanjuPaged => const {
-    'yaguo',
-    'guanguo',
-    'huaguo',
-    'niuguo',
-    'wangguo',
-    'faguo',
-    'wuguo',
-    'huangdou_yh',
-    'ai2026',
-    'ai4k',
-    'aidj',
-    'aiduanju',
-    'aimove',
-    'aisxpc',
-    'danai',
-    'dj69',
-    'dj91',
-    'djwo',
-    'duanjuone',
-    'aihi',
-    'ficeforand',
-    'aipornx',
-    'aiyinhang',
-    'sexaix',
-    'aiwu',
-    'youzidj',
-    'jinguo',
-    'jinguo_jg',
-  }.contains(id);
+  bool get duanjuPaged =>
+      (isDramaSection && importType == 'js') ||
+      const {
+        'yaguo',
+        'guanguo',
+        'huaguo',
+        'niuguo',
+        'wangguo',
+        'faguo',
+        'wuguo',
+        'huangdou_yh',
+        'ai2026',
+        'ai4k',
+        'aidj',
+        'aiduanju',
+        'aimove',
+        'aisxpc',
+        'danai',
+        'dj69',
+        'dj91',
+        'djwo',
+        'duanjuone',
+        'aihi',
+        'ficeforand',
+        'aipornx',
+        'aiyinhang',
+        'sexaix',
+        'aiwu',
+        'youzidj',
+        'jinguo',
+        'jinguo_jg',
+      }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
   String get groupId => switch (id) {
     'huangguo-video' || 'huangguoai' || 'cloudfront' => 'huangguo',
@@ -841,6 +848,11 @@ class SourceSite {
     'wangguo',
     'faguo',
     'wuguo',
+    // idj 成人站（只影响从未配过隐藏列表的新用户；已配过的用户以存档值为准）：
+    // 默认不显示，要在源显示列表里手动打开才可见。只是默认不显示，
+    // 不是访问控制（导入站走 allowsSource 直接放行）。
+    'idj_chaoliu',
+    'idj_ai2048',
   };
 }
 
@@ -964,6 +976,32 @@ class SourceGroup {
           sources: entry.value,
         ),
       ...imported,
+    ];
+  }
+
+  /// 站点切换弹窗的展示分组（设计 §5.3）：按内容类别分，不按来源分。
+  /// 短剧类 = `section == sectionDrama`（不论显示名带不带 🔞）；
+  /// 视频类 = 视频分区且显示名不以 🔞 开头；
+  /// 午夜类 = 视频分区且显示名以 🔞 开头。
+  /// 空组不出现；组内顺序沿用传入的顺序，不重排。
+  /// 这只是展示分组，不改变任何站的浏览分区（`isVodZoneSource` 不动）。
+  static List<SourceGroup> pickerCategoryGroups(Iterable<SourceSite> sources) {
+    final drama = <SourceSite>[];
+    final video = <SourceSite>[];
+    final midnight = <SourceSite>[];
+    for (final source in sources) {
+      if (!source.isVideoSection) {
+        drama.add(source);
+      } else if (source.name.startsWith('🔞')) {
+        midnight.add(source);
+      } else {
+        video.add(source);
+      }
+    }
+    return [
+      if (drama.isNotEmpty) SourceGroup('picker:drama', '短剧类', drama),
+      if (video.isNotEmpty) SourceGroup('picker:video', '视频类', video),
+      if (midnight.isNotEmpty) SourceGroup('picker:midnight', '午夜类', midnight),
     ];
   }
 }

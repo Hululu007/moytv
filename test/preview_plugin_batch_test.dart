@@ -19,7 +19,6 @@ import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/custom_sources_screen.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/detail_screen.dart';
-import 'package:moyi/import_center_screen.dart';
 import 'package:moyi/jar_bridge.dart';
 import 'package:moyi/left_category_layout.dart';
 import 'package:moyi/live_models.dart';
@@ -710,7 +709,6 @@ void main() {
                   sectionName: '片库',
                   currentId: 'b',
                   groups: groups,
-                  repository: FixtureRepository(),
                 ),
               ),
               child: const Text('打开选站'),

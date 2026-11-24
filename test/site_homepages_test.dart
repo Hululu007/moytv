@@ -27,9 +27,9 @@ void main() {
       final text = File(entry.assetPath).readAsStringSync();
       expect(
         text,
-        contains(Uri.parse(url!).host),
+        contains(Uri.parse(url).host),
         reason:
-            '${entry.siteId} 的主机 ${Uri.parse(url!).host} 不在 ${entry.assetPath} 里',
+            '${entry.siteId} 的主机 ${Uri.parse(url).host} 不在 ${entry.assetPath} 里',
       );
       checked.add(entry.siteId);
     }

@@ -70,6 +70,11 @@ Future<String?> showSitePickerDialog(
   /// 打开时默认显示的区：0 内置区，1 导入区。导入成功后调用方
   /// 重开弹窗传 1，列表自动落到导入区。
   int initialZoneIndex = 0,
+
+  /// 打开时自动滚到的站 id（不传则滚到当前站）。导入成功后调用方
+  /// 重开弹窗传新站 id，列表自动滚到新装的站；选中高亮仍以
+  /// currentId 为准。
+  String? scrollToId,
 }) => showDialog<String>(
   context: context,
   builder: (context) => SitePickerDialog(
@@ -81,6 +86,7 @@ Future<String?> showSitePickerDialog(
     onImport: onImport,
     enableZoneFlip: enableZoneFlip,
     initialZoneIndex: initialZoneIndex,
+    scrollToId: scrollToId,
   ),
 );
 
@@ -95,6 +101,7 @@ class SitePickerDialog extends StatefulWidget {
     this.onImport,
     this.enableZoneFlip = false,
     this.initialZoneIndex = 0,
+    this.scrollToId,
   });
 
   final String sectionName;
@@ -105,6 +112,11 @@ class SitePickerDialog extends StatefulWidget {
   final Future<void> Function()? onImport;
   final bool enableZoneFlip;
   final int initialZoneIndex;
+
+  /// 打开时自动滚到的站：默认是当前站；调用方传 [scrollToId] 时
+  /// 滚到那个站（导入成功后重开弹窗定位新站用），选中高亮仍以
+  /// [currentId] 为准，不把定位站误标成当前站。
+  final String? scrollToId;
 
   @override
   State<SitePickerDialog> createState() => _SitePickerDialogState();
@@ -166,16 +178,18 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
   }
 
-  /// 打开弹窗自动滚到当前选中的站。宫格列表一次全建出来，选中行
-  /// 首帧就在树里，直接 ensureVisible；没建出来时按视口步进往下
-  /// 跳、直到它出现再 ensureVisible；到底且范围不再变就放弃。
+  /// 打开弹窗自动滚到当前选中的站（或调用方指定的定位站）。
+  /// 宫格列表一次全建出来，选中行首帧就在树里，直接 ensureVisible；
+  /// 没建出来时按视口步进往下跳、直到它出现再 ensureVisible；
+  /// 到底且范围不再变就放弃。
   void _scrollToCurrent() {
     if (_scrolledToCurrent || !mounted || _scrollSteps >= 80) return;
+    final targetId = widget.scrollToId ?? widget.currentId;
     // 当前站不在活动区时不滚（导入区打开时当前站多半在内置区）。
     if (_flipEnabled) {
       final inZone = _zoneGroups(
         _zoneIndex,
-      ).any((group) => group.entries.any((entry) => entry.id == widget.currentId));
+      ).any((group) => group.entries.any((entry) => entry.id == targetId));
       if (!inZone) return;
     }
     final targetContext = _currentKey.currentContext;
@@ -423,7 +437,8 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
         for (final group in visible) ...[
           if (!searching && group.title.isNotEmpty)
             NeonSectionTitle(
-              '${group.title}（${group.entries.length}）',
+              // 组标题纯文本「名 + 空格 + 数」，不用括号（设计 §5.4）。
+              '${group.title} ${group.entries.length}',
               padding: const EdgeInsets.only(top: 12, bottom: 4),
             ),
           _siteGrid(group),

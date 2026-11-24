@@ -25,6 +25,7 @@ import 'hongguo_account.dart';
 import 'hongguo_account_store.dart';
 import 'jar_bridge.dart';
 import 'local_store.dart';
+import 'idj_plugin_store.dart';
 import 'plugin_manager.dart';
 import 'plugin_share_intent.dart';
 import 'profiles_screen.dart';
@@ -174,6 +175,10 @@ class _AppBootstrapState extends State<AppBootstrap>
       // 插件化首次启动：装好全部未被用户卸载的内置插件
       //（整个内置 jar 一个插件 + 44 个 py 插件），行为与以前一致。
       await PluginManager.ensureBuiltinPlugins(preferences);
+      // idj 插件启动恢复：读索引、逐个校验包文件存在且哈希未变、
+      // 重登记已启用的插件；包文件缺失 / 损坏的跳过记日志，不拦启动。
+      // 4 个插件不预装、不预注册、不打进安装包，只通过市场装进来。
+      await IdjPluginRegistry.restoreAll();
       if (mounted) {
         setState(() {
           store = LocalStore(preferences);
@@ -182,6 +187,15 @@ class _AppBootstrapState extends State<AppBootstrap>
           repository.access = store;
         });
       }
+      // idj 安装器接线：probe 走 NativeRepository.idjProbe（Go 核 idjCall，
+      // fn '__probe'）；注册 / 注销后通知片库刷新。
+      IdjPluginStore.probeHandler =
+          ({
+            required String pluginId,
+            required String script,
+            required Map<String, dynamic> manifest,
+          }) => repository.idjProbe(pluginId, script, manifest);
+      IdjPluginRegistry.onRegistryChanged = () => store?.refreshSiteRegistry();
       await ZooBuiltinSeeder.seed(repository);
       // 网盘站源恢复：登录过的网盘重新注册进站点列表。
       final createdStore = store;

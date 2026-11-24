@@ -2,7 +2,6 @@
 // 入库 works 计数（works 表行数），不许用站方宣称数；同步进行中
 // 列表卡片数要跟着涨；右上角切换站点随站源注册动态更新。
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

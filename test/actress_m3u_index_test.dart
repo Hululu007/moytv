@@ -6,7 +6,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_m3u_index.dart';
 
 Uint8List _gz(Map<String, dynamic> doc) =>

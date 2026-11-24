@@ -151,6 +151,10 @@ type nativeInput struct {
 	Sha256           string                  `json:"sha256"`
 	Manifest         string                  `json:"manifest"`
 	Signature        string                  `json:"signature"`
+	// idjCall 入参（pluginId/fn/args；manifest 已有；脚本走 Content）。
+	PluginID string `json:"pluginId"`
+	Fn       string `json:"fn"`
+	Args     string `json:"args"`
 	// 红果账号/登录动作入参（hongguoAccount* / hongguoLogin*）。
 	Phone         string `json:"phone"`
 	Code          string `json:"code"`
@@ -499,6 +503,14 @@ func nativeDispatch(input nativeInput) (any, error) {
 		ctx = work
 	}
 	switch input.Action {
+	case "idjCall":
+		// iDuanJu 插件调用：必须走引擎初始化之后（要 engine.directory
+		// 落 storage.json / cookies.json），不要复用先于初始化的 "jsSpider"。
+		out, err := idjCallWithDirectory(engine.directory, input.PluginID, input.Content, input.Manifest, input.Fn, input.Args)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"result": out}, nil
 	case "crackConfigSet":
 		if err := seku.CrackConfigSet(input.Content); err != nil {
 			return nil, err

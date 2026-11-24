@@ -9,7 +9,6 @@ import 'package:moyi/models.dart';
 import 'package:moyi/neon/neon_channel_view.dart';
 import 'package:moyi/neon/neon_ui.dart';
 import 'package:moyi/settings_screen.dart';
-import 'package:moyi/ui_style.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';

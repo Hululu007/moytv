@@ -6,7 +6,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
-import 'package:moyi/actress/actress_models.dart';
 
 Map<String, dynamic> _row({
   required String vodId,

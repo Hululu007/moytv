@@ -14,11 +14,13 @@ import 'mini_app_settings.dart';
 import 'mini_app_settings_screen.dart';
 import 'mini_app_store.dart';
 import 'haikuo/haikuo_home_page.dart';
+import '../idj_plugin_store.dart';
+import 'idj_plugin_tab.dart';
 
 /// 小程序首页。
 ///
 /// 结构对齐参考实现：紧凑单行顶栏（标签页 + 新建 / 视图切换 / 设置并作
-/// 一行）+「已安装 / 市场 / 海阔」三标签 + 四列图标网格。图标用名称首字 + 按
+/// 一行）+「已安装 / 市场 / 海阔 / 插件」四标签 + 四列图标网格。图标用名称首字 + 按
 /// appId 取色的圆角方块，与参考实现的视觉一致，也不依赖小程序包内提供图标资源。
 /// 海阔小程序有自己的独立标签（海阔规则列表与导入入口都在那页里），
 /// 不再以固定卡片挂在「已安装」列表顶部。
@@ -91,6 +93,11 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   final Set<String> _installing = {};
   bool _busy = false;
   MiniAppViewMode _viewMode = MiniAppViewMode.grid;
+
+  /// iDuanJu 插件安装器（插件 tab 与右上角「+」菜单共用同一份）。
+  final IdjPluginStore _idjStore = IdjPluginStore();
+  final GlobalKey<IdjPluginTabState> _idjTabKey =
+      GlobalKey<IdjPluginTabState>();
 
   @override
   void initState() {
@@ -326,9 +333,12 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     );
   }
 
-  Future<void> _showCreateMenu() async {
+  /// 右上角「+」菜单。`parentContext` 必须是 DefaultTabController
+  /// 下的 context（顶栏 + 号按钮的 Builder context），装完插件后
+  /// 用它切到「插件」tab；State 自身的 context 在控制器之上，取不到。
+  Future<void> _showCreateMenu(BuildContext parentContext) async {
     await showModalBottomSheet<void>(
-      context: context,
+      context: parentContext,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
         child: Column(
@@ -368,6 +378,24 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.extension_outlined),
+              title: const Text('安装插件文件（.idjplugin）'),
+              subtitle: const Text('走系统文件选择器挑本地插件包'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                unawaited(_installIdjFromFile(parentContext));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.paste_rounded),
+              title: const Text('粘贴插件/订阅'),
+              subtitle: const Text('粘贴插件包内容、订阅 JSON 或地址'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                unawaited(_installIdjFromPaste(parentContext));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.refresh_rounded),
               title: const Text('刷新市场'),
               onTap: () {
@@ -379,6 +407,35 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
         ),
       ),
     );
+  }
+
+  /// 「+」菜单里的插件安装：与插件 tab 里的按钮调同一个安装器入口
+  ///（[IdjPluginActions]），不写两套逻辑。装成功后切到「插件」tab
+  /// 的已安装区（插件 tab 没建出来时走静态入口，tab 切过去后
+  /// initState 会重新拉取，不丢数据）。
+  Future<void> _installIdjFromFile(BuildContext parentContext) async {
+    final tabState = _idjTabKey.currentState;
+    final ok = tabState != null
+        ? await tabState.installFromFile()
+        : await IdjPluginActions.installFromFile(parentContext, _idjStore);
+    if (ok && mounted) {
+      await _idjTabKey.currentState?.refreshAll();
+      DefaultTabController.of(parentContext).animateTo(3);
+    }
+  }
+
+  Future<void> _installIdjFromPaste(BuildContext parentContext) async {
+    final tabState = _idjTabKey.currentState;
+    final ok = tabState != null
+        ? await tabState.installFromPaste()
+        : await IdjPluginActions.installFromPasteDialog(
+            parentContext,
+            _idjStore,
+          );
+    if (ok && mounted) {
+      await _idjTabKey.currentState?.refreshAll();
+      DefaultTabController.of(parentContext).animateTo(3);
+    }
   }
 
   Future<void> _openHaikuo() async {
@@ -503,7 +560,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           // 紧凑单行顶栏：标签页与动作钮并作一行（对标官方密度），
@@ -529,13 +586,18 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
               Tab(text: '已安装', height: 38),
               Tab(text: '市场', height: 38),
               Tab(text: '海阔', height: 38),
+              Tab(text: '插件', height: 38),
             ],
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.add_rounded),
-              tooltip: '安装小程序',
-              onPressed: _busy ? null : _showCreateMenu,
+            Builder(
+              builder: (buttonContext) => IconButton(
+                icon: const Icon(Icons.add_rounded),
+                tooltip: '安装小程序',
+                onPressed: _busy
+                    ? null
+                    : () => _showCreateMenu(buttonContext),
+              ),
             ),
             IconButton(
               icon: Icon(
@@ -568,6 +630,9 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
                   // tabIndex 与上面 tabs 顺序对应（海阔是第 3 个），
                   // 供剪贴板自动检测判断海阔页是否可见。
                   const HaikuoHomePage(embedded: true, tabIndex: 2),
+                  // iDuanJu 插件市场（设计 §4）：已安装 / 安装入口 /
+                  // 订阅 / 更新检查四区，装好的插件落片库当站用。
+                  IdjPluginTab(key: _idjTabKey, store: _idjStore),
                 ],
               ),
       ),
