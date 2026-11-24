@@ -2240,11 +2240,19 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 通用模式分类：从当前库自身的 video_category 表读（见
   /// [GenericDbReader.categories]）；读失败也不崩、不影响列表，
   /// 只按“暂无分类”显示。切库/重读时由调用方先清掉旧分类再调。
+  /// 2026-11-24 用户令：通用模式也不显示数据库名称分类——与第三行
+  /// 同一条规则（库名取自当前已勾的 .db 文件名去后缀；外来库把库名
+  /// 写成 video_category 主分类时这里滤掉，真分类原样保留）。
   Future<void> _loadGenericCategories() async {
     final reader = _genericReader;
     if (reader == null) return;
     try {
-      final categories = await reader.categories();
+      var categories = await reader.categories();
+      final libNames = <String>{
+        for (final p in [_mytvBind?.dbPath ?? '', ..._extraDbs.keys])
+          if (p.isNotEmpty) path.basenameWithoutExtension(p),
+      };
+      categories = filterLibraryNameCategories(categories, libNames);
       if (!mounted) return;
       setState(() {
         _genericCategories = categories;
