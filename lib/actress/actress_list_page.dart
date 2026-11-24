@@ -19,6 +19,7 @@ import 'actress_models.dart';
 import 'actress_multi_db_fallback.dart';
 import 'actress_mytv_bind.dart';
 import 'actress_neon.dart';
+import 'actress_nvku_cache.dart';
 import 'actress_ranking_page.dart';
 import 'actress_roster_sources.dart';
 import 'actress_search.dart';
@@ -1697,6 +1698,10 @@ class _ActressListPageState extends State<ActressListPage> {
     _pageCache.clear();
     _dbTagsCacheKey = null;
     _dbTagsCache = null;
+    // 库内容变了（同步/现爬/叠加/镜像完成、手动重读）：女优库首页
+    // 的进库会话缓存（文件夹/标签/分类/作品第一页）也作废，下次
+    // 进库重查，不显示旧数据（2026-11-24 进库不重载）。
+    NvkuEntryCache.clear();
   }
 
   /// 通用模式的标签筛选条件（2026-11-24 标签筛选）：空 = 不筛；

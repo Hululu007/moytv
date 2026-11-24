@@ -12,6 +12,7 @@ import 'actress_database.dart';
 import 'actress_film_library.dart';
 import 'actress_list_page.dart';
 import 'actress_neon.dart';
+import 'actress_nvku_cache.dart';
 import 'actress_tag_sheet.dart';
 import 'actress_type_folders.dart';
 import '../whos_fallback.dart';
@@ -157,6 +158,18 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   /// 的视频列表（在分类 tab 里看）。点文件夹从首页进来时先切到
   /// 分类 tab 再开（见 [_openFolder]）。
   String? _openFolderName;
+
+  /// 当前库文件指纹（路径 + mtime + 大小，见 [NvkuEntryCache.dbStamp]）：
+  /// 文件夹/标签/分类缓存的 key 成分，库文件一变就自然失效、重查。
+  /// [_loadFilmLibrary] 开库后记下；开库失败时为空，缓存只按路径分。
+  var _dbStamp = '';
+
+  /// 女优 tab 是不是已经打开过（2026-11-24 进库不重载）：页签
+  /// 用 IndexedStack 常驻，列表页状态才不会在切走时被释放；但
+  /// 列表页首次构建就会跑它的 _bootstrap（开库、读分类、读第一页），
+  /// 不能在进库首页时就替用户提前跑——第一次点到女优 tab 时才建，
+  /// 建好后常驻、再切回来不再重跑。
+  var _actressTabVisited = false;
   var _folderWorks = <FilmLibraryEntry>[];
   var _folderTotal = -1; // -1 = 还没数过
   var _folderLoading = false;
@@ -202,7 +215,10 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     super.dispose();
   }
 
-  Future<void> _boot() async {
+  Future<void> _boot({bool refresh = false}) async {
+    // 手动刷新（下拉刷新、顶栏刷新钮）才清会话缓存、重查全部；
+    // 平常进库走缓存（见 [NvkuEntryCache]），第二次进不再全量重查。
+    if (refresh) NvkuEntryCache.clear();
     await _loadFavorites();
     // 文件夹先于作品加载：文件夹在首页最顶，作品随后；库打不开时
     // 这里直接回空，不挡后面的作品加载。
@@ -219,6 +235,21 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   }
 
   Future<void> _loadCategories() async {
+    // 进库不重载：三份分类都在会话缓存里（站点按站 id、本地/主分类
+    // 按库文件指纹），命中直接用，不走网络、不跑 GROUP BY。
+    final siteCached = NvkuEntryCache.siteCategories(nvkuSourceId);
+    final localCached = NvkuEntryCache.localCategories(_dbStamp);
+    final mainCached = NvkuEntryCache.mainCategories(_dbStamp);
+    if (siteCached != null && localCached != null && mainCached != null) {
+      if (!mounted) return;
+      _applyCategories(
+        site: siteCached.items,
+        local: localCached,
+        mains: mainCached,
+        offline: siteCached.offline,
+      );
+      return;
+    }
     var online = const <CatalogCategory>[];
     var offline = false;
     try {
@@ -236,21 +267,45 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     final mains = loaded
         ? await library.mainCategoriesAsync()
         : const <({String name, int count})>[];
+    final mainCats = [
+      for (final row in mains)
+        CatalogCategory('main:${row.name}', '${row.name} · ${row.count}'),
+    ];
+    NvkuEntryCache.putSiteCategories(
+      nvkuSourceId,
+      online,
+      offline: offline || online.isEmpty,
+    );
+    NvkuEntryCache.putLocalCategories(_dbStamp, local);
+    NvkuEntryCache.putMainCategories(_dbStamp, mainCats);
     if (!mounted) return;
+    _applyCategories(
+      site: online,
+      local: local,
+      mains: mainCats,
+      offline: offline || online.isEmpty,
+    );
+  }
+
+  /// 三份分类落到状态里（取数与缓存共用同一份落点，别各写一份）：
+  /// 选中分类不在新分类里时回落到“最新”，不留一个指不到的分类。
+  void _applyCategories({
+    required List<CatalogCategory> site,
+    required List<CatalogCategory> local,
+    required List<CatalogCategory> mains,
+    required bool offline,
+  }) {
     setState(() {
-      _siteCategories = online;
+      _siteCategories = site;
       _localCategories = local;
-      _mainCategories = [
-        for (final row in mains)
-          CatalogCategory('main:${row.name}', '${row.name} · ${row.count}'),
-      ];
-      _offline = offline || online.isEmpty;
+      _mainCategories = mains;
+      _offline = offline;
       if (_category.isEmpty ||
           ![
             'new',
-            ...online.map((c) => c.id),
+            ...site.map((c) => c.id),
             ...local.map((c) => c.id),
-            ..._mainCategories.map((c) => c.id),
+            ...mains.map((c) => c.id),
           ].contains(_category)) {
         _category = 'new';
       }
@@ -272,6 +327,9 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     final service = _filmService;
     if (service == null) return;
     final result = await service.open();
+    // 开库后记下库文件指纹：文件夹/标签/分类缓存的 key 成分，库文件
+    // 一变（同步写库、用户换文件）缓存就自然失效、重查。
+    _dbStamp = NvkuEntryCache.dbStamp(result.dbPath);
     if (!mounted) return;
     if (result.error == null && result.displayPath.isNotEmpty) {
       final name = result.displayPath.split('/').last.trim();
@@ -283,10 +341,25 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
 
   /// 标签列表：服务 open 之后调；严格结构读 video_tag 表，通用
   /// 结构走 tagFacet。key 一起记下来，文件夹与视频列表筛选时传回。
+  /// 进库不重载：命中会话缓存直接用，不再跑 video_tag 全表聚合。
   Future<void> _loadTags() async {
     final service = _filmService;
     if (service == null) return;
+    final cached = NvkuEntryCache.tags(_dbStamp, strict: service.isStrict);
+    if (cached != null) {
+      if (!mounted) return;
+      setState(() {
+        _tagKey = cached.key;
+        _tags = cached.values;
+      });
+      return;
+    }
     final tags = await service.tags();
+    NvkuEntryCache.putTags(
+      _dbStamp,
+      strict: service.isStrict,
+      value: tags,
+    );
     if (!mounted) return;
     setState(() {
       _tagKey = tags.key;
@@ -299,9 +372,26 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   /// 按 type_name 分得出文件夹（同一份计数）。封面随后按同一口径
   /// 取（typeFolderCovers，第一条视频的 pic_url）；封面是装饰，
   /// 取不到也不挡文件夹网格（那几张卡回落文件夹图标）。
+  /// 进库不重载：文件夹与封面按同一份 key 一起缓存，命中直接用，
+  /// 不再跑全表 GROUP BY 与 26 条取封面查询。
   Future<void> _loadFolders() async {
     final service = _filmService;
     if (service == null) return;
+    final cached = NvkuEntryCache.folders(
+      _dbStamp,
+      videoTag: _videoTag,
+      genericTagKey: _tagKey,
+    );
+    if (cached != null) {
+      if (!mounted) return;
+      setState(() {
+        _folders = cached.folders;
+        _folderCovers = cached.covers;
+        _foldersLoading = false;
+        _foldersLoaded = true;
+      });
+      return;
+    }
     setState(() => _foldersLoading = true);
     final folders = await service.typeFolders(
       videoTag: _videoTag,
@@ -317,6 +407,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     } catch (_) {
       covers = const <String, String>{};
     }
+    NvkuEntryCache.putFolders(
+      _dbStamp,
+      videoTag: _videoTag,
+      genericTagKey: _tagKey,
+      folders: folders,
+      covers: covers,
+    );
     if (!mounted) return;
     setState(() {
       _folders = folders;
@@ -478,6 +575,31 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   Future<void> _loadWorks({bool reset = false}) async {
     if (reset) {
       final generation = ++_generation;
+      // 进库不重载：5 分钟内的第一页缓存直接上、不取网络；过期了
+      // 先上旧页、后台悄悄刷一遍再换新页（不转圈、不清列表）。
+      final cached = NvkuEntryCache.worksFirstPage(_category, _query);
+      if (cached != null) {
+        setState(() {
+          _works = cached.rows;
+          _page = 2;
+          _hasMore = cached.hasMore;
+          _loading = false;
+        });
+        if (cached.isFresh) return;
+        final rows = await _fetchPage(1);
+        if (!mounted || generation != _generation) return;
+        NvkuEntryCache.putWorksFirstPage(
+          _category,
+          _query,
+          rows: rows,
+          hasMore: rows.length >= _pageSize,
+        );
+        setState(() {
+          _works = rows;
+          _hasMore = rows.length >= _pageSize;
+        });
+        return;
+      }
       setState(() {
         _loading = true;
         _works = [];
@@ -486,6 +608,12 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       });
       final rows = await _fetchPage(1);
       if (!mounted || generation != _generation) return;
+      NvkuEntryCache.putWorksFirstPage(
+        _category,
+        _query,
+        rows: rows,
+        hasMore: rows.length >= _pageSize,
+      );
       setState(() {
         _works = rows;
         _page = 2;
@@ -691,18 +819,35 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           children: [
             _topBar(),
             Expanded(
-              child: switch (_tab) {
-                1 => _categoryTab(),
-                2 => _actressTab(),
-                3 => _favoriteTab(),
-                _ => _homeTab(),
-              },
+              // 进库不重载（内层）：四个页签用 IndexedStack 常驻，切走
+              // 再回来状态还在——女优列表页不再每次重跑 _bootstrap，
+              // 首页/分类的滚动位置也保住。女优 tab 第一次点到时才建
+              // （_actressTabVisited），不提前跑它的开库流程。
+              child: IndexedStack(
+                index: _tab,
+                children: [
+                  _homeTab(),
+                  _categoryTab(),
+                  _actressTabVisited
+                      ? _actressTab()
+                      : const SizedBox.shrink(),
+                  _favoriteTab(),
+                ],
+              ),
             ),
           ],
         ),
       ),
       bottomNavigationBar: _bottomTabs(),
     );
+  }
+
+  /// 底部四页签切换：点到女优 tab 时记下已访问（下次起常驻）。
+  void _selectTab(int index) {
+    setState(() {
+      if (index == 2) _actressTabVisited = true;
+      _tab = index;
+    });
   }
 
   /// 顶栏（2026-11-22 霓虹化：照活树改版走霓虹配色——深紫底 +
@@ -764,7 +909,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                 tooltip: '刷新',
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.refresh_rounded, color: Neon.textDim, size: 20),
-                onPressed: () => unawaited(_boot()),
+                onPressed: () => unawaited(_boot(refresh: true)),
               ),
             ],
           ),
@@ -881,7 +1026,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
             for (var i = 0; i < items.length; i++)
               Expanded(
                 child: InkWell(
-                  onTap: () => setState(() => _tab = i),
+                  onTap: () => _selectTab(i),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 9),
                     child: Column(
@@ -950,7 +1095,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     return RefreshIndicator(
       color: _pk,
       backgroundColor: Neon.surface,
-      onRefresh: _boot,
+      onRefresh: () => _boot(refresh: true),
       child: ListView(
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),

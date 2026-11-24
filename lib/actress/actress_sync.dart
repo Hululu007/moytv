@@ -150,7 +150,12 @@ class ActressSyncService {
 
   Future<T> _withRosterWriteLock<T>(Future<T> Function() action) {
     final run = _rosterWriteQueue.then((_) => action());
-    _rosterWriteQueue = run.then((_) {});
+    // 链上一次写失败不能毒死整条队列：错误仍经 run 抛给调用方
+    // （工人按人 catch），但队列本身回到已完成态，下一次写照常跑。
+    // 旧写法 `_rosterWriteQueue = run.then((_) {})` 会把错误传进链里，
+    // 此后所有名册入库直接跳过 action、静默丢数据（2026-11-24
+    // 同步卡顿顺查发现：一次写库失败后同步照常走进度、但再无新人入库）。
+    _rosterWriteQueue = run.then((_) {}, onError: (_) {});
     return run;
   }
 
