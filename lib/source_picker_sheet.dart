@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'app_theme_config.dart';
 import 'neon_glass_kit.dart';
 import 'site_icon.dart';
+import 'site_thumb_cache.dart';
+import 'site_thumb_card.dart';
 
 class SourcePickerEntry {
   const SourcePickerEntry({
@@ -65,8 +67,17 @@ Future<String?> showSitePickerDialog(
   Future<void> Function()? onImport,
 
   /// 三区开关（只在片库区传 true）：内置区 / 导入区 / 插件区
-  /// 用 3D 翻页切换；不传时保持原来的单列表。
+  /// 用翻页滑动切换；不传时保持原来的单列表。
   bool enableZoneFlip = false,
+
+  /// 站内随机视频缩图（只在片库区传）：缩图地址缓存 +
+  /// 拉首页取封面的回调；两个都传才拉缩图，只传一个不拉。
+  /// 不传时卡片只显示站标（直播/阅读弹窗）。
+  SiteThumbCache? thumbCache,
+  SiteThumbFetcher? thumbFetcher,
+
+  /// 缩图图片文件缓存：测试注入用；不传用 [SiteIconCache.instance]。
+  SiteIconCache? thumbImageCache,
 
   /// 打开时默认显示的区：0 内置区，1 导入区，2 插件区。导入成功后
   /// 调用方重开弹窗传对应区号，列表自动落到新装站所在的区。
@@ -88,6 +99,9 @@ Future<String?> showSitePickerDialog(
     enableZoneFlip: enableZoneFlip,
     initialZoneIndex: initialZoneIndex,
     scrollToId: scrollToId,
+    thumbCache: thumbCache,
+    thumbFetcher: thumbFetcher,
+    thumbImageCache: thumbImageCache,
   ),
 );
 
@@ -103,6 +117,9 @@ class SitePickerDialog extends StatefulWidget {
     this.enableZoneFlip = false,
     this.initialZoneIndex = 0,
     this.scrollToId,
+    this.thumbCache,
+    this.thumbFetcher,
+    this.thumbImageCache,
   });
 
   final String sectionName;
@@ -113,6 +130,14 @@ class SitePickerDialog extends StatefulWidget {
   final Future<void> Function()? onImport;
   final bool enableZoneFlip;
   final int initialZoneIndex;
+
+  /// 站内随机视频缩图：缓存 + 拉首页回调，两个都传才拉；
+  /// 不传时卡片只显示站标。
+  final SiteThumbCache? thumbCache;
+  final SiteThumbFetcher? thumbFetcher;
+
+  /// 缩图图片文件缓存：测试注入用；不传用 [SiteIconCache.instance]。
+  final SiteIconCache? thumbImageCache;
 
   /// 打开时自动滚到的站：默认是当前站；调用方传 [scrollToId] 时
   /// 滚到那个站（导入成功后重开弹窗定位新站用），选中高亮仍以
@@ -143,7 +168,7 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   ];
 
   /// 最近一次翻页方向：+1 往后翻（内置→导入→插件），-1 往前翻。
-  /// 3D 过渡按这个方向转，翻页才有“往哪边翻”的感觉。
+  /// 翻页滑动按这个方向滑，翻页才有“往哪边翻”的感觉。
   int _flipDirection = 1;
 
   /// 翻页只在片库区开：调用方传 enableZoneFlip 才翻；直播/阅读
@@ -531,27 +556,26 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
-  /// 图标宫格：站点呈现——圆角图标块 + 下面站名，
-  /// 点块进站（与旧文字芯片点行完全一致，pop 回站 id）。
-  /// 图标取不到时显示图案标，见 [SiteIcon]。
+  /// 网格卡片：每站一张图卡（站内随机视频缩图 + 站名），
+  /// 每行固定三张卡，图是 16:9 小平图（无 3D 效果）。
+  /// 失效站点拉不到缩图时卡片只显示站标，不挂假图。
   Widget _siteGrid(({String title, List<SourcePickerEntry> entries}) group) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final columns = width >= 480
-            ? 5
-            : width >= 340
-            ? 4
-            : 3;
+        const columns = 3;
+        const crossSpacing = 8.0;
+        // 卡高 = 缩图高（16:9）+ 站名区：随列宽缩放，窄屏不溢出。
+        final cardWidth = (width - crossSpacing * (columns - 1)) / columns;
+        final mainAxisExtent = cardWidth * 9 / 16 + 40;
         return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            mainAxisSpacing: 6,
-            crossAxisSpacing: 4,
-            // 固定行高 74：图标 30 + 间距 4 + 两行站名，窄屏不溢出。
-            mainAxisExtent: 74,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: crossSpacing,
+            mainAxisExtent: mainAxisExtent,
           ),
           itemCount: group.entries.length,
           itemBuilder: (context, index) => _siteGridTile(group.entries[index]),
@@ -560,6 +584,9 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     );
   }
 
+  /// 站点图卡：上面是 16:9 缩图（站内随机视频封面；拉不到、
+  /// 超时、没封面时显示站标），下面是站名。点卡进站
+  ///（pop 回站 id，与旧文字芯片点行完全一致）。
   Widget _siteGridTile(SourcePickerEntry entry) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -576,71 +603,76 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: selected
-                        ? Border.all(color: config.primaryColor, width: 2)
-                        : null,
-                    boxShadow: selected ? [neonGlow(config)] : null,
-                  ),
-                  child: SiteIcon(
-                    siteId: entry.id,
-                    siteName: entry.name,
-                    iconUrls: entry.iconUrls,
-                    size: 30,
-                    borderRadius: 14,
-                  ),
-                ),
-                if (!_editMode && selected)
-                  Positioned(
-                    top: -4,
-                    right: -4,
-                    child: Container(
-                      width: 20,
-                      height: 20,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: config.primaryColor,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colors.surface, width: 2),
-                      ),
-                      child: Icon(
-                        Icons.check,
-                        size: 13,
-                        color: config.selectedText,
-                      ),
+            AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: selected
+                          ? Border.all(color: config.primaryColor, width: 2)
+                          : null,
+                      boxShadow: selected ? [neonGlow(config)] : null,
+                    ),
+                    child: SiteThumbImage(
+                      siteId: entry.id,
+                      siteName: entry.name,
+                      iconUrls: entry.iconUrls,
+                      thumbCache: widget.thumbCache,
+                      thumbFetcher: widget.thumbFetcher,
+                      imageCache: widget.thumbImageCache,
+                      borderRadius: 12,
                     ),
                   ),
-                if (showDelete)
-                  Positioned(
-                    top: -8,
-                    right: -8,
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: colors.surface,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colors.error),
-                      ),
-                      child: IconButton(
-                        key: ValueKey('site-picker-delete-${entry.id}'),
-                        padding: EdgeInsets.zero,
-                        style: IconButton.styleFrom(
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  if (!_editMode && selected)
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: config.primaryColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.surface, width: 2),
                         ),
-                        icon: const Icon(Icons.delete_outline, size: 17),
-                        color: colors.error,
-                        onPressed: () => _delete(entry),
+                        child: Icon(
+                          Icons.check,
+                          size: 13,
+                          color: config.selectedText,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                  if (showDelete)
+                    Positioned(
+                      top: -8,
+                      right: -8,
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: colors.surface,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.error),
+                        ),
+                        child: IconButton(
+                          key: ValueKey('site-picker-delete-${entry.id}'),
+                          padding: EdgeInsets.zero,
+                          style: IconButton.styleFrom(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.delete_outline, size: 17),
+                          color: colors.error,
+                          onPressed: () => _delete(entry),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 4),
             Text(

@@ -82,6 +82,12 @@ Future<void> _open(
   Future<void> Function()? onImport,
   List<SourcePickerGroup> groups = _groups,
 }) async {
+  // 图卡比旧图标行高（16:9 缩图 + 站名），800x600 默认视口会把
+  // 每区第二组挤到可视区外；按手机视口（390x844，与预览图一致）跑。
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(
     _host(
       onResult: (_) {},
