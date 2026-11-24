@@ -839,13 +839,135 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     return [for (final row in rows) row['vod_play_from'].toString()];
   }
 
-  /// 列表：严格结构 SQL 直查（分类/站点/女优/关键词四筛）；
-  /// 通用结构走通用读出 + 内存里按分类筛（通用读出只有标题/番号搜）。
+  /// 类型文件夹（2026-11-24 文件夹视图）：按 videos.type_name
+  /// 分组计数（成人影片/国产精品/无码专区…，女优库 v3 实查 26 个
+  /// 类型，总和 449,068），从多到少。注意它与 video_category
+  /// 主分类（有码/无码/国产…）是两套不同的维度，别混。
+  /// 选了标签时 [videoTag] 只算带该标签的作品（video_tag 表
+  /// EXISTS 半连接；库里没有 video_tag 表时带标签的作品一条都
+  /// 筛不出来，回空、不抛错、不暗地里回未过滤的数）；[category]
+  /// 是 video_category 主分类（与标签 AND）。
+  /// 通用结构走读库的 [GenericDbReader.typeNameFacet]（作品表
+  /// 没有 type_name 列时回空，页里如实显示“暂无文件夹”）。
+  /// 一次全表聚合，调用方缓存着用，别每页都调。
+  Future<List<(String, int)>> typeFolders({
+    String videoTag = '',
+    String category = '',
+    String genericTagKey = '',
+  }) async {
+    final db = _readDb;
+    if (db == null) return [];
+    if (isStrict) {
+      if (videoTag.isNotEmpty && !await _hasVideoTagTable(db)) return [];
+      final where = <String>[
+        "v.type_name IS NOT NULL AND TRIM(v.type_name) <> ''",
+      ];
+      final args = <Object?>[];
+      if (videoTag.isNotEmpty) {
+        where.add(
+          'EXISTS (SELECT 1 FROM video_tag vt '
+          'WHERE vt.vod_id = v.vod_id AND vt.tag_name = ?)',
+        );
+        args.add(videoTag);
+      }
+      if (category.isNotEmpty) {
+        where.add(
+          'v.vod_id IN (SELECT vod_id FROM video_category '
+          'WHERE main_category = ?)',
+        );
+        args.add(category);
+      }
+      final rows = await db.rawQuery(
+        'SELECT v.type_name AS name, COUNT(*) AS c FROM videos v '
+        'WHERE ${where.join(' AND ')} '
+        'GROUP BY v.type_name ORDER BY c DESC',
+        args,
+      );
+      return [
+        for (final row in rows)
+          (row['name'].toString(), (row['c'] as num).toInt()),
+      ];
+    }
+    final reader = _genericReader;
+    if (reader == null) return [];
+    return reader.typeNameFacet(tagKey: genericTagKey, tag: videoTag);
+  }
+
+  /// 类型文件夹封面（2026-11-24 文件夹卡片用封面）：每个类型取
+  /// 该类型视频列表里第一条视频的 pic_url——与 [listFilms]
+  /// （typeName + videoTag + category）同一过滤、同一排序
+  /// （严格结构 ORDER BY vod_id，通用结构 ORDER BY rowid），即
+  /// 点开文件夹后列表里第一条视频的封面。第一条视频没封面
+  /// （pic_url 为空）或该类型一条视频都没有时回 ''，调用方
+  /// 回落到原来的文件夹图标。SQL 形状不变：直接复用
+  /// [listFilms]（limit 1），不另写取数 SQL。
+  /// 封面是装饰：调用方取不到也不该挡文件夹网格（页里包了
+  /// try/catch，失败时整份回空、卡片全回落图标）。
+  Future<Map<String, String>> typeFolderCovers({
+    required List<String> typeNames,
+    String videoTag = '',
+    String category = '',
+    String genericTagKey = '',
+  }) async {
+    final covers = <String, String>{};
+    for (final name in typeNames) {
+      final first = await listFilms(
+        typeName: name,
+        videoTag: videoTag,
+        category: category,
+        genericTagKey: genericTagKey,
+        offset: 0,
+        limit: 1,
+      );
+      covers[name] = first.isEmpty ? '' : first.first.coverUrl;
+    }
+    return covers;
+  }
+
+  /// 标签列表（2026-11-24 标签筛选）：严格结构读主库的
+  /// video_tag 表（与 SqfliteActressDatabase.dbTags 同口径）；
+  /// 通用结构走读库的 tagFacet。回的 key 就是筛选时传给
+  /// [typeFolders]/[listFilms] 的 genericTagKey（严格结构不用它，
+  /// key 固定是 `video_tag.tag_name`）。须在 [open] 之后调，
+  /// 没打开时回空。
+  Future<({String key, List<(String, int)> values})> tags() async {
+    if (_readDb == null) {
+      return (key: '', values: const <(String, int)>[]);
+    }
+    if (isStrict) {
+      final values = await database.dbTags();
+      return (key: 'video_tag.tag_name', values: values);
+    }
+    final reader = _genericReader;
+    if (reader == null) {
+      return (key: '', values: const <(String, int)>[]);
+    }
+    return reader.tagFacet();
+  }
+
+  Future<bool> _hasVideoTagTable(Database db) async {
+    final rows = await db.rawQuery(
+      "SELECT COUNT(*) AS c FROM sqlite_master "
+      "WHERE type = 'table' AND name = 'video_tag'",
+    );
+    return ((rows.first['c'] as num?)?.toInt() ?? 0) > 0;
+  }
+
+  /// 列表：严格结构 SQL 直查（分类/站点/女优/关键词四筛，再加
+  /// 类型名 [typeName] 与标签 [videoTag] 两筛）；通用结构走
+  /// 通用读出 + 内存里按分类筛（通用读出只有标题/番号搜）。
+  /// [genericTagKey] 是通用结构下标签筛选的 filters 键（[tags]
+  /// 回的 key）；通用结构下标签非空但 key 为空时回空（筛不出，
+  /// 不暗地里回未过滤的列表）；类型名非空但作品表没有 type_name
+  /// 列时同样回空。
   Future<List<FilmLibraryEntry>> listFilms({
     String category = '',
     String site = '',
     String actress = '',
     String query = '',
+    String typeName = '',
+    String videoTag = '',
+    String genericTagKey = '',
     required int offset,
     required int limit,
   }) async {
@@ -871,6 +993,18 @@ class FilmLibraryService implements FilmDbFallbackProvider {
           'WHERE cate_id = ?)',
         );
         args.add(actress);
+      }
+      if (typeName.isNotEmpty) {
+        where.add('v.type_name = ?');
+        args.add(typeName);
+      }
+      if (videoTag.isNotEmpty) {
+        if (!await _hasVideoTagTable(db)) return [];
+        where.add(
+          'EXISTS (SELECT 1 FROM video_tag vt '
+          'WHERE vt.vod_id = v.vod_id AND vt.tag_name = ?)',
+        );
+        args.add(videoTag);
       }
       final q = query.trim();
       if (q.isNotEmpty) {
@@ -899,10 +1033,22 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     }
     final reader = _genericReader;
     if (reader == null) return [];
+    if (videoTag.isNotEmpty && genericTagKey.isEmpty) return [];
+    if (typeName.isNotEmpty) {
+      final worksTable = reader.schema.worksTable;
+      if (worksTable == null ||
+          !worksTable.allColumns.contains('type_name')) {
+        return [];
+      }
+    }
+    final filters = <String, List<String>>{};
+    if (typeName.isNotEmpty) filters['type_name'] = [typeName];
+    if (videoTag.isNotEmpty) filters[genericTagKey] = [videoTag];
     final works = await reader.works(
       offset: offset,
       limit: limit,
       query: query,
+      filters: filters,
     );
     final out = <FilmLibraryEntry>[];
     for (final work in works) {
@@ -917,6 +1063,9 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     String site = '',
     String actress = '',
     String query = '',
+    String typeName = '',
+    String videoTag = '',
+    String genericTagKey = '',
   }) async {
     final db = _readDb;
     if (db == null) return 0;
@@ -941,6 +1090,18 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         );
         args.add(actress);
       }
+      if (typeName.isNotEmpty) {
+        where.add('v.type_name = ?');
+        args.add(typeName);
+      }
+      if (videoTag.isNotEmpty) {
+        if (!await _hasVideoTagTable(db)) return 0;
+        where.add(
+          'EXISTS (SELECT 1 FROM video_tag vt '
+          'WHERE vt.vod_id = v.vod_id AND vt.tag_name = ?)',
+        );
+        args.add(videoTag);
+      }
       final q = query.trim();
       if (q.isNotEmpty) {
         final like = '%${q.replaceAll('%', '').replaceAll('_', '')}%';
@@ -956,7 +1117,18 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     }
     final reader = _genericReader;
     if (reader == null) return 0;
-    return reader.countWorks(query: query);
+    if (videoTag.isNotEmpty && genericTagKey.isEmpty) return 0;
+    if (typeName.isNotEmpty) {
+      final worksTable = reader.schema.worksTable;
+      if (worksTable == null ||
+          !worksTable.allColumns.contains('type_name')) {
+        return 0;
+      }
+    }
+    final filters = <String, List<String>>{};
+    if (typeName.isNotEmpty) filters['type_name'] = [typeName];
+    if (videoTag.isNotEmpty) filters[genericTagKey] = [videoTag];
+    return reader.countWorks(query: query, filters: filters);
   }
 
   /// 直播内置片库（whos_lib）读库分页（2026-11-23 v58 验机）：
