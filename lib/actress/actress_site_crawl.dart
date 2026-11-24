@@ -208,6 +208,7 @@ class ActressSiteCrawlProgress {
     this.page = 0,
     this.items = 0,
     this.enriched = 0,
+    this.enrichTried = 0,
     this.done = false,
     this.error = '',
   });
@@ -219,7 +220,14 @@ class ActressSiteCrawlProgress {
   final String categoryName;
   final int page;
   final int items;
+
+  /// 已补上直链/女优名的条数。
   final int enriched;
+
+  /// 已尝试补流的条数（含失败的尝试）：补流期间每起一条就加一，
+  /// 面板在“详情 + 取流各 ≤70 秒”的慢单元里也能看到数字在走，
+  /// 不只在补成功时才跳（2026-11-24 同步卡顿修复）。
+  final int enrichTried;
   final bool done;
   final String error;
 
@@ -227,8 +235,20 @@ class ActressSiteCrawlProgress {
     if (error.isNotEmpty) return error;
     if (done) return '现爬完成：$items 条，已补流 $enriched 条';
     if (!running) return '未开始';
-    return '现爬 $categoryName（$categoryIndex/$categoryCount）第 $page 页 · $items 条';
+    final enrich = enrichTried > 0 || enriched > 0
+        ? ' · 补流中 $enrichTried 条 · 已补上 $enriched 条'
+        : '';
+    return '现爬 $categoryName（$categoryIndex/$categoryCount）第 $page 页 · $items 条$enrich';
   }
+}
+
+/// 取消中断：在途取数不等它超时、立刻停等（见 [_raceCancel]，
+/// 与 ActressSyncService 的 _SyncCancelled 同一口径）。
+class _CrawlCancelled implements Exception {
+  const _CrawlCancelled();
+
+  @override
+  String toString() => '现爬已取消';
 }
 
 /// 女优库手机现爬：选站后按分类逐页爬，存 hsck 同格式 JSON 到本地。
@@ -259,15 +279,17 @@ class ActressSiteCrawlProgress {
 ///   SharedPreferences 单键，不重蹈 m3u 单键超 16MB 的覆辙）；
 ///   任何站爬到的视频行都只追加进这一个文件，不分站另存；
 ///   单文件里的行按 vod_play_from 认站（mjv011 → mjv，其余来源名
-///   即站 id）；每爬完一页立刻写盘；一轮内合并表常驻内存（只读
-///   一次文件），每页只写不重读；写盘后同一批条目同步进库（人表
+///   即站 id）；新行先合并进内存表，攒够阈值、分类结束或整轮结束
+///   时才批量落盘（2026-11-24 同步卡顿修复：旧写法每页全量重写
+///   几十 MB 的单文件，O(n²) 越跑越慢）；一轮内合并表常驻内存
+///   （只读一次文件）；写盘后同一批条目同步进库（人表
 ///   + 作品表，json-first，库是 json 的派生索引），列表进行中就
 ///   能陆续出人；读时兜底加载器把本地新增合并着算；
 ///   合并后的全文可导出（列表页的导出合并 JSON，走 MYTV/mjv011.json
 ///   或系统保存对话框），用户拷走即用；
 /// - 断点续跑：检查点存在 sync_state（source=site_crawl，phase=站，
-///   cursor=分类下标/页码），每爬完一页即存点，失败停在当前页；
-/// - 每爬完一页立刻写盘（同格式，indent=2、顶层四键、13 字段 +
+///   cursor=分类下标/页码），落盘后才往前存点，失败停在当前页；
+/// - 批量落盘（同格式，indent=2、顶层四键、13 字段 +
 ///   vod_code/vod_actress_pic），不用等全站爬完；写完即进兜底。
 class ActressSiteCrawlService {
   ActressSiteCrawlService({
@@ -311,6 +333,20 @@ class ActressSiteCrawlService {
   static const _checkpointSource = ActressRosterSourceId.chaoliu;
   static String _checkpointPhase(String site) => 'site_crawl_$site';
 
+  /// 一轮默认总预算（2026-11-24 同步卡顿修复）：现爬一轮最多
+  /// 60 分钟，到时停下、断点记未完成，下次继续跑；start() 可传
+  /// timeBudget 覆盖（同步服务传作品阶段同一预算）。
+  static const defaultTimeBudget = Duration(minutes: 60);
+
+  /// 全量重写一次单文件的条数阈值（2026-11-24 同步卡顿修复）：
+  /// 一页只有 12–24 条时每页都重写几十 MB 的单文件是 O(n²) 越跑
+  /// 越慢；改成攒够阈值、分类结束或整轮结束时才落盘一批。
+  static const flushThresholdEntries = 500;
+
+  /// 测试用计数：实际写盘次数（_appendEntries/_flushEntries 落盘
+  /// 才加一）。验收“别每页全量重写”就看它：页数远大于写盘次数。
+  static var flushWriteCount = 0;
+
   /// 每分类的断点（分类工人并行时，单游标记不住各分类进度，
   /// 每分类各记各的页码；整轮完成只看总检查点）。
   static String _categoryCheckpointPhase(String site, int categoryIndex) =>
@@ -337,6 +373,21 @@ class ActressSiteCrawlService {
   var _cancelled = false;
   var _current = const ActressSiteCrawlProgress();
 
+  /// 本轮是否因总预算到时停下（不是用户取消）。
+  var _budgetExpired = false;
+
+  bool get budgetExpired => _budgetExpired;
+
+  /// 本轮总预算的截止点（start/startGenericSite 开始时定）。
+  DateTime? _deadline;
+
+  bool get _overBudget =>
+      _deadline != null && DateTime.now().isAfter(_deadline!);
+
+  /// 一次 start() 内有效的取消信号：cancel() 完成它，[_raceCancel]
+  /// 听到就立刻停等。每次开始时重建，跑完不复用。
+  Completer<void>? _cancelSignal;
+
   bool get running => _running;
 
   ActressSiteCrawlProgress get current => _current;
@@ -348,6 +399,50 @@ class ActressSiteCrawlService {
 
   void cancel() {
     _cancelled = true;
+    final signal = _cancelSignal;
+    if (signal != null && !signal.isCompleted) signal.complete();
+  }
+
+  /// 等一个取数 future，但取消时不等它超时、立刻抛 [_CrawlCancelled]。
+  /// 底层的取数本身停不下来（Dart future 不可撤）：竞跑输了的那
+  /// 一方结果被丢弃——取数晚回来时它的完成/错误回调都已挂上，
+  /// 不会变成未处理异常；写盘/写库在 await 之后，抛错即跳过。
+  Future<T> _raceCancel<T>(Future<T> future) {
+    if (_cancelled) throw const _CrawlCancelled();
+    final signal = _cancelSignal;
+    if (signal == null) return future;
+    final completer = Completer<T>();
+    var settled = false;
+    future.then(
+      (value) {
+        if (!settled) {
+          settled = true;
+          completer.complete(value);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!settled) {
+          settled = true;
+          completer.completeError(error, stack);
+        }
+      },
+    );
+    unawaited(
+      signal.future.then((_) {
+        if (!settled) {
+          settled = true;
+          completer.completeError(const _CrawlCancelled());
+        }
+      }),
+    );
+    return completer.future;
+  }
+
+  /// 开始一轮现爬：重置取消信号、预算截止点与预算到时标志。
+  void _beginRun(Duration timeBudget) {
+    _cancelSignal = Completer<void>();
+    _deadline = DateTime.now().add(timeBudget);
+    _budgetExpired = false;
   }
 
   void dispose() {
@@ -361,13 +456,22 @@ class ActressSiteCrawlService {
     int maxPagesPerCategory = defaultMaxPagesPerCategory,
     int enrichPerCategory = defaultEnrichPerCategory,
     int categoryConcurrency = defaultCategoryConcurrency,
+    Duration timeBudget = defaultTimeBudget,
   }) async {
     if (_running) return;
     if (site == 'whos') {
       _running = true;
       _cancelled = false;
+      _beginRun(timeBudget);
       try {
         await _runWhos(maxPagesPerCategory);
+      } on _CrawlCancelled {
+        _emit(
+          ActressSiteCrawlProgress(
+            site: site,
+            error: '已取消',
+          ),
+        );
       } catch (error) {
         _emit(
           ActressSiteCrawlProgress(
@@ -376,6 +480,13 @@ class ActressSiteCrawlService {
           ),
         );
       } finally {
+        // 收尾落盘：本轮攒着没写盘的条目一次写进去，别丢；
+        // 写盘失败也不掀翻收尾（下次断点续跑重爬，合并键去重）。
+        try {
+          await _flushEntries(site);
+        } catch (_) {
+          // 落盘失败：json 里缺这批，断点仍按未完成记，下次续跑。
+        }
         _localByKey = null;
         _localSite = null;
         _running = false;
@@ -384,6 +495,7 @@ class ActressSiteCrawlService {
     }
     _running = true;
     _cancelled = false;
+    _beginRun(timeBudget);
     // 蜘蛛 id：mjv 走潮流蜘蛛，其余站走本站蜘蛛。
     final spiderId = site == 'mjv' ? 'chaoliu' : site;
     final playFrom = site == 'mjv' ? 'mjv011' : spiderId;
@@ -408,12 +520,13 @@ class ActressSiteCrawlService {
           ? const [(id: '', name: '全部')]
           : usable;
     }
-    // 一轮内合并表常驻内存：只读一次本地单文件，每页只写不重读；
+    // 一轮内合并表常驻内存：只读一次本地单文件，写盘按批量落盘；
     // 取消/跑完后丢弃，下轮重读（文件是唯一真相）。
     _localByKey = await _loadLocalEntries(site);
     _localSite = site;
     var items = 0;
     var enriched = 0;
+    var enrichTried = 0;
     try {
       // 断点：总检查点已完成（或没有）时整轮从头爬（多轮追加靠
       // 这个语义：第二轮重爬全部分类，新番号追加、旧行按更新规则
@@ -446,7 +559,7 @@ class ActressSiteCrawlService {
       var doneCats = 0;
 
       Future<void> categoryWorker() async {
-        while (!_cancelled) {
+        while (!_cancelled && !_budgetExpired) {
           final ci = nextCat;
           if (ci >= categories.length) return;
           nextCat++;
@@ -460,8 +573,17 @@ class ActressSiteCrawlService {
           var categoryDone = false;
           var catItems = 0;
           var pagesDone = fromPage - 1;
+          // 本分类中途抛错（目录/补流取数失败）：先记下，走完分类收尾
+          // （落盘+断点）再往上抛（start() 转“现爬失败”）；批量落盘后
+          // 抛错直接跳过收尾会丢已取数据与断点。
+          Object? categoryError;
           for (var page = fromPage; page <= maxPagesPerCategory; page++) {
-            if (_cancelled) break;
+            if (_cancelled || _budgetExpired) break;
+            // 总预算到时：本页不取了，分类收尾落盘后停，断点记未完成。
+            if (_overBudget) {
+              _budgetExpired = true;
+              break;
+            }
             _emit(
               ActressSiteCrawlProgress(
                 running: true,
@@ -472,13 +594,25 @@ class ActressSiteCrawlService {
                 page: page,
                 items: items,
                 enriched: enriched,
+                enrichTried: enrichTried,
               ),
             );
-            final pageResult = await repository.catalog(
-              spiderId,
-              category: category.id,
-              page: page,
-            );
+            CatalogPage pageResult;
+            try {
+              // 取消时不等这页目录取完（py 腿最长 70 秒）立刻停等。
+              pageResult = await _raceCancel(
+                repository.catalog(
+                  spiderId,
+                  category: category.id,
+                  page: page,
+                ),
+              );
+            } on _CrawlCancelled {
+              break;
+            } catch (error) {
+              categoryError = error;
+              break;
+            }
             final rows = pageResult.items;
             if (rows.isEmpty) {
               categoryDone = true;
@@ -491,41 +625,107 @@ class ActressSiteCrawlService {
             items += entries.length;
             catItems += entries.length;
             pagesDone = page;
-            await _appendEntries(site, entries);
-            await db.saveCheckpoint(
-              ActressSyncCheckpoint(
-                source: _checkpointSource.name,
-                phase: _categoryCheckpointPhase(site, ci),
-                cursor: '${page + 1}',
-                total: catItems,
-                updatedAt: DateTime.now().millisecondsSinceEpoch,
-              ),
-            );
+            // 批量落盘：没攒够阈值时只进内存合并表、不写盘，返回
+            // false；只有落盘后才往前写断点——没落盘的页崩了重爬
+            // （合并键去重，不重复入库），不把没落盘的数据记成
+            // 已完成。
+            final durable = await _appendEntries(site, entries);
             // 补流：本分类前 K 条没直链的，详情 + 取流补齐（K 按分类计，
             // 跨页累计，不按页重置）；补好的攒一页一次写盘。
+            // 每起一条就报一次进度：详情 + 取流各 ≤70 秒，旧写法
+            // 只在页循环顶部报数，补流期间面板长时间停在一个数上。
             final filledEntries = <ActressJsonEntry>[];
+            var filledDurable = durable;
             for (final entry in entries) {
-              if (enrichLeft <= 0 || _cancelled) break;
+              if (enrichLeft <= 0 || _cancelled || _budgetExpired) break;
+              if (_overBudget) {
+                _budgetExpired = true;
+                break;
+              }
               if (entry.playable) continue;
-              final filled = await _enrichEntry(entry, spiderId);
+              enrichTried++;
+              _emit(
+                ActressSiteCrawlProgress(
+                  running: true,
+                  site: site,
+                  categoryIndex: ci + 1,
+                  categoryCount: categories.length,
+                  categoryName: category.name,
+                  page: page,
+                  items: items,
+                  enriched: enriched,
+                  enrichTried: enrichTried,
+                ),
+              );
+              ActressJsonEntry? filled;
+              try {
+                // 取消时不等这条的详情 + 取流（最长 140 秒）立刻停等。
+                filled = await _raceCancel(_enrichEntry(entry, spiderId));
+              } on _CrawlCancelled {
+                break;
+              } catch (error) {
+                // 补流取数抛错：记下，跳出补流与本页循环，分类收尾
+                // 落盘、记断点后再往上抛，不断点、不丢已取数据。
+                categoryError = error;
+                break;
+              }
               if (filled != null) {
                 filledEntries.add(filled);
                 enriched++;
                 enrichLeft--;
               }
             }
+            if (categoryError != null) {
+              // 补流中途抛错：本页已到手的补流结果先落盘（别丢），
+              // 但断点不往前写——下次从本页续爬，重新补流。
+              if (filledEntries.isNotEmpty) {
+                await _appendEntries(
+                  site,
+                  filledEntries,
+                  mirrorRequired: false,
+                );
+              }
+              pagesDone = page - 1;
+              break;
+            }
             if (filledEntries.isNotEmpty) {
-              await _appendEntries(site, filledEntries, mirrorRequired: false);
+              filledDurable = await _appendEntries(
+                site,
+                filledEntries,
+                mirrorRequired: false,
+              );
+            }
+            if (durable || filledDurable) {
+              await db.saveCheckpoint(
+                ActressSyncCheckpoint(
+                  source: _checkpointSource.name,
+                  phase: _categoryCheckpointPhase(site, ci),
+                  cursor: '${page + 1}',
+                  total: catItems,
+                  updatedAt: DateTime.now().millisecondsSinceEpoch,
+                ),
+              );
             }
             if (rows.length < 24) {
               categoryDone = true;
               break;
             }
           }
+          // 分类收尾先落盘：本分类攒着没写盘的条目一次写进去，
+          // 再写分类检查点——断点只认已落盘的页。落盘失败时检查点
+          // 一个字都不往前写，下次从上一个已落盘的断页续爬。
+          var flushed = false;
+          try {
+            flushed = await _flushEntries(site);
+          } catch (_) {
+            flushed = false;
+          }
           // 分类完成：短页/空页到头，或跑满每分类页数上限；
-          // 取消时不记完成，下次从断页续爬。
+          // 取消/预算到时/落盘失败不记完成，下次从断页续爬。
           final catFinished =
+              flushed &&
               !_cancelled &&
+              !_budgetExpired &&
               (categoryDone || pagesDone >= maxPagesPerCategory);
           if (catFinished) {
             await db.saveCheckpoint(
@@ -538,7 +738,21 @@ class ActressSiteCrawlService {
                 updatedAt: DateTime.now().millisecondsSinceEpoch,
               ),
             );
+          } else if (flushed && pagesDone >= fromPage) {
+            await db.saveCheckpoint(
+              ActressSyncCheckpoint(
+                source: _checkpointSource.name,
+                phase: _categoryCheckpointPhase(site, ci),
+                cursor: '${pagesDone + 1}',
+                total: catItems,
+                finished: false,
+                updatedAt: DateTime.now().millisecondsSinceEpoch,
+              ),
+            );
           }
+          // 本分类中途抛错：收尾已落盘、断点已记，现在往上抛，
+          // start() 转“现爬失败”，不断点、不丢已取数据。
+          if (categoryError != null) throw categoryError;
           doneCats++;
         }
       }
@@ -554,7 +768,10 @@ class ActressSiteCrawlService {
           phase: _checkpointPhase(site),
           cursor: '$doneCats/${categories.length}',
           total: items,
-          finished: !_cancelled && doneCats >= categories.length,
+          finished:
+              !_cancelled &&
+              !_budgetExpired &&
+              doneCats >= categories.length,
           updatedAt: DateTime.now().millisecondsSinceEpoch,
         ),
       );
@@ -565,8 +782,23 @@ class ActressSiteCrawlService {
           categoryCount: categories.length,
           items: items,
           enriched: enriched,
-          done: !_cancelled,
-          error: _cancelled ? '已取消' : '',
+          enrichTried: enrichTried,
+          done: !_cancelled && !_budgetExpired,
+          error: _cancelled
+              ? '已取消'
+              : (_budgetExpired ? '本轮时间到，已记断点，下次继续' : ''),
+        ),
+      );
+    } on _CrawlCancelled {
+      // 取消：各分类收尾已落盘、断点已记，直接按取消收口，
+      // 不报“现爬失败”。
+      _emit(
+        ActressSiteCrawlProgress(
+          site: site,
+          items: items,
+          enriched: enriched,
+          enrichTried: enrichTried,
+          error: '已取消',
         ),
       );
     } catch (error) {
@@ -575,10 +807,17 @@ class ActressSiteCrawlService {
           site: site,
           items: items,
           enriched: enriched,
+          enrichTried: enrichTried,
           error: '现爬失败：$error',
         ),
       );
     } finally {
+      // 收尾落盘：异常中途退出时攒着的条目一次写进去，别丢。
+      try {
+        await _flushEntries(site);
+      } catch (_) {
+        // 落盘失败：断点仍按未完成记，下次续跑。
+      }
       _localByKey = null;
       _localSite = null;
       _running = false;
@@ -598,16 +837,20 @@ class ActressSiteCrawlService {
     int maxPages = defaultMaxPagesPerCategory,
     int enrichPerPage = 12,
     GenericSiteCrawler? crawler,
+    Duration timeBudget = defaultTimeBudget,
   }) async {
     if (_running) return;
     _running = true;
     _cancelled = false;
+    _beginRun(timeBudget);
     final engine = crawler ?? GenericSiteCrawler();
     var items = 0;
     var enriched = 0;
+    var enrichTried = 0;
+    var siteId = 'custom';
     try {
-      final plan = await engine.probe(url);
-      final siteId = plan.siteId;
+      final plan = await _raceCancel(engine.probe(url));
+      siteId = plan.siteId;
       _localByKey = await _loadLocalEntries(siteId);
       _localSite = siteId;
       final phase = _checkpointPhase('generic_$siteId');
@@ -619,8 +862,13 @@ class ActressSiteCrawlService {
         items = saved.total;
       }
       var lastPage = startPage - 1;
+      Object? runError;
       for (var page = startPage; page <= maxPages; page++) {
-        if (_cancelled) break;
+        if (_cancelled || _budgetExpired) break;
+        if (_overBudget) {
+          _budgetExpired = true;
+          break;
+        }
         _emit(
           ActressSiteCrawlProgress(
             running: true,
@@ -631,13 +879,27 @@ class ActressSiteCrawlService {
             page: page,
             items: items,
             enriched: enriched,
+            enrichTried: enrichTried,
           ),
         );
-        final result = await engine.fetchPage(plan, page);
+        ({List<GenericCrawlCard> cards, bool hasNext}) result;
+        try {
+          // 取消时不等这页取完立刻停等。
+          result = await _raceCancel(engine.fetchPage(plan, page));
+        } on _CrawlCancelled {
+          break;
+        } catch (error) {
+          // 取页抛错：先记下，收尾落盘、补写上一个好页的断点后再往上抛
+          // （外层 catch 转“现爬失败”）；批量落盘后抛错直接跳过收尾
+          // 会丢已取数据与断点。
+          runError = error;
+          break;
+        }
         if (result.cards.isEmpty) break;
         final entries = <ActressJsonEntry>[];
         var enrichLeft = enrichPerPage;
         for (final card in result.cards) {
+          if (_cancelled || _budgetExpired) break;
           var title = card.title;
           var actor = card.actor;
           var cover = card.cover;
@@ -648,7 +910,28 @@ class ActressSiteCrawlService {
           // 采集接口的行已经带女优名和播放地址；页面卡片缺的才去抓详情。
           if ((actor.isEmpty || playUrl.isEmpty) && enrichLeft > 0) {
             enrichLeft--;
-            final detail = await engine.fetchDetail(card.url);
+            // 每起一条详情就报一次：详情取数慢时面板能看到补流在走。
+            enrichTried++;
+            _emit(
+              ActressSiteCrawlProgress(
+                running: true,
+                site: siteId,
+                categoryIndex: 1,
+                categoryCount: 1,
+                categoryName: plan.note,
+                page: page,
+                items: items,
+                enriched: enriched,
+                enrichTried: enrichTried,
+              ),
+            );
+            GenericCrawlDetail? detail;
+            try {
+              // 取消时不等这条详情取完立刻停等。
+              detail = await _raceCancel(engine.fetchDetail(card.url));
+            } on _CrawlCancelled {
+              detail = null;
+            }
             if (detail != null) {
               if (detail.title.isNotEmpty) title = detail.title;
               if (actor.isEmpty) actor = detail.actor;
@@ -696,17 +979,43 @@ class ActressSiteCrawlService {
         }
         items += entries.length;
         lastPage = page;
-        await _appendEntries(siteId, entries);
-        await db.saveCheckpoint(
-          ActressSyncCheckpoint(
-            source: _checkpointSource.name,
-            phase: phase,
-            cursor: '${page + 1}',
-            total: items,
-            updatedAt: DateTime.now().millisecondsSinceEpoch,
-          ),
-        );
+        // 批量落盘：只有落盘后才往前写断点（与分类现爬同一口径）。
+        final durable = await _appendEntries(siteId, entries);
+        if (durable) {
+          await db.saveCheckpoint(
+            ActressSyncCheckpoint(
+              source: _checkpointSource.name,
+              phase: phase,
+              cursor: '${page + 1}',
+              total: items,
+              updatedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
+          );
+        }
         if (!result.hasNext) break;
+      }
+      // 收尾先落盘，再写总检查点：落盘失败不记完成，下次续爬。
+      var flushed = false;
+      try {
+        flushed = await _flushEntries(siteId);
+      } catch (_) {
+        flushed = false;
+      }
+      if (runError != null) {
+        // 取数中途抛错：断点停在上一个好页（不写总检查点，下次从好页的
+        // 下一页续爬），再往上抛（外层 catch 转“现爬失败”）。
+        if (flushed && lastPage >= startPage) {
+          await db.saveCheckpoint(
+            ActressSyncCheckpoint(
+              source: _checkpointSource.name,
+              phase: phase,
+              cursor: '${lastPage + 1}',
+              total: items,
+              updatedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
+          );
+        }
+        throw runError;
       }
       await db.saveCheckpoint(
         ActressSyncCheckpoint(
@@ -714,7 +1023,7 @@ class ActressSiteCrawlService {
           phase: phase,
           cursor: '',
           total: items,
-          finished: !_cancelled,
+          finished: flushed && !_cancelled && !_budgetExpired,
           updatedAt: DateTime.now().millisecondsSinceEpoch,
         ),
       );
@@ -727,8 +1036,21 @@ class ActressSiteCrawlService {
           page: lastPage < 1 ? 1 : lastPage,
           items: items,
           enriched: enriched,
-          done: !_cancelled,
-          error: _cancelled ? '已取消' : '',
+          enrichTried: enrichTried,
+          done: !_cancelled && !_budgetExpired,
+          error: _cancelled
+              ? '已取消'
+              : (_budgetExpired ? '本轮时间到，已记断点，下次继续' : ''),
+        ),
+      );
+    } on _CrawlCancelled {
+      _emit(
+        ActressSiteCrawlProgress(
+          site: siteId,
+          items: items,
+          enriched: enriched,
+          enrichTried: enrichTried,
+          error: '已取消',
         ),
       );
     } on GenericCrawlFailure catch (error) {
@@ -737,6 +1059,7 @@ class ActressSiteCrawlService {
           site: 'custom',
           items: items,
           enriched: enriched,
+          enrichTried: enrichTried,
           error: error.message,
         ),
       );
@@ -746,10 +1069,17 @@ class ActressSiteCrawlService {
           site: 'custom',
           items: items,
           enriched: enriched,
+          enrichTried: enrichTried,
           error: '现爬失败：$error',
         ),
       );
     } finally {
+      // 收尾落盘：异常中途退出时攒着的条目一次写进去，别丢。
+      try {
+        await _flushEntries(siteId);
+      } catch (_) {
+        // 落盘失败：断点仍按未完成记，下次续跑。
+      }
       _localByKey = null;
       _localSite = null;
       _running = false;
@@ -773,6 +1103,9 @@ class ActressSiteCrawlService {
     _localByKey = await _loadLocalEntries('whos');
     _localSite = 'whos';
     var items = 0;
+    var lastGoodPage = 0;
+    var lastGoodItems = 0;
+    Object? runError;
     final saved = await db.checkpoint(
       _checkpointSource,
       _checkpointPhase('whos'),
@@ -784,7 +1117,11 @@ class ActressSiteCrawlService {
       items = saved.total;
     }
     for (var page = startPage; page <= maxPagesPerCategory; page++) {
-      if (_cancelled) break;
+      if (_cancelled || _budgetExpired) break;
+      if (_overBudget) {
+        _budgetExpired = true;
+        break;
+      }
       _emit(
         ActressSiteCrawlProgress(
           running: true,
@@ -797,22 +1134,62 @@ class ActressSiteCrawlService {
           enriched: 0,
         ),
       );
-      final html = await _whosListFetcher(page);
+      String html;
+      try {
+        // 取消时不等这页取完（validator.nu 通道最长 90 秒）立刻停等。
+        html = await _raceCancel(_whosListFetcher(page));
+      } on _CrawlCancelled {
+        break;
+      } catch (error) {
+        // 取数抛错：先记下，收尾落盘、补写上一个好页的断点后再往上抛
+        // （start() 转“现爬失败”）。批量落盘后好页的断点只在落盘时
+        // 写，抛错直接跳过收尾会丢断点——断点停在上一个好页。
+        runError = error;
+        break;
+      }
       if (html.isEmpty) break;
       final cards = parseWhosListCards(html);
       if (cards.isEmpty) break;
       final entries = [for (final card in cards) _whosEntryFromCard(card)];
       items += entries.length;
-      await _appendEntries('whos', entries);
-      await db.saveCheckpoint(
-        ActressSyncCheckpoint(
-          source: _checkpointSource.name,
-          phase: _checkpointPhase('whos'),
-          cursor: '0/$page',
-          total: items,
-          updatedAt: DateTime.now().millisecondsSinceEpoch,
-        ),
-      );
+      lastGoodPage = page;
+      lastGoodItems = items;
+      // 批量落盘：只有落盘后才往前写断点（与分类现爬同一口径）。
+      final durable = await _appendEntries('whos', entries);
+      if (durable) {
+        await db.saveCheckpoint(
+          ActressSyncCheckpoint(
+            source: _checkpointSource.name,
+            phase: _checkpointPhase('whos'),
+            cursor: '0/$page',
+            total: items,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+      }
+    }
+    // 收尾先落盘，再写检查点：落盘失败不记完成，下次续爬。
+    var flushed = false;
+    try {
+      flushed = await _flushEntries('whos');
+    } catch (_) {
+      flushed = false;
+    }
+    if (runError != null) {
+      // 中途抛错：断点停在上一个好页（基线行为：抛错跳过收尾总检查点，
+      // 页检查点留着）；总检查点不写，下次从好页的下一页续爬。
+      if (flushed && lastGoodPage > 0) {
+        await db.saveCheckpoint(
+          ActressSyncCheckpoint(
+            source: _checkpointSource.name,
+            phase: _checkpointPhase('whos'),
+            cursor: '0/$lastGoodPage',
+            total: lastGoodItems,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+      }
+      throw runError;
     }
     await db.saveCheckpoint(
       ActressSyncCheckpoint(
@@ -820,7 +1197,7 @@ class ActressSiteCrawlService {
         phase: _checkpointPhase('whos'),
         cursor: '',
         total: items,
-        finished: !_cancelled,
+        finished: flushed && !_cancelled && !_budgetExpired,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );
@@ -832,8 +1209,10 @@ class ActressSiteCrawlService {
         categoryName: category.name,
         items: items,
         enriched: 0,
-        done: !_cancelled,
-        error: _cancelled ? '已取消' : '',
+        done: !_cancelled && !_budgetExpired,
+        error: _cancelled
+            ? '已取消'
+            : (_budgetExpired ? '本轮时间到，已记断点，下次继续' : ''),
       ),
     );
   }
@@ -1007,12 +1386,22 @@ class ActressSiteCrawlService {
   /// 合并表是一轮内常驻内存的那份（_localByKey），写盘只写不重读。
   /// 写盘后同一批条目同步进库（json-first：先落 json、再进库镜像，
   /// 库是 json 的派生索引），列表进行中就能陆续出人。
-  Future<void> _appendEntries(
+  /// 批量落盘（2026-11-24 同步卡顿修复）：旧写法每页都把内存里
+  /// 全部条目全量重写一遍（几万条、几十 MB），O(n²) 越跑越慢；
+  /// 新写法新合并的条目先只进内存表，攒够 [flushThresholdEntries]
+  /// 条、或分类/整轮结束调 [_flushEntries] 时才写盘。返回 true
+  /// 表示“磁盘上已包含全部已合并条目”（写过盘、或本批全是重复行
+  /// 磁盘上本来就有）：调用方只有这时才往前写断点，没落盘的页
+  /// 崩了重爬（合并键去重），不把没落盘的数据记成已完成。
+  /// [_dirtyEntries] 是自上次落盘以来新合并/替换的条目数。
+  var _dirtyEntries = 0;
+
+  Future<bool> _appendEntries(
     String site,
     List<ActressJsonEntry> fresh, {
     bool mirrorRequired = true,
   }) async {
-    if (fresh.isEmpty) return;
+    if (fresh.isEmpty) return true;
     final dir = await _localDir();
     await dir.create(recursive: true);
     final file = File(
@@ -1024,21 +1413,23 @@ class ActressSiteCrawlService {
       _localByKey = byKey;
       _localSite = site;
     }
+    var changed = 0;
     for (final entry in fresh) {
       final key = '${entry.site}|${entry.mergeKey}';
       final old = byKey[key];
       if (old != null && old.vodPlayUrl == entry.vodPlayUrl) continue;
       byKey[key] = entry;
+      changed++;
     }
-    final doc = <String, dynamic>{
-      'list': [for (final e in byKey.values) e.toRow()],
-      'parse': 0,
-      'jx': 0,
-      'last_update': DateTime.now().toIso8601String(),
-    };
-    await file.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(doc),
-    );
+    // 全是重复行：磁盘上已有这批数据，不用重写，直接算落盘。
+    if (changed == 0) return true;
+    _dirtyEntries += changed;
+    var durable = false;
+    if (_dirtyEntries >= flushThresholdEntries) {
+      await _writeLocalFile(file, byKey);
+      _dirtyEntries = 0;
+      durable = true;
+    }
     // 同一批条目进库镜像：有女优名的行建/合人物并写作品行，
     // 没女优名的行只留 json、不进库。json-first：文件先落盘，
     // 镜像后做；多分类工人并行时，镜像串在一条队列上依次跑
@@ -1057,12 +1448,49 @@ class ActressSiteCrawlService {
       }
     }
     if (!mirrored && mirrorRequired) {
-      throw StateError('进库镜像失败：本页 ${fresh.length} 条已写 json，库未同步');
+      throw StateError('进库镜像失败：本页 ${fresh.length} 条未进库，库未同步');
     }
     // 影视库追加（2026-11-20）：同一批条目进 MYTV/db/女优库.db
     // （videos 结构），与 json 影子文件、app 库镜像同批；失败不卡
     // 现爬（下次打开影视库时 domain 比对与修复流程会补记）。
     await _appendToFilmLibrary(fresh);
+    return durable;
+  }
+
+  /// 把内存合并表全量写进单文件（批量落盘的唯一写盘点）：
+  /// 格式与旧写法完全一致（顶层四键、indent=2），只是写盘的
+  /// 时机从“每页”改成“攒够阈值/分类结束/整轮结束”。
+  Future<void> _writeLocalFile(
+    File file,
+    Map<String, ActressJsonEntry> byKey,
+  ) async {
+    final doc = <String, dynamic>{
+      'list': [for (final e in byKey.values) e.toRow()],
+      'parse': 0,
+      'jx': 0,
+      'last_update': DateTime.now().toIso8601String(),
+    };
+    await file.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(doc),
+    );
+    flushWriteCount++;
+  }
+
+  /// 强制落盘：分类结束/整轮结束/异常收尾时调，把内存合并表里
+  /// 攒着的条目一次写进单文件。没攒条目时不写盘。
+  /// 返回 true 表示磁盘上已包含全部已合并条目。
+  Future<bool> _flushEntries(String site) async {
+    final byKey = _localByKey;
+    if (byKey == null || _localSite != site) return _dirtyEntries == 0;
+    if (_dirtyEntries == 0) return true;
+    final dir = await _localDir();
+    await dir.create(recursive: true);
+    final file = File(
+      path.join(dir.path, ActressJsonFallback.localFileName),
+    );
+    await _writeLocalFile(file, byKey);
+    _dirtyEntries = 0;
+    return true;
   }
 
   /// 现爬条目追加进影视库文件（绑定的 女优库.db）：失败只吞掉，
@@ -1082,7 +1510,10 @@ class ActressSiteCrawlService {
 
   Future<void> _mirrorEntries(List<ActressJsonEntry> fresh) {
     final run = _mirrorQueue.then((_) => mirrorActressJsonEntriesToDb(db, fresh));
-    _mirrorQueue = run.then((_) {});
+    // 队列本身永不带错：一次镜像失败不能毒掉整条链（旧写法
+    // run.then((_) {}) 会把错传进链里，此后所有镜像直接跳过、
+    // 静默丢数据，与名册写锁中毒同一毛病，见重载批 REPORT 第三节）。
+    _mirrorQueue = run.then((_) {}, onError: (_) {});
     return run;
   }
 

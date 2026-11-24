@@ -65,6 +65,20 @@ abstract class ActressRosterSource {
     required ActressHttpFetch fetch,
   });
 
+  /// 某人作品清单的第 [page] 页（1 起）：whos/MissAV 这类逐页翻
+  /// 人物页的源按页取，同步层失败只重试这一页（2026-11-24 同步
+  /// 卡顿修复：旧的整人重试是一页失败就把整人全部页重取 3 遍）；
+  /// 单请求源（潮流）默认第 1 页返回全量、第 2 页起返回空页，
+  /// 即整人一次取完。空页表示到头（与 fetchFilms 的循环同义）。
+  Future<List<RosterFilm>> fetchFilmsPage(
+    String sourceId,
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (page != 1) return const [];
+    return fetchFilms(sourceId, fetch: fetch);
+  }
+
   /// 排行第 [page] 页（1 起，顺序即名次序）：MissAV 默认提供；
   /// whos 须开 [WhosRosterSource.enableRanking]（未验通前默认关闭），
   /// 其余源返回空页。
@@ -254,23 +268,30 @@ class WhosRosterSource extends ActressRosterSource {
   }
 
   @override
+  Future<List<RosterFilm>> fetchFilmsPage(
+    String sourceId,
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (page < 1 || page > maxPages) return const [];
+    final url = page <= 1
+        ? '$base/actresses/$sourceId'
+        : '$base/actresses/$sourceId/page-$page';
+    final response = await fetch(url);
+    if (response.statusCode != 200) {
+      throw StateError('whos films http ${response.statusCode}');
+    }
+    return parseWhosFilms(response.body, decodeCover: enableXorCover);
+  }
+
+  @override
   Future<List<RosterFilm>> fetchFilms(
     String sourceId, {
     required ActressHttpFetch fetch,
   }) async {
     final films = <RosterFilm>[];
     for (var page = 1; page <= maxPages; page++) {
-      final url = page <= 1
-          ? '$base/actresses/$sourceId'
-          : '$base/actresses/$sourceId/page-$page';
-      final response = await fetch(url);
-      if (response.statusCode != 200) {
-        throw StateError('whos films http ${response.statusCode}');
-      }
-      final pageFilms = parseWhosFilms(
-        response.body,
-        decodeCover: enableXorCover,
-      );
+      final pageFilms = await fetchFilmsPage(sourceId, page, fetch: fetch);
       if (pageFilms.isEmpty) break;
       films.addAll(pageFilms);
     }
@@ -576,22 +597,32 @@ class MissavRosterSource extends ActressRosterSource {
   }
 
   @override
+  Future<List<RosterFilm>> fetchFilmsPage(
+    String sourceId,
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (page < 1 || page > maxPages) return const [];
+    final personUrl = _resolveUrl(base, sourceId);
+    final separator = personUrl.contains('?') ? '&' : '?';
+    final response = await fetch(
+      '$personUrl${separator}page=$page',
+      headers: _headers,
+    );
+    if (response.statusCode != 200) {
+      throw StateError('missav films http ${response.statusCode}');
+    }
+    return parseMissavFilms(response.body);
+  }
+
+  @override
   Future<List<RosterFilm>> fetchFilms(
     String sourceId, {
     required ActressHttpFetch fetch,
   }) async {
     final films = <RosterFilm>[];
-    final personUrl = _resolveUrl(base, sourceId);
     for (var page = 1; page <= maxPages; page++) {
-      final separator = personUrl.contains('?') ? '&' : '?';
-      final response = await fetch(
-        '$personUrl${separator}page=$page',
-        headers: _headers,
-      );
-      if (response.statusCode != 200) {
-        throw StateError('missav films http ${response.statusCode}');
-      }
-      final pageFilms = parseMissavFilms(response.body);
+      final pageFilms = await fetchFilmsPage(sourceId, page, fetch: fetch);
       if (pageFilms.isEmpty) break;
       films.addAll(pageFilms);
     }
@@ -763,6 +794,16 @@ class FakeRosterSource implements ActressRosterSource {
       persons: rosterPages[index],
       hasMore: index + 1 < rosterPages.length,
     );
+  }
+
+  @override
+  Future<List<RosterFilm>> fetchFilmsPage(
+    String sourceId,
+    int page, {
+    required ActressHttpFetch fetch,
+  }) async {
+    if (page != 1) return const [];
+    return fetchFilms(sourceId, fetch: fetch);
   }
 
   @override

@@ -46,6 +46,7 @@ class _NoopCrawl extends ActressSiteCrawlService {
         ActressSiteCrawlService.defaultEnrichPerCategory,
     int categoryConcurrency =
         ActressSiteCrawlService.defaultCategoryConcurrency,
+    Duration timeBudget = ActressSiteCrawlService.defaultTimeBudget,
   }) async {
     startedSite = site;
   }
