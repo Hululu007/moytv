@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core_bridge.dart' show AppFailure;
 import '../idj_plugin_store.dart';
@@ -800,15 +801,35 @@ class IdjPluginTabState extends State<IdjPluginTab> {
   final Set<String> _installingIds = {};
   // 内置远程仓库默认展开：打开市场直接看到远程插件列表，不用再点一下。
   final Set<String> _expandedSubs = {idjBuiltInSubscriptionUrl};
+  // 已安装区折叠：默认展开；状态记偏好，下次进 tab 保持上次的样子。
+  static const _installedCollapsedPrefKey = 'idj_installed_collapsed';
+  bool _installedCollapsed = false;
 
   @override
   void initState() {
     super.initState();
+    _loadInstalledCollapsed();
     _updates = widget.initialUpdateCandidates ?? const [];
     if (widget.initialSubscriptions != null) {
       _subscriptions = widget.initialSubscriptions!;
     }
     _refreshAll();
+  }
+
+  Future<void> _loadInstalledCollapsed() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(
+      () => _installedCollapsed =
+          prefs.getBool(_installedCollapsedPrefKey) ?? false,
+    );
+  }
+
+  Future<void> _toggleInstalledCollapsed() async {
+    final next = !_installedCollapsed;
+    setState(() => _installedCollapsed = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_installedCollapsedPrefKey, next);
   }
 
   /// 供「+」菜单与 tab 外部调用：装完插件后刷新本页。
@@ -1157,14 +1178,40 @@ class IdjPluginTabState extends State<IdjPluginTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _IdjSectionTitle(title: '已安装（${_installed.length}）'),
-          if (_installed.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('还没有安装插件，可用下面的入口安装。'),
-            )
-          else
-            for (final item in _installed) _installedRow(item, colors),
+          InkWell(
+            key: const ValueKey('idj-installed-collapse'),
+            onTap: _toggleInstalledCollapsed,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 16, bottom: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    _installedCollapsed
+                        ? Icons.chevron_right
+                        : Icons.expand_more,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    '已安装（${_installed.length}）',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (!_installedCollapsed) ...[
+            if (_installed.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('还没有安装插件，可用下面的入口安装。'),
+              )
+            else
+              for (final item in _installed) _installedRow(item, colors),
+          ],
           _IdjSectionTitle(title: '安装入口'),
           Row(
             children: [

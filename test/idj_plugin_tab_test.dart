@@ -493,4 +493,77 @@ void main() {
       expect(find.text('安装'), findsNothing);
     });
   });
+
+  group('已安装区折叠', () {
+    testWidgets('点标题收起：卡片消失、标题和计数还在', (tester) async {
+      await pumpTab(tester);
+      expect(find.text('已安装（5）'), findsOneWidget);
+      expect(find.text('橙果短剧'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('idj-installed-collapse')));
+      await tester.pump();
+
+      expect(find.text('已安装（5）'), findsOneWidget);
+      expect(find.text('橙果短剧'), findsNothing);
+      expect(find.text('🔞潮流AV'), findsNothing);
+      // 收起时箭头朝右。
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('idj-installed-collapse')),
+          matching: find.byIcon(Icons.chevron_right),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('再点展开：卡片回来、箭头朝下', (tester) async {
+      await pumpTab(tester);
+      final header = find.byKey(const ValueKey('idj-installed-collapse'));
+      await tester.tap(header);
+      await tester.pump();
+      expect(find.text('橙果短剧'), findsNothing);
+
+      await tester.tap(header);
+      await tester.pump();
+      expect(find.text('橙果短剧'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('idj-installed-collapse')),
+          matching: find.byIcon(Icons.expand_more),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('状态持久化：收起后重进 tab 仍收着', (tester) async {
+      await pumpTab(tester);
+      await tester.tap(find.byKey(const ValueKey('idj-installed-collapse')));
+      await tester.pump();
+      expect(find.text('橙果短剧'), findsNothing);
+      // 偏好已落盘。
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('idj_installed_collapsed'), isTrue);
+
+      // 重建 tab（同一次测试内复用同一份 mock 偏好）。
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: IdjPluginTab(
+              store: store,
+              initialSubscriptions: const [],
+              initialUpdateCandidates: const [],
+            ),
+          ),
+        ),
+      );
+      await drain(
+        tester,
+        until: () =>
+            find.text('已安装（5）').evaluate().isNotEmpty &&
+            find.text('橙果短剧').evaluate().isEmpty,
+      );
+      expect(find.text('已安装（5）'), findsOneWidget);
+      expect(find.text('橙果短剧'), findsNothing);
+    });
+  });
 }
