@@ -31,6 +31,7 @@ import 'package:moyi/local_store.dart';
 import 'package:moyi/ijk_video_pane.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/player_core.dart';
+import 'package:moyi/player_core_fallback.dart';
 import 'package:moyi/tvbox_video_pane.dart';
 import 'package:moyi/playback_launch_screen.dart';
 import 'package:moyi/playback_loader.dart';
@@ -214,6 +215,11 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   bool _sniffFallbackTried = false;
   bool _deepSniffer = true;
   late PlayerCore _core;
+  CoreFallbackController? _coreFallback;
+  CoreFallbackMode _fallbackMode = CoreFallbackMode.all;
+  PlayerCore? _fallbackCoreOverride;
+  String _lastCoreErrorMessage = '';
+  PlayerCore get _activeCore => _fallbackCoreOverride ?? _core;
   final _tvboxHandle = TvboxPlaybackHandle();
   PlaybackPlan? _tvboxPlan;
   double _tvboxStartPosition = 0;
@@ -249,8 +255,8 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   bool _fullscreenApplied = false;
   bool _television = false;
   bool get _useExoCore =>
-      !_television && Platform.isAndroid && _core == PlayerCore.exo;
-  bool get _useIjkCore => !_television && _core == PlayerCore.ijk;
+      !_television && Platform.isAndroid && _activeCore == PlayerCore.exo;
+  bool get _useIjkCore => !_television && _activeCore == PlayerCore.ijk;
   bool get _useNativeHandle => _useExoCore;
   Duration get _enginePosition => _useNativeHandle
       ? _tvboxHandle.position
@@ -377,6 +383,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _core = PlayerCoreStorage.read(widget.store.preferences);
+    _fallbackMode = CoreFallbackModeStorage.read(widget.store.preferences);
     _tvboxHandle.speed = preferences.speed;
     _ijkHandle.speed = preferences.speed;
     _requestedQuality = preferences.quality;
@@ -453,6 +460,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
       _player.stream.error.listen((error) {
         if (_enhancement.handlePlaybackError(error)) return;
         if (!_closed && _acceptErrors && mounted && error.trim().isNotEmpty) {
+          _lastCoreErrorMessage = error;
           _queueRecovery();
         }
       }),
@@ -1092,6 +1100,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         ? PlaybackRecoveryAction.stop
         : _recovery.next(current);
     if (action == PlaybackRecoveryAction.stop) {
+      if (!current.local && _tryCoreFallback(_lastCoreErrorMessage)) return;
       _resumePosition = position;
       final ticket = _generation;
       try {
@@ -1190,8 +1199,28 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     });
   }
 
+  /// 核间自动回退（与主播放器共用同一编排层）：会话内换核续播，
+  /// 不改全局选核设置。返回 true 表示已换核，调用方不再报错。
+  bool _tryCoreFallback(String message) {
+    if (_closed || _plan?.local == true) return false;
+    _coreFallback ??= CoreFallbackController(
+      start: _activeCore,
+      mode: _fallbackMode,
+    );
+    final next = _coreFallback!.advance(classifyPlayerCoreFailure(message));
+    if (next == null) return false;
+    final position = _currentPosition;
+    _fallbackCoreOverride = next;
+    _recovery.reset();
+    _acceptErrors = true;
+    unawaited(_play(_index, position: position, continueChain: true));
+    return true;
+  }
+
   void _onPaneError(String message) {
     if (_closed || _loading || _error != null) return;
+    _lastCoreErrorMessage = message;
+    if (_tryCoreFallback(message)) return;
     if (mounted) {
       setState(() {
         _loading = false;
@@ -1346,6 +1375,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     bool playWhenReady = true,
     PlaybackPlan? preparedPlan,
     bool showControlsOnReady = true,
+    bool continueChain = false,
   }) async {
     if (_closed ||
         widget.store.profileEpoch != _profileEpoch ||
@@ -1388,6 +1418,14 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     _pendingError = false;
     _errorTimer?.cancel();
     _health.reset();
+    if (!continueChain) {
+      _fallbackCoreOverride = null;
+      _coreFallback = CoreFallbackController(
+        start: _core,
+        mode: _fallbackMode,
+      );
+      _lastCoreErrorMessage = '';
+    }
     if (recoveryAction == null) {
       _recovery.reset();
       _playIntent = playWhenReady;

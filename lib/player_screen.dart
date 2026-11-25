@@ -52,6 +52,7 @@ import 'player_backend.dart';
 import 'playback_preferences.dart';
 import 'player_controls.dart';
 import 'player_core.dart';
+import 'player_core_fallback.dart';
 import 'player_route.dart';
 import 'ijk_video_pane.dart';
 import 'network_speed.dart';
@@ -174,6 +175,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   final _tvboxPaneKey = GlobalKey();
   final _tvboxHandle = TvboxPlaybackHandle();
   PlaybackBackendManager? _backendManager;
+  CoreFallbackController? _coreFallback;
+  CoreFallbackMode _fallbackMode = CoreFallbackMode.all;
+  PlayerCore? _fallbackCoreOverride;
+  String _lastCoreErrorMessage = '';
   PlaybackPlan? _tvboxPlan;
   double _tvboxStartPosition = 0;
   bool _tvboxAutoplay = true;
@@ -411,8 +416,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       (_plan?.decryptionKey.isEmpty ?? true) &&
       (_plan?.forceMpv != true) &&
       _backendManager?.current != PlaybackBackend.main;
-  PlayerCore get _effectiveCore =>
+  PlayerCore get _baseEffectiveCore =>
       effectivePlayerCore(stored: _core, siteId: widget.detail.drama.source);
+  PlayerCore get _effectiveCore => _fallbackCoreOverride ?? _baseEffectiveCore;
   bool get _useExoCore =>
       !_television && Platform.isAndroid && _effectiveCore == PlayerCore.exo;
   bool get _useIjkCore => !_television && _effectiveCore == PlayerCore.ijk;
@@ -488,6 +494,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _tvboxHandle.speed = preferences.speed;
     _ijkHandle.speed = preferences.speed;
     _core = PlayerCoreStorage.read(widget.store.preferences);
+    _fallbackMode = CoreFallbackModeStorage.read(widget.store.preferences);
     _requestedQuality = preferences.quality;
     _autoAdvance = true;
     _danmakuEnabled = preferences.danmaku;
@@ -573,6 +580,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _player.stream.error.listen((error) {
         if (_enhancement.handlePlaybackError(error)) return;
         if (!_closed && _acceptErrors && mounted && error.trim().isNotEmpty) {
+          _lastCoreErrorMessage = error;
           _queueRecovery();
         }
       }),
@@ -1100,6 +1108,8 @@ class _PlayerScreenState extends State<PlayerScreen>
           await _play(_index, position: position, continueChain: true);
           return;
         }
+        // 后端链已尽：MPV 路径的终态失败再走核间回退换核续播。
+        if (_tryCoreFallback(_lastCoreErrorMessage)) return;
       }
       _resumePosition = position;
       final ticket = _generation;
@@ -1199,8 +1209,32 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
   }
 
+  /// 核间自动回退：当前核终态失败后，按档位与固定顺序换下一个核，
+  /// 带当前进度与集数续播。只做会话内覆盖，不改全局选核设置。
+  /// 返回 true 表示已换核重试，调用方不要再显示错误。
+  bool _tryCoreFallback(String message) {
+    if (_closed || _plan?.local == true) return false;
+    _coreFallback ??= CoreFallbackController(
+      start: _effectiveCore,
+      mode: _fallbackMode,
+    );
+    final next = _coreFallback!.advance(
+      classifyPlayerCoreFailure(message),
+    );
+    if (next == null) return false;
+    final position = _currentPosition;
+    _fallbackCoreOverride = next;
+    _backendManager = null;
+    _recovery.reset();
+    _acceptErrors = true;
+    unawaited(_play(_index, position: position, continueChain: true));
+    return true;
+  }
+
   void _onIjkError(String message) {
     if (_closed || _loading || _error != null) return;
+    _lastCoreErrorMessage = message;
+    if (_tryCoreFallback(message)) return;
     if (mounted) {
       setState(() {
         _loading = false;
@@ -1213,6 +1247,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _onTvboxError(String message) {
     if (_closed || _loading || _error != null) return;
+    _lastCoreErrorMessage = message;
     final next = _backendManager?.nextBackend();
     if (next == PlaybackBackend.main) {
       final position = _tvboxHandle.positionSeconds > 0
@@ -1221,6 +1256,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       unawaited(_play(_index, position: position, continueChain: true));
       return;
     }
+    // 后端链已尽：再试核间回退（EXO 后端失败可换 MPV/IJK 核）。
+    if (_tryCoreFallback(message)) return;
     if (mounted) {
       setState(() {
         _loading = false;
@@ -1653,6 +1690,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     _pendingError = false;
     _errorTimer?.cancel();
     _health.reset();
+    if (!continueChain) {
+      // 新的播放会话（换集/手动重试/手动换核）：核回退链从当前选核重开。
+      _fallbackCoreOverride = null;
+      _coreFallback = CoreFallbackController(
+        start: _baseEffectiveCore,
+        mode: _fallbackMode,
+      );
+      _lastCoreErrorMessage = '';
+    }
     if (recoveryAction == null || routeSelection != null) {
       _recovery.reset();
       _playIntent = playWhenReady;

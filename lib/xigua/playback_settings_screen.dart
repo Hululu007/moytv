@@ -6,6 +6,7 @@ import 'package:moyi/app_layout.dart';
 import 'package:moyi/glass_panel.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/playback_preferences.dart';
+import 'package:moyi/player_core_fallback.dart';
 import 'package:moyi/widgets.dart';
 
 class PlaybackSettingsScreen extends StatelessWidget {
@@ -193,6 +194,12 @@ class PlaybackSettingsScreen extends StatelessWidget {
                           ),
                         ),
                 ),
+                const Divider(height: 32),
+                const ListTile(
+                  title: Text('核间自动回退'),
+                  subtitle: Text('播放失败时按 MPV → EXO → IJK 的顺序自动换核续播（从起始核沿环形顺序），不改手动选的核。'),
+                ),
+                _CoreFallbackModeSetting(store: store),
                 if (Platform.isAndroid && !AppLayout.isTelevision(context)) ...[
                   const Divider(height: 32),
                   SwitchListTile(
@@ -242,6 +249,7 @@ class PlaybackSettingsScreen extends StatelessWidget {
                   padding: EdgeInsets.all(16),
                   child: Text('偏好保存在当前用户中，应用于在线播放与手势交互。'),
                 ),
+                // 核间回退档位控件在文件末尾的 _CoreFallbackModeSetting。
               ],
             ),
           ),
@@ -249,4 +257,46 @@ class PlaybackSettingsScreen extends StatelessWidget {
       );
     },
   );
+}
+
+class _CoreFallbackModeSetting extends StatefulWidget {
+  const _CoreFallbackModeSetting({required this.store});
+
+  final LocalStore store;
+
+  @override
+  State<_CoreFallbackModeSetting> createState() =>
+      _CoreFallbackModeSettingState();
+}
+
+class _CoreFallbackModeSettingState extends State<_CoreFallbackModeSetting> {
+  late CoreFallbackMode _mode = CoreFallbackModeStorage.read(
+    widget.store.preferences,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Wrap(
+        spacing: 8,
+        children: [
+          for (final mode in CoreFallbackMode.values)
+            ChoiceChip(
+              key: ValueKey('core-fallback-${mode.id}'),
+              label: Text(mode.label),
+              selected: _mode == mode,
+              onSelected: (selected) async {
+                if (!selected) return;
+                setState(() => _mode = mode);
+                await CoreFallbackModeStorage.write(
+                  widget.store.preferences,
+                  mode,
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
 }
