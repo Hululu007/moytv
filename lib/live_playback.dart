@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'core_bridge.dart';
 import 'live_models.dart';
 import 'live_repository.dart';
+import 'live_settings.dart';
 import 'live_sources.dart';
 import 'screen_awake.dart';
 import 'video_output_size.dart';
@@ -43,6 +44,38 @@ extension LiveDecoderModeX on LiveDecoderMode {
 class LivePlaybackController extends ChangeNotifier {
   LivePlaybackController({required this.repository}) {
     sleepTimer.addListener(_sleepChanged);
+    // 解码模式与睡眠默认时长是软件设置页「直播设置」节的偏好
+    // （LiveSettingsStore 全局一份）：构造时先应用已加载的值
+    // （含给睡眠计时器按默认时长起算），再订阅后续变化——
+    // 设置页改了，这边立刻跟着应用。
+    final liveSettings = LiveSettingsStore.instance;
+    _decoderMode = liveSettings.settings.decoderMode;
+    _appliedSleepMinutes = liveSettings.settings.sleepMinutes;
+    if (_appliedSleepMinutes! > 0) {
+      sleepTimer.startMinutes(_appliedSleepMinutes!);
+    }
+    liveSettings.addListener(_onLiveSettingsChanged);
+    unawaited(liveSettings.ensureLoaded());
+  }
+
+  /// 已应用到睡眠计时器的设置页默认时长；null = 还没应用过。
+  /// ⓘ 单里临时选的本次定时不在此列，偏好通知不冲它。
+  int? _appliedSleepMinutes;
+
+  void _onLiveSettingsChanged() {
+    if (_disposed) return;
+    final settings = LiveSettingsStore.instance.settings;
+    if (_appliedSleepMinutes != settings.sleepMinutes) {
+      _appliedSleepMinutes = settings.sleepMinutes;
+      if (settings.sleepMinutes > 0) {
+        sleepTimer.startMinutes(settings.sleepMinutes);
+      } else if (sleepTimer.active) {
+        sleepTimer.cancel();
+      }
+    }
+    if (settings.decoderMode != _decoderMode) {
+      unawaited(setDecoderMode(settings.decoderMode));
+    }
   }
 
   static const maxRetries = 3;
@@ -438,6 +471,7 @@ class LivePlaybackController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    LiveSettingsStore.instance.removeListener(_onLiveSettingsChanged);
     sleepTimer.removeListener(_sleepChanged);
     sleepTimer.dispose();
     _reconnect?.cancel();

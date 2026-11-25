@@ -927,71 +927,6 @@ class _LiveScreenState extends State<LiveScreen> {
     }
   }
 
-  /// 播放设置单：解码模式（点一下换下一个）、恢复默认、睡眠定时。
-  /// 原来视频区底部条里的睡眠定时与已删功能键排的解码/默认入口都在这里。
-  Future<void> _showPlaybackSettings() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: StatefulBuilder(
-            builder: (sheetContext, setSheetState) {
-              return SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListTile(
-                      key: const ValueKey('live-settings-decoder'),
-                      leading: const Icon(Icons.memory_rounded),
-                      title: const Text('解码模式'),
-                      subtitle: Text(
-                        '当前：${_playback.decoderMode.label}，点一下换下一个',
-                      ),
-                      trailing: Text(_playback.decoderMode.label),
-                      onTap: () async {
-                        await _playback.setDecoderMode(
-                          _playback.decoderMode.next,
-                        );
-                        setSheetState(() {});
-                      },
-                    ),
-                    ListTile(
-                      key: const ValueKey('live-settings-reset'),
-                      leading: const Icon(Icons.restart_alt_rounded),
-                      title: const Text('恢复默认'),
-                      subtitle: const Text('线路回到第 1 条、解码回到自动'),
-                      onTap: () => Navigator.of(sheetContext).pop('reset'),
-                    ),
-                    ListTile(
-                      key: const ValueKey('live-settings-sleep'),
-                      leading: const Icon(Icons.bedtime_outlined),
-                      title: Text(
-                        _playback.sleepTimer.active
-                            ? '睡眠定时 · ${_playback.sleepTimer.label}'
-                            : '睡眠定时',
-                      ),
-                      onTap: () => Navigator.of(sheetContext).pop('sleep'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-    if (!mounted) return;
-    switch (action) {
-      case 'reset':
-        final changed = await _playback.resetDefaults();
-        if (mounted) {
-          AppNotice.show(context, changed ? '已恢复默认设置' : '已经是默认设置');
-        }
-      case 'sleep':
-        await _openSleepTimer();
-    }
-  }
-
   Future<void> _openSleepTimer() async {
     await showSleepTimerSheet(
       context,
@@ -1164,7 +1099,7 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
-          // 手机端播放区：中间居中转圈/速率 + 顶部频道名/分辨率/信息/设置。
+          // 手机端播放区：中间居中转圈/速率 + 顶部频道名/分辨率/信息。
           // 顶栏画在错误遮罩之上，断流时照样能点信息换源；中间层只在无错时显示。
           if (!television) ...[
             if (error == null) _videoCenterOverlay(context),
@@ -1176,8 +1111,10 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   /// 截图播放区顶栏：左频道名，右真实分辨率 + 帧率（帧率拿到时
-  /// 拼在分辨率后面，拿不到就不显示那一段、绝不编数）+ 信息 +
-  /// 设置。顶栏本身不拦手势，只有两个按钮吃点按，其余位置仍落
+  /// 拼在分辨率后面，拿不到就不显示那一段、绝不编数）+ 信息。
+  /// 设置齿轮已按用户口径撤掉：解码模式/睡眠定时/恢复默认三项
+  /// 挪进软件设置页「直播设置」节（见 live_settings.dart）。
+  /// 顶栏本身不拦手势，只有信息按钮吃点按，其余位置仍落
   /// 到下面的全屏手势层。
   Widget _videoHeader(BuildContext context) {
     final channel = _playback.channel;
@@ -1217,17 +1154,6 @@ class _LiveScreenState extends State<LiveScreen> {
               onPressed: _showChannelInfo,
               icon: const Icon(
                 Icons.info_outlined,
-                size: 22,
-                color: Colors.white,
-              ),
-            ),
-            IconButton(
-              key: const ValueKey('live-video-settings'),
-              visualDensity: VisualDensity.compact,
-              tooltip: '播放设置',
-              onPressed: _showPlaybackSettings,
-              icon: const Icon(
-                Icons.settings_outlined,
                 size: 22,
                 color: Colors.white,
               ),

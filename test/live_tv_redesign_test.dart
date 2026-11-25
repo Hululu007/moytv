@@ -1,6 +1,7 @@
 // 直播页版式断言：三列区（分组/频道/线路胶囊）、瘦信息行（左槽
-// 预览帧 + 节目卡 + 切源小方钮）、顶栏分辨率+帧率、右上角信息+
-// 设置两钮、中央居中转圈、信息单、设置单。
+// 预览帧 + 节目卡 + 切源小方钮）、顶栏分辨率+帧率、右上角只有
+// 信息钮（设置齿轮已撤，三项挪进软件设置页「直播设置」节，
+// 断言在 live_settings_test.dart）、中央居中转圈、信息单。
 // 只测版式与接线，不改直播源数据、不改取流逻辑。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -405,14 +406,14 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('右上角整组：报错态信息与设置两钮也都在', (tester) async {
+  testWidgets('右上角：信息钮在、设置齿轮不在，报错态也一样', (tester) async {
     final playback = await _pumpLive(tester);
     expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-video-settings')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
     playback.setError('直播中断');
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-video-settings')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -471,21 +472,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('播放设置单：解码模式可切换、恢复默认在', (tester) async {
-    final playback = await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-video-settings')));
-    // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
-    // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('解码模式'), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-decoder')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-reset')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-sleep')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('live-settings-decoder')));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(playback.decoderMode, LiveDecoderMode.hardware);
-    expect(find.textContaining('硬解'), findsWidgets);
-    expect(tester.takeException(), isNull);
-  });
+  // 原「播放设置单」用例已随齿轮撤除：解码模式/睡眠定时/恢复
+  // 默认三项改在软件设置页断言（live_settings_test.dart：三项
+  // 都在、改解码模式偏好真变、控制器跟着应用）。
 }
