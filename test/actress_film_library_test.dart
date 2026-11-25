@@ -304,6 +304,51 @@ void main() {
     });
   });
 
+  group('filmProbeBlocksPlayback（2026-11-25 预播探活改判）', () {
+    test('活链不拦', () {
+      expect(
+        filmProbeBlocksPlayback(
+          const FilmLinkProbe(status: FilmLinkStatus.alive, httpCode: 200),
+        ),
+        isFalse,
+      );
+    });
+
+    test('404 拦下', () {
+      expect(
+        filmProbeBlocksPlayback(
+          const FilmLinkProbe(
+            status: FilmLinkStatus.dead,
+            httpCode: 404,
+            reason: 'HTTP 404',
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('超时不拦：慢链放行进播放器', () {
+      expect(
+        filmProbeBlocksPlayback(
+          const FilmLinkProbe(status: FilmLinkStatus.dead, reason: '超时'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('无地址拦下', () {
+      expect(
+        filmProbeBlocksPlayback(
+          const FilmLinkProbe(
+            status: FilmLinkStatus.dead,
+            reason: '无播放地址',
+          ),
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('filmPlainText', () {
     test('去 HTML 标签与实体', () {
       expect(

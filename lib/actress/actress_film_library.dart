@@ -1142,10 +1142,13 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// query 搜标题/番号（前导 % LIKE，大库上本来就慢，只在用户
   /// 主动搜时跑）；videoCategory 按 video_category 主分类筛
   /// （有码/无码/国产…，空着不过滤；空分类的只在“全部”里出现）。
+  /// rankedOnly 只取 video_ranking 表里的榜单视频，按表内顺序排
+  /// （2026-11-25 排行榜接真榜：榜单就 50 条，别再拿最新冒充）。
   Future<List<FilmLibraryEntry>> listLibraryFilms({
     String brand = '',
     String query = '',
     String videoCategory = '',
+    bool rankedOnly = false,
     required int offset,
     required int limit,
   }) async {
@@ -1174,13 +1177,23 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
         args.addAll([like, like]);
       }
+      // 排行榜走 JOIN：沿 video_ranking 的 rowid 顺序扫（就 50 行），
+      // 每行主键查 videos，比 IN + 相关子查询排序快（热缓存 0.001 秒）。
+      final from = rankedOnly
+          ? 'FROM videos v '
+                'JOIN video_ranking vr ON vr.vod_id = v.vod_id '
+                'LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
+          : 'FROM videos v LEFT JOIN video_category vc ON vc.vod_id = v.vod_id ';
+      final orderBy = rankedOnly
+          ? 'ORDER BY vr.rowid ASC'
+          : 'ORDER BY v.vod_pubdate DESC, v.vod_id ASC';
       final rows = await db.rawQuery(
         'SELECT v.vod_id, v.title, v.pic_url, v.m3u8_url, v.vod_play_url, '
         'v.vod_play_from, v.vod_pubdate, v.vod_remarks, v.type_name, '
         'v.vod_content, vc.main_category '
-        'FROM videos v LEFT JOIN video_category vc ON vc.vod_id = v.vod_id '
+        '$from'
         '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} '
-        'ORDER BY v.vod_pubdate DESC, v.vod_id ASC LIMIT ? OFFSET ?',
+        '$orderBy LIMIT ? OFFSET ?',
         [...args, limit, offset],
       );
       return [for (final row in rows) _strictRowToEntry(row)];
@@ -1194,6 +1207,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     String brand = '',
     String query = '',
     String videoCategory = '',
+    bool rankedOnly = false,
   }) async {
     try {
       if (!await _ensureFilmOpen() || !isStrict) return 0;
@@ -1219,6 +1233,9 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         final like = '%${q.replaceAll('%', '').replaceAll('_', '')}%';
         where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
         args.addAll([like, like]);
+      }
+      if (rankedOnly) {
+        where.add('v.vod_id IN (SELECT vod_id FROM video_ranking)');
       }
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS c FROM videos v '
@@ -1713,6 +1730,13 @@ class FilmLinkProbe {
   final int httpCode;
   final String reason;
 }
+
+/// 预播探活是否拦下播放（2026-11-25）：只有明确死的才拦——
+/// 超时不算死：活链实测首字节 8–18 秒（00gana-2163 要 12–17 秒），
+/// 超时放行进播放器，播放器自己拉流，真死了播放器会报错。
+/// 批量扫库的 probePlayUrl 本身不动（“超时即失效”只留在扫库语境）。
+bool filmProbeBlocksPlayback(FilmLinkProbe probe) =>
+    probe.status != FilmLinkStatus.alive && probe.reason != '超时';
 
 /// 单条修复结果（写进修复汇总与界面日志）。
 class FilmRepairResult {
@@ -2734,13 +2758,19 @@ class _FilmDetailPageState extends State<FilmDetailPage> {
     if (mounted) setState(() => _checking = true);
     try {
       if (host.isNotEmpty && current.isNotEmpty && host != current) {
+        // 2026-11-25 预播探活只做快筛：3 秒预算，超时不算死——
+        // 活链实测首字节 8–18 秒（00gana-2163 要 12–17 秒），
+        // 超时直接放行进播放器（播放器自己拉流，真死了会报错）；
+        // 只有明确死的（HTTP 404/410/403、无地址、非法链接）
+        // 才记失效并拦下。批量扫库的 probePlayUrl 本身不动。
         final repair = FilmLinkRepairService(
           service: widget.service,
           repository: widget.repository,
           store: widget.store,
+          probeTimeout: const Duration(seconds: 3),
         );
         final probe = await repair.probePlayUrl(_entry.playUrl);
-        if (probe.status != FilmLinkStatus.alive) {
+        if (filmProbeBlocksPlayback(probe)) {
           repair.markDead(
             site: _entry.site,
             code: _entry.code,

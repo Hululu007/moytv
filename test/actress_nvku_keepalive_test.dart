@@ -220,20 +220,35 @@ void main() {
         ),
       ),
     );
-    // 等 _boot 全跑完：文件夹上屏 + 作品那一路已调过 catalog
-    // （作品卡可能在 600px 视口之下、懒加载网格还没构建它，
-    // 这里不断言标题可见，只断言取数跑完了；标题可见性由调用方
-    // 滚到可见后再断言）。
+    // 等 _boot 全跑完：标签/文件夹/封面都查过一遍、作品那一路已调过
+    // catalog（2026-11-25：文件夹网格从首页移到分类页，首页不再有
+    // “成人影片”文字，沉降条件改成查数计数，不再等文件夹上屏；
+    // 文件夹上屏由调用方切到分类页后断言）。
     await _settleReal(
       tester,
       until: () =>
-          find.text('成人影片').evaluate().isNotEmpty &&
+          service.tagsCalls >= 1 &&
+          service.foldersCalls >= 1 &&
+          service.coversCalls >= 1 &&
           repository.requests.isNotEmpty,
     );
   }
 
-  /// 把作品卡滚进视口再断言：首页文件夹网格占高，首张作品卡常在
-  /// 视口之下、GridView 懒加载没构建它，直接 find.text 找不到。
+  /// 文件夹在分类页（2026-11-25 首页/分类归位）：切到分类页断言
+  /// 文件夹在，再切回首页；切页不触发重查，计数断言不受影响。
+  Future<void> expectFolderOnCategoryTab(WidgetTester tester) async {
+    await tester.tap(find.text('分类'));
+    await _settleReal(
+      tester,
+      until: () => find.text('成人影片').evaluate().isNotEmpty,
+    );
+    expect(find.text('成人影片'), findsOneWidget);
+    await tester.tap(find.text('首页'));
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+
+  /// 把作品卡滚进视口再断言：首张作品卡常在视口之下、GridView
+  /// 懒加载没构建它，直接 find.text 找不到。
   /// 不能用 scrollUntilVisible（页里多个 Scrollable，它默认找唯一
   /// 的那个会抛 Too many elements），直接拖外层 ListView。
   Future<void> scrollToWorks(WidgetTester tester) async {
@@ -250,7 +265,7 @@ void main() {
       final service1 = _CountingFilmService(database: db);
       final repo1 = _CountingRepository();
       await pumpPage(tester, service: service1, repository: repo1);
-      expect(find.text('成人影片'), findsOneWidget);
+      await expectFolderOnCategoryTab(tester);
       await scrollToWorks(tester);
       expect(find.text('测试短剧'), findsOneWidget);
       expect(service1.tagsCalls, 1);
@@ -268,7 +283,7 @@ void main() {
 
       // 数据立刻在（不用等重查），且第二份服务/仓库一次都没被调——
       // 开库本身每次都走（便宜的连接重开），查数据的几路全命中缓存。
-      expect(find.text('成人影片'), findsOneWidget);
+      await expectFolderOnCategoryTab(tester);
       await scrollToWorks(tester);
       expect(find.text('测试短剧'), findsOneWidget);
       expect(service2.openCalls, 1);
@@ -296,6 +311,11 @@ void main() {
       expect(service.coversCalls, 2);
       expect(repo.categoriesCalls, 2);
       expect(repo.requests, hasLength(2));
+      await tester.tap(find.text('分类'));
+      await _settleReal(
+        tester,
+        until: () => find.text('成人影片').evaluate().isNotEmpty,
+      );
       expect(find.text('成人影片'), findsOneWidget);
     });
   });

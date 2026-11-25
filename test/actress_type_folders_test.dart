@@ -474,23 +474,35 @@ void main() {
       await _settle(tester);
     }
 
-    testWidgets('首页：顶栏是库名，文件夹网格在最顶', (tester) async {
+    /// 文件夹网格在分类页（2026-11-25 首页/分类归位）：切到底栏
+    /// “分类”再断言文件夹；首页不再有文件夹网格。
+    Future<void> goCategoryTab(WidgetTester tester) async {
+      await tester.tap(find.text('分类'));
+      await _settle(tester);
+    }
+
+    testWidgets('文件夹网格在分类页最顶（标题+汇总在），首页不再有文件夹', (tester) async {
       await pumpPage(tester);
+      // 首页：顶栏是库名、最新上架作品在，文件夹不在首页了。
       expect(find.text('女优库.db'), findsOneWidget);
+      expect(find.text('类型文件夹'), findsNothing);
+      expect(find.text('成人影片'), findsNothing);
+      expect(find.text('最新上架'), findsOneWidget);
+      // 分类页：文件夹网格在最顶，标题与汇总都在。
+      await goCategoryTab(tester);
       expect(find.text('类型文件夹'), findsOneWidget);
       expect(find.text('成人影片'), findsOneWidget);
       expect(find.text('共3条'), findsOneWidget);
       expect(find.text('国产精品'), findsOneWidget);
       expect(find.text('无码专区'), findsOneWidget);
       expect(find.text('3 个类型 · 共 6 部'), findsOneWidget);
-      // 首页原来的最新上架作品还在（假站源 3 条合成剧）。
-      expect(find.text('最新上架'), findsOneWidget);
     });
 
     testWidgets('文件夹卡用第一条视频的封面，没封面的回落图标', (tester) async {
       await _seedCoverCache(tester, 'https://example.test/mida619.jpg');
       await _seedCoverCache(tester, 'https://example.test/guo001.jpg');
       await pumpPage(tester);
+      await goCategoryTab(tester);
       // 成人影片第一条 MIDA-619 有封面 → 卡里是图；
       // 国产精品第一条 GUO-001 有封面 → 卡里是图；
       // 无码专区第一条 WUMA-001 没封面 → 回落图标。
@@ -523,6 +535,7 @@ void main() {
       await _seedCoverCache(tester, 'https://example.test/mida619.jpg');
       await _seedCoverCache(tester, 'https://example.test/guo001.jpg');
       await pumpPage(tester);
+      await goCategoryTab(tester);
       await tester.tap(find.byKey(const ValueKey('nvku-tag-open')));
       await _settle(tester);
       await tester.tap(find.text('中文字幕（3）'));
@@ -546,10 +559,11 @@ void main() {
       );
     });
 
-    testWidgets('点文件夹进分类 tab 看该类型视频，‹ 全部类型退回', (
+    testWidgets('分类页点文件夹看该类型视频，‹ 全部类型退回', (
       tester,
     ) async {
       await pumpPage(tester);
+      await goCategoryTab(tester);
       await tester.tap(find.text('国产精品'));
       await _settle(tester);
       expect(find.text('国产测试一'), findsOneWidget);
@@ -568,6 +582,7 @@ void main() {
       tester,
     ) async {
       await pumpPage(tester);
+      await goCategoryTab(tester);
       await tester.tap(find.byKey(const ValueKey('nvku-tag-open')));
       await _settle(tester);
       expect(find.text('中文字幕（3）'), findsOneWidget);
@@ -592,13 +607,12 @@ void main() {
       expect(find.text('测试作品三'), findsOneWidget);
     });
 
-    testWidgets('没有文件夹：首页与分类都如实显示暂无文件夹', (tester) async {
+    testWidgets('没有文件夹：首页不显示文件夹区，分类页如实显示暂无文件夹', (tester) async {
       service.folders = [];
       service.tagFolders = [];
       await pumpPage(tester);
-      expect(find.text('暂无文件夹：这个数据库没有 type_name 分类'), findsOneWidget);
-      await tester.tap(find.text('分类'));
-      await _settle(tester);
+      expect(find.text('暂无文件夹：这个数据库没有 type_name 分类'), findsNothing);
+      await goCategoryTab(tester);
       expect(find.text('暂无文件夹：这个数据库没有 type_name 分类'), findsOneWidget);
       expect(find.text('去首页看作品'), findsOneWidget);
     });

@@ -312,6 +312,9 @@ class WhosLocalLibrary {
       brand: brand,
       query: query,
       videoCategory: videoCategory,
+      // 2026-11-25 排行榜接真榜：rank 不再与 new 共用最新列表，
+      // 只取 video_ranking 表里的榜单视频（50 条，按表内顺序）。
+      rankedOnly: category == whosLocalRankCategory,
       offset: (page - 1) * pageSize,
       limit: pageSize,
     );
@@ -337,6 +340,7 @@ class WhosLocalLibrary {
       brand: brand,
       query: query,
       videoCategory: videoCategory,
+      rankedOnly: category == whosLocalRankCategory,
     );
   }
 
@@ -348,9 +352,11 @@ class WhosLocalLibrary {
     if (db == null) return categories(brandLimit: brandLimit);
     final total = _dbTotal ?? 0;
     final facets = await _dbBrandFacets();
+    // 2026-11-25 排行榜的计数不再用全库总数占位，改成榜单实际条数。
+    final rankCount = await db.countLibraryFilms(rankedOnly: true);
     return [
       (id: whosLocalNewCategory, name: '最新作品', count: total),
-      (id: whosLocalRankCategory, name: '排行榜', count: total),
+      (id: whosLocalRankCategory, name: '排行榜', count: rankCount),
       for (final facet in facets.take(brandLimit))
         (
           id: '$whosLocalBrandPrefix${facet.brand}',
