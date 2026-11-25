@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
@@ -230,7 +231,13 @@ class ImportEngine {
     var nameNote = '';
     try {
       final path = await ImportFileStore.pathOf(fileName);
-      final ping = await PyBridge.call(path, {'action': 'ping'});
+      // ping 只是尽力同步蜘蛛自报的名字：默认 70 秒超时会让整批导入
+      // 长时间无反馈（选完文件没提示的根因之一），压到 10 秒；
+      // 超时/失败都忽略，登记名保持文件名（外层 catch (_) {}）。
+      final ping = await PyBridge.call(
+        path,
+        {'action': 'ping'},
+      ).timeout(const Duration(seconds: 10));
       final spiderName = (ping['name'] as String? ?? '').trim();
       if (spiderName.isNotEmpty && spiderName != displayName) {
         final index = records.indexWhere((record) => record.id == id);
@@ -508,10 +515,12 @@ class ImportEngine {
       // 名字、getName 回落成通用名 "JSON List"，下面又会把登记名
       // 覆盖成它——导入的 JSON 站就全叫 JSON List（用户 08:43
       // 截图）。带上 ext 后蜘蛛名就是推导出的站名，不再覆盖。
+      // 2026-11-25 修：ping 只是尽力确认，默认 70 秒超时会让整批
+      // 导入长时间无反馈，压到 10 秒；超时/失败都忽略（外层 catch）。
       final ping = await PyBridge.call(path, {
         'action': 'ping',
         'extend': jsonListExtFor(path: jsonPath, name: displayName),
-      });
+      }).timeout(const Duration(seconds: 10));
       final spiderName = (ping['name'] as String? ?? '').trim();
       if (spiderName.isNotEmpty &&
           spiderName != displayName &&

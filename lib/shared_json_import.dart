@@ -18,7 +18,7 @@ import 'tvbox_config.dart';
 ///   （与导入中心文件导入的判定一致；base64 包裹与尾随逗号由解析器
 ///   自己处理，与导入器实际接受能力一致）；
 /// - 视频列表 JSON：顶层 list 里有带 vod_play_url 的条目
-///   （见 [looksLikeVideoListJson]，与站点列表“导入 JSON”同一判定）；
+///   （见 [looksLikeVideoListJson]，与站点列表“导入本地文件”同一判定）；
 /// - 阅读书源：validateLegadoJson（单对象）；数组时逐条用同一判定，
 ///   与阅读区批量导入同一条规则；
 /// - 海阔小程序：HaikuoCodec.parseText 能解析出条目（与小程序页
@@ -108,7 +108,7 @@ typedef TvBoxSharedJsonImportFn =
     );
 
 /// 视频列表 JSON 导入：默认走 ImportEngine（与站点列表 + 号里
-/// “导入 JSON”同一入口）。没传 store 时无法登记，诚实提示去向。
+/// “导入本地文件”同一入口）。没传 store 时无法登记，诚实提示去向。
 typedef JsonListSharedJsonImportFn =
     Future<String> Function(List<int> bytes, String fileName);
 
@@ -148,7 +148,7 @@ class SharedJsonImportHandler {
              final targetStore = store;
              final repo = repository;
              if (targetStore == null || repo == null) {
-               return '该文件是 TVBox 视频列表 JSON，请在站点列表右上角 + 号里选“导入 JSON”';
+               return '该文件是 TVBox 视频列表 JSON，请在站点列表右上角 + 号里选“导入本地文件”';
              }
              final engine = ImportEngine(
                store: targetStore,

@@ -231,7 +231,7 @@ void main() {
         utf8.encode(_listJson),
         fileName: 'av.json',
       );
-      expect(message, contains('导入 JSON'));
+      expect(message, contains('导入本地文件'));
     });
 
     test('配置内容为空时报未导入任何内容', () async {
