@@ -810,6 +810,24 @@
       "adult": false,
       "description": "飞快TV（feikuai.in）。分类与原 py 1:1：写死电影/剧集/综艺/动漫 4 个分类，HTML 正则解析列表/详情/搜索，播放页按原 py 多路顺序现取 m3u8/mp4 直链。由内置 py 蜘蛛改写。",
       "manifest": "feikuai/feikuai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.doudouzy",
+      "name": "豆豆资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "豆豆资源（api.douapi.cc）。28 个分类（与原 py 完全一致：接口 class 实时返回 28 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 为空），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "doudouzy/doudouzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.changzhangzy",
+      "name": "厂长资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "厂长资源（api.changzhang.tv）。43 个分类（与原 py 完全一致：接口 class 实时返回、经原 py 旗标过滤，兜底分类为空同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链（changzhang 线的分享页地址在 play 内按其页面自带脚本声明解析为同址 /play/.../index.m3u8）。由内置 py 蜘蛛改写。",
+      "manifest": "changzhangzy/changzhangzy.idjplugin"
     }
   ],
   "cms": []
