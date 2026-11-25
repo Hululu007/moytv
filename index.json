@@ -693,6 +693,51 @@
       "adult": true,
       "description": "精品98（jp98.vip）。5 个分类与原 py 完全一致（接口 class 实时返回、经原 py 旗标过滤：游戏/棋牌/博彩/彩票/赌，兜底分类为空同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
       "manifest": "jp98zy/jp98zy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.laosepzy",
+      "name": "老色P资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "老色P资源（apilsbzy1.com）。25 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py 25 类，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8（主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "laosepzy/laosepzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.lebozy",
+      "name": "乐播资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "乐播资源（lbapi9.com）。16 个分类（与原 py 完全一致：接口 class 实时返回 17 类、经原 py 旗标过滤剔除 type_id=14 及名称含游戏/棋牌/博彩/彩票/赌的分类，兜底分类同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "lebozy/lebozy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.moduzy",
+      "name": "魔都资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "魔都资源（mdzyapi.com）。42 个分类（与原 py 完全一致：接口 class 实时返回、原 py 旗标过滤游戏/棋牌/博彩/彩票/赌后无一命中），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链（master 主列表在 play 内预解析到子列表）。由内置 py 蜘蛛改写。",
+      "manifest": "moduzy/moduzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.naixxzy",
+      "name": "奶香香资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "奶香香资源（naixxzy.com）。分类与原 py 完全一致：接口 class 实时返回（现行 33 类）、兜底同 py 24 类，旗标过滤照搬（游戏/棋牌/博彩/彩票/赌），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8（主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "naixxzy/naixxzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.taohuazy",
+      "name": "桃花资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "桃花资源（thzy1.me）。15 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "taohuazy/taohuazy.idjplugin"
     }
   ],
   "cms": []
