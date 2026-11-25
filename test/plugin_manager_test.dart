@@ -29,22 +29,31 @@ void main() {
       expect(jar.id, PluginManager.jarPluginId);
       expect(jar.kind, PluginIconKind.jar);
       expect(jar.md5, zakatvJarMd5);
-      // 140 条配置，1 条 audioOnly（go_tingshu 飞卢听书，纯音频不进插件站点列表）。
-      expect(zakatvBuiltinSites.length, 140);
-      expect(jar.siteCount, 139);
-      expect(jar.detail, contains('140'));
+      // 137 条配置，1 条 audioOnly（go_tingshu 飞卢听书，纯音频不进插件站点列表）。
+      // 来源（2026-11-26 v67 合树分诊核对）：v23 时为 140 条，此后三步各摘
+      // 1 条 jar 注册——v27(61af046) whos 被 CF 挡改走内置 py、摘 ZakaWhos；
+      // v28(b08ee4e) 删 EroShort；v58(bdf4925) MissAV 收拢为单站、摘
+      // ZakaMirror。audioOnly 仍为 1 条，故可见站点 136。
+      expect(zakatvBuiltinSites.length, 137);
+      expect(jar.siteCount, 136);
+      expect(jar.detail, contains('137'));
     });
 
-    test('121 py plugins in today register order', () {
+    test('124 py plugins in today register order', () {
       final plugins = PluginManager.builtinPlugins();
       final py = plugins.where((p) => p.kind == PluginIconKind.py).toList();
-      expect(py.length, 121);
-      expect(plugins.length, 124);
+      // 来源（2026-11-26 v67 合树分诊核对）：注册表 125 条、jinguo 一文件
+      // 双站，故 py 文件/插件 124 个。较 v23 的 121 个多 3 个——whos
+      // (v27,61af046，jar 转 py)、nvku(v28,b08ee4e，新增女优库在线)、
+      // missav(v58,bdf4925，jar 转 py)。总插件 126 = jar 插件 2 个
+      // (zakatv + one；v58 已删 missav30 独立 jar 插件条目) + py 124。
+      expect(py.length, 124);
+      expect(plugins.length, 126);
       expect(py.first.id, 'py:hmav');
       expect(py.first.name, '🔞河马AV');
       expect(py.last.id, 'py:zuidazy');
       final ids = py.map((p) => p.id).toSet();
-      expect(ids.length, 121);
+      expect(ids.length, 124);
     });
 
     test('jinguo file plugin carries both sites', () {
