@@ -14,6 +14,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
+import androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider
+import androidx.media3.exoplayer.drm.DrmSessionManager
+import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
+import androidx.media3.exoplayer.drm.FrameworkMediaDrm
+import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -61,6 +67,7 @@ internal class TvboxPlayerView(
     private var lastUrl = ""
     private var lastHeaders: Map<String, String> = emptyMap()
     private var lastDecoderMode = "optimized"
+    private var lastDrm: DrmArgs? = null
     private var wasPlaying = false
 
     private val listener = object : Player.Listener {
@@ -136,7 +143,8 @@ internal class TvboxPlayerView(
                             val headers = readHeaders(call.argument<Map<*, *>>("headers"))
                             val position = call.argument<Number>("positionMs")?.toLong() ?: 0L
                             val mode = call.argument<String>("decoderMode") ?: "optimized"
-                            open(url, headers, position, mode, true)
+                            val drm = readDrm(call.argument<Map<*, *>>("drm"))
+                            open(url, headers, position, mode, true, drm)
                             result.success(null)
                         }
                     }
@@ -173,7 +181,7 @@ internal class TvboxPlayerView(
                         } else if (mode != lastDecoderMode && lastUrl.isNotEmpty()) {
                             val position = player?.currentPosition ?: 0L
                             wasPlaying = player?.isPlaying ?: false
-                            open(lastUrl, lastHeaders, position, mode, wasPlaying)
+                            open(lastUrl, lastHeaders, position, mode, wasPlaying, lastDrm)
                             result.success(null)
                         } else {
                             lastDecoderMode = mode
@@ -214,6 +222,33 @@ internal class TvboxPlayerView(
         playerView.player = null
     }
 
+    // DRM 参数（Dart 侧 PlaybackDrm.toJson 的形状）：type/key/
+    // headers/forceKey。key 已在 Dart 侧归一化：服务器型是许可证
+    // 地址，ClearKey 本地键是 JWK JSON 字符串（以 { 开头）。
+    private data class DrmArgs(
+        val type: String,
+        val key: String,
+        val headers: Map<String, String>,
+        val forceKey: Boolean
+    )
+
+    private fun readDrm(raw: Map<*, *>?): DrmArgs? {
+        if (raw == null) return null
+        val type = raw["type"]?.toString()?.trim().orEmpty()
+        val key = raw["key"]?.toString()?.trim().orEmpty()
+        if (type.isEmpty() || key.isEmpty()) return null
+        @Suppress("UNCHECKED_CAST")
+        val headers = readHeaders(raw["headers"] as? Map<*, *>)
+        return DrmArgs(type, key, headers, raw["forceKey"] == true)
+    }
+
+    private fun drmUuid(type: String): java.util.UUID? = when {
+        type.contains("widevine", ignoreCase = true) -> C.WIDEVINE_UUID
+        type.contains("playready", ignoreCase = true) -> C.PLAYREADY_UUID
+        type.contains("clearkey", ignoreCase = true) -> C.CLEARKEY_UUID
+        else -> null
+    }
+
     private fun readHeaders(raw: Map<*, *>?): Map<String, String> {
         if (raw == null) return emptyMap()
         val headers = LinkedHashMap<String, String>()
@@ -236,7 +271,8 @@ internal class TvboxPlayerView(
         headers: Map<String, String>,
         positionMs: Long,
         decoderMode: String,
-        play: Boolean
+        play: Boolean,
+        drm: DrmArgs? = null
     ) {
         val normalized = when {
             url.startsWith("http://") || url.startsWith("https://") ||
@@ -246,6 +282,7 @@ internal class TvboxPlayerView(
         lastUrl = normalized
         lastHeaders = headers
         lastDecoderMode = decoderMode
+        lastDrm = drm
         lastDuration = 0L
         player?.removeListener(listener)
         player?.release()
@@ -261,16 +298,64 @@ internal class TvboxPlayerView(
                 .setSelectUndeterminedTextLanguage(true)
                 .build()
         }
+        // DRM：按 type 选方案 UUID。服务器型（Widevine/PlayReady/
+        // ClearKey 许可证端点）走 MediaItem.DrmConfiguration +
+        // 默认会话管理（HttpMediaDrmCallback 向许可证地址发请求、
+        // 系统 MediaDrm 真正解密）；ClearKey 本地键（JWK JSON）
+        // 默认管理走不通，换 LocalMediaDrmCallback 在本地应答
+        // 密钥请求。无 drm 或 type 不认时与旧行为完全一致。
+        var localClearKeyJwk: ByteArray? = null
+        val itemBuilder = MediaItem.Builder().setUri(normalized)
+        val drmUuid = drm?.let { drmUuid(it.type) }
+        if (drm != null && drmUuid != null) {
+            val isLocalClearKey = drmUuid == C.CLEARKEY_UUID &&
+                drm.key.trimStart().startsWith("{")
+            if (isLocalClearKey) {
+                localClearKeyJwk = drm.key.toByteArray(Charsets.UTF_8)
+            }
+            val configBuilder = MediaItem.DrmConfiguration.Builder(drmUuid)
+                .setMultiSession(drmUuid != C.CLEARKEY_UUID)
+                .setForceDefaultLicenseUri(drm.forceKey)
+            if (!isLocalClearKey) {
+                configBuilder.setLicenseUri(drm.key)
+                if (drm.headers.isNotEmpty()) {
+                    configBuilder.setLicenseRequestHeaders(drm.headers)
+                }
+            }
+            itemBuilder.setDrmConfiguration(configBuilder.build())
+        }
+        val sourceFactory = DefaultMediaSourceFactory(httpFactory)
+        val jwk = localClearKeyJwk
+        if (jwk != null) {
+            sourceFactory.setDrmSessionManagerProvider(
+                object : DrmSessionManagerProvider {
+                    override fun get(
+                        configuration: MediaItem.DrmConfiguration
+                    ): DrmSessionManager {
+                        if (configuration.schemeUuid == C.CLEARKEY_UUID) {
+                            return DefaultDrmSessionManager.Builder()
+                                .setUuidAndExoMediaDrmProvider(
+                                    C.CLEARKEY_UUID,
+                                    FrameworkMediaDrm.DEFAULT_PROVIDER
+                                )
+                                .setMultiSession(false)
+                                .build(LocalMediaDrmCallback(jwk))
+                        }
+                        return DefaultDrmSessionManagerProvider().get(configuration)
+                    }
+                }
+            )
+        }
         val current = ExoPlayer.Builder(appContext)
             .setTrackSelector(trackSelector)
             .setRenderersFactory(renderersFactory(decoderMode))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(sourceFactory)
             .build()
         player = current
         current.addListener(listener)
         playerView.player = current
         playerView.subtitleView?.visibility = View.GONE
-        current.setMediaItem(MediaItem.Builder().setUri(normalized).build())
+        current.setMediaItem(itemBuilder.build())
         current.playWhenReady = play
         if (positionMs > 0) current.seekTo(positionMs)
         current.prepare()

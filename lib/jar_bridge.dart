@@ -671,7 +671,12 @@ class JarBridge {
       } catch (_) {}
     }
     final needsParse = _parseFlag(result['parse']) || _parseFlag(result['jx']);
-    return PlaybackPlan(url: url, headers: headers, needsParse: needsParse);
+    return PlaybackPlan(
+      url: url,
+      headers: headers,
+      needsParse: needsParse,
+      drm: PlaybackDrm.fromJson(result['drm']),
+    );
   }
 
   /// 取流回空地址时的报错文案：蜘蛛给了明确原因（如 EroShort

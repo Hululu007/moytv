@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import 'exo_subtitle.dart';
+import 'models.dart';
 
 class TvboxPlayerController {
   TvboxPlayerController._(this._channel);
@@ -68,6 +69,7 @@ class TvboxPlayerController {
     Map<String, String> headers = const {},
     int positionMs = 0,
     String decoderMode = 'optimized',
+    PlaybackDrm? drm,
   }) {
     if (_released) return Future.value();
     return _channel.invokeMethod('open', {
@@ -75,6 +77,9 @@ class TvboxPlayerController {
       'headers': headers,
       'positionMs': positionMs,
       'decoderMode': decoderMode,
+      // DRM 信息（可空）：原生侧据此给 MediaItem 配
+      // DrmConfiguration / ClearKey 本地会话；null 时与旧行为一致。
+      'drm': drm?.toJson(),
     });
   }
 

@@ -442,6 +442,14 @@ class LivePlaybackController extends ChangeNotifier {
     if (_sleepPaused) return;
     if (_disposed) return;
     _loading = false;
+    // 带 DRM 的频道在 mpv 上必然解不了：报错换成说清原因的口径，
+    // 且不走重连（换线路也是同一套 DRM，重连只会重复失败）。
+    // 标了 DRM 但其实是明流的频道能正常起播、不会走到这里。
+    if (channel?.hasDrm ?? false) {
+      _error = '该频道带 DRM 加密，当前直播播放器无法解密，暂时播不了';
+      notifyListeners();
+      return;
+    }
     _error = message.isEmpty ? '直播中断' : message;
     notifyListeners();
     _scheduleReconnect();
