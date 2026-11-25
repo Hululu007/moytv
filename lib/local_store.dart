@@ -21,6 +21,7 @@ import 'local_snapshot.dart';
 import 'm3u_subscriptions.dart';
 import 'models.dart';
 import 'tvbox_config.dart';
+import 'intro_outro_skip.dart';
 import 'playback_preferences.dart';
 import 'download_preferences.dart';
 import 'catalog_sort.dart';
@@ -1188,6 +1189,47 @@ class LocalStore extends ChangeNotifier {
   Future<void> setHongguoQuality(int value) async {
     final normalized = {0, 480, 720, 1080}.contains(value) ? value : 0;
     await preferences.setInt('hongguoQuality', normalized);
+    _notify();
+  }
+
+  // 跳过片头片尾（第 7 点）：与红果播放设置同路，直走
+  // SharedPreferences，不进 LocalSnapshot 受管字段。全局开关是
+  // 设备级；分段按剧存，键为 IntroOutroSettings.keyFor(站源, 剧 id)，
+  // 整表存一个 JSON 字符串。默认开：没给某部剧设过分段时判定层
+  // 以 notConfigured 不动作，开着也无副作用。
+  bool get introOutroSkipEnabled =>
+      preferences.getBool('introOutroSkipEnabled') ?? true;
+
+  Future<void> setIntroOutroSkipEnabled(bool value) async {
+    await preferences.setBool('introOutroSkipEnabled', value);
+    _notify();
+  }
+
+  Map<String, IntroOutroSettings> get introOutroSkipByDrama =>
+      IntroOutroSettings.decodeMap(
+        preferences.getString('introOutroSkipByDrama'),
+      );
+
+  IntroOutroSettings introOutroFor(String source, String dramaId) =>
+      introOutroSkipByDrama[IntroOutroSettings.keyFor(source, dramaId)] ??
+      const IntroOutroSettings();
+
+  Future<void> setIntroOutroFor(
+    String source,
+    String dramaId,
+    IntroOutroSettings settings,
+  ) async {
+    final values = introOutroSkipByDrama;
+    final key = IntroOutroSettings.keyFor(source, dramaId);
+    if (settings.isEmpty) {
+      values.remove(key);
+    } else {
+      values[key] = settings;
+    }
+    await preferences.setString(
+      'introOutroSkipByDrama',
+      IntroOutroSettings.encodeMap(values),
+    );
     _notify();
   }
 
