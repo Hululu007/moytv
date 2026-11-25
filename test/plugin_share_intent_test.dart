@@ -1,8 +1,16 @@
+import 'dart:convert';
+
 import 'package:archive/archive.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/import_center.dart';
+import 'package:moyi/local_store.dart';
 import 'package:moyi/plugin_share_intent.dart';
+import 'package:moyi/zip_install.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fixtures.dart';
 
 List<int> _zipBytes(Map<String, List<int>> files) {
   final archive = Archive();
@@ -23,6 +31,13 @@ ImportOutcome _failed(ImportCandidate candidate) => ImportOutcome(
   fileName: candidate.name,
   status: ImportOutcomeStatus.failed,
   reason: 'bad',
+);
+
+ImportOutcome _okName(String fileName) => ImportOutcome(
+  fileName: fileName,
+  status: ImportOutcomeStatus.success,
+  reason: 'ok',
+  siteName: fileName,
 );
 
 class _RecordingInstaller {
@@ -366,6 +381,203 @@ void main() {
       final file = PluginShareFile.fromJson({});
       expect(file.uri, isEmpty);
       expect(file.name, isEmpty);
+    });
+  });
+
+  group('sniffPluginShareContent', () {
+    test('PK 头判 archive', () {
+      expect(
+        sniffPluginShareContent([0x50, 0x4B, 0x03, 0x04, 1, 2]),
+        PluginShareSniff.archive,
+      );
+      final zip = _zipBytes({
+        'a.py': [1],
+      });
+      expect(sniffPluginShareContent(zip), PluginShareSniff.archive);
+    });
+
+    test('含 class Spider 的文本判 py', () {
+      final bytes = utf8.encode(
+        'import json\n\nclass Spider:\n    pass\n',
+      );
+      expect(sniffPluginShareContent(bytes), PluginShareSniff.installPy);
+    });
+
+    test('BOM 开头且含 class Spider 的文本判 py', () {
+      final bytes = <int>[
+        0xEF,
+        0xBB,
+        0xBF,
+        ...utf8.encode('class Spider:\n    pass\n'),
+      ];
+      expect(sniffPluginShareContent(bytes), PluginShareSniff.installPy);
+    });
+
+    test('import 开头且通篇含 Spider 判 py', () {
+      final bytes = utf8.encode(
+        'import requests\n\n# Spider 工具函数\nx = 1\n',
+      );
+      expect(sniffPluginShareContent(bytes), PluginShareSniff.installPy);
+    });
+
+    test('import 开头但与 Spider 无关不判 py', () {
+      final bytes = utf8.encode('import os\nprint(os.name)\n');
+      expect(sniffPluginShareContent(bytes), PluginShareSniff.unknown);
+    });
+
+    test('JSON 对象与数组判 json（带空白/BOM）', () {
+      expect(
+        sniffPluginShareContent(utf8.encode('  {"a":1}')),
+        PluginShareSniff.installJson,
+      );
+      expect(
+        sniffPluginShareContent(utf8.encode('\n\t[1,2]')),
+        PluginShareSniff.installJson,
+      );
+      final bomJson = <int>[
+        0xEF,
+        0xBB,
+        0xBF,
+        ...utf8.encode('{"a":1}'),
+      ];
+      expect(sniffPluginShareContent(bomJson), PluginShareSniff.installJson);
+    });
+
+    test('普通文本与二进制乱码判 unknown', () {
+      expect(
+        sniffPluginShareContent(utf8.encode('hello world\n')),
+        PluginShareSniff.unknown,
+      );
+      expect(
+        sniffPluginShareContent([0, 1, 2, 3, 255, 254, 128]),
+        PluginShareSniff.unknown,
+      );
+      expect(sniffPluginShareContent([]), PluginShareSniff.unknown);
+    });
+  });
+
+  group('pluginShareSniffedName', () {
+    test('无后缀名直接拼后缀', () {
+      expect(pluginShareSniffedName('12345', 'py'), '12345.py');
+    });
+
+    test('旧后缀被替换掉', () {
+      expect(pluginShareSniffedName('import.bin', 'py'), 'import.py');
+      expect(pluginShareSniffedName('a.txt', 'jar'), 'a.jar');
+    });
+
+    test('空名用 import 兜底', () {
+      expect(pluginShareSniffedName('', 'zip'), 'import.zip');
+      expect(pluginShareSniffedName('   ', 'py'), 'import.py');
+    });
+  });
+
+  group('PluginShareIntent 内容嗅探与排空重试', () {
+    Future<_RecordingInstaller> startWithPendingPy(
+      WidgetTester tester, {
+      required GlobalKey<NavigatorState> navigatorKey,
+      required LocalStore store,
+    }) async {
+      final pyBytes = utf8.encode('import json\n\nclass Spider:\n    pass\n');
+      const channel = MethodChannel(pluginShareChannelName);
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var pendingTaken = false;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'takePending') {
+          if (pendingTaken) return <Map<String, dynamic>>[];
+          pendingTaken = true;
+          return [
+            {'uri': 'content://x/12345', 'name': '12345'},
+          ];
+        }
+        if (call.method == 'readBytes') {
+          return Uint8List.fromList(pyBytes);
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final installer = _RecordingInstaller();
+      PluginShareIntent.start(
+        store: store,
+        repository: FixtureRepository(),
+        navigatorKey: navigatorKey,
+        runner: PluginShareInstallRunner(
+          importCandidates: installer.call,
+          jarDuplicateCheck: (_) => null,
+        ),
+        zipInstaller: ZipPickInstaller(
+          importCandidates: (candidates) async => ImportReport([
+            for (final candidate in candidates) _ok(candidate),
+          ]),
+          installLiveList: (item) async => _okName(item.name),
+          installMiniApp: (item) async => _okName(item.name),
+          jarDuplicateCheck: (_) => null,
+        ),
+      );
+      return installer;
+    }
+
+    Future<LocalStore> newStore() async {
+      SharedPreferences.setMockInitialValues({});
+      final store = LocalStore(await SharedPreferences.getInstance());
+      addTearDown(store.dispose);
+      addTearDown(PluginShareIntent.resetForTest);
+      return store;
+    }
+
+    testWidgets('无后缀名的 py 文件经内容嗅探按 .py 安装', (tester) async {
+      final store = await newStore();
+      final navigatorKey = GlobalKey<NavigatorState>();
+      final installer = await startWithPendingPy(
+        tester,
+        navigatorKey: navigatorKey,
+        store: store,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigatorKey,
+          home: const Scaffold(body: Text('home')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(installer.calls, hasLength(1));
+      expect(installer.calls.single.single.name, '12345.py');
+      // 排空成功提示 SnackBar 的计时器，避免残留计时器让用例收尾失败。
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('界面未就绪时排空早退，界面就绪后靠重试自动装上', (tester) async {
+      final store = await newStore();
+      final navigatorKey = GlobalKey<NavigatorState>();
+      final installer = await startWithPendingPy(
+        tester,
+        navigatorKey: navigatorKey,
+        store: store,
+      );
+      // 先挂一个没接 navigatorKey 的界面：首帧排空拿不到 context，
+      // 应当早退并安排重试，而不是把文件丢在队列里没人管。
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: Text('no key'))),
+      );
+      await tester.pump();
+      expect(installer.calls, isEmpty);
+      // 换上接了 navigatorKey 的界面（模拟冷启动界面随后就绪）；
+      // 重试还没到点时不该装，重试触发后自动排空装上。
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigatorKey,
+          home: const Scaffold(body: Text('home')),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(installer.calls, isEmpty);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pump();
+      expect(installer.calls, hasLength(1));
+      expect(installer.calls.single.single.name, '12345.py');
+      await tester.pump(const Duration(seconds: 5));
     });
   });
 }

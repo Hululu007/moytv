@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -112,6 +113,50 @@ String pluginShareInstallName(String uri, String? fileName) {
   final segment = _fileNameFromUri(uri);
   if (segment.isNotEmpty) return segment;
   return candidate;
+}
+
+/// 内容嗅探结果：archive 是 zip 容器字节（jar 与 zip 同为 PK 头，
+/// 细分由调用方看包内条目决定）；installJson 走 JSON 内容分流。
+enum PluginShareSniff { installPy, archive, installJson, unknown }
+
+/// 内容嗅探：原生侧放宽暂存后，名字与类型都缺失的文件会以无
+/// 后缀名进来，扩展名判定必然 reject，这里按文件头再判一次——
+/// PK 头 → archive；文本含 Spider 蜘蛛特征（有 class Spider，
+/// 或以 import/from 开头且通篇含 Spider）→ py；去掉空白后以
+/// { 或 [ 开头 → json。都对不上返回 unknown，调用方给提示拒绝。
+/// 只看前 64KB：蜘蛛的类定义一般都在文件前部，够判定用。
+PluginShareSniff sniffPluginShareContent(List<int> bytes) {
+  if (bytes.length >= 4 &&
+      bytes[0] == 0x50 &&
+      bytes[1] == 0x4B &&
+      bytes[2] == 0x03 &&
+      bytes[3] == 0x04) {
+    return PluginShareSniff.archive;
+  }
+  final head = bytes.length > 64 * 1024 ? bytes.sublist(0, 64 * 1024) : bytes;
+  var text = utf8.decode(head, allowMalformed: true);
+  if (text.startsWith('\uFEFF')) text = text.substring(1);
+  if (text.contains('class Spider')) return PluginShareSniff.installPy;
+  final trimmed = text.trimLeft();
+  final scriptHead = trimmed.startsWith('import') || trimmed.startsWith('from');
+  if (scriptHead && text.contains('Spider')) {
+    return PluginShareSniff.installPy;
+  }
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return PluginShareSniff.installJson;
+  }
+  return PluginShareSniff.unknown;
+}
+
+/// 嗅探定型后拼安装文件名：原名去掉旧后缀（没有就不动）作主干，
+/// 主干空了用 import 兜底，再拼嗅探出的后缀（ImportEngine 靠
+/// 后缀分流，名字必须带对后缀）。
+String pluginShareSniffedName(String fileName, String extension) {
+  var base = fileName.trim();
+  final dot = base.lastIndexOf('.');
+  if (dot > 0) base = base.substring(0, dot);
+  if (base.isEmpty) base = 'import';
+  return '$base.$extension';
 }
 
 /// 安装回调：与 ImportEngine.importAll 同签名，可注入假函数测试。
@@ -344,27 +389,54 @@ class _PluginShareController with WidgetsBindingObserver {
   final SharedJsonImportHandler jsonHandler;
   final _processing = <String>{};
   bool _draining = false;
+  int _drainRetryCount = 0;
+  Timer? _drainRetryTimer;
+
+  /// 排空早退后的有限重试节奏：1.5 秒一次、最多 10 次。新的
+  /// 首帧/回前台触发会把计数清零重新来，不会无限重试下去。
+  static const _drainRetryDelay = Duration(milliseconds: 1500);
+  static const _maxDrainRetries = 10;
 
   void start() {
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_drain()));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _kickDrain());
   }
 
   void dispose() {
+    _drainRetryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_drain());
+    if (state == AppLifecycleState.resumed) _kickDrain();
+  }
+
+  void _kickDrain() {
+    _drainRetryCount = 0;
+    unawaited(_drain());
+  }
+
+  void _scheduleDrainRetry() {
+    if (_drainRetryCount >= _maxDrainRetries) return;
+    if (_drainRetryTimer?.isActive ?? false) return;
+    _drainRetryCount += 1;
+    _drainRetryTimer = Timer(_drainRetryDelay, () => unawaited(_drain()));
   }
 
   BuildContext? get _context => navigatorKey.currentContext;
 
   Future<void> _drain() async {
     if (_draining) return;
-    // 界面未就绪或用户未解锁时不取队列，留待下次回到前台再排空。
-    if (_context == null || store.locked) return;
+    // 界面未就绪或用户未解锁时不取队列：文件还留在原生队列里
+    // 没丢，但不能只等下一次回到前台——冷启动经“打开方式”进来
+    // 时赶上这一刻，之后没有新的 resumed 事件，文件就没人管了。
+    // 安排有限次延迟重试，界面就绪/解锁后自动排空。
+    if (_context == null || store.locked) {
+      _scheduleDrainRetry();
+      return;
+    }
+    _drainRetryTimer?.cancel();
     _draining = true;
     try {
       final pending = await channel.takePending();
@@ -388,25 +460,60 @@ class _PluginShareController with WidgetsBindingObserver {
       await _handleJson(file);
       return;
     }
-    final decision = decidePluginShareRoute(file.uri, fileName: file.name);
-    if (decision == PluginShareDecision.reject) {
-      _showSnack('文件「${file.name}」不是插件文件');
-      return;
-    }
-    final installName = pluginShareInstallName(file.uri, file.name);
+    var decision = decidePluginShareRoute(file.uri, fileName: file.name);
+    var installName = pluginShareInstallName(file.uri, file.name);
+    // 提示里用的名字：优先外部应用给的显示名，没有才用安装名兜底。
+    final displayName = file.name.trim().isNotEmpty
+        ? file.name.trim()
+        : installName;
     Uint8List bytes;
     try {
       bytes = await channel.readBytes(file.uri);
     } on PlatformException catch (error) {
-      _showSnack('文件「$installName」无法读取：${error.message ?? error.code}');
+      _showSnack('文件「$displayName」无法读取：${error.message ?? error.code}');
       return;
     } catch (_) {
-      _showSnack('文件「$installName」无法读取');
+      _showSnack('文件「$displayName」无法读取');
       return;
     }
     if (bytes.isEmpty) {
-      _showSnack('文件「$installName」无法导入：文件为空');
+      _showSnack('文件「$displayName」无法导入：文件为空');
       return;
+    }
+    if (decision == PluginShareDecision.reject) {
+      // 后缀判不出来（原生侧放宽暂存进来的无名文件走这里）：
+      // 按内容嗅探兜底，定型后换上带对后缀的安装名再走下面的
+      // 原安装路径；嗅探也判不出才拒绝并给提示，绝不无声丢弃。
+      switch (sniffPluginShareContent(bytes)) {
+        case PluginShareSniff.installPy:
+          decision = PluginShareDecision.installPy;
+          installName = pluginShareSniffedName(displayName, 'py');
+        case PluginShareSniff.archive:
+          {
+            // PK 头分不出 jar 还是 zip：包里有 .jar/.py 条目按
+            // zip 走选择器；没有（纯 class 条目的 jar、或条目
+            // 读不出来）按 jar 走安装器。
+            var hasPluginEntries = false;
+            try {
+              hasPluginEntries = expandPluginZip(bytes).isNotEmpty;
+            } catch (_) {
+              hasPluginEntries = false;
+            }
+            if (hasPluginEntries) {
+              decision = PluginShareDecision.installZip;
+              installName = pluginShareSniffedName(displayName, 'zip');
+            } else {
+              decision = PluginShareDecision.installJar;
+              installName = pluginShareSniffedName(displayName, 'jar');
+            }
+          }
+        case PluginShareSniff.installJson:
+          await _handleJsonBytes(displayName, bytes);
+          return;
+        case PluginShareSniff.unknown:
+          _showSnack('文件「$displayName」不是插件文件');
+          return;
+      }
     }
     if (decision == PluginShareDecision.installZip) {
       // zip 不再自动批量全装：先开选择器，列出识别到的影视源 /
@@ -451,6 +558,12 @@ class _PluginShareController with WidgetsBindingObserver {
       _showSnack('文件「$displayName」无法导入：文件为空');
       return;
     }
+    await _handleJsonBytes(displayName, bytes);
+  }
+
+  /// JSON 内容分流的实际执行：字节已读好时（内容嗅探命中的
+  /// 无后缀 JSON 走这里）直接复用，不重复读流。
+  Future<void> _handleJsonBytes(String displayName, Uint8List bytes) async {
     final message = await jsonHandler.handle(bytes, fileName: displayName);
     _showSnack(message);
   }

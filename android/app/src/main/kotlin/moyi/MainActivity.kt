@@ -200,15 +200,34 @@ class MainActivity : FlutterActivity() {
         }.getOrNull()
     }
 
+    // 插件分享 URI 队列入队：同一 URI 不重复进。Flutter 侧按 URI
+    // 读流安装（见 plugin_share_intent.dart），这里不拷文件。
+    private fun enqueuePluginShare(uri: Uri, name: String, fallbackName: String, jsonKind: Boolean) {
+        val uriString = uri.toString()
+        if (pendingPluginShareFiles.any { it["uri"] == uriString }) return
+        val entry = mutableMapOf<String, Any?>(
+            "uri" to uriString,
+            "name" to if (name.isNotEmpty()) name else fallbackName,
+        )
+        if (jsonKind) entry["kind"] = "json"
+        pendingPluginShareFiles.add(entry)
+    }
+
     @Suppress("DEPRECATION")
     private fun stageIncomingIntent(incoming: Intent?) {
         if (incoming == null) return
         val action = incoming.action
         if (action != Intent.ACTION_VIEW && action != Intent.ACTION_SEND) return
+        // URI 兜底顺序：data / EXTRA_STREAM 都没有时再看 ClipData
+        // 第一条（有些应用只把文件 URI 放在 ClipData 里递过来）。
         val uri: Uri = when (action) {
             Intent.ACTION_VIEW -> incoming.data
             else -> incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: incoming.data
-        } ?: return
+        } ?: runCatching {
+            incoming.clipData?.let { clip ->
+                if (clip.itemCount > 0) clip.getItemAt(0).uri else null
+            }
+        }.getOrNull() ?: return
         val name = displayNameFor(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: ""
         val mime = incoming.type ?: runCatching { contentResolver.getType(uri) }.getOrNull()
         val lowerName = name.lowercase()
@@ -223,25 +242,25 @@ class MainActivity : FlutterActivity() {
         // 不认（否则所有纯文本分享都会进 JSON 分流）。py/jar/zip 优先于 JSON。
         val looksJson = !looksZip && !looksPy && !looksJar &&
             (lowerName.endsWith(".json") || mime == "application/json")
-        if (!looksPy && !looksJar && !looksZip && !looksJson) return
-        if (action == Intent.ACTION_VIEW) {
+        // 名字与类型都认不出的不直接丢：意图能递进来，说明命中了
+        // 清单里注册的文件过滤器；先按 URI 暂存进插件分享队列，
+        // 到底是什么文件由 Flutter 侧读内容嗅探后决定。SEND 只有
+        // EXTRA_TEXT、没有 URI 的在上面取不到 URI 已经 return，
+        // 不会把纯文字分享吞进来。
+        val recognized = looksPy || looksJar || looksZip || looksJson
+        if (action == Intent.ACTION_VIEW || !recognized) {
             // 打开方式进插件分享通道：Flutter 侧按 URI 读流后走插件安装；
             // 不再同时进旧的 py/jar 暂存队列，避免一次打开装两次。
-            // SEND（分享到）仍走旧的暂存队列，行为不变。
+            // SEND（分享到）已识别类型仍走旧的暂存队列，行为不变。
             // JSON 也走这条 URI 队列，但带 kind=json 标记，Flutter 侧按
             // 内容分流到小程序/书源/配置导入，不进插件安装。
+            // 未识别类型同样走这条队列，不带 kind 标记，Flutter 侧
+            // 读内容嗅探定型（认不出会给用户可见提示，不无声丢弃）。
             val fallbackName = if (looksZip) "import.zip"
                 else if (looksJar) "import.jar"
-                else if (looksJson) "import.json" else "import.py"
-            val uriString = uri.toString()
-            if (pendingPluginShareFiles.none { it["uri"] == uriString }) {
-                val entry = mutableMapOf<String, Any?>(
-                    "uri" to uriString,
-                    "name" to if (name.isNotEmpty()) name else fallbackName,
-                )
-                if (looksJson) entry["kind"] = "json"
-                pendingPluginShareFiles.add(entry)
-            }
+                else if (looksJson) "import.json"
+                else if (looksPy) "import.py" else "import.bin"
+            enqueuePluginShare(uri, name, fallbackName, looksJson)
             return
         }
         // zip 只走打开方式的插件分享通道，SEND 来的 zip 不进旧队列。
@@ -251,11 +270,17 @@ class MainActivity : FlutterActivity() {
             val dir = java.io.File(cacheDir, dirName).apply { if (!exists()) mkdirs() }
             val suffix = if (looksJar) "jar" else if (looksJson) "json" else "py"
             val target = java.io.File(dir, "${System.currentTimeMillis()}_${(0..9999).random()}.$suffix")
-            contentResolver.openInputStream(uri)?.use { input ->
+            val copied = contentResolver.openInputStream(uri)?.use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
-            } ?: return
-            target
-        }.getOrNull() ?: return
+            }
+            if (copied == null) null else target
+        }.getOrNull()
+        if (staged == null) {
+            // 暂存拷贝失败不无声丢弃：退回 URI 队列，让 Flutter 侧
+            // 再读一次；真读不到会给出可见的失败提示。
+            enqueuePluginShare(uri, name, "import.bin", false)
+            return
+        }
         val entry = mapOf(
             "path" to staged.absolutePath,
             "name" to if (name.isNotEmpty()) name else if (looksJar) "import.jar" else if (looksJson) "import.json" else "import.py",
