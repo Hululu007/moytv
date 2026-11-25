@@ -1,12 +1,16 @@
 import 'core_bridge.dart';
 
-enum ContentSection { audio, novel }
+enum ContentSection { audio, novel, music }
 
 extension ContentSectionLabel on ContentSection {
   String get title => switch (this) {
     ContentSection.audio => '听书',
     ContentSection.novel => '阅读',
+    ContentSection.music => '音乐',
   };
+
+  bool get isAudioLike =>
+      this == ContentSection.audio || this == ContentSection.music;
 }
 
 class ContentCategory {

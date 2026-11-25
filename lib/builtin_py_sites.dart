@@ -1660,6 +1660,20 @@ class BuiltinPySites {
     importType: 'py',
   );
 
+  static const zgjManmanSiteId = 'manman';
+  static const zgjManmanAssetPath = 'assets/py_spiders/zgj_maccms.py';
+  static const zgjManmanFileId = 'builtin_zgj_manman';
+
+  static const zgjManmanSite = SourceSite(
+    zgjManmanSiteId,
+    '🔞漫果',
+    '内置 py · zgj_maccms',
+    section: SourceSite.sectionVideo,
+    origin: SourceSite.originBuiltin,
+    importType: 'py',
+    importExt: '{"host": "https://1anime.me", "mode": "api", "name": "漫果"}',
+  );
+
   /// 全部内置 py 插件条目，顺序与今天 register() 的注册顺序一致。
   static const List<BuiltinPyEntry> entries = [
     BuiltinPyEntry(
@@ -2411,6 +2425,12 @@ class BuiltinPySites {
       site: zuidazySite,
       assetPath: zuidazyAssetPath,
       fileId: zuidazyFileId,
+    ),
+    BuiltinPyEntry(
+      siteId: zgjManmanSiteId,
+      site: zgjManmanSite,
+      assetPath: zgjManmanAssetPath,
+      fileId: zgjManmanFileId,
     ),
   ];
 

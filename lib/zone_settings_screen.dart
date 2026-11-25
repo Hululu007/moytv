@@ -28,6 +28,7 @@ class ZoneSettingsScreen extends StatelessWidget {
     HomeZone.live => '直播设置',
     HomeZone.audio => '听书设置',
     HomeZone.novel => '阅读设置',
+    HomeZone.music => '音乐设置',
   };
 
   Future<void> _push(BuildContext context, Widget page) =>
@@ -71,6 +72,7 @@ class ZoneSettingsScreen extends StatelessWidget {
         );
       case HomeZone.audio:
       case HomeZone.novel:
+      case HomeZone.music:
         break;
     }
     if (zone == HomeZone.live) {

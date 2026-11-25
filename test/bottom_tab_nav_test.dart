@@ -286,6 +286,7 @@ void main() {
       return switch (section) {
         ContentSection.audio => HomeZone.audio,
         ContentSection.novel => HomeZone.novel,
+        ContentSection.music => HomeZone.music,
       };
     }
     return null;

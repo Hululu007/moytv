@@ -257,6 +257,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> {
     final bookTargets = globalSearchBookTargets(
       audioSources: ContentRegistry.sourcesFor(ContentSection.audio),
       novelSources: ContentRegistry.sourcesFor(ContentSection.novel),
+      musicSources: ContentRegistry.sourcesFor(ContentSection.music),
     );
     unawaited(_runVideoLeg(generation, videoIds, query));
     unawaited(_runBookLeg(generation, query, bookTargets));

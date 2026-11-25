@@ -318,7 +318,7 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
         builder: (_) => ContentDetailScreen(
           source: source,
           book: book,
-          autoPlay: source.section == ContentSection.audio,
+          autoPlay: source.section.isAudioLike,
         ),
       ),
     );
@@ -592,7 +592,7 @@ class _ContentZoneScreenState extends State<ContentZoneScreen> {
                   icon: const Icon(Icons.collections_bookmark_rounded),
                 ),
               ],
-              if (widget.section == ContentSection.audio) ...[
+              if (widget.section.isAudioLike) ...[
                 IconButton(
                   key: const ValueKey('audio-history'),
                   tooltip: '收听记录',
