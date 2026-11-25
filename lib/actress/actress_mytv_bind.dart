@@ -6,23 +6,20 @@ import 'package:path_provider/path_provider.dart';
 
 /// 女优库绑定手机根目录下的 MYTV 文件夹（2026-11-20 用户令）。
 ///
-/// 落点（2026-11-22 用户令最终口径：只读外置数据库，不内置任何
-/// 数据库与 JSON 种子）：
-/// - `MYTV/db/女优库.db`：唯一数据库。用户发来的视频结构库
-///   （videos / video_actress / actresses 表），有就用它；
-///   没有就是空库，界面如实提示放入、点“重新加载数据库”再读，
-///   不回落任何内置库、不悄悄造数据。
-/// - 应用库 `女优库应用.db` 已删除：包里不再带它，加载链里也不再
-///   回落到它；老库 `documents/actress.db` 也不再是回退落点。
-///   旧版迁移（老库拷进应用库）随之作废。
-/// - `MYTV/db/mjv011.json`：本地 json 影子文件（现爬写盘入口，
+/// 落点（2026-11-25 用户令：只留 .sql 导入，删本地 .db 读取——
+/// MYTV/db/女优库.db 从此不再被读，内部工作库搬到应用私有目录
+/// documents/女优库.db，见 actress_working_db.dart；绑定只剩
+/// json/m3u 目录与合并 JSON 导出）：
+/// - `MYTV/db/`：本地 json 影子文件目录（现爬写盘入口，
 ///   与原来 documents/actress_json/mjv011.json 同一口径）。
+///   这里只放 .json，不再放数据库。
 /// - `MYTV/m3u/`：用户自己放 m3u 文件的地方（女优合集1.m3u～
 ///   9.m3u 这种），m3u 兜底先读这里。
+/// - `MYTV/mjv011.json`：合并 JSON 导出落点。
 ///
 /// 权限与降级（targetSdk 36）：直接写根目录要“所有文件访问权限”
 /// （MANAGE_EXTERNAL_STORAGE）。没拿到权限时不硬写、不崩——
-/// 绑定失败，女优库显示空态、给去设置的入口；用户授权后点
+/// 绑定失败，json/m3u 兜底走 documents 下的旧目录；用户授权后点
 /// “重新绑定”再试一次。
 ///
 /// 鸿蒙 NEXT（卓易通容器）：外部存储实际路径可能与原生安卓不同，
@@ -30,28 +27,16 @@ import 'package:path_provider/path_provider.dart';
 /// 验过——手机待验清单见 REPORT.md。
 ///
 /// 本模块只算路径、建目录，不碰界面、不直接开库：
-/// 真正开库的是 [SqfliteActressDatabase._openNow]，它第一次开库
-/// 前调 [ensureBound] 拿路径；列表页在 bootstrap 里先调一次，
-/// 为的是提前拿到结果显示绑定行、给 json/m3u 指目录。
+/// 真正开库的是 [SqfliteActressDatabase._openNow]，它开的是
+/// 应用私有目录的内部工作库（不再调这里拿库路径）；列表页在
+/// bootstrap 里先调一次，为的是给 json/m3u 指目录。
 
 /// MYTV 文件夹名（手机根目录下）。
 const mytvFolderName = 'MYTV';
 
-/// MYTV 下的两个子文件夹。
+/// MYTV 下的两个子文件夹：json 影子文件目录与 m3u 目录。
 const mytvDbFolderName = 'db';
 const mytvM3uFolderName = 'm3u';
-
-/// 涩库引擎（py 的 SikuEngine.DB_DIRS）同款补充扫描目录：手机根
-/// 目录下这 4 个目录里的 .db 都当女优库源读（递归扫，与 py 的
-/// os.walk 一致）。MYTV/db 仍是主目录（绑定落点），这 4 个是
-/// 补充——2026-11-21 用户令按 py 逻辑读库、改路径。
-const sikuDbScanDirs = ['纯福利/db', '女优库', '私藏视频', 'lz/db'];
-
-/// MYTV/db 里的唯一数据库文件名（2026-11-22 用户令最终口径）：
-/// `女优库.db` 是用户发来的视频结构库（videos / video_actress /
-/// actresses 表），女优库只读它。应用自己的 persons / works 表
-/// 库 `女优库应用.db` 已删除，不再是落点、不再回落。
-const mytvVideoDbFileName = '女优库.db';
 
 /// 老 json 影子文件目录名（documents 下）。
 const legacyJsonDirName = 'actress_json';
@@ -75,43 +60,26 @@ typedef MytvAllFilesSettingsOpener = Future<void> Function();
 /// documents 目录解析。
 typedef MytvDocumentsResolver = Future<Directory> Function();
 
-/// 一次绑定解析的结果：列表页显示绑定行、给 json/m3u 指目录、
-/// 导出合并 JSON 落点都用它。
+/// 一次绑定解析的结果：给 json/m3u 指目录、导出合并 JSON 落点
+/// 都用它。2026-11-25 起绑定不再管数据库（内部工作库在应用私有
+/// 目录，见 actress_working_db.dart）。
 class MytvBindResult {
   const MytvBindResult({
     required this.bound,
     required this.needsPermission,
-    required this.root,
-    this.externalRoot,
-    required this.dbDir,
     required this.m3uDir,
     required this.jsonDir,
-    required this.dbPath,
-    required this.hasVideoDb,
-    required this.displayPath,
     required this.mergedJsonExportPath,
     this.note,
   });
 
   /// true = MYTV 可用，json 与 m3u 都走 MYTV；false = 未绑定
-  /// （原因见 [note]），女优库显示空态。
+  /// （原因见 [note]），json/m3u 兜底走 documents 下的旧目录。
   final bool bound;
 
   /// true = 没拿到所有文件访问权限，用户去设置授权后点
   /// “重新绑定”可再试一次。
   final bool needsPermission;
-
-  /// MYTV 根目录（未绑定时是 documents 目录，仅作展示与
-  /// 导出路径拼接用）。
-  final Directory root;
-
-  /// 外部存储根目录（/storage/emulated/0，绑定成功时才有）：
-  /// 补充扫描目录（[sikuDbScanDirs]）从这里拼。未绑定时为 null，
-  /// 镜像只扫主目录。
-  final Directory? externalRoot;
-
-  /// 库目录：MYTV/db 或 documents。
-  final Directory dbDir;
 
   /// m3u 目录：MYTV/m3u 或 documents。
   final Directory m3uDir;
@@ -119,22 +87,10 @@ class MytvBindResult {
   /// json 影子文件目录：MYTV/db 或 documents/actress_json。
   final Directory jsonDir;
 
-  /// 实际开库路径：MYTV/db/女优库.db；未找到外置库时为空字符串，
-  /// 开库方按“没有外置数据库”处理（不回落任何内置库）。
-  final String dbPath;
-
-  /// true = MYTV/db/女优库.db 存在且非空，女优库读它；
-  /// false = 没有外置库，界面显示空态提示。
-  final bool hasVideoDb;
-
-  /// 界面显示的库落点：'MYTV/db/女优库.db'，或未找到时
-  /// '未找到外置数据库'。
-  final String displayPath;
-
   /// 合并 JSON 导出落点：MYTV/mjv011.json（只在 bound 时用）。
   final String mergedJsonExportPath;
 
-  /// 未绑定 / 未找到外置库的原因（给界面提示用）；正常时为空。
+  /// 未绑定的原因（给界面提示用）；正常时为空。
   final String? note;
 }
 
@@ -177,8 +133,7 @@ class ActressMytvBind {
   MytvBindResult? get current => _cached;
 
   /// 解析一次绑定（结果缓存，并发调用共用同一份）。
-  /// [refresh] 为 true 时重新解析（授权后重新绑定、手动“重新加载
-  /// 数据库”时用：新放进 MYTV/db 的女优库.db 只有重解析才看得到）。
+  /// [refresh] 为 true 时重新解析（授权后重新绑定时用）。
   Future<MytvBindResult> ensureBound({bool refresh = false}) {
     if (!refresh && _cached != null) return Future.value(_cached);
     var pending = _pending;
@@ -277,18 +232,18 @@ class ActressMytvBind {
       externalRoot = null;
     }
     if (externalRoot == null) {
-      return _fallbackResult(docs, '外部存储不可用：未找到外置数据库');
+      return _fallbackResult(docs, '外部存储不可用');
     }
     final mytvRoot = Directory(path.join(externalRoot.path, mytvFolderName));
-    final dbDir = Directory(path.join(mytvRoot.path, mytvDbFolderName));
+    final jsonDir = Directory(path.join(mytvRoot.path, mytvDbFolderName));
     final m3uDir = Directory(path.join(mytvRoot.path, mytvM3uFolderName));
     // 建目录：没权限时这里就抛 EACCES（Android 11+ 根目录写要
     // 所有文件访问权限），进下面的权限分支。
     try {
-      dbDir.createSync(recursive: true);
+      jsonDir.createSync(recursive: true);
       m3uDir.createSync(recursive: true);
       // 写探针：目录建得出来不等于写得进去，实写一次才算数。
-      final probe = File(path.join(dbDir.path, '.mytv_probe'));
+      final probe = File(path.join(jsonDir.path, '.mytv_probe'));
       await probe.writeAsString('ok');
       await probe.delete();
     } catch (_) {
@@ -301,11 +256,11 @@ class ActressMytvBind {
       if (!granted) {
         return _fallbackResult(
           docs,
-          '没有所有文件访问权限：未找到外置数据库',
+          '没有所有文件访问权限',
           needsPermission: true,
         );
       }
-      return _fallbackResult(docs, 'MYTV 文件夹写不进去：未找到外置数据库');
+      return _fallbackResult(docs, 'MYTV 文件夹写不进去');
     }
     // 老 json 影子文件拷进 MYTV/db（只补没有的，不覆盖已有的；
     // 拷失败不影响绑定；用户自己的现爬文件，不是内置数据）。
@@ -317,7 +272,7 @@ class ActressMytvBind {
         for (final entity in legacyJsonDir.listSync()) {
           if (entity is! File) continue;
           if (!path.basename(entity.path).endsWith('.json')) continue;
-          final target = File(path.join(dbDir.path, path.basename(entity.path)));
+          final target = File(path.join(jsonDir.path, path.basename(entity.path)));
           if (!target.existsSync()) {
             await entity.copy(target.path);
           }
@@ -326,36 +281,19 @@ class ActressMytvBind {
     } catch (_) {
       // json 拷失败不影响绑定。
     }
-    // 唯一数据库：MYTV/db/女优库.db。存在且非空就用它；
-    // 没有就是空库（note 写清去哪里放、怎么重读），不回落任何
-    // 内置库、不建新库、不悄悄造数据。
-    final videoDb = File(path.join(dbDir.path, mytvVideoDbFileName));
-    final hasVideoDb = videoDb.existsSync() && videoDb.lengthSync() > 0;
     return MytvBindResult(
       bound: true,
       needsPermission: false,
-      root: mytvRoot,
-      externalRoot: externalRoot,
-      dbDir: dbDir,
       m3uDir: m3uDir,
-      jsonDir: dbDir,
-      dbPath: hasVideoDb ? videoDb.path : '',
-      hasVideoDb: hasVideoDb,
-      displayPath: hasVideoDb
-          ? '$mytvFolderName/$mytvDbFolderName/$mytvVideoDbFileName'
-          : '未找到外置数据库',
+      jsonDir: jsonDir,
       mergedJsonExportPath: path.join(
         mytvRoot.path,
         mytvMergedJsonFileName,
       ),
-      note: hasVideoDb
-          ? null
-          : '未找到外置数据库：请把 女优库.db 放进 MYTV/db/ 文件夹，'
-              '再点“重新加载数据库”',
     );
   }
 
-  /// 未绑定结果：没有外置数据库可读（dbPath 为空），女优库显示空态。
+  /// 未绑定结果：json/m3u 兜底走 documents 下的旧目录。
   MytvBindResult _fallbackResult(
     Directory docs,
     String? note, {
@@ -364,13 +302,8 @@ class ActressMytvBind {
     return MytvBindResult(
       bound: false,
       needsPermission: needsPermission,
-      root: docs,
-      dbDir: docs,
       m3uDir: Directory(path.join(docs.path, legacyJsonDirName)),
       jsonDir: Directory(path.join(docs.path, legacyJsonDirName)),
-      dbPath: '',
-      hasVideoDb: false,
-      displayPath: '未找到外置数据库',
       mergedJsonExportPath: path.join(docs.path, mytvMergedJsonFileName),
       note: note,
     );

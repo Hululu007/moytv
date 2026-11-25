@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'actress_database.dart';
 import 'actress_film_library.dart';
-import 'actress_multi_db_fallback.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_neon.dart';
@@ -65,7 +64,7 @@ class ActressDetailPage extends StatefulWidget {
   final ActressJsonFallback? fallback;
 
   /// 测试注入：影视库 db 兜底提供方（唯一一档）；不传时按列表页同一
-  /// 接法现建 MultiDbFilmFallback（测试注入的 fallback 不接提供方，
+  /// 接法现建 FilmLibraryService（测试注入的 fallback 不接提供方，
   /// 保持老行为）。
   @visibleForTesting
   final FilmDbFallbackProvider? filmDb;
@@ -146,9 +145,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _noDatabase = false;
 
   /// DB 服务：只建一次，复用同一条 DB 连接（进详情页多次不重开）。
-  /// 多 .db 合并（主库 + 其它 .db）：本页自己建的时候持有。
-  /// 多 .db 合并仍是数据库，不是 json/m3u 兜底，保留。
-  MultiDbFilmFallback? _multiDb;
+  /// 内部工作库的影视库服务：本页自己建的时候持有，退出时关掉。
+  FilmLibraryService? _filmDbService;
 
   FeedProbeFetch get _verifyFetch => widget.verifyFetch ?? probeStreamHead;
 
@@ -226,11 +224,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   }
 
   /// 批量按番号取库里条目（2026-11-22 女优库加载优化）：
-  /// 真实提供方（MultiDbFilmFallback / FilmLibraryService）一次
-  /// 主键 IN 取回全部番号，不再逐条 LIKE 扫表；其它实现（含测试
-  /// 替身）逐条回落。批量方法没放进 FilmDbFallbackProvider 接口
-  ///（测试替身都是 implements，接口多方法就编不过），所以这里
-  /// 按运行时类型分发。
+  /// 真实提供方（FilmLibraryService）一次主键 IN 取回全部番号，
+  /// 不再逐条 LIKE 扫表；其它实现（含测试替身）逐条回落。批量方法
+  /// 没放进 FilmDbFallbackProvider 接口（测试替身都是 implements，
+  /// 接口多方法就编不过），所以这里按运行时类型分发。
   Future<List<ActressJsonEntry>> _dbEntriesForCodes(
     ActressJsonFallback fallback,
     List<String> codeKeys, {
@@ -240,9 +237,6 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final provider = fallback.filmDb;
     if (provider == null) return const [];
     try {
-      if (provider is MultiDbFilmFallback) {
-        return await provider.entriesForCodes(codeKeys, site: site);
-      }
       if (provider is FilmLibraryService) {
         return await provider.entriesForCodes(codeKeys, site: site);
       }
@@ -257,8 +251,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   }
 
   /// 库里存的播放地址池（只供点播用，从不渲染）：按女优名 + 已加载
-  /// 作品番号，只从本地 db（MYTV/db/ 下多 .db 合并，见
-  /// MultiDbFilmFallback）取行；同番号的条目必须留在池里——
+  /// 作品番号，只从内部工作库（FilmLibraryService）取行；同番号
+  /// 的条目必须留在池里——
   /// _playWork 按番号匹配存的地址播（2026-11-22 用户令：女优库
   /// 全部播放只走数据库里的数据，不读内置 json/m3u、不跨站现取）。
   /// 不调 fallback.load()：那是读本地 json 文件的，DB 行不
@@ -274,7 +268,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     if (injectedFilmDb != null) {
       fallback.filmDb = injectedFilmDb;
     } else if (widget.fallback == null) {
-      fallback.filmDb ??= _multiDb ??= MultiDbFilmFallback(
+      fallback.filmDb ??= _filmDbService ??= FilmLibraryService(
         database: widget.database,
       );
     }
@@ -298,19 +292,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
 
     // 2026-11-23 v58 验机修复：地址池分两段上屏——第一段只走主库
     // （FilmLibraryService，IN 主键取，毫秒级），建好立刻 setState，
-    // 点卡不再干等；第二段再走多库合并（外来 .db 是全表 LIKE 扫，
-    // 库大时要几分钟），补进来再 setState 一次。原来两段串行完才
-    // 一次 setState，池子建得慢时 _playWork 的 15 秒超时一到就按
-    // 空池子报“库里暂无播放地址”，其实地址都在库里。
+    // 点卡不再干等；第二段再走主库重查一遍（去重后基本无新增），
+    // 补进来再 setState 一次。原来两段串行完才一次 setState，
+    // 池子建得慢时 _playWork 的 15 秒超时一到就按空池子报
+    // “库里暂无播放地址”，其实地址都在库里。
     final provider = fallback.filmDb;
-    final FilmLibraryService? primary;
-    if (provider is MultiDbFilmFallback) {
-      primary = provider.primary;
-    } else if (provider is FilmLibraryService) {
-      primary = provider;
-    } else {
-      primary = null;
-    }
+    final FilmLibraryService? primary = provider is FilmLibraryService
+        ? provider
+        : null;
     if (primary != null) {
       try {
         for (final name in [person.displayName, ...person.aliases]) {
@@ -321,14 +310,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           addAll(await primary.entriesForCodes(codes, site: site));
         }
       } catch (_) {
-        // 主库这段失败不堵第二段（多库合并里还会再试主库一次）。
+        // 主库这段失败不堵第二段（第二段还会再试主库一次）。
       }
       if (mounted && merged.isNotEmpty) {
         setState(() => _fallbackEntries = merged);
       }
     }
 
-    // 第二段：多库合并（主库 + MYTV/db/ 下其它 .db），补进来再上屏。
+    // 第二段：主库重查（去重后基本无新增），补进来再上屏。
     try {
       for (final name in [person.displayName, ...person.aliases]) {
         addAll(await fallback.dbEntriesForActress(name, site: site));
@@ -596,7 +585,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         fallback.filmDb = injectedFilmDb;
       } else if (widget.fallback == null) {
         fallback.filmDb ??=
-            _multiDb ??= MultiDbFilmFallback(database: widget.database);
+            _filmDbService ??= FilmLibraryService(database: widget.database);
       }
       final site = widget.siteFilter == ActressSiteFilter.all
           ? null

@@ -14,7 +14,7 @@ import 'actress_generic_crawl.dart';
 import 'actress_film_library.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
-import 'actress_mytv_bind.dart';
+import 'actress_working_db.dart';
 
 /// MJV 视频分类（与潮流蜘蛛 chaoliu.py 的 MJV_CATS 同表，只取视频类；
 /// 18H 漫画/同人/写真/小说四类不是视频，不爬）。
@@ -1493,12 +1493,13 @@ class ActressSiteCrawlService {
     return true;
   }
 
-  /// 现爬条目追加进影视库文件（绑定的 女优库.db）：失败只吞掉，
+  /// 现爬条目追加进内部工作库（.sql 导入落成的库）：失败只吞掉，
   /// 不抛、不卡现爬；写库口径与修复共用 [FilmLibraryWriter]。
   Future<void> _appendToFilmLibrary(List<ActressJsonEntry> fresh) async {
     try {
-      final bind = await ActressMytvBind.instance.ensureBound();
-      final writer = FilmLibraryWriter(dbPath: bind.dbPath);
+      final writer = FilmLibraryWriter(
+        dbPath: await actressWorkingDbPath(),
+      );
       await writer.appendCrawledFilms(fresh);
     } catch (_) {
       // 影视库追加失败不卡现爬：json 已落盘、app 库镜像已成。

@@ -333,9 +333,8 @@ abstract class FilmDbFallbackProvider {
 // 注意：批量按番号取作品（entriesForCodes）不要加进上面这个接口——
 // 三个测试替身（test/actress_*_test.dart）都是 implements 它，
 // 接口多一个方法它们就编不过，而测试文件不在本次可改范围。
-// 批量方法只挂在两个真实实现上（FilmLibraryService、
-// MultiDbFilmFallback），调用方（详情页）按运行时类型分发，
-// 其它实现（含测试替身）逐条回落，见 _dbEntriesForCodes。
+// 批量方法只挂在真实实现 FilmLibraryService 上，调用方（详情页）
+// 按运行时类型分发，其它实现（含测试替身）逐条回落，见 _dbEntriesForCodes。
 
 class ActressJsonFallback {
   ActressJsonFallback({
@@ -672,9 +671,10 @@ class ActressJsonFallback {
     }
   }
 
-  /// 影视库 db 兜底（2026-11-20 18:57）：先查 MYTV/db/女优库.db；
-  /// 没接提供方（测试注入的实例）或库读不到时回空，调用方继续
-  /// 走 json/m3u。详情页把它排在 json 行之前、m3u 行之前。
+  /// 影视库 db 兜底（2026-11-20 18:57）：先查内部工作库
+  /// （.sql 导入落成的库）；没接提供方（测试注入的实例）或库读不到
+  /// 时回空，调用方继续走 json/m3u。详情页把它排在 json 行之前、
+  /// m3u 行之前。
   FilmDbFallbackProvider? filmDb;
 
   Future<List<ActressJsonEntry>> dbEntriesForActress(

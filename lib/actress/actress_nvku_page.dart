@@ -655,6 +655,11 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           _page = 2;
           _hasMore = cached.hasMore;
           _loading = false;
+          // 2026-11-25 防卡死：翻页进行中切分类，旧翻页回来代际
+          // 已顶掉直接 return，_loadingMore 会停在 true，之后新
+          // 分类滑到底全被守卫挡掉（只出第一页、再往下翻不动）。
+          // reset 是代际的唯一入口，在这里清标志才是根因修。
+          _loadingMore = false;
         });
         if (cached.isFresh) return;
         final rows = await _fetchPage(1);
@@ -676,6 +681,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
         _works = [];
         _page = 1;
         _hasMore = true;
+        _loadingMore = false;
       });
       final rows = await _fetchPage(1);
       if (!mounted || generation != _generation) return;
@@ -696,7 +702,18 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     if (_loadingMore || !_hasMore || _loading) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    final rows = await _fetchPage(_page);
+    // 2026-11-25 防卡死：_fetchPage 抛错（本地库取数失败）会直接
+    // 穿出本方法，_loadingMore 停在 true、之后滑到底再也翻不了页。
+    // 抛错只复位本代际的标志，不碰已切走的新代际。
+    late final List<Drama> rows;
+    try {
+      rows = await _fetchPage(_page);
+    } catch (_) {
+      if (mounted && generation == _generation) {
+        setState(() => _loadingMore = false);
+      }
+      return;
+    }
     if (!mounted || generation != _generation) return;
     setState(() {
       _works = [..._works, ...rows];
@@ -729,18 +746,26 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       }
     }
     // 本地兜底：站被挡/取不到时用本地 whos 库与视频库顶上，分类照旧可用。
-    final library = WhosLocalLibrary.shared;
-    if (!await library.ensureLoaded()) return const [];
-    final rows = await library.pageAsync(
-      category: _localCategoryFor(_category),
-      videoCategory: _videoCategoryFor(_category),
-      query: _query,
-      page: page,
-      pageSize: _pageSize,
-    );
-    return [
-      for (final work in rows) whosLocalToDrama(work, source: nvkuSourceId),
-    ];
+    // 2026-11-25 防卡死：本地取数抛错（库文件坏/表缺失）不能穿出
+    // _fetchPage——reset 支路会留 _loading 永久真、整页无限转圈；
+    // 这里吞掉记离线、回空列表，让界面出空态/重试而不是转圈。
+    try {
+      final library = WhosLocalLibrary.shared;
+      if (!await library.ensureLoaded()) return const [];
+      final rows = await library.pageAsync(
+        category: _localCategoryFor(_category),
+        videoCategory: _videoCategoryFor(_category),
+        query: _query,
+        page: page,
+        pageSize: _pageSize,
+      );
+      return [
+        for (final work in rows) whosLocalToDrama(work, source: nvkuSourceId),
+      ];
+    } catch (_) {
+      if (mounted && !_offline) setState(() => _offline = true);
+      return const [];
+    }
   }
 
   /// 站点分类 → 本地库分类：站点分类（c0/c1/c2/c7）库里没有对应

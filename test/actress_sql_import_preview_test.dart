@@ -23,7 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'fixtures.dart';
 
 const _previewDir =
-    '/home/hatch/workspace/moyi_actress_sql_import_20261125/preview';
+    '/home/hatch/workspace/moyi_actress_sql_only_20261125/preview';
 
 late LocalStore _previewStore;
 late MemoryActressDatabase _previewDb;

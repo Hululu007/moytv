@@ -1,9 +1,11 @@
-// 通用读库层（2026-11-20）：字段名归一化与打分、播放地址取值容差、
-// 表分类、手动映射存取。纯函数测试，不碰数据库。
-import 'dart:io';
-
+// 字段名启发式映射层（2026-11-20，2026-11-25 改用途）：字段名归一化
+// 与打分、播放地址取值容差、表分类、手动映射、分类副表维度。
+// .sql 导入归一化用这些纯函数（见 actress_sql_import.dart）。
+// 纯函数测试，不碰数据库。通用读库（GenericDbReader）已随读本地
+// .db 的老路一起删掉，相关测试见下方说明。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_generic_db.dart';
+import 'package:moyi/actress/actress_models.dart';
 
 void main() {
   group('字段名归一化与打分', () {
@@ -220,53 +222,13 @@ void main() {
       expect(identical(next, schema), isTrue);
     });
 
-    test('映射按结构指纹存取，换指纹取不到', () async {
-      final temp = Directory.systemTemp.createTempSync();
-      addTearDown(() => temp.deleteSync(recursive: true));
-      final store = GenericDbMappingStore(
-        file: File('${temp.path}/字段映射.json'),
-      );
-      expect(await store.loadMapping('fp1'), isNull);
-      await store.saveMapping('fp1', 'videos', {
-        GenericDbRole.title: 'my_title',
-        GenericDbRole.playUrl: 'my_url',
-      });
-      final loaded = await store.loadMapping('fp1');
-      expect(loaded?.table, 'videos');
-      expect(loaded?.columns[GenericDbRole.title], 'my_title');
-      expect(loaded?.columns[GenericDbRole.playUrl], 'my_url');
-      expect(await store.loadMapping('fp2'), isNull);
-    });
   });
 
-  group('GenericDbReader.test', () {
-    test('给定作品列表、标题/番号 LIKE 搜、翻页', () async {
-      final reader = GenericDbReader.test(
-        works: const [
-          GenericDbWork(
-            id: 1,
-            title: '测试一',
-            code: 'ABC-1',
-            playUrl: 'https://x/1.m3u8',
-          ),
-          GenericDbWork(
-            id: 2,
-            title: '测试二',
-            code: 'XYZ-2',
-            playUrl: 'https://x/2.m3u8',
-          ),
-        ],
-      );
-      expect(await reader.countWorks(), 2);
-      expect((await reader.works(offset: 0, limit: 10)).length, 2);
-      expect(
-        (await reader.works(offset: 0, limit: 10, query: 'XYZ')).length,
-        1,
-      );
-      expect((await reader.works(offset: 1, limit: 1)).first.title, '测试二');
-      expect(await reader.countWorks(query: '测试一'), 1);
-    });
-
+  // 2026-11-25 只留 .sql 导入：GenericDbReader（读用户放的 .db
+  // 文件）已删，上面“给定作品列表、标题/番号 LIKE 搜、翻页”那条
+  // 跟着删；toJsonEntry 是 GenericDbWork 自身的方法（nvku 只出
+  // 作品的站源还在用它当展示模型），留下来。
+  group('GenericDbWork', () {
     test('toJsonEntry 走 chaoliu 直通、可播', () {
       const work = GenericDbWork(
         id: 1,
@@ -382,41 +344,20 @@ void main() {
       expect(work.playUrl, isEmpty);
     });
 
-    test('按人名查（测试注入）：归一化名字匹配、多女优行也能命中', () async {
-      final reader = GenericDbReader.test(
-        works: const [
-          GenericDbWork(id: 1, title: 'A', actress: 'Boda Ye Yi'),
-          GenericDbWork(id: 2, title: 'B', actress: '别人'),
-        ],
-      );
-      final rows = await reader.worksForActress('bodayeyi');
-      expect(rows.map((w) => w.id), [1]);
+    // 2026-11-25 只留 .sql 导入：上面三条（按人名查/按番号查/
+    // 筛选参数进 WHERE）测的是已删 GenericDbReader 的内存过滤，
+    // 改写成存活的归一化键纯函数测试——匹配口径还是同一套。
+    test('人名归一化：大小写/空白差异不影响匹配', () {
+      expect(actressTitleKey('Boda Ye Yi'), 'bodayeyi');
+      expect(actressTitleKey('bodayeyi'), 'bodayeyi');
+      expect(actressTitleKey('佐藤 花'), '佐藤花');
     });
 
-    test('按番号查（测试注入）：分隔符差异不影响', () async {
-      final reader = GenericDbReader.test(
-        works: const [
-          GenericDbWork(id: 1, title: 'A', code: 'JUL-893'),
-          GenericDbWork(id: 2, title: 'B', code: 'SSIS-001'),
-        ],
-      );
-      final rows = await reader.worksForCode('jul893');
-      expect(rows.map((w) => w.id), [1]);
-    });
-
-    test('筛选参数进 WHERE：同列 OR、跨列 AND（测试注入按值过滤）', () async {
-      final reader = GenericDbReader.test(
-        works: const [
-          GenericDbWork(id: 1, title: 'A', category: '剧情'),
-          GenericDbWork(id: 2, title: 'B', category: '素人'),
-        ],
-      );
-      final rows = await reader.works(
-        offset: 0,
-        limit: 10,
-        query: '素人',
-      );
-      expect(rows.map((w) => w.id), [2]);
+    test('番号归一化：分隔符/大小写/前导零差异不影响匹配', () {
+      expect(normalizeAvCode('JUL-893'), 'JUL893');
+      expect(normalizeAvCode('jul893'), 'JUL893');
+      expect(normalizeAvCode('SSIS-001'), 'SSIS1');
+      expect(normalizeAvCode('SSIS-123'), 'SSIS123');
     });
   });
 
@@ -503,49 +444,10 @@ void main() {
     });
   });
 
-  group('分类（2026-11-22：外来库视频列表页顶部 chips）', () {
-    GenericDbReader readerWithCategories() => GenericDbReader.test(
-      works: const [
-        GenericDbWork(id: 1, title: '有码一', code: 'A-1', category: '有码'),
-        GenericDbWork(id: 2, title: '有码二', code: 'A-2', category: '有码'),
-        GenericDbWork(id: 3, title: '无码一', code: 'B-1', category: '无码'),
-        GenericDbWork(id: 4, title: '没分类', code: 'C-1', category: ''),
-      ],
-    );
-
-    test('categories() 按分类分组、按数量倒序、空分类不进', () async {
-      final reader = readerWithCategories();
-      expect(await reader.categories(), [
-        ('有码', 2),
-        ('无码', 1),
-      ]);
-    });
-
-    test('works()/countWorks() 按 category 筛，只留当前这个库该分类的行', () async {
-      final reader = readerWithCategories();
-      expect(await reader.countWorks(category: '有码'), 2);
-      expect(await reader.countWorks(category: '无码'), 1);
-      expect(await reader.countWorks(category: '欧美'), 0);
-      final works = await reader.works(
-        offset: 0,
-        limit: 10,
-        category: '有码',
-      );
-      expect(works.map((w) => w.title), ['有码一', '有码二']);
-      // 分类筛与标题搜可叠加。
-      expect(await reader.countWorks(category: '有码', query: '二'), 1);
-    });
-
-    test('没有分类的作品：categories() 回空，不编', () async {
-      final reader = GenericDbReader.test(
-        works: const [
-          GenericDbWork(id: 1, title: '没分类', code: 'C-1'),
-        ],
-      );
-      expect(await reader.categories(), isEmpty);
-      expect(await reader.countWorks(), 1);
-    });
-  });
 }
 
 // 2026-11-28 v28 追加：多级分类筛选、跨表关系、按人名/番号查。
+// 2026-11-25 只留 .sql 导入：「分类 chips」组测的是已删
+// GenericDbReader 的 categories()/countWorks() 内存聚合，
+// 整组删掉；分类聚合现在走数据库 video_category（见
+// SqfliteActressDatabase.categories）。

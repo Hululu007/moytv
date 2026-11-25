@@ -662,7 +662,7 @@ class ActressWork {
   );
 }
 
-/// 视频库（MYTV/db/女优库.db）的一条视频：videos / video_category
+/// 视频库（内部工作库，.sql 导入落成）的一条视频：videos / video_category
 /// 行的合并输入。vodId 是 videos 主键；playUrl 是去掉了 `正片$`
 /// 前缀的直链地址（m3u8_url 与 vod_play_url 两列同值）；category
 /// 是 video_category.main_category（条目的分类，空就留空）；

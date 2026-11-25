@@ -23,7 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'fixtures.dart';
 
 const _previewDir =
-    '/home/hatch/workspace/actress_sync_filter_20261119/preview';
+    '/home/hatch/workspace/moyi_actress_sql_only_20261125/preview';
 
 // 预览种子（setUp 里填，测试体里用）：放文件级，_capture 是顶层函数。
 late LocalStore _previewStore;
@@ -282,6 +282,40 @@ void main() {
       label: '预览 · 女优库列表页 · 站点筛选：mjv（只留 JSON 里有的人）',
       action: (tester) async {
         await _selectSite(tester, 'mjv');
+      },
+    );
+  });
+
+  testWidgets('preview actress settings sheet', (tester) async {
+    await _capture(
+      tester,
+      name: 'actress_settings_sheet',
+      label: '预览 · 女优库设置弹窗 · 只剩导入数据库（绑定行/重新加载/镜像/多库已删）',
+      action: (tester) async {
+        await tester.tap(
+          find.byKey(const ValueKey('open-actress-settings')),
+        );
+        await _settle(tester);
+        // 导入区在弹窗下方，滚到可见再拍（按按钮 key 找：标题文本
+        // “导入数据库（.sql）”与按钮文本撞名，scrollUntilVisible
+        // 要求单元素；scrollable 必须显式指定弹窗里那个，否则
+        // 默认 find.byType(Scrollable) 会撞上页面上多个滚动容器）。
+        await tester.scrollUntilVisible(
+          find.byKey(const ValueKey('actress-sql-import-button')),
+          200,
+          // 弹窗的 SingleChildScrollView 里还嵌了一个横向滚动容器，
+          // descendant 会撞两个；外层那个在深度优先顺序里排第一。
+          scrollable: find
+              .descendant(
+                of: find.descendant(
+                  of: find.byType(BottomSheet),
+                  matching: find.byType(SingleChildScrollView),
+                ),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await _settle(tester);
       },
     );
   });

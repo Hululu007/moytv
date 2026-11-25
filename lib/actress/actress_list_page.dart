@@ -5,19 +5,15 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as path;
 
 import 'actress_database.dart';
-import 'actress_db_fields_page.dart';
-import 'actress_db_mirror.dart';
-import 'actress_db_selection.dart';
 import 'actress_detail_page.dart';
-import 'actress_generic_database.dart';
+import 'actress_film_library.dart';
 import 'actress_generic_db.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
-import 'actress_multi_db_fallback.dart';
 import 'actress_mytv_bind.dart';
+import 'actress_working_db.dart';
 import 'actress_neon.dart';
 import 'actress_nvku_cache.dart';
 import 'actress_ranking_page.dart';
@@ -30,7 +26,6 @@ import 'actress_stacking.dart';
 import 'actress_sync.dart';
 import 'actress_tag_sheet.dart';
 import 'actress_widgets.dart';
-import 'video_db_normalize.dart';
 import '../content_http.dart';
 import '../models.dart';
 import '../whos_fallback.dart';
@@ -40,15 +35,17 @@ import '../player_picker.dart';
 
 /// 女优库浏览页：人物列表 + 搜索/性别筛选/排序 + 同步横幅。
 ///
-/// 打开只读本地外置库（MYTV/db/女优库.db）+ 本地 json/m3u 兜底，
-/// 不自动爬取网站、不后台自动续爬、不自动生成（2026-11-20 用户令：
-/// 不自动爬取；2026-11-22 用户令最终口径：没有外置库就是空库，
-/// 不灌内置 json 种子、不走互联网同步）；同步只在用户点了刷新/
-/// 重试时跑一次，跑完不自动再续。排行榜入口在顶栏奖杯钮。
-/// 全站叠加入口在同步横幅下方：手动开始/继续，按番号把各站作品
-/// 叠加进库，断点续跑，不自动跑、不与名册同步抢着跑。
+/// 打开只读导入进来的内部工作库（应用私有目录下的 女优库.db，
+/// 只由 .sql 导入建/换，见 actress_sql_import.dart）+ 本地
+/// json/m3u 兜底，不自动爬取网站、不后台自动续爬、不自动生成
+/// （2026-11-20 用户令：不自动爬取；2026-11-22 用户令最终口径：
+/// 没有导入的库就是空库，不灌内置 json 种子、不走互联网同步；
+/// 2026-11-25 用户令：读本地 .db 的老路全删，只留 .sql 导入）；
+/// 同步只在用户点了刷新/重试时跑一次，跑完不自动再续。排行榜入口
+/// 在顶栏奖杯钮。全站叠加入口在同步横幅下方：手动开始/继续，按番号
+/// 把各站作品叠加进库，断点续跑，不自动跑、不与名册同步抢着跑。
 /// 同步/现爬进行中、列表还空时，每 8 秒节流刷新一次列表（有人
-/// 出现即停），爬到的条目写盘后进库镜像，列表陆续出人。
+/// 出现即停），爬到的条目写盘后进库，列表陆续出人。
 /// 站点筛选下拉选项（纯函数，供测试直接验）：全部 + mjv + whos +
 /// 片库全部可见视频站（与叠加搜索 actressSearchSiteIds 同一口径：
 /// store.visibleSources 里 isVideoSection、非 cloud:、siteVisible
@@ -171,21 +168,10 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 第一页缓存（2026-11-24 切换不重载）：key = 筛选条件全维度，
   /// 值 = 第一页人物 + hasMore + 查库时的原始偏移 + 滚动偏移。
   /// 只缓存第一页（60 条），上限 8 个 key（LRU）。失效：热换库、
-  /// 同步/现爬/叠加/镜像完成、手动刷新时全清（见 _clearListCaches）。
+  /// 同步/现爬/叠加完成、手动刷新时全清（见 _clearListCaches）。
   final _pageCache = <String, _CachedListPage>{};
   static const _pageCacheMaxKeys = 8;
 
-  /// 外来库连接的文件指纹（打开时记的 mtime + 大小）：复用连接前先
-  /// 比对，文件被用户在外面替换过就关掉重开，不能读旧文件句柄。
-  final _extraDbFingerprints = <String, (DateTime, int)>{};
-
-  /// 可播视频数缓存（2026-11-24）：按路径记（数量，mtime，大小）。
-  /// 文件没变直接用缓存数，变了才重数；-1（打不开）不缓存，下次重试。
-  final _playableCountCache = <String, (int, DateTime, int)>{};
-
-  /// 本会话已补过索引的外来库路径（ensureVideoDbIndexes 是
-  /// CREATE INDEX IF NOT EXISTS，重复调只是浪费一次开库 IO）。
-  final _indexedDbPaths = <String>{};
   var _sex = ActressSexFilter.all;
   var _tagFilter = ActressTagFilter.all;
   var _sort = ActressSort.worksDesc;
@@ -203,13 +189,6 @@ class _ActressListPageState extends State<ActressListPage> {
   var _videoTag = '';
   String? _dbTagsCacheKey;
   List<(String, int)>? _dbTagsCache;
-
-  /// 通用模式标签筛选：与 [_videoTag] 同一口径，筛的是当前通用库
-  /// 的作品；[_genericTagKey] 是筛选键（`video_tag.tag_name` 或
-  /// 作品表里的标签列，见 GenericDbReader.tagFacet），空 = 该库
-  /// 没有标签维度，弹窗如实显示“暂无标签”。
-  var _genericTag = '';
-  var _genericTagKey = '';
 
   /// 顶栏站点筛选：默认全部；选站后列表只留该站有 JSON 兜底条目的
   /// 人（按女优名或本地作品番号对），详情页兜底与现爬也只走该站。
@@ -246,45 +225,22 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 导出合并 JSON 进行中（防重复点）。
   var _exportingJson = false;
 
-  /// 2026-11-20 MYTV 绑定：绑定解析结果（库落点、是否已授权）。
-  /// bootstrap 第一件事就是解析它——在第一次读库之前，库的落点
-  /// （MYTV/db/女优库.db，或未找到外置库）与 json/m3u 目录都由它定。
+  /// 2026-11-20 MYTV 绑定：绑定解析结果（json/m3u 目录、是否已
+  /// 授权）。bootstrap 第一件事就是解析它；内部工作库的落点不再
+  /// 由它定（见 actress_working_db.dart，2026-11-25 只留 .sql 导入）。
   MytvBindResult? _mytvBind;
 
-  /// 绑定行被用户点了“隐藏提示”后隐藏（本页内有效）。
-  var _mytvRowDismissed = false;
-
-  /// 没有外置数据库：绑定不到 MYTV/db/女优库.db，列表显示空态
-  /// 提示（放库、重新加载），不回落任何内置库。
-  var _noExternalDb = false;
+  /// 没有导入的数据库：内部工作库还没建，列表显示空态提示
+  /// （导入 .sql 数据库），不回落任何内置库。
+  var _noLibraryDb = false;
 
   /// 兜底加载器与现爬服务是不是本页自己建的：是才按绑定结果
   /// 改它们的本地目录；测试注入的实例不动（注入的假目录优先）。
   var _ownsFallback = true;
   var _ownsCrawl = true;
 
-  /// 2026-11-20 热换库：最近一次重读失败的原因（显示在绑定行上）；
-  /// 成功重读后清掉。没有外置数据库时这里就是“未找到外置数据库”。
-  String? _mytvDbError;
-
   /// 手动“重新加载数据库”进行中（防重复点）。
   var _reloadingDb = false;
-
-  /// 开库提示（见 openFallbackNote）：2026-11-22 起不再回退任何
-  /// 内置库，恒为 null（显示分支保留）。
-  String? _mytvOpenNote;
-
-  /// 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件的追加
-  /// 进行中、已追加数、已处理行数、总行数、正在追加的文件名、失败
-  /// 原因。已处理数每批都涨（新增数在源库内容已入库时可以是 0，
-  /// 只看新增数会以为卡住）；列表与总览刷新节流用。
-  var _mirrorRunning = false;
-  var _mirrorAppended = 0;
-  var _mirrorProcessed = 0;
-  var _mirrorTotal = 0;
-  var _mirrorFile = '';
-  String? _mirrorError;
-  var _lastMirrorRefresh = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 2026-11-25 .sql 导入：设置里选 .sql / .sql.gz 文件导回主库。
   /// 进度由设置弹窗的 600ms 轮询取走重画，这里只写字段、不逐批
@@ -296,43 +252,17 @@ class _ActressListPageState extends State<ActressListPage> {
   ActressSqlImportResult? _sqlImportResult;
   var _sqlImportCancelRequested = false;
 
-  /// 2026-11-20 通用读库：当前库不是女优库结构时为 true，列表
-  /// 改走通用作品模式（作品列表 + 点按直播），不走女优库的总览/
-  /// 同步/自动生成。[_genericReader] 为空时不是通用模式。
-  /// 2026-11-23 多库勾选：勾上的外来库（只读打开的严格视频库实例），
-  /// 主库之外的库按这个读列表与分类；打不开/不是严格结构的库不进这里。
-  /// 勾选集合本身存在 SharedPreferences（见 actress_db_selection），
-  /// 设置弹窗里那份列表自己维护勾选状态，这里只留打开的实例。
-  final _extraDbs = <String, ActressDatabase>{};
 
-  /// 合并后的人名 → 该人作品所在的库：主库优先，只在主库没有这个人
-  /// 时才指到外来库；点人进详情页时按这个库取作品。
-  final _personHomeDb = <String, ActressDatabase>{};
-
-  var _genericMode = false;
-
-  /// 视频库模式：当前库是用户视频库（MYTV/db/女优库.db，
+  /// 视频库模式：当前库是用户视频库（内部工作库，
   /// actresses/videos/video_actress/video_category 四张表）时为
   /// true。主名册就是 actresses 表（本地库是主库，不是兜底）；
   /// 名册同步照常跑（往本地库补新人/补视频），自动生成/
-  /// 全站叠加/数据库镜像/新 json 同步禁掉（它们写 persons/works）。
+  /// 全站叠加/新 json 同步禁掉（它们写 persons/works）。
   var _videoLibraryMode = false;
-  GenericDbReader? _genericReader;
 
-  /// 三库合并内置兜底（主库 + 其它 .db），本页自己建的时候持有，
+  /// 影视库 db 兜底（内部工作库），本页自己建的时候持有，
   /// 退出时关掉连接。
-  MultiDbFilmFallback? _multiDb;
-  var _genericWorks = <GenericDbWork>[];
-  var _genericTotal = 0;
-
-  /// 通用模式分类（2026-11-22：外来库视频列表页顶部的分类行，
-  /// 照活树改版）：从当前库自身的 video_category 表取
-  /// （见 GenericDbReader.categories，按数量倒序）；没读完时
-  /// 不占位，读完为空才如实显示“暂无分类”。
-  var _genericCategories = <(String, int)>[];
-  var _genericCategory = '';
-  var _genericCategoriesLoaded = false;
-
+  FilmLibraryService? _filmDbService;
   /// 只出作品的站源（nvku）：站上只有作品没有人物名册，选了它就切
   /// 到作品网格按站点分类翻页，不再按人物过滤（否则永远是「该站
   /// 暂无匹配人物」）。
@@ -354,9 +284,9 @@ class _ActressListPageState extends State<ActressListPage> {
     _fallback = widget.fallback ?? ActressJsonFallback();
     if (_ownsFallback) {
       // 2026-11-20 18:57 全部使用数据库兜底：兜底先查影视库 db
-      // （MYTV/db/女优库.db），读不到回退 json/m3u。测试注入的
+      // （内部工作库），读不到回退 json/m3u。测试注入的
       // fallback 不接提供方，保持老行为。
-      _fallback.filmDb = _multiDb = MultiDbFilmFallback(database: _db);
+      _fallback.filmDb = _filmDbService = FilmLibraryService(database: _db);
     }
     _crawl =
         widget.crawlService ??
@@ -409,10 +339,7 @@ class _ActressListPageState extends State<ActressListPage> {
 
   @override
   void dispose() {
-    for (final extra in _extraDbs.values) {
-      unawaited(extra.close());
-    }
-    unawaited(_multiDb?.close());
+    unawaited(_filmDbService?.close());
     widget.store.removeListener(_onStoreChanged);
     _progressSub?.cancel();
     _stackingSub?.cancel();
@@ -435,17 +362,14 @@ class _ActressListPageState extends State<ActressListPage> {
   Future<void> _bootstrap() async {
     final generation = ++_generation;
     // 2026-11-20 MYTV 绑定：先解析绑定，再读库。绑定里建
-    // MYTV/db 与 MYTV/m3u、迁移老数据（开库前做，库开着拷
-    // 不干净）；没权限/外部存储不可用时降级回 documents，
-    // 下面流程不变，女优库照常能用。测试环境没有平台通道，
-    // 解析内部全包 try/catch，拿不到就降级，不抛错。
+    // MYTV/db 与 MYTV/m3u、迁移老数据（开库前做）；没权限/外部存储
+    // 不可用时降级回 documents，下面流程不变，女优库照常能用。
+    // 测试环境没有平台通道，解析内部全包 try/catch，拿不到就降级，
+    // 不抛错。绑定只定 json/m3u 目录（2026-11-25：内部工作库落点
+    // 不再由绑定定，见 actress_working_db.dart）。
     final bind = await ActressMytvBind.instance.ensureBound();
     if (!mounted || generation != _generation) return;
     setState(() => _mytvBind = bind);
-    // 2026-11-23 多库勾选：绑定结果出来后读一次勾选与可选库。
-    // 这里等它开完（reload: false，不重读列表）再往下走，否则首屏
-    // 列表可能在外来库就绪前按单库读完，勾选的库要下次重读才合并。
-    await _loadDbSelection(reload: false);
     if (_ownsFallback) {
       _fallback.bindLocalDirs(
         jsonDir: bind.jsonDir,
@@ -453,53 +377,26 @@ class _ActressListPageState extends State<ActressListPage> {
       );
     }
     if (_ownsCrawl) _crawl.bindLocalDir(bind.jsonDir);
-    // 2026-11-20 热换库：进模块先看库文件变了没有——变了就关旧连接
-    // 重开再读（用户用文件管理器换了 db 不用重装）；重读失败留旧库
-    // 并把原因记下来显示在绑定行上，不崩。没有外置库时这里就报
-    // “未找到外置数据库”，下面开库再抛一次也接住显示空态。
+    // 2026-11-25 只留 .sql 导入：内部工作库还没建时开库报
+    // “还没有导入数据库”，接住显示空态提示（导入 .sql 数据库），
+    // 不崩、不回落；其它开库错误弹一次提示，同样不崩。
     final reload = await _db.reloadIfChanged();
     if (!mounted || generation != _generation) return;
     if (reload.error != null) {
-      setState(() => _mytvDbError = reload.error);
-    }
-    // 2026-11-20 通用读库：当前库不是女优库结构时走通用模式
-    // （作品列表 + 点按直播），不走女优库的总览/同步。
-    // 没有外置数据库时开库抛 ActressNoExternalDbException：
-    // 接住显示空态提示（放库、重新加载），不崩、不回落。
-    GenericDbReader? generic;
-    try {
-      generic = await _db.genericReader();
-    } on ActressNoExternalDbException catch (e) {
-      if (!mounted || generation != _generation) return;
+      final noDb = reload.error!.startsWith('还没有导入数据库');
       setState(() {
-        _noExternalDb = true;
-        _mytvDbError = e.message;
+        _noLibraryDb = noDb;
         _loading = false;
       });
-      return;
-    } catch (e) {
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _mytvDbError = '数据库打不开：${e.toString().split('\n').first}';
-        _loading = false;
-      });
-      return;
-    }
-    if (!mounted || generation != _generation) return;
-    if (generic != null) {
-      setState(() {
-        _genericReader = generic;
-        _genericMode = true;
-        _videoLibraryMode = false;
-      });
-      await _loadGenericCategories();
-      await _loadPage(reset: true);
+      if (!noDb) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(actressReloadErrorText(reload.error!))),
+        );
+      }
       return;
     }
     setState(() {
-      _genericReader = null;
-      _genericMode = false;
-      // genericReader() 已开过库，isVideoLibrary 的标志已算好。
+      // reloadIfChanged 已开过库，isVideoLibrary 的标志已算好。
       _videoLibraryMode = _db.isVideoLibrary;
     });
     // 兜底后台读、不堵首屏：列表站点过滤要用它，但不能在首屏等它。
@@ -508,8 +405,8 @@ class _ActressListPageState extends State<ActressListPage> {
     if (!mounted || generation != _generation) return;
     setState(() => _overview = overview);
     // 2026-11-22 用户令最终口径：库缺失/空库不再自动生成（不灌
-    // 内置 json 种子、不走互联网同步），空态如实提示放库、重新加载。
-    // 叠加只读一次断点作横幅状态，绝不自动跑。
+    // 内置 json 种子、不走互联网同步），空态如实提示导入 .sql
+    // 数据库。叠加只读一次断点作横幅状态，绝不自动跑。
     final stacking = await _stacking.snapshot();
     if (!mounted || generation != _generation) return;
     setState(() => _stackingProgress = stacking);
@@ -520,385 +417,11 @@ class _ActressListPageState extends State<ActressListPage> {
     // _refreshAfterSync 再刷。
     // 不自动爬取（2026-11-20 用户令）：打开只读本地，不自动起爬、
     // 不后台自动续爬、不自动生成；只等用户手动点刷新/重试/同步。
-    // 2026-11-20 数据库镜像：主目录与补充目录里其他 .db 文件有作品就
-    // 递增追加进库（后台跑，列表数边涨边看）。
-    unawaited(_maybeStartDbMirror());
   }
-
-  /// 多库勾选：读可选库与已勾的库，只读打开勾上的外来库（有可播
-  /// 视频的库都进列表合并：严格视频库走 SqfliteActressDatabase，
-  /// 其它结构的库走通用读法 GenericActressDatabase；0 部可播视频
-  /// 或打不开的库不进，播放兜底仍走老路）。勾选变化时由设置弹窗
-  /// 调 [_applyDbSelection] 再走这里。
-  /// [reload] 为 false 时只开库、不重读分类与列表（启动时用，
-  /// 启动流程自己会读列表）。
-  /// 读勾选失败（偏好存储不可用等）时单库继续：这里绝不能抛错，
-  /// 否则启动流程（_bootstrap 在等它）会被打断、列表再也读不出来。
-  Future<void> _loadDbSelection({bool reload = true}) async {
-    try {
-      await _loadDbSelectionUnsafe(reload: reload);
-    } catch (_) {
-      // 勾选读不到就单库继续，不挡列表。
-    }
-  }
-
-  /// 外来库文件指纹（mtime + 大小）：复用连接/缓存可播数前先比对，
-  /// 文件被用户在外面替换过就当没见过、重开重数。文件没了返回 null。
-  (DateTime, int)? _dbFileFingerprint(String path) {
-    try {
-      final stat = File(path).statSync();
-      return (stat.modified, stat.size);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// 外来库文件指纹字符串（分类缓存 key 用）：文件没了记 'missing'。
-  String _dbFileFingerprintKey(String path) {
-    final fp = _dbFileFingerprint(path);
-    if (fp == null) return 'missing';
-    return '${fp.$1.millisecondsSinceEpoch}|${fp.$2}';
-  }
-
-  /// 该库的可播视频数（带缓存）：文件没变直接用缓存数，变了才重数。
-  /// -1（打不开）不缓存，下次重试。缓存只活在本页实例里，
-  /// 文件变了（指纹变）自动失效。
-  Future<int> _countPlayableVideosCached(String path) async {
-    final fp = _dbFileFingerprint(path);
-    final cached = _playableCountCache[path];
-    if (cached != null &&
-        fp != null &&
-        cached.$2 == fp.$1 &&
-        cached.$3 == fp.$2) {
-      return cached.$1;
-    }
-    final count = await ActressDbSelection.countPlayableVideos(path);
-    if (count >= 0 && fp != null) {
-      _playableCountCache[path] = (count, fp.$1, fp.$2);
-    }
-    return count;
-  }
-
-  /// 外来库补索引（本会话每个路径只补一次）：ensureVideoDbIndexes
-  /// 是 CREATE INDEX IF NOT EXISTS，重复调只是浪费一次开库 IO。
-  void _ensureVideoDbIndexesOnce(String path) {
-    if (!_indexedDbPaths.add(path)) return;
-    unawaited(ensureVideoDbIndexes(path));
-  }
-
-  Future<void> _loadDbSelectionUnsafe({bool reload = true}) async {
-    final bind = _mytvBind;
-    if (bind == null || !bind.bound) return;
-    final choices = ActressDbSelection.availableChoices(bind: bind);
-    final selected = await ActressDbSelection.loadSelectedPaths(bind.dbPath);
-    // 2026-11-24 切换不重载：按路径复用已打开的连接——只开新勾的、
-    // 只关取消的；勾选没变的库直接复用旧连接，不重数、不重开。
-    // 文件被用户在外面替换过（指纹变了）时旧连接读的是旧文件句柄，
-    // 必须关掉重开（见诊断 §7 风险 5）。
-    final keep = <String, ActressDatabase>{};
-    for (final choice in choices) {
-      if (choice.isMain || !selected.contains(choice.path)) continue;
-      final existing = _extraDbs[choice.path];
-      if (existing != null) {
-        final oldFp = _extraDbFingerprints[choice.path];
-        final newFp = _dbFileFingerprint(choice.path);
-        if (oldFp != null &&
-            newFp != null &&
-            oldFp.$1 == newFp.$1 &&
-            oldFp.$2 == newFp.$2) {
-          keep[choice.path] = existing;
-          continue;
-        }
-        // 文件变了或指纹丢了：关掉旧连接重开。
-        unawaited(existing.close());
-        _extraDbFingerprints.remove(choice.path);
-      }
-      // 2026-11-23 用户令：数据库全部支持勾选——有可播视频的库
-      // 都进合并；0 部可播视频 / 打不开的才不进（界面已如实写原因）。
-      final playable = await _countPlayableVideosCached(choice.path);
-      if (playable <= 0) continue;
-      if (await ActressDbSelection.isStrictVideoLibraryDbFile(choice.path)) {
-        keep[choice.path] = SqfliteActressDatabase.forPath(choice.path);
-        // 2026-11-23 转圈根因之三：外来库只读打开、不补索引，点人
-        // ORDER BY vod_pubdate、分类 GROUP BY 都走全表扫；和
-        // MultiDbFilmFallback 同口径，后台给外来库补同一套索引
-        //（只加索引、不动任何一行数据；建不了就跳过，查询照样跑）。
-        // 本会话每个路径只补一次（见 _ensureVideoDbIndexesOnce）。
-        _ensureVideoDbIndexesOnce(choice.path);
-        final fp = _dbFileFingerprint(choice.path);
-        if (fp != null) _extraDbFingerprints[choice.path] = fp;
-        continue;
-      }
-      // 非严格结构：通用读法进合并（按作品表女优列分组人物，
-      // 见 GenericActressDatabase）；认不出作品表的库开不出来，
-      // 跳过（界面上它仍显示可播数，播放池那条路还能用它）。
-      final generic = await GenericActressDatabase.open(choice.path);
-      if (generic != null) {
-        keep[choice.path] = generic;
-        final fp = _dbFileFingerprint(choice.path);
-        if (fp != null) _extraDbFingerprints[choice.path] = fp;
-      }
-    }
-    if (!mounted) return;
-    final oldExtras = Map<String, ActressDatabase>.from(_extraDbs);
-    // 2026-11-24 标签筛选：勾选的库变了，旧标签是旧库的数据，新库
-    // 未必有——清空已选标签与标签缓存（切分类/搜词/换排序时保留，
-    // 只在换库时清）。
-    final selectionChanged =
-        oldExtras.keys.toSet().difference(keep.keys.toSet()).isNotEmpty ||
-        keep.keys.toSet().difference(oldExtras.keys.toSet()).isNotEmpty;
-    setState(() {
-      _extraDbs
-        ..clear()
-        ..addAll(keep);
-      _personHomeDb.clear();
-      if (selectionChanged) {
-        _videoTag = '';
-        _dbTagsCacheKey = null;
-        _dbTagsCache = null;
-      }
-    });
-    for (final entry in oldExtras.entries) {
-      if (!keep.containsKey(entry.key)) unawaited(entry.value.close());
-    }
-    // 勾选变了（勾上或取消）都要重读分类与列表：取消最后一个外来库
-    // 也要回单库。启动时 reload 为 false，启动流程自己读。
-    if (reload) {
-      unawaited(_loadPage(reset: true));
-    }
-  }
-
-  /// 设置弹窗里勾选变化：存勾选、重开外来库、重读分类与列表。
-  Future<void> _applyDbSelection(Set<String> selected) async {
-    final bind = _mytvBind;
-    if (bind == null) return;
-    await ActressDbSelection.saveSelectedPaths(selected);
-    await _loadDbSelection();
-  }
-
-  /// 勾上的库里有没有外来库：没有时列表/分类走老路，一字不动。
-  bool get _hasExtraDbs => _extraDbs.isNotEmpty;
-
-  /// 多库合并查一页人：主库 + 每个勾上的外来库各查一个窗口
-  /// （offset 0、limit 已翻页数 + 一页），按人名归并（作品数相加、
-  /// 头像取第一个非空、性别有男算男），再按当前排序排、切出本页。
-  /// 最近更新排序在合并模式下没有跨库日期字段，退化为按作品数排。
-  Future<List<ActressPerson>> _loadMergedPersons({
-    required int offset,
-    required int limit,
-  }) async {
-    final window = offset + limit;
-    final rawLists = <(List<ActressPerson>, ActressDatabase)>[];
-    var anyFullWindow = false;
-    Future<List<ActressPerson>> queryDb(ActressDatabase db) => db.listPersons(
-      sex: _sex,
-      sort: _sort,
-      query: _query,
-      tag: _tagFilter.tagValue,
-      videoTag: _videoTag,
-      offset: 0,
-      limit: window,
-    );
-    final mainRows = await queryDb(_db);
-    rawLists.add((mainRows, _db));
-    if (mainRows.length >= window) anyFullWindow = true;
-    for (final extra in _extraDbs.values) {
-      try {
-        final rows = await queryDb(extra);
-        rawLists.add((rows, extra));
-        if (rows.length >= window) anyFullWindow = true;
-      } catch (_) {
-        // 外来库查失败（文件被删/被占）：跳过这个库，不堵列表。
-      }
-    }
-    final merged = <String, ActressPerson>{};
-    final homeDb = <String, ActressDatabase>{};
-    // 2026-11-23 多库去重：三个库是同一套合库的副本，同一（番号，
-    // 播放链接）在三个库里各有一份，相加会把 2437 计成 7368。
-    // 记下每个人在每个库里的作品数（供下面按（番号，播放链接）
-    // 并集去重；只在多个库出现的人才要去重）。
-    final personDbs = <String, Map<ActressDatabase, int>>{};
-    void addRows(List<ActressPerson> rows, ActressDatabase db) {
-      for (final person in rows) {
-        final key = person.displayName;
-        personDbs.putIfAbsent(key, () => {})[db] = person.worksCount;
-        final existing = merged[key];
-        if (existing == null) {
-          merged[key] = person;
-          homeDb[key] = db;
-          continue;
-        }
-        merged[key] = ActressPerson(
-          localId: existing.localId,
-          displayName: existing.displayName,
-          aliases: existing.aliases,
-          sex: existing.sex == 'male' || person.sex == 'male'
-              ? 'male'
-              : existing.sex,
-          avatarUrl: preferLoadableAvatar(
-            existing.avatarUrl,
-            person.avatarUrl,
-          ),
-          tags: existing.tags,
-          worksCount: existing.worksCount + person.worksCount,
-          rosterWorks: existing.rosterWorks + person.rosterWorks,
-          fromChaoliu: existing.fromChaoliu || person.fromChaoliu,
-          fromWhos: existing.fromWhos || person.fromWhos,
-          fromMissav: existing.fromMissav || person.fromMissav,
-          chaoliuId: existing.chaoliuId,
-          whosSlug: existing.whosSlug,
-          missavPath: existing.missavPath,
-          missavRank: existing.missavRank,
-          recommended: existing.recommended || person.recommended,
-          filmsSyncedAt: existing.filmsSyncedAt,
-          enrichedAt: existing.enrichedAt,
-          rating: existing.rating,
-          exactWorks: existing.exactWorks + person.exactWorks,
-          about: existing.about,
-          whosRank: existing.whosRank,
-        );
-      }
-    }
-
-    addRows(mainRows, _db);
-    for (final entry in rawLists.skip(1)) {
-      addRows(entry.$1, entry.$2);
-    }
-    _personHomeDb
-      ..clear()
-      ..addAll(homeDb);
-    // 多库勾选时按（番号，播放链接）并集去重，计数按去重后的实数算；
-    // 单库时各库计数本身就是实数，不动。
-    if (_hasExtraDbs) {
-      await _dedupMergedWorksCounts(merged, personDbs);
-    }
-    final persons = merged.values.toList();
-    switch (_sort) {
-      case ActressSort.nameAsc:
-        persons.sort((a, b) => a.displayName.compareTo(b.displayName));
-      case ActressSort.worksDesc:
-      case ActressSort.recentDesc:
-        // 最近更新在合并模式下退化为按作品数排（跨库没有统一日期字段）。
-        persons.sort((a, b) {
-          final byWorks = b.worksCount.compareTo(a.worksCount);
-          if (byWorks != 0) return byWorks;
-          return a.displayName.compareTo(b.displayName);
-        });
-    }
-    _mergedHasMore = persons.length > offset + limit || anyFullWindow;
-    if (offset >= persons.length) return const [];
-    final end = (offset + limit).clamp(0, persons.length);
-    return persons.sublist(offset, end);
-  }
-
-  /// 多库合并去重：同一（番号，播放链接）只算一条，计数按去重后
-  /// 的实数算（2026-11-20 合并规则：只有番号与播放链接完全一样
-  /// 才过滤，同番号不同地址各留一条）。每个人在各库拉（番号，
-  /// 播放链接）键集合求并集，计数 = 并集大小；作品数巨大的兜底名
-  ///（如 素人 29 万部）不拉全量集合（内存顶不住），三个库是同一
-  /// 套合库的副本，并集 ≈ 最大单库数，取最大库数。只在勾了外来库
-  /// 时跑；单库时各库计数本身就是实数，不动。
-  static const _mergedDedupKeyCap = 50000;
-
-  Future<void> _dedupMergedWorksCounts(
-    Map<String, ActressPerson> merged,
-    Map<String, Map<ActressDatabase, int>> personDbs,
-  ) async {
-    final targets = <String, Map<ActressDatabase, int>>{};
-    final capped = <String, int>{};
-    for (final entry in personDbs.entries) {
-      final name = entry.key;
-      final perDb = entry.value;
-      final person = merged[name];
-      if (person == null || perDb.length < 2) continue;
-      if (person.worksCount > _mergedDedupKeyCap) {
-        capped[name] = perDb.values.reduce((a, b) => a > b ? a : b);
-        continue;
-      }
-      targets[name] = perDb;
-    }
-    // 各库并行拉键集合（不同库是不同连接，互不堵；同一库内
-    // sqflite 串行）。单个库查失败时按该库无此人处理，不堵整页。
-    final unions = <String, Set<String>>{};
-    await Future.wait([
-      for (final entry in targets.entries)
-        for (final db in entry.value.keys)
-          db
-              .distinctWorkKeysForName(entry.key)
-              .then(
-                (keys) => unions
-                    .putIfAbsent(entry.key, () => <String>{})
-                    .addAll(keys),
-              )
-              .catchError((_) {}),
-    ]);
-    for (final entry in merged.entries) {
-      final name = entry.key;
-      final union = unions[name];
-      if (union != null) {
-        merged[name] = entry.value.copyWith(
-          worksCount: union.length,
-          exactWorks: union.length,
-        );
-      } else if (capped.containsKey(name)) {
-        merged[name] = entry.value.copyWith(
-          worksCount: capped[name],
-          exactWorks: capped[name],
-        );
-      }
-    }
-  }
-
-  var _mergedHasMore = false;
-
-  /// 顶部瓦片行：一级分类式的方块（名字 + 库图标），横向可滑。
-  /// 内嵌进女优库外壳时（2026-11-21 用户令：顶区别占半屏）压成
-  /// 一条横向小卡：去掉标题行、高度减到 30，功能不变。
- /// 没拿到“所有文件访问权限”时打开系统授权页（走平台通道，
-  /// 照树里悬浮窗去设置的路子）。用户在设置里授权后回 App，
-  /// 点绑定行上的“重新绑定”再切 MYTV；授权前女优库显示空态。
-  Future<void> _requestMytvPermission() async {
-    await ActressMytvBind.instance.requestPermission();
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已打开系统设置，授权后点“重新绑定”')));
-  }
-
-  /// 授权后重新绑定：先关库（close 会清 _openFuture，下次开库
-  /// 重新走绑定路径），再重新解析绑定、给 json/m3u 重新指目录、
-  /// 重读总览与列表。重新绑定成功后清掉旧的重读报错。
-  Future<void> _rebindMytv() async {
-    await _db.close();
-    final bind = await ActressMytvBind.instance.ensureBound(refresh: true);
-    if (!mounted) return;
-    setState(() {
-      _mytvBind = bind;
-      _mytvRowDismissed = false;
-      _mytvDbError = null;
-      _noExternalDb = false;
-      // 2026-11-24 标签筛选：重新绑定可能换了库文件，旧标签作废。
-      _videoTag = '';
-      _genericTag = '';
-      _dbTagsCacheKey = null;
-      _dbTagsCache = null;
-    });
-    if (_ownsFallback) {
-      _fallback.bindLocalDirs(
-        jsonDir: bind.jsonDir,
-        userM3uDir: bind.bound ? bind.m3uDir : null,
-      );
-    }
-    if (_ownsCrawl) _crawl.bindLocalDir(bind.jsonDir);
-    await _refreshAfterSync();
-  }
-
-  /// 手动“重新加载数据库”（2026-11-20 热换库）：不管文件指纹变
-  /// 没变都重读一次当前文件（重解析绑定：新放进 MYTV/db 的
-  /// 女优库.db 只有重解析才看得到）。重读后重新探结构（不要沿用
-  /// 旧映射）：模式可能变了（女优库 ↔ 外来库），按新模式重读列表。
-  /// 重读失败留旧库并报原因，不崩、不丢数据；没有外置库时报
-  /// “未找到外置数据库”，不说“仍用旧库”（没有旧库可留）。
+  /// 手动重读内部工作库（2026-11-25 只留 .sql 导入）：只给
+  /// _startSqlImport 内部调用，导完刷新列表；不再对外提供“热换库”
+  /// 入口（设置里的重新加载按钮与绑定行已删）。重读失败留旧库并
+  /// 报原因，不崩、不丢数据；还没导入过库时报“还没有导入数据库”。
   Future<void> _manualReloadDb() async {
     if (_reloadingDb) return;
     _reloadingDb = true;
@@ -906,10 +429,9 @@ class _ActressListPageState extends State<ActressListPage> {
       final result = await _db.reloadIfChanged(force: true);
       if (!mounted) return;
       if (result.error != null) {
-        final noDb = result.error!.startsWith('未找到外置数据库');
+        final noDb = result.error!.startsWith('还没有导入数据库');
         setState(() {
-          _mytvDbError = result.error;
-          _noExternalDb = noDb;
+          _noLibraryDb = noDb;
         });
         ScaffoldMessenger.of(
           context,
@@ -918,62 +440,30 @@ class _ActressListPageState extends State<ActressListPage> {
         );
         return;
       }
-      // 重读成功：从单例重取绑定，显示行与实际落点一致；
-      // 之前没库、现在放进来了，空态也清掉。库文件可能换了，
-      // 旧缓存作废（下面非通用分支走 _refreshAfterSync 也会清，
-      // 通用分支不走那里，这里先清一次）。
+      // 重读成功：之前没库、现在导进来了，空态也清掉。库文件可能
+      // 换了，旧缓存作废（下面 _refreshAfterSync 也会清）。
       _clearListCaches();
       setState(() {
-        _mytvDbError = null;
-        _noExternalDb = false;
-        _mytvBind = ActressMytvBind.instance.current ?? _mytvBind;
+        _noLibraryDb = false;
         // 2026-11-24 标签筛选：重读可能换了库文件，旧标签作废。
         _videoTag = '';
-        _genericTag = '';
       });
-      final generic = await _db.genericReader();
-      if (!mounted) return;
-      setState(() {
-        _genericReader = generic;
-        _genericMode = generic != null;
-        // genericReader() 已开过库，isVideoLibrary 的标志已算好。
-        _videoLibraryMode = generic == null && _db.isVideoLibrary;
-        // 重读可能换了库：旧分类作废，先清掉再按新库重读。
-        _genericCategory = '';
-        _genericCategories = [];
-        _genericCategoriesLoaded = false;
-      });
-      if (_genericMode) {
-        await _loadGenericCategories();
-        await _loadPage(reset: true);
-      } else {
-        await _refreshAfterSync();
-      }
+      await _refreshAfterSync();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result.reloaded ? '已重新加载数据库' : '数据库没有变化')),
       );
-      // 重读后库安静了：主目录与补充目录里其他 .db 文件有作品就递增追加。
-      unawaited(_maybeStartDbMirror());
     } finally {
       _reloadingDb = false;
     }
   }
-
   /// .sql 导入（2026-11-25 用户令）：设置里选 .sql / .sql.gz 文件，
   /// 导进临时库、校验四项（作品/人数/播放地址/封面/头像）通过后才
-  /// 换掉 MYTV/db/女优库.db（先备份 .bak）。导完清缓存、重读列表。
+  /// 换掉内部工作库（先备份 .bak）。导完清缓存、重读列表。
   /// 失败/取消：原库不动，只报原因；换过库连接才重读恢复连接。
+  /// 不再要求先绑定 MYTV：导入直接落到内部工作库。
   Future<void> _startSqlImport() async {
     if (_sqlImportRunning) return;
-    final bind = _mytvBind;
-    if (bind == null || !bind.bound || bind.dbPath.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('先绑定 MYTV 再导入数据库')),
-      );
-      return;
-    }
     List<PlatformFile> files;
     try {
       // file_picker 13.1.0：pickFiles 直接回 List<PlatformFile>。
@@ -1016,7 +506,7 @@ class _ActressListPageState extends State<ActressListPage> {
     });
     final result = await ActressSqlImporter().importFile(
       sqlPath: pickedPath,
-      dbPath: bind.dbPath,
+      dbPath: await actressWorkingDbPath(),
       closeDatabase: _db.close,
       // 进度只写字段：设置弹窗每 600ms 轮询重画，不逐批 setState。
       onProgress: (p) => _sqlImportProgress = p,
@@ -1053,100 +543,6 @@ class _ActressListPageState extends State<ActressListPage> {
       );
       // 换过库连接才重读恢复连接；没动主库就不用重读。
       if (result.needsReload) await _manualReloadDb();
-    }
-  }
-
-  /// 数据库镜像（2026-11-20 用户令“读取数据库要把作品数量
-  /// 递增追加上去”，2026-11-21 用户令按 py 的涩库引擎逻辑改路
-  /// 径）：扫主目录 MYTV/db（只扫一层）与补充目录（纯福利/db、
-  /// 女优库、私藏视频、lz/db，递归扫）下除当前库文件外的 *.db，
-  /// 逐个只读打开、分批（200 条）按合并规则追加进当前库。
-  /// 触发点：bootstrap 末尾、手动重读成功后。
-  /// 护栏：通用模式（当前库本身是外来库）不跑；视频库模式不跑
-  /// （镜像写 persons/works，那两张表这个库里没有；视频靠现爬/
-  /// 名册同步补）；没有外置库不跑；同步时不跑（等下次安静时再试）；
-  /// 正在跑时不重复起；同一文件指纹未变时跳过（镜像记录在
-  /// 镜像记录.json 里）。追加失败记错不崩，已有数据不受影响。
-  Future<void> _maybeStartDbMirror() async {
-    if (_genericMode) return;
-    // 视频库模式不跑数据库镜像（镜像写 persons/works，那两张表
-    // 这个库里没有；视频靠现爬/名册同步补）。
-    if (_videoLibraryMode) return;
-    if (_mirrorRunning) return;
-    if (_sync.isRunning) return;
-    final bind = _mytvBind;
-    if (bind == null || !bind.bound) return;
-    // 没有外置库：没有可追加进的库，不跑（否则逐人写库全抛错）。
-    if (bind.dbPath.isEmpty) return;
-    // 补充目录（py 的 SikuEngine.DB_DIRS 同款）从外部存储根
-    // 目录拼；没根目录时只扫主目录。
-    final externalRoot = bind.externalRoot;
-    final extraDirs = externalRoot == null
-        ? const <Directory>[]
-        : [
-            for (final rel in sikuDbScanDirs)
-              Directory(path.join(externalRoot.path, rel)),
-          ];
-    final targets = collectDbMirrorTargets(
-      dbDir: bind.dbDir,
-      libraryPath: bind.dbPath,
-      extraDirs: extraDirs,
-    );
-    if (targets.isEmpty) return;
-    setState(() {
-      _mirrorRunning = true;
-      _mirrorFile = targets.map((f) => path.basename(f.path)).join('、');
-      _mirrorAppended = 0;
-      _mirrorProcessed = 0;
-      _mirrorTotal = 0;
-      _mirrorError = null;
-    });
-    for (final target in targets) {
-      if (!mounted) return;
-      final result = await const ActressDbMirror().mirrorFile(
-        sourcePath: target.path,
-        library: _db,
-        libraryPath: bind.dbPath,
-        onProgress: (appended, processed, total) {
-          if (!mounted) return;
-          setState(() {
-            _mirrorAppended = appended;
-            _mirrorProcessed = processed;
-            _mirrorTotal = total;
-          });
-          // 每批都刷列表与总览会把数据库队列与界面刷爆（每批 200 行，
-          // 323798 行就是 1619 次）：数字每批照刷，最多每 5 秒才刷
-          // 一次列表与总览，追加过程列表照样能看到数在涨。
-          final now = DateTime.now();
-          if (now.difference(_lastMirrorRefresh) < const Duration(seconds: 5)) {
-            return;
-          }
-          _lastMirrorRefresh = now;
-          unawaited(_refreshVisiblePersons());
-          unawaited(
-            _db.overview().then((overview) {
-              if (mounted) setState(() => _overview = overview);
-            }),
-          );
-        },
-      );
-      if (!mounted) return;
-      if (result.error != null) {
-        setState(
-          () => _mirrorError = '${path.basename(target.path)}：${result.error}',
-        );
-      } else if (result.appended > 0 || result.updated > 0) {
-        // 追加完刷新一次可见列表与总览（数涨上去），不重置滚动。
-        unawaited(_refreshVisiblePersons());
-        unawaited(
-          _db.overview().then((overview) {
-            if (mounted) setState(() => _overview = overview);
-          }),
-        );
-      }
-    }
-    if (mounted) {
-      setState(() => _mirrorRunning = false);
     }
   }
 
@@ -1233,10 +629,10 @@ class _ActressListPageState extends State<ActressListPage> {
     // 进行中刷新也写透缓存：否则缓存里还是同步前的旧第一页，
     // 切换回来会显示旧数据（同步完成时 _refreshAfterSync 会全清，
     // 这里写透是让同步进行中切换也不显示旧数据）。只存第一页；
-    // 只在主模式写（站源/通用模式各有自己的列表，不走这份缓存）。
+    // 只在主模式写（站源模式有自己的列表，不走这份缓存）。
     // rawOffset 存缓存这页的人数（第一页），不能存已加载的总页数，
     // 否则恢复后翻页会跳页。
-    if (!_genericMode && !_siteWorksMode) {
+    if (!_siteWorksMode) {
       final firstPage = persons.length > _pageSize
           ? persons.sublist(0, _pageSize)
           : persons;
@@ -1294,8 +690,6 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 没跑完下次手动点继续补。跑之前记一次库里作品数，横幅算
   /// “本轮 +N”。
   Future<void> _runSync() async {
-    // 2026-11-20 通用读库：外来库不走女优库同步。
-    if (_genericMode) return;
     // 视频库模式不禁名册同步（2026-11-21 用户令）：它现在是往
     // 本地 actresses 表补新人（upsertRosterPerson 走视频库分支），
     // 再由作品阶段把她的作品写进 videos；检查点不记，同步每次按
@@ -1624,11 +1018,6 @@ class _ActressListPageState extends State<ActressListPage> {
       await _loadSiteWorks(reset: reset);
       return;
     }
-    // 2026-11-20 通用读库：外来库走通用作品翻页（标题/番号 LIKE 搜）。
-    if (_genericMode) {
-      await _loadGenericPage(reset: reset);
-      return;
-    }
     if (reset) {
       final generation = ++_generation;
       // 2026-11-24 切换不重载：列表非空时是筛选切换，旧列表留着当底，
@@ -1647,21 +1036,6 @@ class _ActressListPageState extends State<ActressListPage> {
         _hasMore = true;
       });
       _rawOffset = 0;
-      // 2026-11-23 多库勾选：勾了外来库时按人名归并查（每库各取一个
-      // 窗口再合并，见 _loadMergedPersons）；只勾主库走老路。
-      if (_hasExtraDbs) {
-        final merged = await _loadMergedPersons(offset: 0, limit: _pageSize);
-        final persons = await _applySiteFilter(merged);
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _persons = persons;
-          _hasMore = _mergedHasMore;
-          _loading = false;
-          _refreshing = false;
-        });
-        _storePageCache(persons, _mergedHasMore, _rawOffset);
-        return;
-      }
       final raw = await _db.listPersons(
         sex: _sex,
         sort: _sort,
@@ -1686,20 +1060,6 @@ class _ActressListPageState extends State<ActressListPage> {
     if (_loadingMore || !_hasMore) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    if (_hasExtraDbs) {
-      final merged = await _loadMergedPersons(
-        offset: _persons.length,
-        limit: _pageSize,
-      );
-      final persons = await _applySiteFilter(merged);
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _persons = [..._persons, ...persons];
-        _hasMore = _mergedHasMore;
-        _loadingMore = false;
-      });
-      return;
-    }
     final raw = await _db.listPersons(
       sex: _sex,
       sort: _sort,
@@ -1719,12 +1079,9 @@ class _ActressListPageState extends State<ActressListPage> {
     });
   }
 
-  /// 第一页缓存的 key：筛选条件的全部维度 + 已勾选库路径（排好序）。
-  /// 任一维度变了就是另一个 key；数据库勾选变化时库路径段变了，
-  /// 旧 key 自然失效。只用于主模式（通用/站源模式各有自己的列表，
-  /// 不走这份缓存）。
+  /// 第一页缓存的 key：筛选条件的全部维度。任一维度变了就是另一个
+  /// key。只用于主模式（站源模式有自己的列表，不走这份缓存）。
   String _pageCacheKey() {
-    final dbs = _extraDbs.keys.toList()..sort();
     return [
       _sex.name,
       _videoTag,
@@ -1732,7 +1089,6 @@ class _ActressListPageState extends State<ActressListPage> {
       _sort.name,
       _query,
       _source.siteId,
-      ...dbs,
     ].join('|');
   }
 
@@ -1756,9 +1112,9 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 切换前把当前滚动偏移存进当前 key 的缓存项（有缓存项才存）。
-  /// 只用于主模式（通用/站源模式不走这份缓存）。
+  /// 只用于主模式（站源模式不走这份缓存）。
   void _saveScrollOffsetForCache() {
-    if (_genericMode || _siteWorksMode) return;
+    if (_siteWorksMode) return;
     if (!_scrollController.hasClients) return;
     final cached = _pageCache[_pageCacheKey()];
     if (cached != null) {
@@ -1767,10 +1123,10 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 筛选值已变后的统一收尾（主模式）：先查缓存，命中直接恢复，
-  /// 未命中走 _loadPage(reset: true) 查库。通用/站源模式不走缓存，
+  /// 未命中走 _loadPage(reset: true) 查库。站源模式不走缓存，
   /// 直接查库。
   void _reloadAfterFilterChange() {
-    if (!_genericMode && !_siteWorksMode && _restorePageFromCache()) return;
+    if (!_siteWorksMode && _restorePageFromCache()) return;
     unawaited(_loadPage(reset: true));
   }
 
@@ -1807,114 +1163,15 @@ class _ActressListPageState extends State<ActressListPage> {
     _pageCache.clear();
     _dbTagsCacheKey = null;
     _dbTagsCache = null;
-    // 库内容变了（同步/现爬/叠加/镜像完成、手动重读）：女优库首页
+    // 库内容变了（同步/现爬/叠加完成、手动重读）：女优库首页
     // 的进库会话缓存（文件夹/标签/分类/作品第一页）也作废，下次
     // 进库重查，不显示旧数据（2026-11-24 进库不重载）。
     NvkuEntryCache.clear();
   }
 
-  /// 通用模式的标签筛选条件（2026-11-24 标签筛选）：空 = 不筛；
-  /// 否则按 tagFacet 给的键筛（`video_tag.tag_name` 或作品表标签列）。
-  Map<String, List<String>> get _genericTagFilters =>
-      _genericTag.isEmpty || _genericTagKey.isEmpty
-      ? const {}
-      : {_genericTagKey: [_genericTag]};
-
-  /// 通用模式翻页：作品表按 rowid 顺序翻页，搜索走标题/番号 LIKE。
-  Future<void> _loadGenericPage({bool reset = false}) async {
-    final reader = _genericReader;
-    if (reader == null) return;
-    if (reset) {
-      final generation = ++_generation;
-      // 2026-11-24 切换不重载：同主列表，旧作品留着当底、只置细进度条。
-      final keepOld = _genericWorks.isNotEmpty;
-      setState(() {
-        if (keepOld) {
-          _refreshing = true;
-        } else {
-          _loading = true;
-        }
-        _loadingMore = false;
-        _hasMore = true;
-      });
-      final total = await reader.countWorks(
-        query: _query,
-        category: _genericCategory,
-        filters: _genericTagFilters,
-      );
-      final works = await reader.works(
-        offset: 0,
-        limit: _pageSize,
-        query: _query,
-        category: _genericCategory,
-        filters: _genericTagFilters,
-      );
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _genericWorks = works;
-        _genericTotal = total;
-        _hasMore = works.length >= _pageSize;
-        _loading = false;
-        _refreshing = false;
-      });
-      return;
-    }
-    if (_loadingMore || !_hasMore) return;
-    final generation = _generation;
-    setState(() => _loadingMore = true);
-    final works = await reader.works(
-      offset: _genericWorks.length,
-      limit: _pageSize,
-      query: _query,
-      category: _genericCategory,
-      filters: _genericTagFilters,
-    );
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _genericWorks = [..._genericWorks, ...works];
-      _hasMore = works.length >= _pageSize;
-      _loadingMore = false;
-    });
-  }
-
-  /// 通用作品点按直播：转成兜底条目走现有播放链（站走 chaoliu
-  /// 原始地址直通，parse=0），地址是播之前刚从当前库里取出来的，
-  /// 不播缓存的旧地址；没有可播地址就提示，不硬播。
-  Future<void> _playGenericWork(GenericDbWork work) async {
-    final entry = work.toJsonEntry();
-    if (!entry.playable) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('这条没有可播地址')));
-      return;
-    }
-    await pushPlayer<void>(
-      context,
-      detail: entry.toDramaDetail(),
-      initialIndex: 0,
-      repository: widget.repository,
-      store: widget.store,
-    );
-    if (mounted) setState(() {});
-  }
-
-  /// 打开“数据库字段”页：映射改了就按新映射重读列表。
-  Future<void> _openFieldsPage() async {
-    final reader = _genericReader;
-    if (reader == null) return;
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => ActressDbFieldsPage(reader: reader)),
-    );
-    if (changed != true || !mounted) return;
-    await _loadPage(reset: true);
-  }
-
   void _openPerson(ActressPerson person) {
-    // 2026-11-23 多库勾选：合并列表里的人按所在库进详情（主库优先，
-    // 主库没有这个人才指外来库）；单库时 _personHomeDb 为空，走主库。
     // 2026-11-24 标签筛选：列表页选了标签时，详情页的作品列表也只
     // 留带该标签的作品（initialTag 传进去）。
-    final homeDb = _personHomeDb[person.displayName] ?? _db;
     Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -1922,7 +1179,7 @@ class _ActressListPageState extends State<ActressListPage> {
           localId: person.localId,
           repository: widget.repository,
           store: widget.store,
-          database: homeDb,
+          database: _db,
           siteFilter: _source,
           initialTag: _videoTag,
           fallback: _fallback,
@@ -1930,7 +1187,6 @@ class _ActressListPageState extends State<ActressListPage> {
       ),
     );
   }
-
   void _openRanking() {
     Navigator.push<void>(
       context,
@@ -1944,16 +1200,13 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 有任一路在跑（名册同步、全站叠加、任意站点爬取、数据库镜像）：
+  /// 有任一路在跑（名册同步、全站叠加、任意站点爬取）：
   /// 齿轮图标换成小转圈，顶栏不占位也能看出在动。
   bool get _anyRunning =>
-      _progress.running ||
-      _stackingProgress.running ||
-      _crawlProgress.running ||
-      _mirrorRunning;
+      _progress.running || _stackingProgress.running || _crawlProgress.running;
 
   /// 设置弹窗（2026-11-21 用户令）：把原来排在顶栏的同步横幅、全站
-  /// 叠加横幅、现爬横幅、数据库镜像横幅全收进这一个 ⚙️ 弹窗；
+  /// 叠加横幅、现爬横幅全收进这一个 ⚙️ 弹窗；
   /// 弹窗里的“同步爬取”小窗点标题即可收起（收回），只留一行摘要。
   Future<void> _openSettingsSheet() async {
     await showModalBottomSheet<void>(
@@ -2045,9 +1298,7 @@ class _ActressListPageState extends State<ActressListPage> {
           ? null
           : actressNeonAppBar(
         toolbarHeight: 40,
-        title: _genericMode
-            ? const Text('演员库 · 外来数据库')
-            : widget.showTitle
+        title: widget.showTitle
             ? Text(
                 overview == null
                     ? '演员库'
@@ -2067,12 +1318,9 @@ class _ActressListPageState extends State<ActressListPage> {
           // 女优/男优 + 排序这一排提到最顶，紧跟工具栏；原先它压在
           // 绑定行、库瓦片、搜索框下面，要往下翻才够得着。
           _buildSexFilterRow(),
-          // 2026-11-21 用户令：同步/叠加/现爬/数据库镜像不再在顶栏排
-          // 一排横幅，全部收进右上角 ⚙️ 设置弹窗（弹窗里的“同步爬取”
-          // 小窗可随手收回，见 _openSettingsSheet）。数据库绑定行与
-          // 外来库行属于库信息，继续留在页面顶部。
-          _buildMytvBindRow(colors),
-          _buildGenericModeRow(colors),
+          // 2026-11-21 用户令：同步/叠加/现爬不再在顶栏排一排横幅，
+          // 全部收进右上角 ⚙️ 设置弹窗（弹窗里的“同步爬取”小窗可
+          // 随手收回，见 _openSettingsSheet）。
           if (widget.showTitle)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 2),
@@ -2100,51 +1348,6 @@ class _ActressListPageState extends State<ActressListPage> {
               ),
             ),
           ),
-          // 通用模式分类（2026-11-22：外来库视频列表页顶部的分类行，
-          // 照活树改版）：从当前库自身的 video_category 表取分类
-          // （见 GenericDbReader.categories），点分类只筛当前这个
-          // 库的视频；库里没有分类表 / 分类为空时如实显示“暂无分类”，
-          // 不编。样式照本页分类行（霓虹药丸钮）。
-          if (_genericMode && _genericCategoriesLoaded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-              child: _genericCategories.isEmpty
-                  ? Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '暂无分类',
-                        style: TextStyle(color: colors.onSurfaceVariant),
-                      ),
-                    )
-                  : SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          ActressNeonPill(
-                            key: const ValueKey(
-                              'actress-generic-category-all',
-                            ),
-                            label: '全部',
-                            selected: _genericCategory.isEmpty,
-                            onTap: () => _setGenericCategory(''),
-                          ),
-                          const SizedBox(width: 8),
-                          for (final category in _genericCategories) ...[
-                            ActressNeonPill(
-                              key: ValueKey(
-                                'actress-generic-category-${category.$1}',
-                              ),
-                              label: '${category.$1}（${category.$2}）',
-                              selected: _genericCategory == category.$1,
-                              onTap: () =>
-                                  _setGenericCategory(category.$1),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                        ],
-                      ),
-                    ),
-            ),
           // 2026-11-24 标签筛选：分类行下面独立一行放“标签”入口，
           // 不依赖分类行——库没有分类时入口也在；没选时只显示“标签”，
           // 选了显示“标签：<名>”高亮 + “清除”一键清掉。站源作品
@@ -2154,11 +1357,9 @@ class _ActressListPageState extends State<ActressListPage> {
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
               child: Row(
                 children: _buildTagPills(
-                  selected: _genericMode ? _genericTag : _videoTag,
+                  selected: _videoTag,
                   onOpen: _openTagSheet,
-                  onClear: _genericMode
-                      ? () => _setGenericTag('')
-                      : () => _setVideoTag(''),
+                  onClear: () => _setVideoTag(''),
                 ),
               ),
             ),
@@ -2209,7 +1410,7 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 抽出来是为了外层 AppBar 和内嵌时的置顶工具栏共用一份，
   /// 不出现「内嵌进女优库区域后这几个按钮消失」的问题。
   List<Widget> _toolbarActions() {
-    return [            if (!_genericMode)
+    return [
               PopupMenuButton<ActressSiteFilter>(
                 key: const ValueKey('actress-site-filter'),
                 tooltip: '站点筛选',
@@ -2228,7 +1429,6 @@ class _ActressListPageState extends State<ActressListPage> {
                   ],
                 ),
               ),
-            if (!_genericMode)
               IconButton(
                 key: const ValueKey('open-actress-ranking'),
                 tooltip: '演员排行榜',
@@ -2238,18 +1438,13 @@ class _ActressListPageState extends State<ActressListPage> {
               ),
             IconButton(
               key: const ValueKey('refresh-actress-library'),
-              // 2026-11-20 热换库：通用模式下刷新按钮就是手动重载数据库。
-              tooltip: _genericMode ? '重新加载数据库' : '刷新同步',
+              tooltip: '刷新同步',
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.refresh_rounded),
-              onPressed: _genericMode
-                  ? _manualReloadDb
-                  : _progress.running
-                  ? null
-                  : () => _runSync(),
+              onPressed: _progress.running ? null : () => _runSync(),
             ),
             // 2026-11-21 用户令：右上角“影视库”按钮没用，删掉。
-            // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬/镜像全部
+            // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬全部
             // 收进这个弹窗，顶栏不再排一列横幅。
             IconButton(
               key: const ValueKey('open-actress-settings'),
@@ -2272,9 +1467,7 @@ class _ActressListPageState extends State<ActressListPage> {
       key: const ValueKey('actress-search'),
       controller: _searchController,
       decoration: InputDecoration(
-        hintText: _genericMode
-            ? '搜标题或番号'
-            : '搜名字或番号：中文 / 日文 / SSIS-123 都行',
+        hintText: '搜名字或番号：中文 / 日文 / SSIS-123 都行',
         prefixIcon: const Icon(Icons.search_rounded),
         suffixIcon: _query.isEmpty
             ? null
@@ -2316,81 +1509,18 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 列表/分类/标签缓存的 key：主库路径+指纹 + 各外来库路径+指纹；
-  /// 文件没变就不跑 GROUP BY。库内容变了时 _clearListCaches 清掉
-  /// 缓存，指纹只是第二道防线（防文件在外面被换了）。
-  String _dbListCacheKey() {
-    final keyParts = <String>[
-      _dbFileFingerprintKey(_mytvBind?.dbPath ?? ''),
-    ];
-    final extraPaths = _extraDbs.keys.toList()..sort();
-    for (final p in extraPaths) {
-      keyParts.add('$p|${_dbFileFingerprintKey(p)}');
-    }
-    return keyParts.join(';');
-  }
-
-  /// 通用模式分类：从当前库自身的 video_category 表读（见
-  /// [GenericDbReader.categories]）；读失败也不崩、不影响列表，
-  /// 只按“暂无分类”显示。切库/重读时由调用方先清掉旧分类再调。
-  /// 2026-11-24 用户令：通用模式也不显示数据库名称分类——与第三行
-  /// 同一条规则（库名取自当前已勾的 .db 文件名去后缀；外来库把库名
-  /// 写成 video_category 主分类时这里滤掉，真分类原样保留）。
-  Future<void> _loadGenericCategories() async {
-    final reader = _genericReader;
-    if (reader == null) return;
-    try {
-      var categories = await reader.categories();
-      final libNames = <String>{
-        for (final p in [_mytvBind?.dbPath ?? '', ..._extraDbs.keys])
-          if (p.isNotEmpty) path.basenameWithoutExtension(p),
-      };
-      categories = filterLibraryNameCategories(categories, libNames);
-      if (!mounted) return;
-      setState(() {
-        _genericCategories = categories;
-        _genericCategoriesLoaded = true;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _genericCategoriesLoaded = true);
-    }
-  }
-
-  void _setGenericCategory(String category) {
-    if (category == _genericCategory) return;
-    setState(() => _genericCategory = category);
-    unawaited(_loadPage(reset: true));
-  }
-
   /// 读数据库里的标签（video_tag.tag_name + 作品数，按作品数倒序）：
-  /// 只在打开标签弹窗时调（懒加载），之后走缓存；多库勾选时取各库
-  /// 并集（同一标签取最大单库数，与分类合并同一口径）。读不到
+  /// 只在打开标签弹窗时调（懒加载），之后走缓存；读不到
   /// （没有 video_tag 表的库）回空，弹窗如实显示“暂无标签”。
+  /// 缓存键只认内部工作库文件指纹（换库/重导后作废）。
   Future<List<(String, int)>> _loadDbTags() async {
-    final cacheKey = _dbListCacheKey();
+    final cacheKey = _workingDbCacheKey(await actressWorkingDbPath());
     if (_dbTagsCacheKey == cacheKey && _dbTagsCache != null) {
       return _dbTagsCache!;
     }
     var tags = <(String, int)>[];
     try {
       tags = await _db.dbTags();
-      if (_hasExtraDbs) {
-        final counts = <String, int>{
-          for (final t in tags) t.$1: t.$2,
-        };
-        for (final extra in _extraDbs.values) {
-          try {
-            for (final t in await extra.dbTags()) {
-              final prev = counts[t.$1];
-              if (prev == null || t.$2 > prev) counts[t.$1] = t.$2;
-            }
-          } catch (_) {}
-        }
-        final merged = counts.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value));
-        tags = [for (final e in merged) (e.key, e.value)];
-      }
     } catch (_) {
       tags = const [];
     }
@@ -2399,29 +1529,22 @@ class _ActressListPageState extends State<ActressListPage> {
     return tags;
   }
 
-  /// 读通用库里的标签（见 GenericDbReader.tagFacet）：没有标签维度
-  /// 时 key 为空、列表为空，弹窗如实显示“暂无标签”。
-  Future<List<(String, int)>> _loadGenericTags() async {
-    final reader = _genericReader;
-    if (reader == null) return const [];
+  /// 内部工作库文件指纹（路径 + mtime + 大小）：标签缓存键用，
+  /// 换库/重导后作废；读不到文件时回落到路径本身。
+  String _workingDbCacheKey(String dbPath) {
     try {
-      final tag = await reader.tagFacet();
-      if (!mounted) return const [];
-      setState(() {
-        _genericTagKey = tag.key;
-      });
-      return tag.values;
+      final stat = File(dbPath).statSync();
+      return '$dbPath|${stat.modified.millisecondsSinceEpoch}|${stat.size}';
     } catch (_) {
-      return const [];
+      return dbPath;
     }
   }
-
   /// 打开标签筛选底部弹窗（2026-11-24 用户令）：列出数据库里的
   /// 全部标签（带作品数），点标签即筛，点“全部”即清空。弹窗打开
   /// 前先查好标签（首次查库，之后走缓存）；没有标签也照常打开，
   /// 如实显示“暂无标签”，不拦。
   Future<void> _openTagSheet() async {
-    final tags = _genericMode ? await _loadGenericTags() : await _loadDbTags();
+    final tags = await _loadDbTags();
     if (!mounted) return;
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -2432,17 +1555,13 @@ class _ActressListPageState extends State<ActressListPage> {
         height: MediaQuery.of(context).size.height * 0.75,
         child: ActressTagSheet(
           tags: tags,
-          selected: _genericMode ? _genericTag : _videoTag,
+          selected: _videoTag,
           onSelected: (tag) => Navigator.of(sheetContext).pop(tag),
         ),
       ),
     );
     if (selected == null || !mounted) return;
-    if (_genericMode) {
-      _setGenericTag(selected);
-    } else {
-      _setVideoTag(selected);
-    }
+    _setVideoTag(selected);
   }
 
   void _setVideoTag(String tag) {
@@ -2450,12 +1569,6 @@ class _ActressListPageState extends State<ActressListPage> {
     _saveScrollOffsetForCache();
     setState(() => _videoTag = tag);
     _reloadAfterFilterChange();
-  }
-
-  void _setGenericTag(String tag) {
-    if (tag == _genericTag) return;
-    setState(() => _genericTag = tag);
-    unawaited(_loadPage(reset: true));
   }
 
   void _setSex(ActressSexFilter sex) {
@@ -2500,160 +1613,6 @@ class _ActressListPageState extends State<ActressListPage> {
     ];
   }
 
-  /// 2026-11-20 MYTV 绑定：绑定路径行（用户一眼看到库落在哪）。
-  /// 已绑定且有外置库：显示 `数据库：MYTV/db/女优库.db`。没找到
-  /// 外置库：显示“未找到外置数据库”与放库提示。没绑定：给“去设置
-  /// 授权”与“重新绑定”两个按钮，用户点了“隐藏提示”后本页内
-  /// 隐藏（绝不挡路）。
-  Widget _buildMytvBindRow(ColorScheme colors) {
-    final bind = _mytvBind;
-    if (bind == null || _mytvRowDismissed) {
-      return const SizedBox.shrink();
-    }
-    final noteLines = <String>[];
-    // 未绑定 / 未找到外置库的原因（绑定解析时写进 note）：绑定成功
-    // 且库在时 note 为空，这行不出现。
-    if (bind.note != null) {
-      noteLines.add(bind.note!);
-    }
-    // 2026-11-20 热换库：最近一次重读失败的原因。没有外置库时
-    // 不说“仍用旧库”（没有旧库可留），见 actressReloadErrorText。
-    if (_mytvDbError != null) {
-      noteLines.add(actressReloadErrorText(_mytvDbError!));
-    }
-    // 开库提示（2026-11-22 起恒为 null，分支保留）。
-    if (_mytvOpenNote != null) {
-      noteLines.add(_mytvOpenNote!);
-    }
-    // 内嵌进女优库外壳时（2026-11-21 用户令：顶部别叠一层又一层）：
-    // 一切正常（已绑定、有外置库、无错误）就把这整块收起来，
-    // 路径仍可从 ⚙️ 设置里看到；只有真出问题（未绑定/找不到库/
-    // 打不开）才显示，免得把列表挤掉半屏。
-    if (!widget.showTitle && noteLines.isEmpty && bind.bound) {
-      return const SizedBox.shrink();
-    }
-    return Container(
-      width: double.infinity,
-      color: colors.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      // 按钮另起一行：四个按钮全挤在同一行会把文字列压到只剩一字宽
-      // （桌面窗口里竖排显示，2026-11-21 用户截图）。文字行独占
-      // 一行、按钮行靠右换行，窄屏也不会压坏文字。
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.folder_rounded, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '数据库：${bind.displayPath}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    for (final line in noteLines)
-                      Text(
-                        line,
-                        style: TextStyle(
-                          color: colors.onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 4,
-            children: [
-              // 2026-11-20 热换库：手动“重新加载数据库”入口（两种模式都有）。
-              TextButton(
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 28),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: _manualReloadDb,
-                child: const Text('重新加载数据库'),
-              ),
-              if (bind.needsPermission)
-                TextButton(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 28),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: _requestMytvPermission,
-                  child: const Text('去设置授权'),
-                ),
-              if (!bind.bound)
-                TextButton(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 28),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: _rebindMytv,
-                  child: const Text('重新绑定'),
-                ),
-              if (!bind.bound)
-                TextButton(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 28),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => setState(() => _mytvRowDismissed = true),
-                  child: const Text('隐藏提示'),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGenericModeRow(ColorScheme colors) {
-    if (!_genericMode) return const SizedBox.shrink();
-    final reader = _genericReader;
-    final table = reader?.schema.worksTable?.table ?? '';
-    return Container(
-      width: double.infinity,
-      color: colors.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          const Icon(Icons.storage_rounded, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '外来数据库 · 表 $table · $_genericTotal 条',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: _openFieldsPage,
-            child: const Text('数据库字段'),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// 人物宫格布局：普通列表与姓名分组共用同一套格子尺寸。
   static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: 3,
@@ -2669,17 +1628,15 @@ class _ActressListPageState extends State<ActressListPage> {
   Widget _buildList(ColorScheme colors) {
     // 只出作品的站源（nvku）：作品网格，点卡直发播放器。
     if (_siteWorksMode) return _buildSiteWorkList(colors);
-    // 2026-11-20 通用读库：外来库是作品列表，不是人物宫格。
-    if (_genericMode) return _buildGenericList(colors);
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_persons.isEmpty) {
-      // 空态分流：没有外置库就是没有库（放库、重新加载）；搜不到就是
-      // 搜不到；选了站、该站没匹配上的人就说该站没有；确实一个人
-      // 才是“暂无人物”——四种情况不混着说。
-      final emptyText = _noExternalDb
-          ? '未找到外置数据库：请把 女优库.db 放进 MYTV/db/，再点“重新加载数据库”'
+      // 空态分流：没有导入库就是没有库（导入 .sql 数据库）；搜不到
+      // 就是搜不到；选了站、该站没匹配上的人就说该站没有；确实
+      // 一个人没有才是“暂无人物”——四种情况不混着说。
+      final emptyText = _noLibraryDb
+          ? '还没有导入数据库：请在设置里导入 .sql 数据库'
           : _query.isNotEmpty
           ? '没有找到“$_query”'
           : _source != ActressSiteFilter.all
@@ -2709,47 +1666,6 @@ class _ActressListPageState extends State<ActressListPage> {
           key: ValueKey('actress-person-${person.localId}'),
           person: person,
           onTap: () => _openPerson(person),
-        );
-      },
-    );
-  }
-
-  /// 通用模式作品列表（2026-11-21 用户令：作品一律网格卡片，不再用
-  /// 一行一条的列表）：封面 + 标题 + 番号/女优/日期，点卡直接播
-  ///（parse=0），没有详情页。
-  Widget _buildGenericList(ColorScheme colors) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_genericWorks.isEmpty) {
-      final emptyText = _query.isNotEmpty ? '没有找到“$_query”' : '这个库里没有作品';
-      return Center(
-        child: Text(
-          emptyText,
-          style: TextStyle(color: colors.onSurfaceVariant),
-        ),
-      );
-    }
-    return GridView.builder(
-      key: const ValueKey('actress-generic-grid'),
-      controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 160,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.58,
-      ),
-      itemCount: _genericWorks.length + (_hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index >= _genericWorks.length) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final work = _genericWorks[index];
-        return _GenericWorkCard(
-          key: ValueKey('generic-work-${work.id ?? work.title}'),
-          work: work,
-          onTap: () => _playGenericWork(work),
         );
       },
     );
@@ -2997,7 +1913,7 @@ class _GenericWorkCard extends StatelessWidget {
 }
 
 /// 女优库设置弹窗（2026-11-21 用户令）：原来排在顶栏的同步、全站叠加、
-/// 数据库镜像四块状态与操作全收进这里；弹窗内的“同步爬取”
+/// 现爬三块状态与操作全收进这里；弹窗内的“同步爬取”
 /// 小窗点标题即可收起（收回），只留一行摘要，随时再展开。
 class _ActressSettingsSheet extends StatefulWidget {
   const _ActressSettingsSheet({required this.host});
@@ -3070,19 +1986,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
     return '按番号把各站作品叠加到每个人名下，断点续跑，不用一次跑完';
   }
 
-  String _mirrorText() {
-    final host = _host;
-    if (host._mirrorRunning) {
-      return '正在追加数据库 ${host._mirrorFile}…已处理 ${host._mirrorProcessed}'
-          ' / 共 ${host._mirrorTotal > 0 ? host._mirrorTotal : '…'} 条'
-          '（新增 ${host._mirrorAppended} 部）';
-    }
-    if (host._mirrorError != null) {
-      return '追加数据库失败：${host._mirrorError}（已有数据不受影响）';
-    }
-    return 'MYTV/db 与补充目录里其它 .db 会自动按番号补进来';
-  }
-
   /// 收起时的一行摘要：跑着的路数 + 关键数字。
   String _summary() {
     final host = _host;
@@ -3090,7 +1993,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
     if (host._progress.running) running.add('同步');
     if (host._stackingProgress.running) running.add('叠加');
     if (host._crawlProgress.running) running.add('现爬');
-    if (host._mirrorRunning) running.add('追加库');
     final overview = host._overview;
     final tail = overview == null
         ? ''
@@ -3248,8 +2150,8 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                     ),
                 ],
               ),
-              // 2026-11-24 用户令：选站现爬已删（详情页自动写入站点库
-              // 已能回写数据库，不用再现爬补库）；任意站点爬取留着。
+              // 2026-11-24 用户令：选站现爬已删（详情页播片自动记
+              // 录到演员库，不用再现爬补库）；任意站点爬取留着。
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
                 child: Row(
@@ -3342,32 +2244,11 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                   ],
                 ),
               ),
-              section(
-                title: '数据库镜像（其它 .db 追加）',
-                body: _mirrorText(),
-                spinning: host._mirrorRunning,
-                actions: const [],
-              ),
-              if (host._mytvBind != null)
-                section(
-                  title: '数据库',
-                  body:
-                      '${host._mytvBind!.displayPath}\n'
-                      '${host._mytvDbError != null ? '${actressReloadErrorText(host._mytvDbError!)}\n' : ''}'
-                      '${host._mytvOpenNote ?? ''}',
-                  actions: [
-                    button(
-                      '重新加载数据库',
-                      host._reloadingDb ? null : host._manualReloadDb,
-                    ),
-                  ],
-                ),
               // 2026-11-25 .sql 导入：选 .sql / .sql.gz 文件导回主库
-              //（临时库校验通过才换，失败原库不动）。
+              //（临时库校验通过才换，失败原库不动）。不再要求先绑定
+              // MYTV：导入直接落到内部工作库。
               ActressSqlImportSection(
-                bound:
-                    host._mytvBind?.bound == true &&
-                    (host._mytvBind?.dbPath.isNotEmpty ?? false),
+                bound: true,
                 running: host._sqlImportRunning,
                 progress: host._sqlImportProgress,
                 error: host._sqlImportError,
@@ -3379,9 +2260,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                     ? () => host._sqlImportCancelRequested = true
                     : null,
               ),
-              // 2026-11-23 多库勾选：勾上的库一起加载（列表按人名归并、
-              // 分类取并集），默认只勾主库；主库永远勾着不可取消。
-              _ActressDbChoiceList(host: host),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Text(
@@ -3395,130 +2273,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// 设置弹窗“数据库”区下的多库勾选（2026-11-23 用户令）。
-/// 勾上的库一起加载：列表按人名归并、分类取并集；默认只勾主库，
-/// 主库永远勾着不可取消。有可播视频的库都能勾（严格视频库与
-/// 通用库都进合并，见 GenericActressDatabase）；只有确实 0 部
-/// 可播视频、或文件打不开的库才不让勾，副标题如实写原因
-///（“0 部可播视频”/“读不出来”），不拿“不是视频库结构”一句话
-/// 把有视频的库挡在外面。本 widget 自己读可选库与已勾集合（弹窗
-/// 是独立路由，宿主 setState 不会重建它）；勾选变化时调宿主
-/// [_ActressListPageState._applyDbSelection] 存勾选并重读列表
-/// 与分类。
-class _ActressDbChoiceList extends StatefulWidget {
-  const _ActressDbChoiceList({required this.host});
-
-  final _ActressListPageState host;
-
-  @override
-  State<_ActressDbChoiceList> createState() => _ActressDbChoiceListState();
-}
-
-class _ActressDbChoiceListState extends State<_ActressDbChoiceList> {
-  var _choices = <ActressDbChoice>[];
-  var _selected = <String>{};
-  final _counts = <String, int>{};
-  var _loaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_load());
-  }
-
-  Future<void> _load() async {
-    final bind = widget.host._mytvBind;
-    if (bind == null || !bind.bound) {
-      if (mounted) setState(() => _loaded = true);
-      return;
-    }
-    final choices = ActressDbSelection.availableChoices(bind: bind);
-    final selected = await ActressDbSelection.loadSelectedPaths(bind.dbPath);
-    if (!mounted) return;
-    setState(() {
-      _choices = choices;
-      _selected = selected;
-      _loaded = true;
-    });
-    for (final choice in choices) {
-      final count =
-          await ActressDbSelection.countPlayableVideos(choice.path);
-      if (!mounted) return;
-      setState(() => _counts[choice.path] = count);
-    }
-    // 0 部可播视频 / 读不出来的勾选不参与合并：自动取消勾选并存回去。
-    final pruned = Set<String>.from(_selected);
-    var changed = false;
-    for (final choice in _choices) {
-      if (choice.isMain) continue;
-      final count = _counts[choice.path];
-      if (count != null && count <= 0 && pruned.remove(choice.path)) {
-        changed = true;
-      }
-    }
-    if (changed) {
-      setState(() => _selected = pruned);
-      await widget.host._applyDbSelection(pruned);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_loaded) {
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
-        child: Text('正在读数据库列表…'),
-      );
-    }
-    if (_choices.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
-        child: Text('没找到可勾的数据库（先绑定 MYTV）。'),
-      );
-    }
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final choice in _choices)
-          CheckboxListTile(
-            key: ValueKey('actress-db-choice-${choice.name}'),
-            value: _selected.contains(choice.path),
-            onChanged: choice.isMain ||
-                    (_counts[choice.path] != null &&
-                        _counts[choice.path]! <= 0)
-                ? null
-                : (value) async {
-                    final next = Set<String>.from(_selected);
-                    if (value == true) {
-                      next.add(choice.path);
-                    } else {
-                      next.remove(choice.path);
-                    }
-                    setState(() => _selected = next);
-                    await widget.host._applyDbSelection(next);
-                  },
-            title: Text(
-              '${choice.name}${choice.isMain ? '（主库）' : ''}'
-              '${choice.isSiteDb ? '（播放记录）' : ''}',
-            ),
-            subtitle: Text(
-              _counts[choice.path] == null
-                  ? '正在数…'
-                  : _counts[choice.path]! < 0
-                      ? '读不出来（打不开或不是数据库）'
-                      : _counts[choice.path]! == 0
-                          ? '0 部可播视频'
-                          : '${_counts[choice.path]} 部视频',
-            ),
-            controlAffinity: ListTileControlAffinity.leading,
-            dense: true,
-          ),
-      ],
     );
   }
 }

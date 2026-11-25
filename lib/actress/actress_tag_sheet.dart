@@ -8,8 +8,8 @@ import 'actress_neon.dart';
 /// 样式照用户给过的“全部站源”弹窗：标题 + 数量在顶，标签 chips 带
 /// 作品数、可滚动、选中高亮；最前是“全部”（清空筛选）。
 ///
-/// 纯展示 widget：数据由调用方查好传进来（视频库模式走数据库的
-/// dbTags，通用模式走 GenericDbReader.tagFacet；没有标签时 [tags]
+/// 纯展示 widget：数据由调用方查好传进来（走数据库的
+/// dbTags；没有标签时 [tags]
 /// 为空，这里如实显示“暂无标签”，不编）。
 /// 点标签回传标签名，点“全部”回传空串，调用方据此设筛选并关弹窗。
 class ActressTagSheet extends StatelessWidget {

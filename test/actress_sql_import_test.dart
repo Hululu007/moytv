@@ -330,6 +330,112 @@ void main() {
       expect(await File('$livePath.importing').exists(), isFalse);
     });
 
+    // 2026-11-25 导入防卡死（用户令）：取消/失败后原库必须还能
+    // 正常用、能再导一次——不是只剩文件没动，而是下一步导入能成。
+    // 假执行器世界里“能用”= 活库文件内容一字不动、无残留临时文件、
+    // needsReload 为假（库连接没关过，App 接着用旧库）；再导一次
+    // 走完整链路、行数对上。
+    test('取消后原库仍可用、能再导一次', () async {
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      // 先导一次好的，活库成为 NEWDB。
+      final first = ActressSqlImporter(
+        executorFactory: factoryFor(_RecordingExecutor()),
+      );
+      final firstResult = await first.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(firstResult.ok, isTrue, reason: firstResult.error);
+      expect(await File(livePath).readAsString(), 'NEWDB');
+      // 再导一次，中途取消。
+      var closeCalls = 0;
+      final cancelled = ActressSqlImporter(
+        executorFactory: factoryFor(_RecordingExecutor()),
+      );
+      final cancelResult = await cancelled.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {
+          closeCalls++;
+        },
+        onProgress: (_) {},
+        isCancelled: () => true,
+      );
+      expect(cancelResult.ok, isFalse);
+      expect(cancelResult.error, contains('已取消'));
+      expect(closeCalls, 0);
+      expect(cancelResult.needsReload, isFalse);
+      expect(await File(livePath).readAsString(), 'NEWDB');
+      expect(await File('$livePath.bak').readAsString(), 'OLDDB');
+      expect(await File('$livePath.importing').exists(), isFalse);
+      // 取消后马上再导好的：能成，行数对上。
+      final retryExecutor = _RecordingExecutor();
+      final retry = ActressSqlImporter(
+        executorFactory: factoryFor(retryExecutor),
+      );
+      final retryResult = await retry.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(retryResult.ok, isTrue, reason: retryResult.error);
+      expect(retryResult.videos, 300);
+      expect(retryResult.playUrls, 480);
+      expect(await File(livePath).readAsString(), 'NEWDB');
+      expect(await File('$livePath.bak').readAsString(), 'NEWDB');
+      expect(await File('$livePath.importing').exists(), isFalse);
+    });
+
+    test('中途出错后原库仍可用、能再导一次', () async {
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      final first = ActressSqlImporter(
+        executorFactory: factoryFor(_RecordingExecutor()),
+      );
+      final firstResult = await first.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(firstResult.ok, isTrue, reason: firstResult.error);
+      // 中途往 video_tag 插就抛错。
+      final failing = ActressSqlImporter(
+        executorFactory: factoryFor(
+          _RecordingExecutor()..failOnTable = 'video_tag',
+        ),
+      );
+      final failResult = await failing.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(failResult.ok, isFalse);
+      expect(await File(livePath).readAsString(), 'NEWDB');
+      expect(await File('$livePath.bak').readAsString(), 'OLDDB');
+      expect(await File('$livePath.importing').exists(), isFalse);
+      // 出错后马上再导好的：能成，行数对上。
+      final retry = ActressSqlImporter(
+        executorFactory: factoryFor(_RecordingExecutor()),
+      );
+      final retryResult = await retry.importFile(
+        sqlPath: 'test/fixtures/actress_sample.sql',
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(retryResult.ok, isTrue, reason: retryResult.error);
+      expect(retryResult.videos, 300);
+      expect(retryResult.playUrls, 480);
+      expect(await File('$livePath.bak').readAsString(), 'NEWDB');
+      expect(await File('$livePath.importing').exists(), isFalse);
+    });
+
     test('非 .sql 文件直接拒绝', () async {
       final executor = _RecordingExecutor();
       final livePath = '${tempDir.path}/女优库.db';

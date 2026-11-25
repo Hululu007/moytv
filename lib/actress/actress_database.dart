@@ -1,17 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
 import 'actress_generic_db.dart';
 import 'actress_models.dart';
-import 'actress_mytv_bind.dart';
+import 'actress_working_db.dart';
 
-/// 没有外置数据库：女优库只读 MYTV/db/女优库.db（2026-11-22 用户令
-/// 最终口径），绑定不到它、或文件不存在/为空时开库抛这个错；
-/// 调用方（列表页/详情页）接住它显示空态提示，不回落任何内置库、
-/// 不建新库、不悄悄造数据。
+/// 还没有导入数据库：女优库只读 .sql 导入落成的内部工作库
+/// （2026-11-25 用户令：删本地 .db 读取），文件不存在/为空时开库抛这个错；
+/// 调用方（列表页/详情页）接住它显示空态提示
+/// 不悄悄造数据。
+/// （请导入 .sql 数据库），不回落任何内置库、不建新库、
 class ActressNoExternalDbException implements Exception {
   const ActressNoExternalDbException(this.message);
 
@@ -24,7 +24,7 @@ class ActressNoExternalDbException implements Exception {
 /// 重读失败文案：没找到外置库时直说，没有“仍用旧库”（没有旧库可留）；
 /// 其它失败（新库打不开）才说留旧库继续用。
 String actressReloadErrorText(String error) =>
-    error.startsWith('未找到外置数据库')
+    error.startsWith('还没有导入数据库')
         ? error
         : '数据库重读失败：$error（仍用旧库）';
 
@@ -195,17 +195,14 @@ abstract class ActressDatabase {
   Future<Set<String>> distinctWorkKeysForName(String name) async =>
       const <String>{};
 
-  /// 全库一级分类（去重计数）：多库勾选时列表页分类行取各库并集。
-  /// 严格库读 video_category.main_category；通用库读通用读法
-  /// 的分类（优先 video_category、否则作品表自己的分类列，
-  /// 见 GenericDbReader.categories）。默认实现回空集——测试替身
+  /// 全库一级分类（去重计数）：读 video_category.main_category
+  /// （导入建的标准库）。默认实现回空集——测试替身
   /// 与内存库不用实现。
   Future<List<(String, int)>> dbCategories() async => const [];
 
-  /// 全库作品标签（去重计数，按作品数倒序）：严格库读
+  /// 全库作品标签（去重计数，按作品数倒序）：读
   /// video_tag.tag_name（2026-11-24 标签筛选，底部弹窗的数据
-  /// 来源）；通用库读通用读法的标签维度（video_tag.tag_name
-  /// 优先，否则作品表里含 tag 的列，见 GenericDbReader.tagFacet）。
+  /// 来源）。
   /// 没有 video_tag 表的库直接抛错，调用方跳过（与 dbCategories
   /// 同一口径）。默认实现回空集——测试替身与内存库不用实现。
   Future<List<(String, int)>> dbTags() async => const [];
@@ -342,11 +339,6 @@ abstract class ActressDatabase {
     bool force = false,
   });
 
-  /// 通用读库（2026-11-20 用户令）：当前打开的库不是女优库结构
-  /// 时返回通用读取器（动态探结构 + 字段映射，见
-  /// actress_generic_db.dart）；是女优库结构时返回 null，走严格
-  /// 路径。每次调用都按当前文件指纹重探，不沿用旧库的字段映射。
-  Future<GenericDbReader?> genericReader();
 
   /// 是不是用户视频库（MYTV/db/女优库.db：actresses + videos +
   /// video_actress + video_category）：是时读走视频库 SQL（人用
@@ -603,23 +595,15 @@ ActressWork videoLibraryWorkFromRow(
 
 /// sqflite 实现：独立 actress.db，不动 app.db 的版本与表结构。
 class SqfliteActressDatabase implements ActressDatabase {
-  SqfliteActressDatabase._({this.pathOverride});
+  SqfliteActressDatabase._();
 
   static final SqfliteActressDatabase instance = SqfliteActressDatabase._();
 
-  /// 多库勾选：按指定路径开一个只读库实例（不走 MYTV 绑定）。
-  /// 只读打开、不跑迁移、不补索引、不补列、不写汇总表，用户的
-  /// 外来库文件一个字都不动；读走与主库同一套 SQL。
-  factory SqfliteActressDatabase.forPath(String path) =>
-      SqfliteActressDatabase._(pathOverride: path);
-
-  /// 非空时 _openNow 不读绑定，直接开这个路径（只读）。
-  final String? pathOverride;
 
   Database? _db;
 
-  /// 视频库模式（2026-11-21 用户令：女优库加载 MYTV/db/女优库.db）：
-  /// 当前打开的是用户视频库时为 true，读走视频库 SQL、写只走
+  /// 视频库模式（2026-11-25 用户令：只留 .sql 导入）：
+  /// 当前打开的是内部工作库（标准视频库结构）时为 true，读走
   /// videos / video_category 合并。由 _openDbAt 按实际打开的
   /// 文件定，close() 时清掉。
   bool _videoLibraryMode = false;
@@ -658,34 +642,16 @@ class SqfliteActressDatabase implements ActressDatabase {
   }
 
   Future<Database> _openNow() async {
-    // 2026-11-23 多库勾选：指定了路径就只读开那个文件，不读绑定、
-    // 不跑迁移、不补索引列，文件一个字都不动。
-    final override = pathOverride;
-    if (override != null && override.isNotEmpty) {
-      final db = await _openDbAt(override, readOnly: true);
-      _openedPath = override;
-      _openedSignature = _signatureOf(File(override));
-      _genericReaderCache = null;
-      _genericReaderKey = null;
-      return db;
-    }
-    // 2026-11-22 用户令最终口径：女优库只读外置数据库
-    // MYTV/db/女优库.db；绑定不到它（dbPath 为空）就抛
-    // ActressNoExternalDbException，界面显示空态提示；外置库
-    // 损坏/打不开也直接抛错，不回落任何内置库、不建新库。
-    final bind = await ActressMytvBind.instance.ensureBound();
-    final filePath = bind.dbPath;
+    // 2026-11-25 用户令：只留 .sql 导入，删本地 .db 读取——
+    // 开库只认应用私有目录的内部工作库（.sql 导进去落成的库），
+    // 不再读 MYTV/db/ 下用户放的 .db 文件；文件不存在/为空时
+    // 抛 ActressNoExternalDbException，界面显示空态提示（导 .sql），
+    // 不回落任何内置库、不建新库、不悄悄造数据。
+    final filePath = await actressWorkingDbPath();
     _openFallbackNote = null;
-    if (filePath.isEmpty) {
-      throw const ActressNoExternalDbException(
-        '未找到外置数据库：MYTV/db/女优库.db',
-      );
-    }
     final db = await _openDbAt(filePath);
     _openedPath = filePath;
     _openedSignature = _signatureOf(File(filePath));
-    _genericReaderCache = null;
-    _genericReaderKey = null;
     return db;
   }
 
@@ -717,78 +683,38 @@ class SqfliteActressDatabase implements ActressDatabase {
     }
   }
 
-  /// 按文件探结构再开库（2026-11-20 通用读库）：不存在/空文件
-  /// 直接抛没有外置数据库——绝不在用户文件位置新建 persons/works
-  /// 库（2026-11-22 用户令：没有外置库就是空库，不悄悄造数据）；
-  /// 是女优库结构走建库/迁移路径；是用户视频库
-  /// （女优库.db）走读写打开、置视频库标志；外来库直接打开，
-  /// 不跑女优库迁移、不动用户的文件结构，读走通用映射层。
-  Future<Database> _openDbAt(String filePath, {bool readOnly = false}) async {
+  /// 只开内部工作库（.sql 导入落成的标准视频库结构）：不存在/
+  /// 空文件直接抛“还没有导入数据库”；不是视频库结构（actresses
+  /// + videos + video_actress）直接抛错，不开外来库、不跑通用
+  /// 映射。读写打开——网站上新出的、库里没有的视频要补进这个库。
+  Future<Database> _openDbAt(String filePath) async {
     final file = File(filePath);
     if (!file.existsSync() || file.lengthSync() == 0) {
       _videoLibraryMode = false;
-      throw ActressNoExternalDbException(
-        '数据库文件不存在或为空：$filePath',
+      throw const ActressNoExternalDbException(
+        '还没有导入数据库：请在设置里导入 .sql 数据库',
       );
     }
-    if (await _looksLikeActressDb(filePath)) {
+    if (!await _looksLikeVideoLibraryDb(filePath)) {
       _videoLibraryMode = false;
-      // 只读开外来库时不跑迁移（_openActressDb 会建表/升版写盘），
-      // 直接只读打开，结构不对读的时候再报错。
-      final db = readOnly
-          ? await openDatabase(filePath, readOnly: true)
-          : await _openActressDb(filePath);
-      await applyReadSpeedPragmas(db);
-      // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
-      // 才抛；这里验出来就关掉重抛，不开坏库。
-      try {
-        await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
-      } catch (_) {
-        await db.close();
-        rethrow;
-      }
-      return db;
+      throw StateError('不是女优库数据库：请导入 .sql 数据库');
     }
-    // 2026-11-21 用户令：女优库.db 是用户视频库，读写打开——
-    // 网站上新出的、库里没有的视频要补进这个库；只读打开写不
-    // 进去。标志由这里定，close() 时清掉；验头失败时标志清掉
-    // 再重抛，不留错标志。
-    if (await _looksLikeVideoLibraryDb(filePath)) {
-      final db = readOnly
-          ? await openDatabase(filePath, readOnly: true)
-          : await openDatabase(filePath);
-      await applyReadSpeedPragmas(db);
-      _videoLibraryMode = true;
-      try {
-        await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
-        if (!readOnly) {
-          // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
-          // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
-          // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
-          // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
-          // 或磁盘满时建不了就跳过，查询照样能跑。
-          await _ensureVideoIndexes(db, filePath);
-          // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
-          // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
-          await _ensureActressSexColumn(db);
-        }
-      } catch (_) {
-        _videoLibraryMode = false;
-        await db.close();
-        rethrow;
-      }
-      return db;
-    }
-    _videoLibraryMode = false;
-    final db = readOnly
-        ? await openDatabase(filePath, readOnly: true)
-        : await openDatabase(filePath);
+    final db = await openDatabase(filePath);
     await applyReadSpeedPragmas(db);
-    // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
-    // 才抛；这里验出来就关掉重抛，不开坏库。
+    _videoLibraryMode = true;
     try {
       await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
+      // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
+      // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
+      // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
+      // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
+      // 或磁盘满时建不了就跳过，查询照样能跑。
+      await _ensureVideoIndexes(db, filePath);
+      // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
+      // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
+      await _ensureActressSexColumn(db);
     } catch (_) {
+      _videoLibraryMode = false;
       await db.close();
       rethrow;
     }
@@ -866,7 +792,7 @@ class SqfliteActressDatabase implements ActressDatabase {
 
   /// 没有 actresses 表时按 video_actress 的 rowid 反查 cate_id
   ///（人名）：回退人物的 localId 就是该人 video_actress 行里最小
-  /// 的 rowid（与通用库同一口径，见 GenericActressDatabase）。
+  /// 的 rowid。
   Future<String?> _cateIdOfVideoActressRow(
     Database db,
     int rowId,
@@ -1162,144 +1088,6 @@ class SqfliteActressDatabase implements ActressDatabase {
 
   /// 女优库建库/迁移路径：version 4 + onCreate 建五张表 +
   /// onUpgrade v1→v2、v2→v3、v3→v4。只对女优库结构的文件跑。
-  Future<Database> _openActressDb(String filePath) {    return openDatabase(
-      filePath,
-      version: 4,
-      onCreate: (db, version) async {
-        await db.execute(
-          'CREATE TABLE persons('
-          'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-          'display_name TEXT NOT NULL, '
-          'aliases TEXT NOT NULL DEFAULT \'[]\', '
-          'sex TEXT NOT NULL DEFAULT \'\', '
-          'avatar_url TEXT NOT NULL DEFAULT \'\', '
-          'tags TEXT NOT NULL DEFAULT \'[]\', '
-          'works_count INTEGER NOT NULL DEFAULT 0, '
-          'roster_works INTEGER NOT NULL DEFAULT 0, '
-          'from_chaoliu INTEGER NOT NULL DEFAULT 0, '
-          'from_whos INTEGER NOT NULL DEFAULT 0, '
-          'from_missav INTEGER NOT NULL DEFAULT 0, '
-          'chaoliu_id TEXT NOT NULL DEFAULT \'\', '
-          'whos_slug TEXT NOT NULL DEFAULT \'\', '
-          'missav_path TEXT NOT NULL DEFAULT \'\', '
-          'missav_rank INTEGER, '
-          'recommended INTEGER NOT NULL DEFAULT 0, '
-          'films_synced_at INTEGER, '
-          'enriched_at INTEGER, '
-          'whos_rank INTEGER, '
-          'rating REAL, '
-          'exact_works INTEGER NOT NULL DEFAULT 0, '
-          'about TEXT NOT NULL DEFAULT \'{}\', '
-          'updated_at INTEGER NOT NULL)',
-        );
-        await db.execute(
-          'CREATE TABLE person_names('
-          'name_key TEXT NOT NULL PRIMARY KEY, '
-          'person_id INTEGER NOT NULL)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_persons_works ON persons(works_count DESC)',
-        );
-        await db.execute(
-          'CREATE TABLE works('
-          'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-          'person_id INTEGER NOT NULL, '
-          'code_key TEXT NOT NULL DEFAULT \'\', '
-          'title_key TEXT NOT NULL DEFAULT \'\', '
-          'site TEXT NOT NULL DEFAULT \'\', '
-          'code_display TEXT NOT NULL DEFAULT \'\', '
-          'title TEXT NOT NULL DEFAULT \'\', '
-          'date TEXT NOT NULL DEFAULT \'\', '
-          'cover_source TEXT NOT NULL DEFAULT \'\', '
-          'cover_drama_id TEXT NOT NULL DEFAULT \'\', '
-          'cover_url TEXT NOT NULL DEFAULT \'\', '
-          'category TEXT NOT NULL DEFAULT \'\', '
-          'from_cross_site INTEGER NOT NULL DEFAULT 0)',
-        );
-        // 番号去重与无番号标题去重：部分唯一索引各管一摊，互不冲突；
-        // 去重键是（人，站，番号/标题）：同番号两站各留一条。
-        await db.execute(
-          'CREATE UNIQUE INDEX idx_works_code '
-          'ON works(person_id, site, code_key) WHERE code_key <> \'\'',
-        );
-        await db.execute(
-          'CREATE UNIQUE INDEX idx_works_title '
-          'ON works(person_id, site, title_key) '
-          'WHERE code_key = \'\' AND title_key <> \'\'',
-        );
-        await db.execute(
-          'CREATE INDEX idx_works_person ON works(person_id, id)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_works_person_category '
-          'ON works(person_id, category)',
-        );
-        await db.execute(
-          'CREATE TABLE source_films('
-          'person_id INTEGER NOT NULL, '
-          'source TEXT NOT NULL, '
-          'synced_at INTEGER, '
-          'failed INTEGER NOT NULL DEFAULT 0, '
-          'PRIMARY KEY(person_id, source))',
-        );
-        await db.execute(
-          'CREATE TABLE sync_state('
-          'source TEXT NOT NULL, '
-          'phase TEXT NOT NULL, '
-          'cursor TEXT NOT NULL DEFAULT \'\', '
-          'total INTEGER NOT NULL DEFAULT 0, '
-          'finished INTEGER NOT NULL DEFAULT 0, '
-          'error TEXT NOT NULL DEFAULT \'\', '
-          'updated_at INTEGER NOT NULL, '
-          'PRIMARY KEY(source, phase))',
-        );
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        // v1 → v2：whos 兜底四列（排行后备、评分、精确作品数、简介）。
-        if (oldVersion < 2) {
-          await db.execute('ALTER TABLE persons ADD COLUMN whos_rank INTEGER');
-          await db.execute('ALTER TABLE persons ADD COLUMN rating REAL');
-          await db.execute(
-            'ALTER TABLE persons ADD COLUMN exact_works INTEGER NOT NULL DEFAULT 0',
-          );
-          await db.execute(
-            'ALTER TABLE persons ADD COLUMN about TEXT NOT NULL DEFAULT \'{}\'',
-          );
-        }
-        // v2 → v3：作品行加站列，去重键改成（人，站，番号/标题）；
-        // 旧行站为空，与新口径一致（旧库本就按番号去重，站空即一站）。
-        if (oldVersion < 3) {
-          await db.execute(
-            'ALTER TABLE works ADD COLUMN site TEXT NOT NULL DEFAULT \'\'',
-          );
-          await db.execute('DROP INDEX IF EXISTS idx_works_code');
-          await db.execute('DROP INDEX IF EXISTS idx_works_title');
-          await db.execute(
-            'CREATE UNIQUE INDEX idx_works_code '
-            'ON works(person_id, site, code_key) WHERE code_key <> \'\'',
-          );
-          await db.execute(
-            'CREATE UNIQUE INDEX idx_works_title '
-            'ON works(person_id, site, title_key) '
-            'WHERE code_key = \'\' AND title_key <> \'\'',
-          );
-        }
-        // v3 → v4：作品行加分类列（爬取/镜像时的列表分类，如
-        // “中文字幕”/“国产自拍”；旧行与无分类来源的行留空，只在
-        // “全部”里显示，不丢数据；下次镜像经过时由 upsertWorks
-        // 的回填把空分类补上）。
-        if (oldVersion < 4) {
-          await db.execute(
-            'ALTER TABLE works ADD COLUMN category TEXT NOT NULL DEFAULT \'\'',
-          );
-          await db.execute(
-            'CREATE INDEX IF NOT EXISTS idx_works_person_category '
-            'ON works(person_id, category)',
-          );
-        }
-      },
-    );
-  }
 
   /// 当前打开库的文件指纹（大小 + 修改时间毫秒）：开库时记一次，
   /// 热换库比对它，变了才重开。
@@ -1309,11 +1097,6 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 开库提示（见 openFallbackNote）：2026-11-22 起不再回退任何
   /// 内置库，恒为 null（接口保留，列表页的显示分支不动）。
   String? _openFallbackNote;
-
-  /// 通用读取器缓存：按（路径，文件指纹）缓存，文件变了自动重探，
-  /// 不沿用旧库的字段映射。
-  GenericDbReader? _genericReaderCache;
-  String? _genericReaderKey;
 
   static ({int length, int modifiedMs})? _signatureOf(File file) {
     try {
@@ -1327,37 +1110,6 @@ class SqfliteActressDatabase implements ActressDatabase {
     }
   }
 
-  /// 只读探一下：是不是女优库结构（persons + works 表，且 works
-  /// 有 code_key 列）。文件损坏/不是 sqlite 时返回 false（调用方
-  /// 再按外来库直接打开，同样打不开就报错，不静默当空库）。
-  Future<bool> _looksLikeActressDb(String filePath) async {
-    Database? probe;
-    try {
-      probe = await openDatabase(filePath, readOnly: true);
-      return await _isActressSchemaDb(probe);
-    } catch (_) {
-      return false;
-    } finally {
-      await probe?.close();
-    }
-  }
-
-  /// 已打开的库是不是女优库结构（persons + works 表，且 works 有
-  /// code_key 列）：严格路径只认这一套；表名撞上、字段不对的按
-  /// 外来库走通用映射。
-  Future<bool> _isActressSchemaDb(Database db) async {
-    final tables = await db.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type='table'",
-    );
-    final names = {for (final row in tables) row['name'].toString()};
-    if (!names.contains('persons') || !names.contains('works')) {
-      return false;
-    }
-    final cols = await db.rawQuery('PRAGMA table_info("works")');
-    final colNames = {for (final row in cols) row['name'].toString()};
-    return colNames.contains('code_key') &&
-        colNames.contains('person_id');
-  }
 
   /// 只读探一下：是不是用户视频库（actresses + videos +
   /// video_actress 三张表同时在）。文件损坏/不是 sqlite 时返回
@@ -1390,25 +1142,6 @@ class SqfliteActressDatabase implements ActressDatabase {
         isVideoLibrarySchemaWithoutActresses(names);
   }
 
-  /// 验一个已打开的候选库：女优库结构核对 works.code_key；用户
-  /// 视频库（actresses + videos + video_actress）是合法的女优库
-  /// 源，直接认；外来库至少要有一张能认出作品的表（标题 + 播放
-  /// 地址），否则抛错——调用方留旧库并报原因。空库（0 张表）也
-  /// 接受（后面自动生成会灌种子；通用模式下列表为空，不报错）。
-  Future<void> _validateOpenDb(Database db) async {
-    final tables = await db.rawQuery(
-      "SELECT name FROM sqlite_master "
-      "WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    );
-    if (tables.isEmpty) return;
-    if (await _isActressSchemaDb(db)) return;
-    if (await _isVideoLibraryDb(db)) return;
-    final schema = await probeGenericDbSchema(db);
-    if (schema.worksTable == null) {
-      throw StateError('没有找到带标题与播放地址的作品表');
-    }
-  }
-
   static String _shortDbError(Object error) {
     final first = error.toString().split('\n').first.trim();
     return first.length > 120 ? '${first.substring(0, 120)}…' : first;
@@ -1418,13 +1151,9 @@ class SqfliteActressDatabase implements ActressDatabase {
   Future<({bool reloaded, String? error})> reloadIfChanged({
     bool force = false,
   }) async {
-    // 重解析绑定：新放进 / 删掉的女优库.db 只有重解析才看得到
-    // （“重新加载数据库”与进页热换库都靠它）。
-    final bind = await ActressMytvBind.instance.ensureBound(refresh: true);
-    final currentPath = bind.dbPath;
-    if (currentPath.isEmpty) {
-      return (reloaded: false, error: '未找到外置数据库：MYTV/db/女优库.db');
-    }
+    // 内部工作库路径固定（应用私有目录，不再重解析 MYTV 绑定）：
+    // 导入换了文件、或文件被删，只有看文件指纹才知道。
+    final currentPath = await actressWorkingDbPath();
     final file = File(currentPath);
     FileStat? stat;
     try {
@@ -1433,7 +1162,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       stat = null;
     }
     if (stat == null || stat.type == FileSystemEntityType.notFound) {
-      return (reloaded: false, error: '数据库文件不存在：$currentPath');
+      return (reloaded: false, error: '还没有导入数据库：请在设置里导入 .sql 数据库');
     }
     final signature = (
       length: stat.size,
@@ -1457,7 +1186,7 @@ class SqfliteActressDatabase implements ActressDatabase {
         _openedSignature == signature) {
       return (reloaded: false, error: null);
     }
-    // 同一文件、只是内容变了（指纹变了）：不重开。镜像/同步正是
+    // 同一文件、只是内容变了（指纹变了）：不重开。同步正是
     // 通过当前连接在写这个文件，当前连接本来就能读到已提交的新
     // 数据；重开反而要等镜像的写锁（PRAGMA journal_mode 报
     // SQLITE_BUSY，2026-11-21 用户截图里详情页一点作品就弹这个
@@ -1479,8 +1208,6 @@ class SqfliteActressDatabase implements ActressDatabase {
         await _open();
         _openedPath = currentPath;
         _openedSignature = signature;
-        _genericReaderCache = null;
-        _genericReaderKey = null;
         return (reloaded: true, error: null);
       } catch (e) {
         return (reloaded: false, error: '数据库打不开：${_shortDbError(e)}');
@@ -1490,7 +1217,6 @@ class SqfliteActressDatabase implements ActressDatabase {
     Database? candidate;
     try {
       candidate = await _openDbAt(currentPath);
-      await _validateOpenDb(candidate);
     } catch (e) {
       await candidate?.close();
       return (reloaded: false, error: '新数据库打不开：${_shortDbError(e)}');
@@ -1501,48 +1227,11 @@ class SqfliteActressDatabase implements ActressDatabase {
     _openFuture = Future.value(candidate);
     _openedPath = currentPath;
     _openedSignature = signature;
-    _genericReaderCache = null;
-    _genericReaderKey = null;
     await old?.close();
     return (reloaded: true, error: null);
   }
 
   @override
-  Future<GenericDbReader?> genericReader() async {
-    final db = await _open();
-    // 视频库是合法的女优库源（不是通用库）：返回 null，走视频库
-    // 严格路径，不走通用映射。
-    if (_videoLibraryMode) return null;
-    if (await _isActressSchemaDb(db)) return null;
-    final key =
-        '$_openedPath|${_openedSignature?.length}|'
-        '${_openedSignature?.modifiedMs}';
-    final cached = _genericReaderCache;
-    if (cached != null && _genericReaderKey == key) return cached;
-    final schema = await probeGenericDbSchema(db);
-    // 手动映射文件与库文件放一起（MYTV/db/字段映射.json；未绑定
-    // 时在 documents 下），换同结构库直接复用。
-    final bind = await ActressMytvBind.instance.ensureBound();
-    final store = GenericDbMappingStore(
-      file: File(path.join(path.dirname(bind.dbPath), '字段映射.json')),
-    );
-    var resolvedSchema = schema;
-    final saved = await store.loadMapping(schema.fingerprint);
-    if (saved != null) {
-      resolvedSchema = schema.withManualMapping(
-        table: saved.table,
-        columns: saved.columns,
-      );
-    }
-    final reader = GenericDbReader(
-      db: db,
-      schema: resolvedSchema,
-      mappingStore: store,
-    );
-    _genericReaderCache = reader;
-    _genericReaderKey = key;
-    return reader;
-  }
 
   @override
   Future<ActressPerson?> upsertRosterPerson(RosterPerson roster) async {
@@ -3591,11 +3280,9 @@ class SqfliteActressDatabase implements ActressDatabase {
     // 拿新路径（授权后重新绑定换库用）。原来只清 _db 不清
     // _openFuture，close 后再开会拿到已关闭的旧库。
     _openFuture = null;
-    // 2026-11-20 热换库：指纹与通用缓存也清掉，下次开库重探。
+    // 2026-11-20 热换库：指纹也清掉，下次开库重探。
     _openedPath = null;
     _openedSignature = null;
-    _genericReaderCache = null;
-    _genericReaderKey = null;
     // 2026-11-25 读库提速第二阶段：排行榜缓存也清掉，不让旧库
     // 的榜挂在新库上。
     _rankingCache.clear();
@@ -4459,9 +4146,6 @@ class MemoryActressDatabase implements ActressDatabase {
   Future<({bool reloaded, String? error})> reloadIfChanged({
     bool force = false,
   }) async => (reloaded: false, error: null);
-
-  @override
-  Future<GenericDbReader?> genericReader() async => null;
 
   @override
   String? get openFallbackNote => null;

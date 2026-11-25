@@ -4,14 +4,18 @@ import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
+import 'actress_generic_db.dart';
+
 /// 女优库 .sql 导入（2026-11-25 用户令）：把女优库.db 改成 .sql 后，
 /// 从演员库设置里选 .sql / .sql.gz 文件导回手机，导完直接当主库用。
 ///
 /// 流程：流式读 SQL（整文件不进内存）→ 临时库分批执行
-/// （每 1000 条 INSERT 一个事务）→ 校验四项（作品数/人数/播放
-/// 地址/封面/头像）→ 关主库连接 → 备份现库为 .bak → 临时库改名
-/// 顶替主库。校验不过、取消、执行出错都在换库之前停下：原库一字
-/// 不动，临时文件删掉。
+/// （每 1000 条 INSERT 一个事务）→ 字段归一化（标准库直接过；
+/// 字段不一样的库按字段名宽容映射建成标准表，见 _normalizeImport）
+/// → 校验三项（作品数/播放地址大于 0；人数可为 0 只警告）
+/// → 关主库连接 → 备份现库为 .bak → 临时库改名顶替主库。
+/// 校验不过、取消、执行出错都在换库之前停下：原库一字不动，
+/// 临时文件删掉。
 ///
 /// 红线：临时库只在导入时存在，导完即改名成主库；journal_mode /
 /// synchronous 一个字不改（读写库不抄参考文件的 OFF/WAL 写法）。
@@ -53,6 +57,7 @@ class ActressSqlImportResult {
     this.playUrls = 0,
     this.covers = 0,
     this.avatars = 0,
+    this.skipped = 0,
     this.warnings = const [],
     this.needsReload = false,
   });
@@ -76,6 +81,9 @@ class ActressSqlImportResult {
 
   /// 有头像的人数（avatar 非空）。
   final int avatars;
+
+  /// 归一化时跳过的行数（没有播放地址的行，不进库）。
+  final int skipped;
 
   /// 非致命提醒（例如封面/头像数为 0 时写在这里，不拦导入）。
   final List<String> warnings;
@@ -239,7 +247,7 @@ class ActressSqlImporter {
     if (dbPath.isEmpty) {
       return const ActressSqlImportResult(
         ok: false,
-        error: '没有可替换的数据库路径（先绑定 MYTV）',
+        error: '没有可替换的数据库路径',
       );
     }
     if (!await sqlFile.exists() || await sqlFile.length() == 0) {
@@ -360,11 +368,30 @@ class ActressSqlImporter {
       await flushInserts();
       checkCancelled();
 
+      // 字段归一化：标准库直接过；字段不一样的库按字段名宽容映射
+      // 建成标准表（缺播放地址的行跳过并计数）。
+      var normalizedRows = 0;
+      final skipped = await _normalizeImport(
+        executor,
+        onNormalized: (rows) {
+          normalizedRows = rows;
+          onProgress(
+            ActressSqlImportProgress(
+              phase: '正在归一化',
+              statements: statements + rows,
+              bytesRead: bytesRead,
+              totalBytes: totalBytes,
+            ),
+          );
+        },
+      );
+      checkCancelled();
+
       // 校验（还在临时库上，不合格不换库）。
       onProgress(
         ActressSqlImportProgress(
           phase: '正在校验',
-          statements: statements,
+          statements: statements + normalizedRows,
           bytesRead: bytesRead,
           totalBytes: totalBytes,
         ),
@@ -373,6 +400,8 @@ class ActressSqlImporter {
       final warnings = <String>[];
       if (counts.covers == 0) warnings.add('导入的库里没有封面');
       if (counts.avatars == 0) warnings.add('导入的库里没有头像');
+      if (counts.actresses == 0) warnings.add('导入的库里没有演员信息');
+      if (skipped > 0) warnings.add('跳过 $skipped 行（没有播放地址）');
       await executor.close();
       executor = null;
 
@@ -411,6 +440,7 @@ class ActressSqlImporter {
         playUrls: counts.playUrls,
         covers: counts.covers,
         avatars: counts.avatars,
+        skipped: skipped,
         warnings: warnings,
         needsReload: true,
       );
@@ -446,8 +476,9 @@ class ActressSqlImporter {
     return head;
   }
 
-  /// 校验临时库：四张必备表都在、作品/人数/播放地址都大于 0。
-  /// 失败抛错（调用方按“原库不动”收尾）。
+  /// 校验临时库：四张必备表都在、作品与播放地址都大于 0。
+  /// 人数可为 0（只警告、不拦：没演员信息的库作品仍可通过分类/
+  /// 影视库看）。失败抛错（调用方按“原库不动”收尾）。
   Future<
     ({
       int videos,
@@ -483,7 +514,6 @@ class ActressSqlImporter {
       "SELECT COUNT(*) FROM actresses WHERE avatar IS NOT NULL AND avatar <> ''",
     );
     if (videos == 0) throw StateError('导入的库里没有作品');
-    if (actresses == 0) throw StateError('导入的库里没有演员');
     if (playUrls == 0) throw StateError('导入的库里没有播放地址');
     return (
       videos: videos,
@@ -492,5 +522,407 @@ class ActressSqlImporter {
       covers: covers,
       avatars: avatars,
     );
+  }
+
+  /// 标准库关键列：四表齐且这些列都在，才算标准库、走快捷通道。
+  static const _standardKeyColumns = <String, List<String>>{
+    'videos': [
+      'vod_id',
+      'title',
+      'pic_url',
+      'm3u8_url',
+      'vod_play_url',
+      'type_name',
+    ],
+    'actresses': ['cate_id', 'name', 'avatar'],
+    'video_actress': ['vod_id', 'cate_id'],
+    'video_play_urls': ['vod_id', 'play_url'],
+  };
+
+  /// 标准表 DDL（与真库一致，见 REPORT §九）：归一化建表用；
+  /// actresses 带 roster_id/claimed/sex 列，免得同步写时缺列失败。
+  static const _standardTableDdl = <String, String>{
+    'videos':
+        'CREATE TABLE videos (vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_remarks TEXT, vod_pubdate TEXT, vod_area TEXT, vod_year TEXT, vod_content TEXT, vod_play_from TEXT, vod_play_url TEXT, type_name TEXT, created_at TEXT)',
+    'actresses':
+        'CREATE TABLE actresses (cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT, created_at TEXT, sex TEXT, roster_id TEXT, claimed INTEGER)',
+    'video_actress':
+        'CREATE TABLE video_actress (vod_id TEXT, cate_id TEXT, PRIMARY KEY (vod_id, cate_id))',
+    'video_play_urls':
+        'CREATE TABLE video_play_urls (vod_id TEXT, play_url TEXT, play_from TEXT, PRIMARY KEY (vod_id, play_url))',
+    'video_category':
+        'CREATE TABLE video_category (vod_id TEXT PRIMARY KEY, main_category TEXT)',
+    'video_tag':
+        'CREATE TABLE video_tag (vod_id TEXT, tag_name TEXT, PRIMARY KEY (vod_id, tag_name))',
+  };
+
+  /// 头像列名（归一化后）：人物表与作品表独立头像列都认这些。
+  static const _avatarColumnNames = {
+    'avatar',
+    'avatarurl',
+    'head',
+    'headimg',
+    'headpic',
+    'photo',
+    'portrait',
+    'face',
+    '头像',
+    'pic',
+    'image',
+  };
+
+  static bool _isAvatarColumnName(String column) =>
+      _avatarColumnNames.contains(normalizeDbFieldName(column));
+
+  /// 字段不一样的 .sql 归一化（2026-11-25 用户令：不管什么字段的
+  /// .sql 导入，都要能显示列表/封面/头像/播放链接、能播）：
+  /// 先判标准库（四表齐且关键列在）→ 快捷通道，返回 0；
+  /// 否则按字段名宽容映射，把作品表读行建成标准表。
+  /// 缺播放地址的行跳过并计数（返回值）；缺失的可选字段按空处理。
+  /// [onNormalized] 每读完一批作品行回调一次（累计已归一化行数），
+  /// 调用方用它报“正在归一化”进度。
+  Future<int> _normalizeImport(
+    SqlImportExecutor executor, {
+    required void Function(int rows) onNormalized,
+  }) async {
+    final tableRows = await executor.query(
+      "SELECT name FROM sqlite_master WHERE type='table'",
+    );
+    final tables = <String>{
+      for (final row in tableRows) '${row['name']}',
+    }..removeWhere((t) => t.startsWith('sqlite_'));
+    // 探每张表的列：答不出列信息（测试假执行器）时按老口径——
+    // 四表齐当标准库，不齐报缺表。
+    final tableColumns = <String, List<String>>{};
+    final pkColumns = <String, String>{};
+    var canInspect = true;
+    for (final table in tables) {
+      final cols = await executor.query(
+        'PRAGMA table_info(${_ident(table)})',
+      );
+      final names = <String>[];
+      for (final col in cols) {
+        final name = col['name'];
+        if (name == null) continue;
+        names.add('$name');
+        if (col['pk'] == 1) pkColumns[table] = '$name';
+      }
+      if (names.isEmpty) {
+        canInspect = false;
+        break;
+      }
+      tableColumns[table] = names;
+    }
+    if (!canInspect) {
+      final missing = _requiredTables.difference(tables);
+      if (missing.isNotEmpty) {
+        throw StateError('缺表：${missing.join('、')}，不是女优库');
+      }
+      return 0;
+    }
+    if (_isStandardLibrary(tableColumns)) {
+      // 标准库：可选表缺了就补建空表（首页分类/标签读它们）。
+      for (final optional in ['video_category', 'video_tag']) {
+        if (!tables.contains(optional)) {
+          await executor.execute(_standardTableDdl[optional]!);
+        }
+      }
+      return 0;
+    }
+    return _normalizeToStandard(
+      executor,
+      tables,
+      tableColumns,
+      pkColumns,
+      onNormalized: onNormalized,
+    );
+  }
+
+  bool _isStandardLibrary(Map<String, List<String>> tableColumns) {
+    for (final entry in _standardKeyColumns.entries) {
+      final columns = tableColumns[entry.key];
+      if (columns == null) return false;
+      final lower = columns.map((c) => c.toLowerCase()).toSet();
+      for (final required in entry.value) {
+        if (!lower.contains(required)) return false;
+      }
+    }
+    return true;
+  }
+
+  /// 归一化本体：作品表读行 → 建标准表。已存在但结构不对的标准表
+  /// 先改名成 <名>_source（数据不动），再建标准表。
+  Future<int> _normalizeToStandard(
+    SqlImportExecutor executor,
+    Set<String> tables,
+    Map<String, List<String>> tableColumns,
+    Map<String, String> pkColumns, {
+    required void Function(int rows) onNormalized,
+  }) async {
+    final schema = classifyGenericTables(tableColumns, pkColumns: pkColumns);
+    var works = schema.worksTable;
+    if (works != null) {
+      final playCol = works.columnFor(GenericDbRole.playUrl);
+      if (playCol != null && _isAvatarColumnName(playCol)) {
+        // 唯一的“地址列”其实是头像列：这张表没有真播放地址。
+        works = null;
+      }
+    }
+    if (works == null) {
+      throw StateError('认不出作品表：没有同时带标题与播放地址的表');
+    }
+    final titleCol = works.columnFor(GenericDbRole.title)!;
+    final playCol = works.columnFor(GenericDbRole.playUrl)!;
+    final persons =
+        schema.personsTable ?? _personsTableFallback(schema, works);
+
+    // 标准表名已存在但结构不对：先改名（数据不动），再建标准表。
+    final renamed = <String, String>{};
+    for (final name in _standardTableDdl.keys) {
+      if (!tables.contains(name)) continue;
+      var source = '${name}_source';
+      if (tables.contains(source)) source = '${name}_source2';
+      if (tables.contains(source)) {
+        throw StateError('表名冲突：$name 与 $source 都已存在');
+      }
+      await executor.execute(
+        'ALTER TABLE ${_ident(name)} RENAME TO ${_ident(source)}',
+      );
+      renamed[name] = source;
+    }
+    String sourceName(String original) => renamed[original] ?? original;
+    for (final ddl in _standardTableDdl.values) {
+      await executor.execute(ddl);
+    }
+
+    // 人物表：名 → cate_id 映射（作品行挂人用），头像一起进库。
+    final nameToCateId = <String, String>{};
+    if (persons != null) {
+      final personsTable = sourceName(persons.table);
+      final personsNameCol =
+          persons.columnFor(GenericDbRole.title) ??
+          persons.columnFor(GenericDbRole.actress);
+      final personsAvatarCol =
+          persons.columnFor(GenericDbRole.cover) ??
+          _avatarColumn(persons.allColumns);
+      final personsIdCol =
+          persons.columnFor(GenericDbRole.code) ?? persons.idColumn;
+      if (personsNameCol != null) {
+        await _forEachRow(
+          executor,
+          personsTable,
+          columns: [
+            ?personsIdCol,
+            personsNameCol,
+            ?personsAvatarCol,
+          ],
+          onBatch: (rows) async {
+            final inserts = <String>[];
+            for (final row in rows) {
+              final name = _cellText(row[personsNameCol]);
+              if (name.isEmpty) continue;
+              final id = personsIdCol == null
+                  ? name
+                  : _cellText(row[personsIdCol]);
+              final cateId = id.isEmpty ? name : id;
+              nameToCateId[name] = cateId;
+              final avatar = personsAvatarCol == null
+                  ? ''
+                  : resolveCoverUrl(row[personsAvatarCol]);
+              inserts.add(
+                'INSERT OR IGNORE INTO actresses (cate_id, name, avatar, sex, roster_id, claimed) '
+                "VALUES (${_q(cateId)}, ${_q(name)}, ${_q(avatar)}, '', '', 0)",
+              );
+            }
+            if (inserts.isNotEmpty) await executor.executeBatch(inserts);
+          },
+        );
+      }
+    }
+
+    // 作品表各角色列。
+    final coverCol = works.columnFor(GenericDbRole.cover);
+    final codeCol = works.columnFor(GenericDbRole.code);
+    final categoryCol = works.columnFor(GenericDbRole.category);
+    final actressCol = works.columnFor(GenericDbRole.actress);
+    final dateCol = works.columnFor(GenericDbRole.date);
+    // 作品表独立头像列：只认 avatar/avatarurl/头像，且不是封面列那一列。
+    final worksAvatarCol = _avatarColumn(
+      works.allColumns,
+      exclude: coverCol,
+    );
+    final worksTable = sourceName(works.table);
+    final playFrom = works.table;
+    final readColumns = <String>{
+      titleCol,
+      playCol,
+      ?codeCol,
+      ?coverCol,
+      ?categoryCol,
+      ?actressCol,
+      ?dateCol,
+      ?worksAvatarCol,
+    }.toList();
+    var skipped = 0;
+    var normalized = 0;
+    await _forEachRow(
+      executor,
+      worksTable,
+      columns: readColumns,
+      onBatch: (rows) async {
+        final videoInserts = <String>[];
+        final urlInserts = <String>[];
+        final categoryInserts = <String>[];
+        final actressInserts = <String>[];
+        final linkInserts = <String>[];
+        for (final row in rows) {
+          final playUrl = extractPlayUrl(row[playCol]);
+          if (playUrl.isEmpty) {
+            skipped++;
+            continue;
+          }
+          final rowId = row['rowid'];
+          final code = codeCol == null ? '' : _cellText(row[codeCol]);
+          final vodId = code.isEmpty ? 'row-${rowId ?? ''}' : code;
+          var title = _cellText(row[titleCol]);
+          if (title.isEmpty) title = vodId;
+          final cover = coverCol == null
+              ? ''
+              : resolveCoverUrl(row[coverCol]);
+          final category = categoryCol == null
+              ? ''
+              : _cellText(row[categoryCol]);
+          final date = dateCol == null ? '' : _cellText(row[dateCol]);
+          videoInserts.add(
+            'INSERT OR IGNORE INTO videos (vod_id, title, pic_url, m3u8_url, vod_remarks, vod_pubdate, vod_area, vod_year, vod_content, vod_play_from, vod_play_url, type_name) '
+            "VALUES (${_q(vodId)}, ${_q(title)}, ${_q(cover)}, ${_q(playUrl)}, '', ${_q(date)}, '', '', '', ${_q(playFrom)}, ${_q(playUrl)}, ${_q(category)})",
+          );
+          urlInserts.add(
+            'INSERT OR IGNORE INTO video_play_urls (vod_id, play_url, play_from) '
+            "VALUES (${_q(vodId)}, ${_q(playUrl)}, ${_q(playFrom)})",
+          );
+          if (category.isNotEmpty) {
+            categoryInserts.add(
+              'INSERT OR IGNORE INTO video_category (vod_id, main_category) '
+              "VALUES (${_q(vodId)}, ${_q(category)})",
+            );
+          }
+          // 女优：作品行里的名字先挂进 actresses（头像只认作品表
+          // 的独立头像列），再挂 video_actress 关联。
+          final names = actressCol == null
+              ? const <String>[]
+              : _splitActressNames(_cellText(row[actressCol]));
+          for (final name in names) {
+            final cateId = nameToCateId[name] ?? name;
+            final avatar = worksAvatarCol == null
+                ? ''
+                : resolveCoverUrl(row[worksAvatarCol]);
+            actressInserts.add(
+              'INSERT OR IGNORE INTO actresses (cate_id, name, avatar, sex, roster_id, claimed) '
+              "VALUES (${_q(cateId)}, ${_q(name)}, ${_q(avatar)}, '', '', 0)",
+            );
+            linkInserts.add(
+              'INSERT OR IGNORE INTO video_actress (vod_id, cate_id) '
+              "VALUES (${_q(vodId)}, ${_q(cateId)})",
+            );
+          }
+        }
+        for (final batch in [
+          videoInserts,
+          urlInserts,
+          categoryInserts,
+          actressInserts,
+          linkInserts,
+        ]) {
+          if (batch.isNotEmpty) await executor.executeBatch(batch);
+        }
+        normalized += rows.length;
+        onNormalized(normalized);
+      },
+    );
+    return skipped;
+  }
+
+  /// 人物表兜底：classify 没认出来时（比如头像列叫 avatar_url 被算
+  /// 成播放地址列，或人名列只认出 actress 角色没认出 title 角色），
+  /// 再按“有名列、且播放地址列全是头像列”扫一遍。分类字典表排除。
+  GenericDbTableMapping? _personsTableFallback(
+    GenericDbSchema schema,
+    GenericDbTableMapping works,
+  ) {
+    for (final mapping in schema.tables) {
+      if (mapping.table == works.table) continue;
+      final normalizedTable = normalizeDbFieldName(mapping.table);
+      if (normalizedTable == 'categories' ||
+          normalizedTable == 'category') {
+        continue;
+      }
+      final nameCol =
+          mapping.columnFor(GenericDbRole.actress) ??
+          mapping.columnFor(GenericDbRole.title);
+      if (nameCol == null) continue;
+      final playCol = mapping.columnFor(GenericDbRole.playUrl);
+      if (playCol != null && !_isAvatarColumnName(playCol)) continue;
+      return mapping;
+    }
+    return null;
+  }
+
+  /// 作品表/人物表里找头像列：第一个头像名、且不是封面列那一列。
+  static String? _avatarColumn(
+    List<String> columns, {
+    String? exclude,
+  }) {
+    for (final column in columns) {
+      if (column == exclude) continue;
+      if (_isAvatarColumnName(column)) return column;
+    }
+    return null;
+  }
+
+  /// 分页读一张表（ORDER BY rowid，每页 [batchSize] 行），
+  /// 读完一批调一次 [onBatch]。行里带 rowid 键。
+  Future<void> _forEachRow(
+    SqlImportExecutor executor,
+    String table, {
+    required List<String> columns,
+    required Future<void> Function(List<Map<String, Object?>> rows) onBatch,
+  }) async {
+    final selectList = [
+      'rowid',
+      for (final c in columns) _ident(c),
+    ].join(', ');
+    var offset = 0;
+    while (true) {
+      final rows = await executor.query(
+        'SELECT $selectList FROM ${_ident(table)} '
+        'ORDER BY rowid LIMIT $batchSize OFFSET $offset',
+      );
+      if (rows.isEmpty) return;
+      await onBatch(rows);
+      offset += rows.length;
+      if (rows.length < batchSize) return;
+    }
+  }
+
+  /// SQL 字符串字面量：单引号加倍转义。
+  static String _q(String value) => "'${value.replaceAll("'", "''")}'";
+
+  /// SQL 标识符（表名/列名）：双引号包起来，双引号加倍转义。
+  static String _ident(String name) => '"${name.replaceAll('"', '""')}"';
+
+  /// 单元格取值：null → ''，其余转字符串去首尾空白。
+  static String _cellText(Object? value) =>
+      value == null ? '' : value.toString().trim();
+
+  /// 女优名拆分：`A、B、C` / `A, B` / `A/B` / `A|B` 都拆，去重保序。
+  static List<String> _splitActressNames(String text) {
+    if (text.isEmpty) return const [];
+    final names = <String>[];
+    for (final part in text.split(RegExp(r'[、，,;；/｜|]+'))) {
+      final name = part.trim();
+      if (name.isNotEmpty && !names.contains(name)) names.add(name);
+    }
+    return names;
   }
 }

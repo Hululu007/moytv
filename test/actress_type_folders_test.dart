@@ -1,5 +1,7 @@
 // 类型文件夹视图测试（2026-11-24 文件夹视图）。
-// - GenericDbReader.typeNameFacet 分组计数 + 标签过滤（测试构造器）；
+// - 文件夹分组计数 + 标签过滤（FilmLibraryService.typeFolders，
+//   严格 SQL；2026-11-25 只留 .sql 导入后 GenericDbReader 已删，
+//   原来测它内存分组的那组跟着删，行为由下面假服务与 Python 重放覆盖）；
 // - 文件夹网格 widget 渲染与点开；
 // - 文件夹卡片封面（2026-11-24 13:42 令）：每卡用该类型视频列表
 //   第一条视频的 pic_url，没封面的回落文件夹图标；
@@ -242,95 +244,6 @@ Future<void> _seedCoverCache(WidgetTester tester, String url) async {
 }
 
 void main() {
-  group('GenericDbReader.typeNameFacet', () {
-    test('按 category 分组、从多到少', () async {
-      final reader = GenericDbReader.test(
-        works: [
-          const GenericDbWork(
-            id: 1,
-            title: '一',
-            category: '成人影片',
-            code: 'MIDA-619',
-          ),
-          const GenericDbWork(
-            id: 2,
-            title: '二',
-            category: '成人影片',
-            code: 'SSIS-123',
-          ),
-          const GenericDbWork(
-            id: 3,
-            title: '三',
-            category: '国产精品',
-            code: 'GUO-001',
-          ),
-          const GenericDbWork(id: 4, title: '四', category: '', code: 'X-1'),
-        ],
-      );
-      expect(await reader.typeNameFacet(), [
-        ('成人影片', 2),
-        ('国产精品', 1),
-      ]);
-    });
-
-    test('标签过滤只算带该标签的作品', () async {
-      final reader = GenericDbReader.test(
-        works: [
-          const GenericDbWork(
-            id: 1,
-            title: '一',
-            category: '成人影片',
-            code: 'MIDA-619',
-          ),
-          const GenericDbWork(
-            id: 2,
-            title: '二',
-            category: '成人影片',
-            code: 'SSIS-123',
-          ),
-          const GenericDbWork(
-            id: 3,
-            title: '三',
-            category: '国产精品',
-            code: 'GUO-001',
-          ),
-        ],
-        workTags: {
-          'MIDA-619': {'中文字幕'},
-          'GUO-001': {'中文字幕'},
-        },
-      );
-      expect(
-        await reader.typeNameFacet(
-          tagKey: 'video_tag.tag_name',
-          tag: '中文字幕',
-        ),
-        [
-          ('成人影片', 1),
-          ('国产精品', 1),
-        ],
-      );
-      // 没给 workTags 时带标签的作品一条都筛不出来（不是不过滤）。
-      final noTags = GenericDbReader.test(
-        works: [
-          const GenericDbWork(
-            id: 1,
-            title: '一',
-            category: '成人影片',
-            code: 'MIDA-619',
-          ),
-        ],
-      );
-      expect(
-        await noTags.typeNameFacet(
-          tagKey: 'video_tag.tag_name',
-          tag: '中文字幕',
-        ),
-        isEmpty,
-      );
-    });
-  });
-
   group('ActressTypeFolderGrid', () {
     testWidgets('三列文件夹卡：名 + 共N条，点卡回传类型名', (tester) async {
       var opened = '';
@@ -576,6 +489,42 @@ void main() {
       expect(find.text('国产测试一'), findsNothing);
       expect(find.text('成人影片'), findsOneWidget);
       expect(find.text('无码专区'), findsOneWidget);
+    });
+
+    // 2026-11-25 导入防卡死（用户令）：导完文件夹来回点几次都得
+    // 能加载。群里报的毛病是点进一个文件夹、返回再点第二个就全都
+    // 加载不出来、非重启不可；这里连进 5 次（三个文件夹轮着点，
+    // 成人影片与国产精品各进两次），每次作品都出来、转圈指示器
+    // 全清、退回网格也在。文件夹数据走 FilmLibraryService（导入
+    // 后的内部工作库同一条取数路子），这里用假服务代入。
+    testWidgets('连续进出文件夹 5 次：每次都加载出来，不转圈、不卡死', (
+      tester,
+    ) async {
+      await pumpPage(tester);
+      await goCategoryTab(tester);
+      const folders = ['成人影片', '国产精品', '无码专区', '成人影片', '国产精品'];
+      const firstWorks = [
+        '测试作品一',
+        '国产测试一',
+        '无码测试一',
+        '测试作品一',
+        '国产测试一',
+      ];
+      for (var i = 0; i < folders.length; i++) {
+        await tester.tap(find.text(folders[i]));
+        await _settle(tester);
+        expect(find.text(firstWorks[i]), findsOneWidget);
+        expect(service.lastFolder, folders[i]);
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        await tester.tap(find.text('‹ 全部类型'));
+        await _settle(tester);
+        expect(find.text(firstWorks[i]), findsNothing);
+        expect(find.text('类型文件夹'), findsOneWidget);
+        expect(find.text('成人影片'), findsOneWidget);
+        expect(find.text('国产精品'), findsOneWidget);
+        expect(find.text('无码专区'), findsOneWidget);
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+      }
     });
 
     testWidgets('标签筛：文件夹计数按标签重算，文件夹里同样能筛', (

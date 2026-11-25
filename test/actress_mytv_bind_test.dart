@@ -1,12 +1,13 @@
-// 女优库 MYTV 绑定（2026-11-20）：绑定解析、迁移、用户 m3u、
-// json/m3u/现爬目录覆盖、内存库重读空实现、列表页通用模式渲染。
+// 女优库 MYTV 绑定（2026-11-20，2026-11-25 只留 .sql 导入后绑定
+// 只剩 json/m3u 目录与合并 JSON 导出，不再管数据库）：绑定解析、
+// 迁移、用户 m3u、json/m3u/现爬目录覆盖、内存库重读空实现、
+// 列表页没导入数据库的空态。
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
-import 'package:moyi/actress/actress_generic_db.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_m3u_index.dart';
@@ -45,18 +46,6 @@ class _CountingSyncService extends ActressSyncService {
   }
 }
 
-/// 通用模式测试库：内存库 + 注入的通用读库。
-class _GenericTestDb extends MemoryActressDatabase {
-  _GenericTestDb(this.works, {GenericDbSchema? schema}) : _schema = schema;
-
-  final List<GenericDbWork> works;
-  final GenericDbSchema? _schema;
-
-  @override
-  Future<GenericDbReader?> genericReader() async =>
-      GenericDbReader.test(works: works, schema: _schema);
-}
-
 void main() {
   group('MYTV 绑定解析', () {
     late Directory temp;
@@ -78,57 +67,43 @@ void main() {
       );
     }
 
-    test('有外置库：库路径是 MYTV/db/女优库.db，显示路径带 MYTV', () async {
-      File('${ext.path}/MYTV/db/女优库.db')
-        ..createSync(recursive: true)
-        ..writeAsStringSync('video-db-bytes');
+    test('绑定成功：json/m3u 目录是 MYTV 下的两子目录', () async {
       final result = await bind().ensureBound();
       expect(result.bound, isTrue);
-      expect(result.hasVideoDb, isTrue);
-      expect(result.dbPath, '${ext.path}/MYTV/db/女优库.db');
-      expect(result.displayPath, 'MYTV/db/女优库.db');
+      expect(result.jsonDir.path, '${ext.path}/MYTV/db');
+      expect(result.m3uDir.path, '${ext.path}/MYTV/m3u');
       expect(Directory('${ext.path}/MYTV/db').existsSync(), isTrue);
       expect(Directory('${ext.path}/MYTV/m3u').existsSync(), isTrue);
       expect(result.mergedJsonExportPath, '${ext.path}/MYTV/mjv011.json');
       expect(result.note, isNull);
     });
 
-    test('没有外置库：dbPath 为空、显示未找到外置数据库、带放库提示', () async {
-      final result = await bind().ensureBound();
-      expect(result.bound, isTrue);
-      expect(result.hasVideoDb, isFalse);
-      expect(result.dbPath, isEmpty);
-      expect(result.displayPath, '未找到外置数据库');
-      expect(result.note, contains('未找到外置数据库'));
-      expect(result.note, contains('MYTV/db/'));
-      expect(Directory('${ext.path}/MYTV/db').existsSync(), isTrue);
-      expect(Directory('${ext.path}/MYTV/m3u').existsSync(), isTrue);
-    });
-
-    test('外置库是空文件：按没有外置库处理', () async {
+    test('MYTV/db 里放 .db 文件也不认：绑定只管 json/m3u', () async {
+      // 2026-11-25 只留 .sql 导入：用户往 MYTV/db 里放 女优库.db
+      // 不再被读，绑定结果里也没有任何数据库字段。
       File('${ext.path}/MYTV/db/女优库.db')
         ..createSync(recursive: true)
-        ..writeAsStringSync('');
+        ..writeAsStringSync('video-db-bytes');
       final result = await bind().ensureBound();
-      expect(result.hasVideoDb, isFalse);
-      expect(result.dbPath, isEmpty);
-      expect(result.note, contains('未找到外置数据库'));
+      expect(result.bound, isTrue);
+      expect(result.jsonDir.path, '${ext.path}/MYTV/db');
+      expect(result.m3uDir.path, '${ext.path}/MYTV/m3u');
+      expect(result.note, isNull);
     });
 
-    test('外部存储不可用：未绑定、dbPath 为空，不抛错', () async {
+    test('外部存储不可用：未绑定，json/m3u 回落到 documents，不抛错', () async {
       final noExt = ActressMytvBind(
         externalRoot: () async => null,
         documentsDir: () async => docs,
       );
       final result = await noExt.ensureBound();
       expect(result.bound, isFalse);
-      expect(result.hasVideoDb, isFalse);
-      expect(result.dbPath, isEmpty);
-      expect(result.displayPath, '未找到外置数据库');
+      expect(result.jsonDir.path, '${docs.path}/actress_json');
+      expect(result.m3uDir.path, '${docs.path}/actress_json');
       expect(result.note, contains('外部存储不可用'));
     });
 
-    test('写不进去且没权限：needsPermission，dbPath 为空', () async {
+    test('写不进去且没权限：needsPermission', () async {
       // 外部根是一份普通文件：建 MYTV/db 必然抛错，走权限分支。
       final fileRoot = File('${temp.path}/not-a-dir')
         ..writeAsStringSync('x');
@@ -140,7 +115,7 @@ void main() {
       final result = await noPerm.ensureBound();
       expect(result.bound, isFalse);
       expect(result.needsPermission, isTrue);
-      expect(result.dbPath, isEmpty);
+      expect(result.note, contains('没有所有文件访问权限'));
     });
 
     test('老 json 影子文件拷进 MYTV/db：只补没有的', () async {
@@ -307,16 +282,15 @@ void main() {
   });
 
   group('内存库重读空实现', () {
-    test('reloadIfChanged 返回未变、genericReader 返回 null', () async {
+    test('reloadIfChanged 返回未变', () async {
       final db = MemoryActressDatabase();
       final reload = await db.reloadIfChanged();
       expect(reload.reloaded, isFalse);
       expect(reload.error, isNull);
-      expect(await db.genericReader(), isNull);
     });
   });
 
-  group('列表页：绑定行与手动重载', () {
+  group('列表页：没导入数据库的空态', () {
     late Directory temp;
     late MemoryActressDatabase db;
 
@@ -326,109 +300,58 @@ void main() {
       db = MemoryActressDatabase();
     });
 
-    testWidgets('空库不再自动生成，绑定行如实显示未找到外置数据库', (
-      tester,
-    ) async {
+    testWidgets('没导入数据库：空态提示导入 .sql，不自动同步', (tester) async {
       final store = await _makeStore();
       final sync = _CountingSyncService(db: db, sources: const []);
       addTearDown(sync.dispose);
       final fallback = ActressJsonFallback(documentsDir: temp);
       // 2026-11-20：列表页 bootstrap 里 await 平台通道拿 MYTV
-      // 绑定（真机上毫秒级）；FakeAsync 下平台通道等不到返回，
-      // 按树里老办法包在 runAsync 里跑（见 AGENTS.md）。
+      // 绑定（真机上毫秒级）。pumpAndSettle 的假时钟等不到真异步
+      // bootstrap（会超时），pump() 也不能放进 runAsync（会挂住）：
+      // 按树里既定模式，延时放 runAsync、刷帧放外面（见 AGENTS.md）。
       await tester.runAsync(() async {
         await tester.pumpWidget(
           MaterialApp(
             home: ActressListPage(
               repository: FixtureRepository(),
               store: store,
-              database: db,
+              database: _NoLibraryTestDb(),
               syncService: sync,
               fallback: fallback,
             ),
           ),
         );
-        await tester.pumpAndSettle();
-        // 空库不再自动生成（2026-11-22 用户令最终口径）：不灌
-        // 内置 json 种子、不走互联网同步，同步一次都不跑。
-        expect(sync.runs, 0);
-        // 绑定行在（测试环境没外部存储，未绑定、未找到外置数据库）。
-        expect(find.text('数据库：未找到外置数据库'), findsOneWidget);
-        // 手动重载入口常驻，点按后内存库没有变化。
-        expect(find.text('重新加载数据库'), findsOneWidget);
-        await tester.tap(find.text('重新加载数据库'));
-        await tester.pumpAndSettle();
-        expect(find.text('数据库没有变化'), findsOneWidget);
       });
-    });
-
-    testWidgets('通用模式：作品标题可见、“数据库字段”按钮在', (tester) async {
-      final store = await _makeStore();
-      final sync = _CountingSyncService(db: db, sources: const []);
-      final genericDb = _GenericTestDb(
-        const [
-          GenericDbWork(
-            id: 1,
-            title: '通用测试作品一',
-            code: 'ABC-1',
-            playUrl: 'https://example.com/1.m3u8',
-          ),
-          GenericDbWork(
-            id: 2,
-            title: '通用测试作品二',
-            code: 'XYZ-2',
-            playUrl: 'https://example.com/2.m3u8',
-          ),
-        ],
-        schema: classifyGenericTables({
-          'videos': ['id', 'title', 'url'],
-        }),
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 300)),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      // 空库不再自动生成（2026-11-22 用户令最终口径）：不灌
+      // 内置 json 种子、不走互联网同步，同步一次都不跑。
+      expect(sync.runs, 0);
+      // 2026-11-25 只留 .sql 导入：绑定行与“重新加载数据库”
+      // 入口都删了，空态只剩这一句导入提示。
+      expect(
+        find.text('还没有导入数据库：请在设置里导入 .sql 数据库'),
+        findsOneWidget,
       );
-      final fallback = ActressJsonFallback(documentsDir: temp);
-      await tester.runAsync(() async {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: ActressListPage(
-              repository: FixtureRepository(),
-              store: store,
-              database: genericDb,
-              syncService: sync,
-              fallback: fallback,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text('演员库 · 外来数据库'), findsOneWidget);
-        expect(find.text('通用测试作品一'), findsOneWidget);
-        expect(find.text('通用测试作品二'), findsOneWidget);
-        expect(find.text('外来数据库 · 表 videos · 2 条'), findsOneWidget);
-        expect(find.text('数据库字段'), findsOneWidget);
-        // 通用模式不跑同步（护栏），同步次数为 0。
-        expect(sync.runs, 0);
-        // 点“数据库字段”进查看页：表名与字段名列出来（表名在卡片标题与
-        // 手动指定的表下拉里各出现一次，字段名在列清单与角色下拉里各
-        // 出现一次）。
-        await tester.tap(find.text('数据库字段'));
-        await tester.pumpAndSettle();
-        expect(find.text('数据库字段'), findsWidgets);
-        expect(find.text('videos'), findsWidgets);
-        expect(find.text('title'), findsWidgets);
-        expect(find.text('url'), findsWidgets);
-        expect(find.text('手动指定作品表'), findsOneWidget);
-        // 手动映射已按自动认出的标题/播放地址预填，保存可用。
-        // 保存按钮在字段页 ListView 底部，屏外没构建出来，先滚到可见。
-        final saveButton = find.text('保存映射并重新加载');
-        await tester.scrollUntilVisible(saveButton, 100);
-        expect(saveButton, findsOneWidget);
-        await tester.tap(saveButton);
-        // 保存走真文件写（runAsync 下走真实 IO）：只 pumpAndSettle
-        // 会在写没完成时就返回（没帧可刷了），先等它落盘、弹回、
-        // 列表重读完再断言。
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        await tester.pumpAndSettle();
-        // 保存后回到列表，作品还在。
-        expect(find.text('通用测试作品一'), findsOneWidget);
-      });
+      expect(find.text('重新加载数据库'), findsNothing);
     });
   });
+}
+
+/// reloadIfChanged 报“还没有导入数据库”的测试库：模拟内部工作库
+/// 还没建（用户还没导过 .sql）。
+class _NoLibraryTestDb extends MemoryActressDatabase {
+  @override
+  Future<({bool reloaded, String? error})> reloadIfChanged({
+    bool force = false,
+  }) async {
+    return (
+      reloaded: false,
+      error: '还没有导入数据库：请在设置里导入 .sql 数据库',
+    );
+  }
 }

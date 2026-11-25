@@ -7,11 +7,10 @@ import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
 import 'actress_database.dart';
-import 'actress_db_fields_page.dart';
 import 'actress_generic_db.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
-import 'actress_mytv_bind.dart';
+import 'actress_working_db.dart';
 import 'actress_neon.dart';
 import 'actress_nvku_cache.dart';
 import '../core_bridge.dart';
@@ -19,23 +18,19 @@ import '../local_store.dart';
 import '../models.dart';
 import '../player_picker.dart';
 
-/// 影视库分类（2026-11-20 用户令）：根据用户放进 MYTV/db 的
-/// 女优库.db 新增的影视库分类，另加爬虫写库、域名批量替换、失效
+/// 影视库分类（2026-11-20 用户令）：内部工作库（.sql 导入落成）
+/// 的影视库分类，另加爬虫写库、域名批量替换、失效
 /// 链接自动修复。
 ///
-/// 读库分两路，走 MYTV 绑定那批的通用读库层（actress_generic_db.dart），
-/// 本文件不另起字段映射：
-/// - 女优库结构（videos/actresses/video_actress/video_category）：
-///   严格路径，本文件直接 SQL 读（女优名、分类、站点全取到）；
-/// - 别的结构：走 [ActressDatabase.genericReader]，动态探表与字段、
-///   启发式映射；认不出的表进“数据库字段”页由用户手动指定。
+/// 只读标准视频库结构（videos/actresses/video_actress/
+/// video_category），本文件直接 SQL 读（女优名、分类、站点全取到）；
 /// 播放地址取值（正片$、JSON、$$$/# 分隔）与换库重读以通用层为准，
-/// 本文件只用 [extractPlayUrl] 与 [GenericDbReader]，不自写解析。
+/// 本文件只用 [extractPlayUrl]，不自写解析。
 /// 播放走现有链：条目转兜底条目（单集“正片”，集 id 即直链），
 /// 潮流蜘蛛 playerContent 原始分支原样回 parse=0 直链 + dict 头。
 ///
-/// 域名与修复状态存在库文件夹旁的 `影视库状态.json`（与“字段映射.json”
-/// 同一目录，按库结构指纹分键），不往用户任意结构的 db 里加表；
+/// 域名与修复状态存在库文件夹旁的 `影视库状态.json`
+/// （按库结构指纹分键），不往库里加表；
 /// 域名批量替换本身是 UPDATE 目标库的地址列（用户要的功能），
 /// 只换域名、路径与 hash 不动。
 
@@ -587,7 +582,6 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   GenericDbSchema? _schema;
   String? _dbPath;
   String? _displayPath;
-  GenericDbReader? _genericReader;
   FilmLibraryStateStore? _state;
 
   bool get isOpen => _readDb != null;
@@ -604,33 +598,32 @@ class FilmLibraryService implements FilmDbFallbackProvider {
 
   String get fingerprint => _schema?.fingerprint ?? '';
 
-  /// 打开绑定的影视库文件（只读连接；换库后重读以绑定层为准）。
+  /// 打开内部工作库文件（只读连接；.sql 导入换库后重读）。
   /// 打开时比对域名：sidecar 里记的当前域名与库里实际主域名不一
   /// 样时，默认只记不自动换（见 [autoReplaceDomain]）；开关开着
   /// 才批量替换库里全部播放地址的域名并记数（只在打开时做一次，
   /// 不在列表滚动时反复做）。
   Future<FilmLibraryOpenResult> open() async {
     await close();
-    final bind = await ActressMytvBind.instance.ensureBound();
-    final dbPath = bind.dbPath;
+    final dbPath = await actressWorkingDbPath();
     _dbPath = dbPath;
-    _displayPath = bind.displayPath;
+    _displayPath = actressWorkingDbFileName;
     if (dbPath.isEmpty) {
       return FilmLibraryOpenResult(
         dbPath: dbPath,
-        displayPath: bind.displayPath,
+        displayPath: actressWorkingDbFileName,
         strict: false,
         total: 0,
         schema: const GenericDbSchema(tables: [], fingerprint: ''),
         domain: '',
-        error: '未找到外置数据库：MYTV/db/女优库.db',
+        error: '还没有导入数据库：请在设置里导入 .sql 数据库',
       );
     }
     final file = File(dbPath);
     if (!file.existsSync() || file.lengthSync() == 0) {
       return FilmLibraryOpenResult(
         dbPath: dbPath,
-        displayPath: bind.displayPath,
+        displayPath: actressWorkingDbFileName,
         strict: false,
         total: 0,
         schema: const GenericDbSchema(tables: [], fingerprint: ''),
@@ -653,10 +646,20 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     final state = FilmLibraryStateStore(file: stateFile);
     _state = state;
     final strict = filmIsStrictVideosSchema(schema);
-    GenericDbReader? generic;
     if (!strict) {
-      generic = await database.genericReader();
-      _genericReader = generic;
+      await db.close();
+      _readDb = null;
+      _schema = null;
+      _state = null;
+      return FilmLibraryOpenResult(
+        dbPath: dbPath,
+        displayPath: actressWorkingDbFileName,
+        strict: false,
+        total: 0,
+        schema: schema,
+        domain: '',
+        error: '不是女优库数据库：请导入 .sql 数据库',
+      );
     }
     final total = await countFilms();
     final domain = await _currentDomainFromDb();
@@ -676,7 +679,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     }
     return FilmLibraryOpenResult(
       dbPath: dbPath,
-      displayPath: bind.displayPath,
+      displayPath: actressWorkingDbFileName,
       strict: strict,
       total: total,
       schema: schema,
@@ -689,14 +692,12 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     final db = _readDb;
     _readDb = null;
     _schema = null;
-    _genericReader = null;
     _state = null;
     _filmActressNames = null;
     await db?.close();
   }
 
-  /// 库里实际主域名：严格结构取 m3u8_url 前 200 条非空地址的众数；
-  /// 通用结构取通用读出的前 200 条作品的播放地址众数。
+  /// 库里实际主域名：严格结构取 m3u8_url 前 200 条非空地址的众数。
   Future<String> _currentDomainFromDb() async {
     final hosts = <String, int>{};
     void add(String url) {
@@ -714,14 +715,6 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         );
         for (final row in rows) {
           add(row['m3u8_url']?.toString() ?? '');
-        }
-      }
-    } else {
-      final reader = _genericReader;
-      if (reader != null) {
-        final works = await reader.works(offset: 0, limit: 200);
-        for (final work in works) {
-          add(work.playUrl);
         }
       }
     }
@@ -819,17 +812,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
           ),
       ];
     }
-    final reader = _genericReader;
-    if (reader == null) return [];
-    final counts = <String, int>{};
-    final works = await reader.works(offset: 0, limit: 1000);
-    for (final work in works) {
-      if (work.category.isEmpty) continue;
-      counts[work.category] = (counts[work.category] ?? 0) + 1;
-    }
-    final list = counts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return [for (final e in list) (e.key, e.value)];
+    return [];
   }
 
   /// 站点列表：严格结构读 videos.vod_play_from 去重；通用结构没有
@@ -853,8 +836,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// EXISTS 半连接；库里没有 video_tag 表时带标签的作品一条都
   /// 筛不出来，回空、不抛错、不暗地里回未过滤的数）；[category]
   /// 是 video_category 主分类（与标签 AND）。
-  /// 通用结构走读库的 [GenericDbReader.typeNameFacet]（作品表
-  /// 没有 type_name 列时回空，页里如实显示“暂无文件夹”）。
+  /// 作品表没有 type_name 列时回空，页里如实显示“暂无文件夹”。
   /// 一次全表聚合，调用方缓存着用，别每页都调。
   Future<List<(String, int)>> typeFolders({
     String videoTag = '',
@@ -894,9 +876,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
           (row['name'].toString(), (row['c'] as num).toInt()),
       ];
     }
-    final reader = _genericReader;
-    if (reader == null) return [];
-    return reader.typeNameFacet(tagKey: genericTagKey, tag: videoTag);
+    return [];
   }
 
   /// 类型文件夹封面（2026-11-24 文件夹卡片用封面）：每个类型取
@@ -1018,11 +998,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       final values = await database.dbTags();
       return (key: 'video_tag.tag_name', values: values);
     }
-    final reader = _genericReader;
-    if (reader == null) {
-      return (key: '', values: const <(String, int)>[]);
-    }
-    return reader.tagFacet();
+    return (key: '', values: const <(String, int)>[]);
   }
 
   Future<bool> _hasVideoTagTable(Database db) async {
@@ -1111,31 +1087,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       );
       return _strictRowsWithActresses(rows);
     }
-    final reader = _genericReader;
-    if (reader == null) return [];
-    if (videoTag.isNotEmpty && genericTagKey.isEmpty) return [];
-    if (typeName.isNotEmpty) {
-      final worksTable = reader.schema.worksTable;
-      if (worksTable == null ||
-          !worksTable.allColumns.contains('type_name')) {
-        return [];
-      }
-    }
-    final filters = <String, List<String>>{};
-    if (typeName.isNotEmpty) filters['type_name'] = [typeName];
-    if (videoTag.isNotEmpty) filters[genericTagKey] = [videoTag];
-    final works = await reader.works(
-      offset: offset,
-      limit: limit,
-      query: query,
-      filters: filters,
-    );
-    final out = <FilmLibraryEntry>[];
-    for (final work in works) {
-      if (category.isNotEmpty && work.category != category) continue;
-      out.add(_genericWorkToEntry(work));
-    }
-    return out;
+    return [];
   }
 
   Future<int> countFilms({
@@ -1215,27 +1167,14 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       NvkuEntryCache.putCount(stamp, 'countFilms', filterKey, total);
       return total;
     }
-    final reader = _genericReader;
-    if (reader == null) return 0;
-    if (videoTag.isNotEmpty && genericTagKey.isEmpty) return 0;
-    if (typeName.isNotEmpty) {
-      final worksTable = reader.schema.worksTable;
-      if (worksTable == null ||
-          !worksTable.allColumns.contains('type_name')) {
-        return 0;
-      }
-    }
-    final filters = <String, List<String>>{};
-    if (typeName.isNotEmpty) filters['type_name'] = [typeName];
-    if (videoTag.isNotEmpty) filters[genericTagKey] = [videoTag];
-    return reader.countWorks(query: query, filters: filters);
+    return 0;
   }
 
   /// 直播内置片库（whos_lib）读库分页（2026-11-23 v58 验机）：
   /// 内置片库原来只读 documents/actress_json/ 里的 whos.json /
   /// mjv011.json，v58 删了包内 whos.json、用户又定 App 里不内置
   /// 任何 JSON，没那两个文件就确定性播不了；改成优先读本地数据库
-  /// （MYTV/db/女优库.db，34 万部、地址封面都有），没库才读 JSON。
+/// （.sql 导入落成的内部工作库，地址封面都有），没库才读 JSON。
   /// 只读严格结构库；打不开/非严格结构回空，不抛错。
   /// 排序是最新在前（vod_pubdate 倒序，不是 listFilms 的 vod_id
   /// 字典序）；brand 按番号前缀筛（`rki-%`，走 vod_id 主键前缀）；
@@ -1459,15 +1398,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         }
         return _filterFallbackSite(out, site);
       }
-      final reader = _genericReader;
-      if (reader == null) return const [];
-      final works = await reader.works(offset: 0, limit: 1000);
-      final out = <ActressJsonEntry>[
-        for (final work in works)
-          if (normalizeActressJsonName(work.actress) == key)
-            _genericWorkToEntry(work).toJsonEntry(),
-      ];
-      return _filterFallbackSite(out, site);
+      return const [];
     } catch (_) {
       return const [];
     }
@@ -1498,15 +1429,7 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         ];
         return _filterFallbackSite(out, site);
       }
-      final reader = _genericReader;
-      if (reader == null) return const [];
-      final works = await reader.works(offset: 0, limit: 1000, query: slug);
-      final out = <ActressJsonEntry>[
-        for (final work in works)
-          if (filmSlugCode(work.code) == slug)
-            _genericWorkToEntry(work).toJsonEntry(),
-      ];
-      return _filterFallbackSite(out, site);
+      return const [];
     } catch (_) {
       return const [];
     }
@@ -1683,8 +1606,8 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// 就关旧连接重开。失败回 false，调用方回空、不拖垮兜底。
   Future<bool> _ensureFilmOpen() async {
     try {
-      final bind = await ActressMytvBind.instance.ensureBound();
-      if (isOpen && _dbPath == bind.dbPath) return true;
+      final workingPath = await actressWorkingDbPath();
+      if (isOpen && _dbPath == workingPath) return true;
       await close();
       final result = await open();
       return result.error == null;
@@ -1783,27 +1706,9 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     return row['type_name']?.toString() ?? '';
   }
 
-  FilmLibraryEntry _genericWorkToEntry(GenericDbWork work) {
-    return FilmLibraryEntry(
-      vodId: work.id?.toString() ?? work.title,
-      title: work.title,
-      coverUrl: work.coverUrl,
-      playUrl: work.playUrl,
-      actress: work.actress,
-      code: filmSlugCode(work.code),
-      category: work.category,
-      site: '',
-      date: work.date,
-      remarks: '',
-      typeName: work.category,
-      content: '',
-    );
-  }
 
   FilmLibraryStateStore? get stateStoreForRepair => _state;
 
-  /// 通用读出器（“数据库字段”页用；严格结构时为 null）。
-  GenericDbReader? get genericReader => _genericReader;
 
   /// 当前库的 sidecar 状态（域名/失效标记/修复汇总）。
   FilmLibraryStateStore? get stateStore => _state;
@@ -2464,17 +2369,6 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
     });
   }
 
-  Future<void> _openFieldsPage() async {
-    final reader = _service.genericReader;
-    if (reader == null) return;
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => ActressDbFieldsPage(reader: reader),
-      ),
-    );
-    if (changed != true || !mounted) return;
-    await _openLibrary();
-  }
 
   /// 手动“更新域名”：当前域名与爬虫最近见到的域名不一样时，
   /// 批量替换库里全部播放地址的域名并记数。
@@ -2555,12 +2449,6 @@ class _FilmLibraryPageState extends State<FilmLibraryPage> {
               database: widget.database,
             ),
           ),
-          if (_service.genericReader != null)
-            IconButton(
-              icon: const Icon(Icons.tune),
-              tooltip: '数据库字段',
-              onPressed: _openFieldsPage,
-            ),
         ],
       ),
       body: _loading && open == null
