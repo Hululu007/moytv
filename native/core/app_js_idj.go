@@ -202,6 +202,7 @@ type idjPermissions struct {
 	cloudflare bool
 	storage    bool
 	login      bool
+	pan        bool // WebHome 对照补宿主：permissions.pan（host.pan.check 的审计声明）
 	present    bool // manifest 里到底有没有 permissions 一节
 }
 
@@ -237,6 +238,7 @@ func idjParseManifest(raw string) (*idjManifest, error) {
 			Cloudflare   bool     `json:"cloudflare"`
 			Storage      bool     `json:"storage"`
 			Login        bool     `json:"login"`
+			Pan          bool     `json:"pan"`
 		} `json:"permissions"`
 		Integrity json.RawMessage `json:"integrity"`
 	}
@@ -254,6 +256,7 @@ func idjParseManifest(raw string) (*idjManifest, error) {
 		p.http = append(append([]string{}, doc.Permissions.HTTP...), doc.Permissions.HTTPDomains...)
 		p.media = append(append([]string{}, doc.Permissions.Media...), doc.Permissions.MediaDomains...)
 		p.cloudflare, p.storage, p.login = doc.Permissions.Cloudflare, doc.Permissions.Storage, doc.Permissions.Login
+		p.pan = doc.Permissions.Pan
 	}
 	// integrity 两种形态都接受（Android 宽松口径）：扁平字符串
 	// "sha256-…" 或对象 {"files": {"main.js": "sha256-…"}}。
@@ -1028,6 +1031,15 @@ func idjInstallHost(s *idjCallState, rt *goja.Runtime) error {
 	_ = hostObj.Set("codec", s.hostCodecObject(rt))
 	_ = hostObj.Set("m3u8", s.hostM3U8Object(rt))
 	_ = hostObj.Set("url", s.hostURLObject(rt))
+	// WebHome 接口面对照补宿主（app_js_idj_webhome.go）：res 资源代理、
+	// pan 网盘验活入口、history 本站观看、site/config/device 上下文。
+	// 全部只新增注册项，不改既有方法行为。
+	_ = hostObj.Set("res", s.hostResFunc(rt))
+	_ = hostObj.Set("pan", s.hostPanObject(rt))
+	_ = hostObj.Set("history", s.hostHistoryObject(rt))
+	_ = hostObj.Set("site", s.hostSiteFunc(rt))
+	_ = hostObj.Set("config", s.hostConfigFunc(rt))
+	_ = hostObj.Set("device", s.hostDeviceFunc(rt))
 	rt.Set("host", hostObj)
 
 	consoleObj := rt.NewObject()
@@ -1057,6 +1069,11 @@ var idjHostCaps = map[string]bool{
 	"crypto.random": true, "codec.base64": true, "codec.gunzip": true, "codec.unpack": true,
 	"m3u8.parse": true, "html.parse": true, "url.resolve": true, "storage.get": true,
 	"image.stripes": false, "image.aes": false,
+	// WebHome 对照补宿主（app_js_idj_webhome.go）。pan.check 的方法面
+	// 已注册，但检测后端未接线时调用会明确 reject E_UNSUPPORTED。
+	"res": true, "pan": true, "pan.check": true,
+	"history": true, "history.list": true,
+	"site": true, "config": true, "device": true,
 }
 
 func (s *idjCallState) hostHasFunc(rt *goja.Runtime) func(goja.FunctionCall) goja.Value {
@@ -1325,10 +1342,18 @@ func idjTimeoutToMS(v interface{}) int {
 
 // httpDoPromise 发一次请求并包成 Promise：成功 resolve 响应对象，
 // 失败 reject 带码错误对象。
+//
+// WebHome 对照扩展（只加不改）：opts.responseType 取
+// 'text'（默认）|'json'|'base64'，决定 body 的形态——json 由宿主解析
+// 成 JS 值（解析失败 reject E_PARSE），base64 返回原始字节的 Base64
+// 文本；响应对象新增 ok（status 是否 2xx）与 cookies（最终响应
+// Set-Cookie 的 "name=value" 数组）。既有 status/url/headers/body
+// （text 形态）语义不变，旧插件不受影响。
 func (s *idjCallState) httpDoPromise(rt *goja.Runtime, urlText, method, body string, opts map[string]interface{}) goja.Value {
 	promise, resolve, reject := rt.NewPromise()
 	headers := map[string]string{}
 	timeoutMS := 0
+	responseType := "text"
 	if opts != nil {
 		if h, ok := opts["__headers"].(map[string]string); ok {
 			headers = h
@@ -1339,8 +1364,15 @@ func (s *idjCallState) httpDoPromise(rt *goja.Runtime, urlText, method, body str
 			}
 		}
 		timeoutMS = idjTimeoutToMS(opts["timeout"])
+		if v, ok := opts["responseType"].(string); ok && strings.TrimSpace(v) != "" {
+			responseType = strings.ToLower(strings.TrimSpace(v))
+		}
 	}
-	status, respHeaders, respBody, finalURL, err := s.httpDo(urlText, method, body, headers, timeoutMS)
+	if responseType != "text" && responseType != "json" && responseType != "base64" {
+		_ = reject(idjErrorObject(rt, "E_ARGS", "responseType 只支持 text/json/base64"))
+		return rt.ToValue(promise)
+	}
+	status, respHeaders, respBody, respCookies, finalURL, err := s.httpDo(urlText, method, body, headers, timeoutMS)
 	if err != nil {
 		var coded *idjError
 		if errors.As(err, &coded) {
@@ -1354,7 +1386,21 @@ func (s *idjCallState) httpDoPromise(rt *goja.Runtime, urlText, method, body str
 	_ = respObj.Set("status", status)
 	_ = respObj.Set("url", finalURL)
 	_ = respObj.Set("headers", rt.ToValue(respHeaders))
-	_ = respObj.Set("body", string(respBody))
+	_ = respObj.Set("ok", status >= 200 && status < 300)
+	_ = respObj.Set("cookies", rt.ToValue(respCookies))
+	switch responseType {
+	case "base64":
+		_ = respObj.Set("body", base64.StdEncoding.EncodeToString(respBody))
+	case "json":
+		var parsed interface{}
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			_ = reject(idjErrorObject(rt, "E_PARSE", "响应不是合法 JSON："+err.Error()))
+			return rt.ToValue(promise)
+		}
+		_ = respObj.Set("body", rt.ToValue(parsed))
+	default:
+		_ = respObj.Set("body", string(respBody))
+	}
 	_ = resolve(respObj)
 	return rt.ToValue(promise)
 }
@@ -1367,10 +1413,12 @@ func (s *idjCallState) httpPromiseReject(rt *goja.Runtime, err *idjError) goja.V
 
 // httpDo 执行一次 host.http.request：白名单 → 限额 → 禁发头剥离 →
 // 发请求 → CF 判定 → 20MB 上限 → 小写响应头。返回
-// (status, headers, body, finalURL, err)。
-func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]string, timeoutMS int) (int, map[string]string, []byte, string, error) {
+// (status, headers, body, cookies, finalURL, err)；cookies 是
+// WebHome 对照扩展新增的返回值（最终响应 Set-Cookie 的
+// "name=value" 列表），其余行为不变。
+func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]string, timeoutMS int) (int, map[string]string, []byte, []string, string, error) {
 	if strings.TrimSpace(urlText) == "" {
-		return 0, nil, nil, "", idjErr("E_PERMISSION", "地址无效")
+		return 0, nil, nil, nil, "", idjErr("E_PERMISSION", "地址无效")
 	}
 	if method == "" {
 		method = "GET"
@@ -1378,10 +1426,10 @@ func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]s
 	method = strings.ToUpper(method)
 	u, err := idjCheckURL(s.manifest, urlText)
 	if err != nil {
-		return 0, nil, nil, "", err
+		return 0, nil, nil, nil, "", err
 	}
 	if err := idjRateCheck(s.pluginID, s.pluginName, &s.callCount); err != nil {
-		return 0, nil, nil, "", err
+		return 0, nil, nil, nil, "", err
 	}
 	if timeoutMS <= 0 {
 		timeoutMS = idjDefaultRequestTimeoutMS
@@ -1400,7 +1448,7 @@ func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]s
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if err != nil {
-		return 0, nil, nil, "", idjErr("E_NETWORK", "创建请求失败："+err.Error())
+		return 0, nil, nil, nil, "", idjErr("E_NETWORK", "创建请求失败："+err.Error())
 	}
 	s.visited[strings.ToLower(u.Hostname())] = true
 	httpReq.Header.Set("User-Agent", idjHTTPDefaultUA)
@@ -1415,31 +1463,31 @@ func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]s
 	if err != nil {
 		var coded *idjError
 		if errors.As(err, &coded) {
-			return 0, nil, nil, "", coded
+			return 0, nil, nil, nil, "", coded
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return 0, nil, nil, "", idjErr("E_TIMEOUT", "请求超时（"+strconv.Itoa(timeoutMS)+" 毫秒）")
+			return 0, nil, nil, nil, "", idjErr("E_TIMEOUT", "请求超时（"+strconv.Itoa(timeoutMS)+" 毫秒）")
 		}
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) && urlErr.Timeout() {
-			return 0, nil, nil, "", idjErr("E_TIMEOUT", "请求超时（"+strconv.Itoa(timeoutMS)+" 毫秒）")
+			return 0, nil, nil, nil, "", idjErr("E_TIMEOUT", "请求超时（"+strconv.Itoa(timeoutMS)+" 毫秒）")
 		}
-		return 0, nil, nil, "", idjErr("E_NETWORK", "请求失败："+err.Error())
+		return 0, nil, nil, nil, "", idjErr("E_NETWORK", "请求失败："+err.Error())
 	}
 	defer resp.Body.Close()
 	// CF 判定（只认 403 + cf-mitigated: challenge，与
 	// network_browser.go 的 browserChallengeStatus /
 	// isCFMitigatedChallenge 同一规则，v1 只报 E_CF_REQUIRED，不解盾）。
 	if browserChallengeStatus(resp) && isCFMitigatedChallenge(resp) {
-		return 0, nil, nil, "", idjErr("E_CF_REQUIRED", "站方返回 Cloudflare 验证页")
+		return 0, nil, nil, nil, "", idjErr("E_CF_REQUIRED", "站方返回 Cloudflare 验证页")
 	}
 	limit := idjBodyLimit()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
-		return 0, nil, nil, "", idjErr("E_NETWORK", "读取响应失败："+err.Error())
+		return 0, nil, nil, nil, "", idjErr("E_NETWORK", "读取响应失败："+err.Error())
 	}
 	if len(data) > limit {
-		return 0, nil, nil, "", idjErr("E_INTERNAL", "响应体超过 20MB 上限")
+		return 0, nil, nil, nil, "", idjErr("E_INTERNAL", "响应体超过 20MB 上限")
 	}
 	lowerHeaders := map[string]string{}
 	for k, values := range resp.Header {
@@ -1451,7 +1499,11 @@ func (s *idjCallState) httpDo(urlText, method, body string, headers map[string]s
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
-	return resp.StatusCode, lowerHeaders, data, finalURL, nil
+	setCookies := []string{}
+	for _, c := range resp.Cookies() {
+		setCookies = append(setCookies, c.Name+"="+c.Value)
+	}
+	return resp.StatusCode, lowerHeaders, data, setCookies, finalURL, nil
 }
 
 // ---------------------------------------------------------------------------
