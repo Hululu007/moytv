@@ -22,6 +22,7 @@ type providerMedia struct {
 	Audio           bool
 	Quality         int
 	NeedsParse      bool
+	Subs            []playSubtitle
 	Variants        []providerMedia
 	Hook            seku.StreamHook
 	PlayAuthToken   string

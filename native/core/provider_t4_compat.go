@@ -401,6 +401,66 @@ type httpAggPlayCandidate struct {
 	url  string
 }
 
+// playSubtitle 是播放返回 subs 字段里的一条外挂字幕，字段名与
+// Dart 侧 SubtitleSource 对齐（第 8 点透传链）。
+type playSubtitle struct {
+	Name   string `json:"name,omitempty"`
+	URL    string `json:"url"`
+	Lang   string `json:"lang,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
+// httpAggPlaySubs 解析播放返回的 subs 数组：元素认对象
+// {url,name,lang,format}（含 v/n 别名）与裸地址字符串；format 缺失
+// 时按地址扩展名推断（srt/vtt/ass/ssa/ttml）；同地址去重保序。
+func httpAggPlaySubs(raw any) []playSubtitle {
+	rows, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	seen := map[string]bool{}
+	var subs []playSubtitle
+	for _, row := range rows {
+		var sub playSubtitle
+		switch entry := row.(type) {
+		case string:
+			sub.URL = strings.TrimSpace(entry)
+		case map[string]any:
+			sub.URL = strings.TrimSpace(httpAggFirstString(entry, "url", "v", "src", "address"))
+			sub.Name = strings.TrimSpace(httpAggFirstString(entry, "name", "n", "title"))
+			sub.Lang = strings.TrimSpace(httpAggFirstString(entry, "lang", "language"))
+			sub.Format = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(httpAggFirstString(entry, "format", "type")), "."))
+		default:
+			continue
+		}
+		if sub.URL == "" || seen[sub.URL] {
+			continue
+		}
+		seen[sub.URL] = true
+		if sub.Format == "" {
+			sub.Format = httpAggSubtitleFormat(sub.URL)
+		}
+		subs = append(subs, sub)
+	}
+	return subs
+}
+
+func httpAggSubtitleFormat(rawURL string) string {
+	path := rawURL
+	if index := strings.Index(path, "?"); index >= 0 {
+		path = path[:index]
+	}
+	dot := strings.LastIndex(path, ".")
+	if dot < 0 || dot == len(path)-1 {
+		return ""
+	}
+	switch ext := strings.ToLower(path[dot+1:]); ext {
+	case "srt", "vtt", "ass", "ssa", "ttml":
+		return ext
+	}
+	return ""
+}
+
 // httpAggPlayResult 是播放接口返回的归一结果。candidates 是 url 数组
 // 形态解析出的全部候选（成对多地址），url 仍为首选地址。
 type httpAggPlayResult struct {
@@ -409,6 +469,7 @@ type httpAggPlayResult struct {
 	headers    map[string]string
 	needsParse bool
 	hasURL     bool
+	subs       []playSubtitle
 }
 
 // httpAggPlayPairCandidates 把 url 数组按 easytv 规范的成对形态解析：
@@ -474,7 +535,7 @@ func httpAggPlay(payload map[string]any) httpAggPlayResult {
 	}
 	needsParse := httpAggParseFlag(root["parse"]) || httpAggParseFlag(root["jx"]) ||
 		httpAggParseFlag(root["needParse"]) || httpAggParseFlag(root["needsParse"])
-	result := httpAggPlayResult{headers: headers, needsParse: needsParse, candidates: candidates}
+	result := httpAggPlayResult{headers: headers, needsParse: needsParse, candidates: candidates, subs: httpAggPlaySubs(root["subs"])}
 	switch {
 	case address != "" && needsParse && playURL != "" && playURL != address:
 		result.url = playURL + address

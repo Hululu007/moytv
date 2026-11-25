@@ -214,6 +214,7 @@ type nativePlan struct {
 	RouteIndex      int               `json:"routeIndex"`
 	RouteCount      int               `json:"routeCount"`
 	Parse           bool              `json:"parse,omitempty"`
+	Subs            []playSubtitle    `json:"subs,omitempty"`
 }
 
 func nativeParseFallbackPlan(pageURL, referer string) nativePlan {

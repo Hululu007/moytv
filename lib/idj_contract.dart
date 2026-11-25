@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core_bridge.dart' show AppFailure;
 import 'models.dart';
+import 'track_selection.dart';
 
 /// iDuanJu 插件返回形状 → 魔蚁站点形状的翻译（与 [PyContract] 并列）。
 ///
@@ -234,6 +235,7 @@ class IdjContract {
         needsParse: false,
         expiresAt: _int(result['expiresAt']),
         drm: drm,
+        subs: parseSubtitleSources(result['subs'] ?? stream['subs']),)
       );
     }
     throw AppFailure('插件没有返回可播放地址');

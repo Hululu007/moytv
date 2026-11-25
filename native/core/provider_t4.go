@@ -256,7 +256,7 @@ func (d *Downloader) t4PlayOnce(ctx context.Context, apiURL, flag, playID string
 	userAgent := firstNonEmpty(headers["User-Agent"], headers["user-agent"])
 	cookie := firstNonEmpty(headers["Cookie"], headers["cookie"])
 	origin := firstNonEmpty(headers["Origin"], headers["origin"])
-	media := providerMedia{URL: played.url, Referer: referer, NeedsParse: played.needsParse}
+	media := providerMedia{URL: played.url, Referer: referer, NeedsParse: played.needsParse, Subs: played.subs}
 	if userAgent != "" || referer != "" || cookie != "" || origin != "" {
 		media.credentials = &providerMediaCredentials{userAgent: userAgent, referer: referer, cookie: cookie, origin: origin}
 	}

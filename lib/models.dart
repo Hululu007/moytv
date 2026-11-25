@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'app_build.dart';
+import 'track_selection.dart';
 
 /// 用户自定义的 MacCMS / XBPQ 站源记录。
 class CustomSourceSite {
@@ -1575,6 +1576,7 @@ class PlaybackPlan {
     this.needsParse = false,
     this.forceMpv = false,
     this.drm,
+    this.subs = const [],
   });
   final String url;
   final String originalUrl;
@@ -1601,6 +1603,8 @@ class PlaybackPlan {
   /// 两者同时出现时 decryptionKey 优先，保持既有口径）。
   final PlaybackDrm? drm;
   bool get hasDrm => drm?.isValid ?? false;
+  /// 源在播放结果里给的外挂字幕列表（subs 字段透传，第 8 点）。
+  final List<SubtitleSource> subs;
   bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
 
   PlaybackPlan withDanmaku(String sessionValue, String danmakuIdValue) =>
@@ -1621,6 +1625,7 @@ class PlaybackPlan {
         needsParse: needsParse,
         forceMpv: forceMpv,
         drm: drm,
+        subs: subs,
       );
 
   PlaybackPlan withUrl(String value) => PlaybackPlan(
@@ -1640,6 +1645,7 @@ class PlaybackPlan {
     needsParse: needsParse,
     forceMpv: forceMpv,
         drm: drm,
+    subs: subs,
   );
 
   PlaybackPlan withHeaders(Map<String, String> value) => PlaybackPlan(
@@ -1659,6 +1665,7 @@ class PlaybackPlan {
     needsParse: needsParse,
     forceMpv: forceMpv,
         drm: drm,
+    subs: subs,
   );
 
   PlaybackPlan withNeedsParse(bool value) => PlaybackPlan(
@@ -1678,6 +1685,7 @@ class PlaybackPlan {
     needsParse: value,
     forceMpv: forceMpv,
         drm: drm,
+    subs: subs,
   );
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',
@@ -1700,6 +1708,7 @@ class PlaybackPlan {
         : 1,
     needsParse: json['parse'] == true || json['needsParse'] == true,
     drm: PlaybackDrm.fromJson(json['drm']),
+    subs: parseSubtitleSources(json['subs']),
   );
 }
 

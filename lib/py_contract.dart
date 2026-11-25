@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'models.dart';
+import 'track_selection.dart';
 
 class PyContract {
   PyContract._();
@@ -210,6 +211,11 @@ class PyContract {
     final needsParse = _parseFlag(result['parse']) || _parseFlag(result['jx']);
     var url = _text(result['url']);
     if (url.isEmpty) url = _text(result['playUrl']);
-    return PlaybackPlan(url: url, headers: headers, needsParse: needsParse);
+    return PlaybackPlan(
+      url: url,
+      headers: headers,
+      needsParse: needsParse,
+      subs: parseSubtitleSources(result['subs']),
+    );
   }
 }

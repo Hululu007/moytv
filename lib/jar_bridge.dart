@@ -8,6 +8,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
+import 'track_selection.dart';
 import 'tg_list_postprocess.dart';
 
 class JarBridgeFailure implements Exception {
@@ -676,6 +677,7 @@ class JarBridge {
       headers: headers,
       needsParse: needsParse,
       drm: PlaybackDrm.fromJson(result['drm']),
+      subs: parseSubtitleSources(result['subs']),)
     );
   }
 
