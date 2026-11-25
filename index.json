@@ -1089,6 +1089,51 @@
       "adult": true,
       "description": "夜社短剧（yesheai.com）。成人短剧 / 国产短剧 / 海外短剧 / 动漫 / AI漫剧 / 电影 / 网剧 / 综艺，分类浏览带翻页、关键词搜索、详情选集、HLS 播放。播放清单由插件自己整理成绝对地址，自建片源与采集片源都能直接播。更多片源与插件更新见 TG 频道〖多多纯净软件分享〗@yydsys。",
       "manifest": "yesheai/yesheai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.heiheizy",
+      "name": "嘿嘿资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "嘿嘿资源（api.heiapi.cc）。65 个分类（与原 py 完全一致：接口 class 实时返回 65 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 为 id 48–112 共 65 条），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "heiheizy/heiheizy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.heiliaozy",
+      "name": "黑料资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黑料资源（heiliaozyapi.com）。分类与原 py 完全一致：接口 class 实时返回（实测 24 类）、经原 py 旗标过滤（EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除），接口无分类时用原 py 兜底 17 类。MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表不带封面、经详情批量补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "heiliaozy/heiliaozy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hongniuzy",
+      "name": "红牛资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "红牛资源（www.hongniuzy2.com）。44 个分类（与原 py 完全一致：接口 class 实时返回 44 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 为空），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放含 hnyun 网页播放页线与 hnm3u8 直链 m3u8 线（play 内预解析主清单）。由内置 py 蜘蛛改写。",
+      "manifest": "hongniuzy/hongniuzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hsckzy",
+      "name": "黄色仓库资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黄色仓库资源（hsckzy888.com，MacCMS 资源接口站，与订阅里已有的黄色仓库视频站插件是两个不同的站）。分类取接口 class 实时返回并经原 py 旗标过滤照搬（EXCLUDED_IDS=['20']、名称含游戏/棋牌/博彩/彩票/赌的分类剔除），兜底分类 40 个同 py；JSON 主、XML 备双通道列表/详情/搜索，列表无封面时经详情批量补封面（同 py _enrich），播放为详情直给线路（hsckyun 分享直链 / hsckm3u8 的 m3u8），play 内主清单预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "hsckzy/hsckzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.huosuzy",
+      "name": "火速资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "火速资源（api.huosuapi.cc）。6 个分类（与原 py 完全一致：接口 class 实时返回 47 国产伦理/48 香港伦理/49 台湾伦理/50 韩国伦理/51 日本伦理/52 西方伦理，经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，接口无分类时用同 py 兜底 6 类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "huosuzy/huosuzy.idjplugin"
     }
   ],
   "cms": []
