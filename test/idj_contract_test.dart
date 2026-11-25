@@ -212,6 +212,79 @@ void main() {
       );
     });
 
+    test('结果级 drm → PlaybackPlan.drm 且 hasDrm（强制 EXO 的判定旗）', () {
+      final plan = IdjContract.planFromResult({
+        'streams': [
+          {'url': 'https://cdn.test/x.mpd', 'format': 'dash'},
+        ],
+        'drm': {
+          'key': 'https://license.test/wv',
+          'type': 'com.widevine.alpha',
+          'header': {'Authorization': 'Bearer t1', 'X-Custom': 'v'},
+        },
+      });
+      expect(plan.drm, isNotNull);
+      expect(plan.drm!.type, 'com.widevine.alpha');
+      expect(plan.drm!.key, 'https://license.test/wv');
+      expect(plan.drm!.headers['Authorization'], 'Bearer t1');
+      expect(plan.drm!.headers['X-Custom'], 'v');
+      // player_screen 的 useNativeForPlan 与西瓜页都以 hasDrm 为
+      // 强制 EXO 的判定旗（点播侧现成链），这里钉死旗为真。
+      expect(plan.hasDrm, isTrue);
+    });
+
+    test('流级 drm 优先于结果级；header 认 JSON 字符串', () {
+      final plan = IdjContract.planFromResult({
+        'streams': [
+          {
+            'url': 'https://cdn.test/x.mpd',
+            'format': 'dash',
+            'drm': {
+              'key': '00112233445566778899aabbccddeeff:'
+                  'ffeeddccbbaa99887766554433221100',
+              'type': 'org.w3.clearkey',
+              'header': '{"X-Key": "stream"}',
+            },
+          },
+        ],
+        'drm': {
+          'key': 'https://license.test/wv',
+          'type': 'com.widevine.alpha',
+        },
+      });
+      expect(plan.drm!.type, 'org.w3.clearkey');
+      expect(plan.drm!.headers['X-Key'], 'stream');
+      expect(plan.hasDrm, isTrue);
+    });
+
+    test('不带 drm 行为不变：drm 为 null、hasDrm 为假', () {
+      final plan = IdjContract.planFromResult({
+        'streams': [
+          {'url': 'https://cdn.test/x.m3u8', 'format': 'hls'},
+        ],
+      });
+      expect(plan.drm, isNull);
+      expect(plan.hasDrm, isFalse);
+    });
+
+    test('残缺 drm（缺 key 或 type）视为无 DRM，不抛错', () {
+      final noKey = IdjContract.planFromResult({
+        'streams': [
+          {'url': 'https://cdn.test/x.m3u8', 'format': 'hls'},
+        ],
+        'drm': {'type': 'com.widevine.alpha'},
+      });
+      expect(noKey.drm, isNull);
+      expect(noKey.hasDrm, isFalse);
+      final noType = IdjContract.planFromResult({
+        'streams': [
+          {'url': 'https://cdn.test/x.m3u8', 'format': 'hls'},
+        ],
+        'drm': {'key': 'https://license.test/wv'},
+      });
+      expect(noType.drm, isNull);
+    });
+
     test('media 白名单不符只记日志、不丢弃', () {
       final plan = IdjContract.planFromResult(
         {

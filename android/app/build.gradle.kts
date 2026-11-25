@@ -131,6 +131,9 @@ dependencies {
     implementation("androidx.core:core:1.13.1")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    // DASH 容器支持：DRM 直播/点播的主力格式是 DASH(mpd)，缺这行
+    // 时 EXO 核连容器都进不去（明流 DASH 同样受益）。
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("tv.danmaku.ijk.media:ijkplayer-java:0.8.8")
     implementation("tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8")

@@ -10,7 +10,9 @@ import 'models.dart';
 /// 插件返回的是 idj1 形状：`home()` 给 `{categories, items, hasMore}`，
 /// `category` / `search` 给 `{items, hasMore}`，`detail` 给
 /// `{id, title, cover, desc, duration, tags, lines}`，`play` 给
-/// `{streams: [{url, format, headers, name}], expiresAt}`。
+/// `{streams: [{url, format, headers, name}], expiresAt}`，可选带
+/// `drm: {key, type, header}`（结果级或流级，流级优先）——带上时
+/// 解析进 [PlaybackPlan.drm]，播放器路由据此强制走 EXO 核。
 /// 本文件只做形状翻译，不跑 JS、不联网、不改 [PyContract]。
 class IdjContract {
   IdjContract._();
@@ -172,6 +174,12 @@ class IdjContract {
   /// `play()` 返回 → [PlaybackPlan]：只取 `streams[0]` 的 `url` +
   /// `headers`（`{User-Agent, Referer}` 透传），`expiresAt` 透传，
   /// `format: hls/mp4` → `needsParse: false`。
+  /// DRM：结果级 `drm` 或命中流自带的 `drm`（流级优先）按 FongMi
+  /// 形态 `{key, type, header}` 经 [PlaybackDrm.fromJson] 解析进
+  /// 计划（header 认 Map 或 JSON 字符串；key/type 缺一即视为无 DRM，
+  /// 不硬造、不抛错）。带有效 drm 的计划 `hasDrm` 为真，播放器
+  /// 路由强制走 EXO（点播侧现成链，见 player_screen）；不带 drm
+  /// 时计划与旧行为完全一致。
   /// 空 `streams`（或全部流都不合法）时抛
   /// [AppFailure]（'插件没有返回可播放地址'）。
   /// URL 形态校验：https、443 端口（不写端口或写 443 都行）、无 userinfo、
@@ -217,11 +225,15 @@ class IdjContract {
           } catch (_) {}
         }
       }
+      final drm =
+          PlaybackDrm.fromJson(stream['drm']) ??
+          PlaybackDrm.fromJson(result['drm']);
       return PlaybackPlan(
         url: url,
         headers: headers,
         needsParse: false,
         expiresAt: _int(result['expiresAt']),
+        drm: drm,
       );
     }
     throw AppFailure('插件没有返回可播放地址');

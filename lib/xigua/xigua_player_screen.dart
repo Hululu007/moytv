@@ -1559,7 +1559,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         _plan = plan;
         installed = true;
         _acceptErrors = true;
-        if (_useExoCore && plan.decryptionKey.isEmpty) {
+        if ((_useExoCore || plan.hasDrm) && plan.decryptionKey.isEmpty) {
           _tvboxPlan = plan;
           _tvboxStartPosition = position;
           _tvboxAutoplay = _foreground && _playIntent;
