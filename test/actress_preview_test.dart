@@ -15,7 +15,6 @@ import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_ranking_page.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
@@ -218,22 +217,10 @@ void main() {
       name: 'actress_list',
       label: '预览 · 假数据 · 女优库列表 · 封面头像为占位',
       buildPage: (db, repository, store) {
-        final sync = ActressSyncService(
-          db: db,
-          sources: const [],
-          fetch:
-              (
-                String url, {
-                Map<String, String> headers = const {},
-                Duration timeout = const Duration(seconds: 20),
-              }) async => throw UnimplementedError(),
-        );
-        addTearDown(sync.dispose);
         return ActressListPage(
           repository: repository,
           store: store,
           database: db,
-          syncService: sync,
         );
       },
     );

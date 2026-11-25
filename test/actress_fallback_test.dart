@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_sync.dart';
 
 Future<ActressHttpResponse> _neverFetch(
   String url, {
@@ -423,70 +422,4 @@ void main() {
     });
   });
 
-  group('sync ranking dispatch', () {
-    test('whos ranking writes whos_rank, missav ranking writes missav_rank',
-        () async {
-      final db = MemoryActressDatabase();
-      final whos = FakeRosterSource(
-        sourceId: ActressRosterSourceId.whos,
-        rosterPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.whos,
-              sourceId: 'aoi',
-              name: '苍井翼',
-            ),
-          ],
-        ],
-        rankingPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.whos,
-              sourceId: 'aoi',
-              name: '苍井翼',
-            ),
-          ],
-        ],
-      );
-      final missav = FakeRosterSource(
-        sourceId: ActressRosterSourceId.missav,
-        rosterPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.missav,
-              sourceId: 'm/aoi',
-              name: '苍井翼',
-            ),
-          ],
-        ],
-        rankingPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.missav,
-              sourceId: 'm/aoi',
-              name: '苍井翼',
-            ),
-          ],
-        ],
-      );
-      final sync = ActressSyncService(
-        db: db,
-        sources: [whos, missav],
-        fetch: _neverFetch,
-      );
-      addTearDown(sync.dispose);
-      final result = await sync.run();
-      expect(result.hasFailures, isFalse);
-      final persons = await db.listPersons(
-        sex: ActressSexFilter.all,
-        sort: ActressSort.nameAsc,
-        query: '',
-        offset: 0,
-        limit: 10,
-      );
-      expect(persons, hasLength(1));
-      expect(persons.single.whosRank, 1);
-      expect(persons.single.missavRank, 1);
-    });
-  });
 }

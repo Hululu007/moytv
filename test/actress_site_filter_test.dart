@@ -12,54 +12,17 @@ import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
-import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_site_crawl.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
 /// 不真爬：只记下触发的站。
-class _NoopCrawl extends ActressSiteCrawlService {
-  _NoopCrawl({required super.repository, required super.db});
 
-  String? startedSite;
-
-  @override
-  Future<void> start({
-    String site = 'mjv',
-    int maxPagesPerCategory =
-        ActressSiteCrawlService.defaultMaxPagesPerCategory,
-    int enrichPerCategory =
-        ActressSiteCrawlService.defaultEnrichPerCategory,
-    int categoryConcurrency =
-        ActressSiteCrawlService.defaultCategoryConcurrency,
-    Duration timeBudget = ActressSiteCrawlService.defaultTimeBudget,
-  }) async {
-    startedSite = site;
-  }
-}
-
-/// 不真同步：空源同步服务（站点筛选测的不是同步；默认真同步服务
-/// 带潮流/whos 两个源，见下面 pumpPage 的 runAsync 说明）。
-class _NoopSync extends ActressSyncService {
-  _NoopSync({required super.db})
-    : super(sources: const [], fetch: _unusedFetch);
-
-  static Future<ActressHttpResponse> _unusedFetch(
-    String url, {
-    Map<String, String> headers = const {},
-    Duration timeout = const Duration(seconds: 20),
-  }) async =>
-      throw UnimplementedError('test sync must not fetch');
-}
 
 void main() {
   late MemoryActressDatabase db;
   late ActressJsonFallback fallback;
-  late _NoopCrawl crawl;
-  late _NoopSync sync;
   late LocalStore store;
   late File localMjvFile;
 
@@ -146,8 +109,6 @@ void main() {
       );
     fallback = ActressJsonFallback(localJsonDir: jsonDir);
     await fallback.load();
-    crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
-    sync = _NoopSync(db: db);
     // MYTV 绑定预解析（树里既定做法，见 actress_count_fix_test.dart）：
     // 列表页 bootstrap 开头 await ensureBound()，它里面有异步文件
     // IO（探针写/删），在 widget 测试 FakeAsync 下挂起；setUp 在
@@ -168,8 +129,6 @@ void main() {
             store: store,
             database: db,
             fallback: fallback,
-            crawlService: crawl,
-            syncService: sync,
           ),
         ),
       );
@@ -192,33 +151,8 @@ void main() {
 
     expect(find.text('八木奈奈'), findsOneWidget);
     expect(find.text('测试二号'), findsNothing);
-    // 2026-11-23 用户令：切站不再自动现爬。
-    expect(crawl.startedSite, isNull);
-
-    // 设置页“选站现爬”区点“爬当前选站”才爬当前选的站。
-    await tester.tap(find.byKey(const ValueKey('open-actress-settings')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('爬当前选站'));
-    await tester.pumpAndSettle();
-    expect(crawl.startedSite, 'mjv');
   });
 
-  testWidgets('选 whos 不自动现爬，点“爬当前选站”才爬 whos', (
-    tester,
-  ) async {
-    await pumpPage(tester);
-    await tester.tap(find.byKey(const ValueKey('actress-site-filter')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('whos').last);
-    await tester.pumpAndSettle();
-    // 2026-11-23 用户令：切站不再自动现爬。
-    expect(crawl.startedSite, isNull);
-    await tester.tap(find.byKey(const ValueKey('open-actress-settings')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('爬当前选站'));
-    await tester.pumpAndSettle();
-    expect(crawl.startedSite, 'whos');
-  });
 
   /// 从本地 mjv011.json 里取第 index 个可兜底样例（有番号、有女优名、
   /// 有直链，且不是八木奈奈——setUp 里的 A 号就是她，本地已有

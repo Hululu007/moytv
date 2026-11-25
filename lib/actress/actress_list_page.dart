@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -17,18 +15,17 @@ import 'actress_working_db.dart';
 import 'actress_neon.dart';
 import 'actress_nvku_cache.dart';
 import 'actress_ranking_page.dart';
-import 'actress_roster_sources.dart';
-import 'actress_search.dart';
-import 'actress_site_crawl.dart';
 import 'actress_sql_import.dart';
+import 'actress_sql_import_controller.dart';
 import 'actress_sql_import_section.dart';
-import 'actress_stacking.dart';
-import 'actress_sync.dart';
+import 'actress_db_manage_page.dart';
+import 'actress_whos_topup.dart';
+import 'whos_json_index.dart';
 import 'actress_tag_sheet.dart';
 import 'actress_widgets.dart';
-import '../content_http.dart';
 import '../models.dart';
 import '../whos_fallback.dart';
+import '../whos_local_library.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../player_picker.dart';
@@ -76,12 +73,11 @@ class ActressListPage extends StatefulWidget {
     required this.repository,
     required this.store,
     this.database,
-    this.syncService,
-    this.stackingService,
     this.fallback,
-    this.crawlService,
     this.showTitle = true,
     this.externalSearch,
+    this.topupPagerFuture,
+    this.topupIndexFuture,
   });
 
   final AppRepository repository;
@@ -96,21 +92,21 @@ class ActressListPage extends StatefulWidget {
   /// 本页不再画自己的搜索框，只留人数与右侧动作按钮。
   final TextEditingController? externalSearch;
 
-  /// 测试/预览注入：不传时用 sqflite 真库 + 默认三家名册源。
+  /// 测试/预览注入：不传时用 sqflite 真库。
   @visibleForTesting
   final ActressDatabase? database;
-  @visibleForTesting
-  final ActressSyncService? syncService;
 
-  /// 测试/预览注入：不传时用默认叠加服务（与详情页同一套补全）。
-  @visibleForTesting
-  final ActressStackingService? stackingService;
-
-  /// 测试/预览注入：JSON 兜底与现爬服务；不传时现建。
+  /// 测试/预览注入：JSON 兜底；不传时现建。
   @visibleForTesting
   final ActressJsonFallback? fallback;
+
+  /// 测试注入：无库顶上的目录分页器/女优索引；不传时走单例。
   @visibleForTesting
-  final ActressSiteCrawlService? crawlService;
+  final Future<WhosCatalogPager>? topupPagerFuture;
+
+  /// 测试注入：无库顶上的女优索引；不传时走单例。
+  @visibleForTesting
+  final Future<WhosJsonIndex>? topupIndexFuture;
 
   @override
   State<ActressListPage> createState() => _ActressListPageState();
@@ -131,28 +127,12 @@ class _CachedListPage {
 
 class _ActressListPageState extends State<ActressListPage> {
   static const _pageSize = 60;
-  // 进行中刷新节流：同步/现爬跑着、列表还空时，最多每 8 秒刷新
-  // 一次列表（有人出现即停）；总览（库里作品数）最多每 5 秒读
-  // 一次，不拿 COUNT(*) 高频刷库。
-  static const _progressListRefreshInterval = Duration(seconds: 8);
-  static const _overviewRefreshInterval = Duration(seconds: 5);
 
   late final ActressDatabase _db;
-  late final ActressSyncService _sync;
-  late final ActressStackingService _stacking;
   late final ActressJsonFallback _fallback;
-  late final ActressSiteCrawlService _crawl;
-  ContentHttp? _http;
-  StreamSubscription<ActressSyncProgress>? _progressSub;
-  StreamSubscription<ActressStackingProgress>? _stackingSub;
-  StreamSubscription<ActressSiteCrawlProgress>? _crawlSub;
 
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
-
-  /// 任意站点现爬的地址输入（2026-11-21）：粘一个列表页/分类页地址，
-  /// 自动认列表结构与翻页规律，不认识站点名也照爬。
-  final _genericUrlController = TextEditingController();
   Timer? _searchDebounce;
 
   var _persons = <ActressPerson>[];
@@ -208,36 +188,17 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 每人本地作品番号集合缓存（站点过滤用，按需取一次）。
   final _siteCodeKeys = <int, Set<String>>{};
 
-  ActressSyncProgress _progress = ActressSyncProgress.idle;
-  ActressStackingProgress _stackingProgress = ActressStackingProgress.idle;
-  ActressSiteCrawlProgress _crawlProgress = const ActressSiteCrawlProgress();
+  /// 库总览（人数/作品数）：进页与重读后从库里现读，顶栏人数与
+  /// 设置弹窗的库信息行都用它。只读展示，不带任何同步状态。
   ActressSyncOverview? _overview;
-  var _lastSyncFailed = false;
-
-  /// 本轮开始时库里作品数（同步/现爬跑起来时记一次）：横幅用它算
-  /// “本轮 +N”，爬一页涨多少一眼能看到；跑完清掉。
-  int? _worksAtRunStart;
-
-  /// 进行中刷新节流的上次时间。
-  DateTime _lastProgressListRefresh = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _lastOverviewRefresh = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// 导出合并 JSON 进行中（防重复点）。
-  var _exportingJson = false;
-
-  /// 2026-11-20 MYTV 绑定：绑定解析结果（json/m3u 目录、是否已
-  /// 授权）。bootstrap 第一件事就是解析它；内部工作库的落点不再
-  /// 由它定（见 actress_working_db.dart，2026-11-25 只留 .sql 导入）。
-  MytvBindResult? _mytvBind;
 
   /// 没有导入的数据库：内部工作库还没建，列表显示空态提示
   /// （导入 .sql 数据库），不回落任何内置库。
   var _noLibraryDb = false;
 
-  /// 兜底加载器与现爬服务是不是本页自己建的：是才按绑定结果
-  /// 改它们的本地目录；测试注入的实例不动（注入的假目录优先）。
+  /// 兜底加载器是不是本页自己建的：是才按绑定结果改它的本地
+  /// 目录；测试注入的实例不动（注入的假目录优先）。
   var _ownsFallback = true;
-  var _ownsCrawl = true;
 
   /// 手动“重新加载数据库”进行中（防重复点）。
   var _reloadingDb = false;
@@ -246,19 +207,31 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 进度由设置弹窗的 600ms 轮询取走重画，这里只写字段、不逐批
   /// setState；开始/结束/失败时才 setState。取消只改标志位，
   /// 导入器在批与批之间检查，停在换库之前、原库不动。
-  var _sqlImportRunning = false;
-  ActressSqlImportProgress? _sqlImportProgress;
-  String? _sqlImportError;
-  ActressSqlImportResult? _sqlImportResult;
-  var _sqlImportCancelRequested = false;
+  // .sql 导入状态在应用级控制器里（2026-11-25 用户令：离开页面
+  // 也能在后台继续导）：本页只转发读，设置弹窗与顶栏横幅都读它；
+  // 导完由控制器监听统一清缓存重读 + 弹一次提示。
+  final ActressDbTaskController _taskController =
+      ActressDbTaskController.instance;
+  bool get _sqlImportRunning => _taskController.sqlImportRunning;
+  ActressSqlImportProgress? get _sqlImportProgress =>
+      _taskController.sqlImportProgress;
+  String? get _sqlImportError {
+    final result = _taskController.sqlImportResult;
+    return (result != null && !result.ok) ? result.error : null;
+  }
 
+  ActressSqlImportResult? get _sqlImportResult {
+    final result = _taskController.sqlImportResult;
+    return (result != null && result.ok) ? result : null;
+  }
 
-  /// 视频库模式：当前库是用户视频库（内部工作库，
-  /// actresses/videos/video_actress/video_category 四张表）时为
-  /// true。主名册就是 actresses 表（本地库是主库，不是兜底）；
-  /// 名册同步照常跑（往本地库补新人/补视频），自动生成/
-  /// 全站叠加/新 json 同步禁掉（它们写 persons/works）。
-  var _videoLibraryMode = false;
+  /// 已处理过的换库代次：控制器代次涨了 = 有新库顶替成功。
+  var _seenSwapGeneration = 0;
+
+  /// 已处理过的数据代次：控制器代次涨了 = 库被改过（表格更新/
+  /// 恢复/删除），同样清缓存重读。
+  var _seenDataGeneration = 0;
+
 
   /// 影视库 db 兜底（内部工作库），本页自己建的时候持有，
   /// 退出时关掉连接。
@@ -277,10 +250,7 @@ class _ActressListPageState extends State<ActressListPage> {
   void initState() {
     super.initState();
     _db = widget.database ?? SqfliteActressDatabase.instance;
-    // 先建兜底加载器与现爬服务：同步服务默认要接爬虫腿（潮流源
-    // 作品阶段改走爬虫逻辑），构造顺序不能反。
     _ownsFallback = widget.fallback == null;
-    _ownsCrawl = widget.crawlService == null;
     _fallback = widget.fallback ?? ActressJsonFallback();
     if (_ownsFallback) {
       // 2026-11-20 18:57 全部使用数据库兜底：兜底先查影视库 db
@@ -288,43 +258,16 @@ class _ActressListPageState extends State<ActressListPage> {
       // fallback 不接提供方，保持老行为。
       _fallback.filmDb = _filmDbService = FilmLibraryService(database: _db);
     }
-    _crawl =
-        widget.crawlService ??
-        ActressSiteCrawlService(repository: widget.repository, db: _db);
-    _crawlSub = _crawl.progress.listen(_onCrawlProgress);
-    if (widget.syncService != null) {
-      _sync = widget.syncService!;
-    } else {
-      _http = ContentHttp();
-      _sync = ActressSyncService(
-        db: _db,
-        sources: [
-          ChaoliuRosterSource(),
-          // 2026-11-21 用户令：MissAV 从同步移除，不再拉取
-          // （视频站、jar、名册显示与枚举都不动）；排行主链改走
-          // whos 日榜，enableRanking 开关已开。
-          WhosRosterSource(enableRanking: true),
-        ],
-        fetch: actressDefaultFetch(_http!),
-        crawlService: _crawl,
-      );
-    }
-    _progressSub = _sync.progress.listen(_onProgress);
-    if (widget.stackingService != null) {
-      _stacking = widget.stackingService!;
-    } else {
-      _stacking = ActressStackingService(
-        db: _db,
-        enrichment: ActressEnrichment(
-          repository: widget.repository,
-          store: widget.store,
-          db: _db,
-        ),
-      );
-    }
-    _stackingSub = _stacking.progress.listen(_onStackingProgress);
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
+    // 后台导入控制器：本页活着时导完立刻清缓存重读 + 弹提示；
+    // 本页不在时结果留着，下次进来补弹（见 _consumeImportNotice）。
+    _seenSwapGeneration = _taskController.swapGeneration;
+    _seenDataGeneration = _taskController.dataGeneration;
+    _taskController.addListener(_onTaskControllerChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumeImportNotice();
+    });
     // 宿主搜索框（内嵌进女优库区域时）：同一个输入框驱动本页搜索，
     // 本页不再画第二个搜索框。
     widget.externalSearch?.addListener(_onSearchChanged);
@@ -340,22 +283,12 @@ class _ActressListPageState extends State<ActressListPage> {
   @override
   void dispose() {
     unawaited(_filmDbService?.close());
+    _taskController.removeListener(_onTaskControllerChanged);
     widget.store.removeListener(_onStoreChanged);
-    _progressSub?.cancel();
-    _stackingSub?.cancel();
-    _crawlSub?.cancel();
-    _crawl.cancel();
-    _crawl.dispose();
     _scrollController.dispose();
     widget.externalSearch?.removeListener(_onSearchChanged);
     _searchController.dispose();
-    _genericUrlController.dispose();
     _searchDebounce?.cancel();
-    _sync.cancel();
-    _sync.dispose();
-    _stacking.cancel();
-    _stacking.dispose();
-    _http?.close();
     super.dispose();
   }
 
@@ -369,14 +302,12 @@ class _ActressListPageState extends State<ActressListPage> {
     // 不再由绑定定，见 actress_working_db.dart）。
     final bind = await ActressMytvBind.instance.ensureBound();
     if (!mounted || generation != _generation) return;
-    setState(() => _mytvBind = bind);
     if (_ownsFallback) {
       _fallback.bindLocalDirs(
         jsonDir: bind.jsonDir,
         userM3uDir: bind.bound ? bind.m3uDir : null,
       );
     }
-    if (_ownsCrawl) _crawl.bindLocalDir(bind.jsonDir);
     // 2026-11-25 只留 .sql 导入：内部工作库还没建时开库报
     // “还没有导入数据库”，接住显示空态提示（导入 .sql 数据库），
     // 不崩、不回落；其它开库错误弹一次提示，同样不崩。
@@ -395,10 +326,6 @@ class _ActressListPageState extends State<ActressListPage> {
       }
       return;
     }
-    setState(() {
-      // reloadIfChanged 已开过库，isVideoLibrary 的标志已算好。
-      _videoLibraryMode = _db.isVideoLibrary;
-    });
     // 兜底后台读、不堵首屏：列表站点过滤要用它，但不能在首屏等它。
     unawaited(_fallback.load());
     final overview = await _db.overview();
@@ -406,10 +333,7 @@ class _ActressListPageState extends State<ActressListPage> {
     setState(() => _overview = overview);
     // 2026-11-22 用户令最终口径：库缺失/空库不再自动生成（不灌
     // 内置 json 种子、不走互联网同步），空态如实提示导入 .sql
-    // 数据库。叠加只读一次断点作横幅状态，绝不自动跑。
-    final stacking = await _stacking.snapshot();
-    if (!mounted || generation != _generation) return;
-    setState(() => _stackingProgress = stacking);
+    // 数据库。
     // _loadPage(reset) 会推进代次，这里只判 mounted，不再比代次。
     await _loadPage(reset: true);
     if (!mounted) return;
@@ -497,212 +421,112 @@ class _ActressListPageState extends State<ActressListPage> {
       ).showSnackBar(const SnackBar(content: Text('只认 .sql 或 .sql.gz 文件')));
       return;
     }
-    setState(() {
-      _sqlImportRunning = true;
-      _sqlImportProgress = null;
-      _sqlImportError = null;
-      _sqlImportResult = null;
-      _sqlImportCancelRequested = false;
-    });
-    final result = await ActressSqlImporter().importFile(
+    // 交给应用级控制器跑：离开本页、关掉设置弹窗，导入都在后台
+    // 继续；导完由 _onTaskControllerChanged 统一清缓存重读并弹
+    // 一次提示，这里只管选文件。
+    await _taskController.startSqlImport(
       sqlPath: pickedPath,
       dbPath: await actressWorkingDbPath(),
       closeDatabase: _db.close,
-      // 进度只写字段：设置弹窗每 600ms 轮询重画，不逐批 setState。
-      onProgress: (p) => _sqlImportProgress = p,
-      isCancelled: () => _sqlImportCancelRequested,
     );
+  }
+
+  void _cancelSqlImport() => _taskController.cancelSqlImport();
+
+  /// 顶上模式点作品播放：目录行 → 本地作品 → 一条直链集的详情，
+  /// 直接推播放器（who's 直链，不经站点解析、不查数据库）。
+  Future<void> _playTopupVideo(WhosVideo video) async {
+    final work = WhosLocalWork(
+      id: video.code,
+      title: video.title,
+      cover: video.pic,
+      playUrl: video.m3u8,
+      code: video.code,
+      brand: WhosLocalWork.brandOfCode(video.code),
+    );
+    final drama = whosLocalToDrama(work);
+    final detail = whosLocalDetail(drama, work);
     if (!mounted) return;
-    setState(() {
-      _sqlImportRunning = false;
-      _sqlImportProgress = null;
-      if (result.ok) {
-        _sqlImportResult = result;
-        _sqlImportError = null;
-      } else {
-        _sqlImportError = result.error;
-      }
-    });
-    if (result.ok) {
-      // 库文件换了：会话缓存按文件指纹分 key 也全清一次，再重读列表。
+    if (detail.episodes.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('这条暂时没有可播地址')));
+      return;
+    }
+    await pushPlayer<void>(
+      context,
+      detail: detail,
+      initialIndex: 0,
+      repository: widget.repository,
+      store: widget.store,
+    );
+  }
+
+  /// 打开数据库管理页（设置区与空态共用入口）。
+  Future<void> _openDbManagePage() async {
+    final dbPath = await actressWorkingDbPath();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ActressDbManagePage(
+          dbPath: dbPath,
+          closeDatabase: _db.close,
+          reloadDatabase: _manualReloadDb,
+        ),
+      ),
+    );
+  }
+
+  /// 后台任务状态变了（进度/导完）：重画本页；换库代次或数据代次
+  /// 涨了说明库被换掉/改过（导入、表格更新、管理页恢复/删除），
+  /// 清缓存重读——导完不重启、不手动重进就看到新数据（自动刷新）。
+  void _onTaskControllerChanged() {
+    if (!mounted) return;
+    setState(() {});
+    final swapped =
+        _taskController.swapGeneration != _seenSwapGeneration;
+    final mutated =
+        _taskController.dataGeneration != _seenDataGeneration;
+    if (swapped || mutated) {
+      _seenSwapGeneration = _taskController.swapGeneration;
+      _seenDataGeneration = _taskController.dataGeneration;
       _clearListCaches();
       NvkuEntryCache.clear();
-      await _manualReloadDb();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '已导入：${result.videos} 部作品 · ${result.actresses} 人'
-            ' · 封面 ${result.covers} · 头像 ${result.avatars}',
-          ),
+      unawaited(_manualReloadDb());
+    }
+    _consumeImportNotice();
+  }
+
+  /// 导入完成提示只弹一次：活着的页面导完立刻弹；导入期间页面
+  /// 不在的，下次进来补弹。失败且动过库连接的先重读恢复连接。
+  void _consumeImportNotice() {
+    if (!mounted) return;
+    final notice = _taskController.consumeImportNotice();
+    if (notice == null) return;
+    if (!notice.ok && notice.needsReload) {
+      unawaited(_manualReloadDb());
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          notice.ok
+              ? '已导入：${notice.videos} 部作品 · ${notice.actresses} 人'
+                    ' · 封面 ${notice.covers} · 头像 ${notice.avatars}'
+              : '导入失败：${notice.error ?? '未知原因'}',
         ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('导入失败：${result.error ?? '未知原因'}')),
-      );
-      // 换过库连接才重读恢复连接；没动主库就不用重读。
-      if (result.needsReload) await _manualReloadDb();
-    }
-  }
-
-  void _onProgress(ActressSyncProgress progress) {
-    if (!mounted) return;
-    setState(() => _progress = progress);
-    if (progress.running) {
-      // 本轮起点：第一次跑起来时记一次库里作品数，横幅算“本轮 +N”。
-      _worksAtRunStart ??= _overview?.works ?? 0;
-      _maybeRefreshOverview();
-      _maybeRefreshListWhileRunning();
-      return;
-    }
-    _clearWorksStartIfIdle();
-    if (progress.phase == 'done') {
-      unawaited(_refreshAfterSync());
-    }
-  }
-
-  /// 同步与现爬都停了才清本轮起点（两路可能同时跑，清早了横幅
-  /// 的“本轮 +N”就断了）。
-  void _clearWorksStartIfIdle() {
-    if (!_progress.running && !_crawlProgress.running) {
-      _worksAtRunStart = null;
-    }
-  }
-
-  /// 进行中总览节流刷新（最多每 5 秒读一次库里作品数）：横幅的
-  /// “库里作品 X 部（本轮 +N）”靠它长，跑完才刷一次看不见增长。
-  void _maybeRefreshOverview() {
-    final now = DateTime.now();
-    if (now.difference(_lastOverviewRefresh) < _overviewRefreshInterval) {
-      return;
-    }
-    _lastOverviewRefresh = now;
-    unawaited(
-      _db.overview().then((overview) {
-        if (mounted) setState(() => _overview = overview);
-      }),
+      ),
     );
   }
 
-  /// 进行中刷新（最多每 8 秒一次）：同步/现爬跑着时重读列表，
-  /// 卡片数随入库增长陆续更新——列表空时整页重读（有人出现即
-  /// 停），列表非空时只原地替换当前已加载页的卡片数据（不动
-  /// 加载态、不动滚动位置）。旧版只在列表空时刷，非空列表在
-  /// 同步进行中永远停在进页那一刻的数（2026-11-20 计数修复：
-  /// 列表 54 部、详情 992 部就是这么来的）。
-  void _maybeRefreshListWhileRunning() {
-    final now = DateTime.now();
-    if (now.difference(_lastProgressListRefresh) <
-        _progressListRefreshInterval) {
-      return;
-    }
-    _lastProgressListRefresh = now;
-    if (_persons.isEmpty) {
-      unawaited(_loadPage(reset: true));
-      return;
-    }
-    unawaited(_refreshVisiblePersons());
-  }
-
-  /// 进行中轻量刷新：只重读当前已加载的原始页（offset 0、
-  /// limit=_rawOffset），原地替换卡片数据；不碰 _loading、
-  /// 不碰 _generation（不打断在途的整页加载）、不动滚动位置。
-  Future<void> _refreshVisiblePersons() async {
-    final generation = _generation;
-    final limit = _rawOffset <= 0 ? _pageSize : _rawOffset;
-    final raw = await _db.listPersons(
-      sex: _sex,
-      sort: _sort,
-      query: _query,
-      tag: _tagFilter.tagValue,
-      videoTag: _videoTag,
-      offset: 0,
-      limit: limit,
-    );
-    final persons = await _applySiteFilter(raw);
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _persons = persons;
-      _hasMore = raw.length >= _pageSize;
-    });
-    // 进行中刷新也写透缓存：否则缓存里还是同步前的旧第一页，
-    // 切换回来会显示旧数据（同步完成时 _refreshAfterSync 会全清，
-    // 这里写透是让同步进行中切换也不显示旧数据）。只存第一页；
-    // 只在主模式写（站源模式有自己的列表，不走这份缓存）。
-    // rawOffset 存缓存这页的人数（第一页），不能存已加载的总页数，
-    // 否则恢复后翻页会跳页。
-    if (!_siteWorksMode) {
-      final firstPage = persons.length > _pageSize
-          ? persons.sublist(0, _pageSize)
-          : persons;
-      _storePageCache(firstPage, raw.length >= _pageSize, firstPage.length);
-    }
-  }
-
-  /// 本轮入库增长文案（2026-11-20 用户令：增长要看得见，按
-  /// “要入库才算”只算库里实际有的）：库里作品总数 + 本轮新增。
-  String _worksGrowthText() {
-    final overview = _overview;
-    if (overview == null) return '';
-    final start = _worksAtRunStart;
-    if (start == null) return '库里作品 ${overview.works} 部';
-    final delta = overview.works - start;
-    return '库里作品 ${overview.works} 部（本轮 +$delta）';
-  }
-
-  void _onStackingProgress(ActressStackingProgress progress) {
-    if (!mounted) return;
-    setState(() => _stackingProgress = progress);
-    if (progress.running) {
-      // 叠加也在写库：进行中同样节流刷卡片数（与同步同一节流）。
-      _maybeRefreshListWhileRunning();
-      return;
-    }
-    // 叠加写库刷新了 works_count：总览与列表都要重读才显示真数。
-    unawaited(_refreshAfterSync());
-  }
-
-  /// 手动开始/继续叠加：名册同步跑着时不启动（两路同时写库抢带宽，
-  /// 等同步停了再点）；叠加服务内部断点续跑，本处只管触发一次。
-  Future<void> _runStacking() async {
-    // 视频库模式不跑全站叠加（叠加写 persons/works，那两张表
-    // 这个库里没有；跨站叠加由现爬/名册同步的合并规则覆盖）。
-    if (_videoLibraryMode) return;
-    if (_stacking.isRunning || _progress.running) return;
-    await _stacking.run();
-  }
-
+  /// 库内容被外部变更后（导入换库、表格更新、管理页删/恢复）
+  /// 的统一重读：旧缓存作废，先清再重读总览与列表。
   Future<void> _refreshAfterSync() async {
-    // 同步/现爬/叠加写了库：旧缓存作废，先清再重读（漏清会显示旧数据）。
-    // 所有完成路径都走这里（同步 done、叠加 done、现爬 done、重绑、
-    // 手动重载），一处清就全覆盖。
     _clearListCaches();
     final overview = await _db.overview();
     if (!mounted) return;
     setState(() => _overview = overview);
     await _loadPage(reset: true);
     if (!mounted) return;
-  }
-
-  /// 只断点续跑：永远不从头重拉（refresh 恒为 false）。手动点一次
-  /// 跑一次，跑完不自动再续（2026-11-20 用户令：不自动爬取）；
-  /// 没跑完下次手动点继续补。跑之前记一次库里作品数，横幅算
-  /// “本轮 +N”。
-  Future<void> _runSync() async {
-    // 视频库模式不禁名册同步（2026-11-21 用户令）：它现在是往
-    // 本地 actresses 表补新人（upsertRosterPerson 走视频库分支），
-    // 再由作品阶段把她的作品写进 videos；检查点不记，同步每次按
-    // 名册全量比对、只补没有的。
-    if (_sync.isRunning) return;
-    _worksAtRunStart = _overview?.works ?? 0;
-    setState(() => _lastSyncFailed = false);
-    final result = await _sync.run(refresh: false);
-    if (!mounted) return;
-    setState(() => _lastSyncFailed = result.hasFailures);
-    final overview = await _db.overview();
-    if (!mounted) return;
-    setState(() => _overview = overview);
   }
 
   void _onScroll() {
@@ -730,71 +554,6 @@ class _ActressListPageState extends State<ActressListPage> {
       setState(() => _query = query);
       _reloadAfterFilterChange();
     });
-  }
-
-  void _onCrawlProgress(ActressSiteCrawlProgress progress) {
-    if (!mounted) return;
-    setState(() => _crawlProgress = progress);
-    if (progress.running) {
-      _worksAtRunStart ??= _overview?.works ?? 0;
-      _maybeRefreshOverview();
-      _maybeRefreshListWhileRunning();
-      return;
-    }
-    _clearWorksStartIfIdle();
-    if (!progress.done) return;
-    // 现爬写了新的本地 JSON：重读兜底再刷新列表，爬到的条目立刻可见。
-    unawaited(
-      _fallback.load().then((_) {
-        if (mounted) unawaited(_loadPage(reset: true));
-      }),
-    );
-  }
-
-  /// 导出合并 JSON：本地全部行按更新规则合并后的全文，走系统保存
-  /// 对话框存成 mjv011.json（已绑定时直接写 MYTV/mjv011.json），
-  /// 用户拷走即用。
-  Future<void> _exportMergedJson() async {
-    if (_exportingJson) return;
-    setState(() => _exportingJson = true);
-    try {
-      if (!_fallback.loaded) await _fallback.load();
-      final doc = _fallback.mergedDocument();
-      final text = const JsonEncoder.withIndent('  ').convert(doc);
-      // 2026-11-20 MYTV 绑定：已绑定时直接写到 MYTV/mjv011.json
-      // （根目录，不碰 MYTV/db 里正在用的影子文件），用户用文件
-      // 管理器拷走即用；未绑定时走原来的选位置保存。
-      final bind = _mytvBind;
-      if (bind != null && bind.bound) {
-        await File(bind.mergedJsonExportPath).writeAsString(text);
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已导出到 MYTV/mjv011.json')));
-        return;
-      }
-      final bytes = Uint8List.fromList(utf8.encode(text));
-      final savedUri = await FilePicker.saveFile(
-        dialogTitle: '导出合并 JSON',
-        fileName: ActressJsonFallback.localFileName,
-        bytes: bytes,
-        mimeType: 'application/json',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(savedUri == null ? '已取消导出' : '已导出合并 JSON，可拷进树里内置文件'),
-        ),
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('导出失败')));
-      }
-    } finally {
-      if (mounted) setState(() => _exportingJson = false);
-    }
   }
 
   /// 站源注册表变了（新站导入/站点摘掉/隐藏/显隐切换）：
@@ -827,25 +586,6 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 不在视频区登记里，进不了选项）。
   List<ActressSiteFilter> _siteFilterOptions() =>
       actressSiteFilterOptions(widget.store);
-
-  /// 任意站点现爬（2026-11-21 用户令）：粘一个站点列表页/分类页地址就爬。
-  /// 不认站点名：列表结构、翻页规律、详情字段全部按页面实测识别。
-  Future<void> _runGenericCrawl() async {
-    if (_crawl.running) return;
-    final url = _genericUrlController.text.trim();
-    if (url.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('先填一个站点地址（列表页或分类页）')));
-      return;
-    }
-    if (_source != ActressSiteFilter.all) {
-      setState(() => _source = ActressSiteFilter.all);
-    }
-    await _crawl.startGenericSite(url);
-    if (!mounted) return;
-    await _refreshAfterSync();
-  }
 
   /// 切换站点筛选：只重读列表与分类。2026-11-23 用户令：女优库不要
   /// 全自动同步检查——切站不再自动现爬，想爬去设置页“任意站点爬取”
@@ -1200,10 +940,9 @@ class _ActressListPageState extends State<ActressListPage> {
     );
   }
 
-  /// 有任一路在跑（名册同步、全站叠加、任意站点爬取）：
+  /// 有数据库任务在跑（后台导入/表格更新/导出）：
   /// 齿轮图标换成小转圈，顶栏不占位也能看出在动。
-  bool get _anyRunning =>
-      _progress.running || _stackingProgress.running || _crawlProgress.running;
+  bool get _anyRunning => _taskController.busy;
 
   /// 设置弹窗（2026-11-21 用户令）：把原来排在顶栏的同步横幅、全站
   /// 叠加横幅、现爬横幅全收进这一个 ⚙️ 弹窗；
@@ -1384,6 +1123,35 @@ class _ActressListPageState extends State<ActressListPage> {
                 ),
               ),
             ),
+          // 后台导入中（2026-11-25）：离开设置弹窗也看得见进度，
+          // 旧库照常能看能播；点取消就停（旧库不动）。
+          if (_sqlImportRunning)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+              child: Row(
+                children: [
+                  const SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _sqlImportProgress == null
+                          ? '正在后台导入数据库…（旧库照常能看能播）'
+                          : '正在后台导入数据库…已导入 '
+                                '${_sqlImportProgress!.statements} 条'
+                                '（${(_sqlImportProgress!.fraction * 100).toStringAsFixed(0)}%）',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _cancelSqlImport,
+                    child: const Text('取消'),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: Stack(
               children: [
@@ -1436,16 +1204,9 @@ class _ActressListPageState extends State<ActressListPage> {
                 icon: const Icon(Icons.emoji_events_outlined),
                 onPressed: _openRanking,
               ),
-            IconButton(
-              key: const ValueKey('refresh-actress-library'),
-              tooltip: '刷新同步',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.refresh_rounded),
-              onPressed: _progress.running ? null : () => _runSync(),
-            ),
             // 2026-11-21 用户令：右上角“影视库”按钮没用，删掉。
-            // 设置齿轮（2026-11-21 用户令）：同步/叠加/现爬全部
-            // 收进这个弹窗，顶栏不再排一列横幅。
+            // 设置齿轮：数据库导入/管理全部收进这个弹窗，
+            // 顶栏不再排一列横幅。
             IconButton(
               key: const ValueKey('open-actress-settings'),
               tooltip: '设置',
@@ -1642,6 +1403,18 @@ class _ActressListPageState extends State<ActressListPage> {
           : _source != ActressSiteFilter.all
           ? '该站暂无匹配人物'
           : '暂无人物';
+      if (_noLibraryDb) {
+        // 没导过库：内置 who's 数据顶上首页（2026-11-25 用户令）：
+        // 作品流 + 按女优看，导入成功后自动刷新切回数据库口径
+        // （本分支不再命中）。目录读不出来时视图内部回落纯空态。
+        return ActressWhosTopupView(
+          onPlay: _playTopupVideo,
+          onImport: _startSqlImport,
+          onManage: _openDbManagePage,
+          pagerFuture: widget.topupPagerFuture,
+          indexFuture: widget.topupIndexFuture,
+        );
+      }
       return Center(
         child: Text(
           emptyText,
@@ -1925,9 +1698,6 @@ class _ActressSettingsSheet extends StatefulWidget {
 }
 
 class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
-  /// 同步爬取小窗是否展开（收起后只剩一行摘要）。
-  var _expanded = true;
-
   Timer? _ticker;
 
   @override
@@ -1948,119 +1718,12 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
 
   _ActressListPageState get _host => widget.host;
 
-  /// 同步一行文案：跑着报阶段 + 进度 + 失败数，停下报总数，空库报
-  /// 还没数据。与原来横幅同一口径，只是搬了位置。
-  String _syncText() {
-    final host = _host;
-    final progress = host._progress;
-    if (progress.running) {
-      final detail = progress.detail.isNotEmpty
-          ? progress.detail
-          : progress.total > 0
-          ? '${progress.done}/${progress.total}'
-          : '第 ${progress.done} 页';
-      final failed = progress.failed > 0 ? ' · 失败 ${progress.failed}' : '';
-      return '${progress.phaseLabel}（${progress.sourceIndex}/${progress.sourceCount}）· $detail$failed';
-    }
-    final overview = host._overview;
-    if (overview == null) return '还没读到库';
-    if (overview.persons == 0) return '还没有数据，点下面开始同步演员库';
-    if (host._lastSyncFailed || !overview.allDone) {
-      return '已同步 ${overview.persons} 人 · ${overview.works} 部作品，部分还没同步完';
-    }
-    return '已同步 ${overview.persons} 人 · ${overview.works} 部作品';
-  }
-
-  String _stackingText() {
-    final stacking = _host._stackingProgress;
-    if (stacking.running) {
-      return '全站叠加中 · 已叠加 ${stacking.done}/${stacking.total} 人'
-          ' · 本轮新增 ${stacking.worksAdded} 部作品';
-    }
-    if (stacking.finished) {
-      return '全站叠加已完成：${stacking.done} 人作品已按番号叠加';
-    }
-    if (stacking.done > 0) {
-      return '已叠加 ${stacking.done}/${stacking.total} 人，继续按番号补全各站作品';
-    }
-    return '按番号把各站作品叠加到每个人名下，断点续跑，不用一次跑完';
-  }
-
-  /// 收起时的一行摘要：跑着的路数 + 关键数字。
-  String _summary() {
-    final host = _host;
-    final running = <String>[];
-    if (host._progress.running) running.add('同步');
-    if (host._stackingProgress.running) running.add('叠加');
-    if (host._crawlProgress.running) running.add('现爬');
-    final overview = host._overview;
-    final tail = overview == null
-        ? ''
-        : ' · ${overview.persons} 人 / ${overview.works} 部';
-    if (running.isEmpty) return '空闲$tail';
-    return '正在${running.join('、')}$tail';
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final host = _host;
     final busy = host._anyRunning;
     final textStyle = Theme.of(context).textTheme;
-
-    Widget button(String label, VoidCallback? onPressed, {Key? key}) =>
-        TextButton(
-          key: key,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            minimumSize: const Size(0, 30),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          onPressed: onPressed,
-          child: Text(label),
-        );
-
-    Widget section({
-      required String title,
-      required String body,
-      required List<Widget> actions,
-      bool spinning = false,
-    }) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: spinning
-                ? const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.circle, size: 8),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title, style: textStyle.titleSmall),
-                const SizedBox(height: 2),
-                Text(
-                  body,
-                  style: textStyle.bodySmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (actions.isNotEmpty)
-            Wrap(alignment: WrapAlignment.end, children: actions),
-        ],
-      ),
-    );
 
     return SafeArea(
       top: false,
@@ -2070,180 +1733,20 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 标题行：点右侧箭头收起/展开整个“同步爬取”小窗。
+            // 标题行（2026-11-25 同步功能删除后，弹窗只剩数据库
+            // 相关操作：导入 + 管理入口）。
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
               child: Row(
                 children: [
-                  const Icon(Icons.sync_rounded, size: 18),
+                  const Icon(Icons.storage_rounded, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      _expanded ? '同步爬取' : '同步爬取（已收起）',
-                      style: textStyle.titleMedium,
-                    ),
-                  ),
-                  IconButton(
-                    key: const ValueKey('toggle-actress-settings-body'),
-                    tooltip: _expanded ? '收起' : '展开',
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(
-                      _expanded
-                          ? Icons.keyboard_arrow_up_rounded
-                          : Icons.keyboard_arrow_down_rounded,
-                    ),
-                    onPressed: () => setState(() => _expanded = !_expanded),
+                    child: Text('数据库', style: textStyle.titleMedium),
                   ),
                 ],
               ),
             ),
-            if (!_expanded)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  _summary(),
-                  key: const ValueKey('actress-settings-summary'),
-                  style: textStyle.bodySmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              )
-            else ...[
-              section(
-                title: '名册 / 作品同步',
-                body: [
-                  host._worksGrowthText(),
-                  _syncText(),
-                ].where((t) => t.isNotEmpty).join('\n'),
-                spinning: host._progress.running,
-                actions: [
-                  if (host._progress.running)
-                    button('取消', host._sync.cancel)
-                  else
-                    button(
-                      host._overview == null || host._overview!.persons == 0
-                          ? '开始同步'
-                          : (host._lastSyncFailed || !host._overview!.allDone
-                                ? '继续同步'
-                                : '再同步一次'),
-                      host._progress.running
-                          ? null
-                          : () => host._runSync(),
-                    ),
-                ],
-              ),
-              section(
-                title: '全站叠加',
-                body: _stackingText(),
-                spinning: host._stackingProgress.running,
-                actions: [
-                  if (host._stackingProgress.running)
-                    button('取消', host._stacking.cancel)
-                  else
-                    button(
-                      host._stackingProgress.done > 0 ? '继续叠加' : '开始叠加',
-                      host._progress.running ||
-                              host._overview == null ||
-                              host._overview!.persons == 0
-                          ? null
-                          : () => host._runStacking(),
-                    ),
-                ],
-              ),
-              // 2026-11-24 用户令：选站现爬已删（详情页播片自动记
-              // 录到演员库，不用再现爬补库）；任意站点爬取留着。
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 3),
-                      child: Icon(Icons.public, size: 14),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('任意站点爬取', style: textStyle.titleSmall),
-                          const SizedBox(height: 2),
-                          Text(
-                            '粘一个列表页/分类页地址：自动认列表结构、翻页规律、'
-                            '女优与番号，不用先把站加进列表。',
-                            style: textStyle.bodySmall?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          TextField(
-                            key: const ValueKey('generic-crawl-url'),
-                            controller: host._genericUrlController,
-                            enabled: !host._crawlProgress.running,
-                            keyboardType: TextInputType.url,
-                            style: textStyle.bodySmall,
-                            onSubmitted: (_) => host._runGenericCrawl(),
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              hintText: 'https://站点.com/videos',
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 10,
-                              ),
-                            ),
-                          ),
-                          // 现爬进度行（原在“选站现爬”区，2026-11-24
-                          // 删区后挪到这里）：跑着显示进度 + 取消，
-                          // 跑完显示导出合并 JSON。
-                          if (host._crawlProgress.running ||
-                              host._crawlProgress.done)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Row(
-                                children: [
-                                  if (host._crawlProgress.running)
-                                    const Padding(
-                                      padding: EdgeInsets.only(right: 8),
-                                      child: SizedBox(
-                                        width: 14,
-                                        height: 14,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      ),
-                                    ),
-                                  Expanded(
-                                    child: Text(
-                                      host._crawlProgress.label,
-                                      style: textStyle.bodySmall,
-                                    ),
-                                  ),
-                                  if (host._crawlProgress.running)
-                                    button('取消', host._crawl.cancel)
-                                  else if (host._crawlProgress.done)
-                                    button(
-                                      '导出合并 JSON',
-                                      host._exportingJson
-                                          ? null
-                                          : host._exportMergedJson,
-                                    ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    button(
-                      '开始爬',
-                      host._crawlProgress.running
-                          ? null
-                          : host._runGenericCrawl,
-                    ),
-                  ],
-                ),
-              ),
               // 2026-11-25 .sql 导入：选 .sql / .sql.gz 文件导回主库
               //（临时库校验通过才换，失败原库不动）。不再要求先绑定
               // MYTV：导入直接落到内部工作库。
@@ -2257,8 +1760,48 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                     ? null
                     : host._startSqlImport,
                 onCancel: host._sqlImportRunning
-                    ? () => host._sqlImportCancelRequested = true
+                    ? host._cancelSqlImport
                     : null,
+              ),
+              // 2026-11-25 数据库管理入口（与导入同区）：库信息、
+              // 表格导入更新、导出、备份恢复、删除数据库都在里面。
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Icon(Icons.circle, size: 8),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('数据库管理', style: textStyle.titleSmall),
+                          const SizedBox(height: 2),
+                          Text(
+                            '看库信息、用表格更新、导出、恢复备份、删除数据库。',
+                            style: textStyle.bodySmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        minimumSize: const Size(0, 30),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: host._openDbManagePage,
+                      child: const Text('打开'),
+                    ),
+                  ],
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -2269,7 +1812,6 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                   ),
                 ),
               ),
-            ],
           ],
         ),
       ),

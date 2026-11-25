@@ -141,15 +141,6 @@ class _ViewingExperienceScreenState extends State<ViewingExperienceScreen> {
                             settings.copyWith(deepSniffer: value),
                           ),
                         ),
-                        SwitchListTile(
-                          key: const ValueKey('viewing-auto-record-plays-switch'),
-                          title: const Text('自动记录播放到演员库'),
-                          subtitle: const Text('播起来后把能播的片记进演员库，播不了的不记'),
-                          value: settings.autoRecordPlays,
-                          onChanged: (value) => _updateSettings(
-                            settings.copyWith(autoRecordPlays: value),
-                          ),
-                        ),
                       ],
                     ),
                   ),

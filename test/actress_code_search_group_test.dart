@@ -3,18 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
-import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
-Future<ActressHttpResponse> _unusedFetch(
-  String url, {
-  Map<String, String> headers = const {},
-  Duration timeout = const Duration(seconds: 20),
-}) async => throw UnimplementedError('fake source must not fetch');
 
 Future<LocalStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
@@ -156,12 +149,6 @@ void main() {
     }
 
     Future<void> pumpPage(WidgetTester tester) async {
-      final sync = ActressSyncService(
-        db: db,
-        sources: const [],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
       // 列表页 bootstrap 里 await MYTV 绑定（平台通道），FakeAsync
       // 下等不到返回会 pumpAndSettle 超时——按树里老办法包进
       // runAsync（真机上绑定是毫秒级，不改生产代码）。
@@ -172,7 +159,6 @@ void main() {
               repository: repository,
               store: store,
               database: db,
-              syncService: sync,
             ),
           ),
         );

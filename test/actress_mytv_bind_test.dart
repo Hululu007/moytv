@@ -12,19 +12,13 @@ import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_m3u_index.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
-import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_site_crawl.dart';
-import 'package:moyi/actress/actress_sync.dart';
+import 'package:moyi/actress/actress_whos_topup.dart';
+import 'package:moyi/actress/whos_json_index.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
-Future<ActressHttpResponse> _unusedFetch(
-  String url, {
-  Map<String, String> headers = const {},
-  Duration timeout = const Duration(seconds: 20),
-}) async => throw UnimplementedError('fake source must not fetch');
 
 Future<LocalStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
@@ -33,18 +27,6 @@ Future<LocalStore> _makeStore() async {
   return store;
 }
 
-class _CountingSyncService extends ActressSyncService {
-  _CountingSyncService({required super.db, required super.sources})
-    : super(fetch: _unusedFetch);
-
-  var runs = 0;
-
-  @override
-  Future<ActressSyncResult> run({bool refresh = false}) {
-    runs++;
-    return super.run(refresh: refresh);
-  }
-}
 
 void main() {
   group('MYTV 绑定解析', () {
@@ -257,28 +239,6 @@ void main() {
       expect(entries.first.vodName, '本地测试片');
     });
 
-    test('现爬 bindLocalDir 实跑：mjv011.json 落在新目录不在旧目录', () async {
-      final oldDir = Directory('${temp.path}/old_json')..createSync();
-      final newDir = Directory('${temp.path}/new_json')..createSync();
-      final db = MemoryActressDatabase();
-      final crawl = ActressSiteCrawlService(
-        repository: FixtureRepository(),
-        db: db,
-        localJsonDir: oldDir,
-      );
-      crawl.bindLocalDir(newDir);
-      await crawl.start(
-        site: 'mjv',
-        maxPagesPerCategory: 1,
-        enrichPerCategory: 0,
-      );
-      expect(File('${newDir.path}/mjv011.json').existsSync(), isTrue);
-      expect(File('${oldDir.path}/mjv011.json').existsSync(), isFalse);
-      expect(
-        File('${newDir.path}/mjv011.json').readAsStringSync(),
-        contains('mjv011'),
-      );
-    });
   });
 
   group('内存库重读空实现', () {
@@ -292,19 +252,24 @@ void main() {
 
   group('列表页：没导入数据库的空态', () {
     late Directory temp;
-    late MemoryActressDatabase db;
 
     setUp(() {
       temp = Directory.systemTemp.createTempSync();
       addTearDown(() => temp.deleteSync(recursive: true));
-      db = MemoryActressDatabase();
     });
 
-    testWidgets('没导入数据库：空态提示导入 .sql，不自动同步', (tester) async {
+    testWidgets('没导入数据库：内置数据顶上，不自动同步', (tester) async {
       final store = await _makeStore();
-      final sync = _CountingSyncService(db: db, sources: const []);
-      addTearDown(sync.dispose);
       final fallback = ActressJsonFallback(documentsDir: temp);
+      // 无库顶上（2026-11-25 晚用户令）：注入小目录/索引夹具，
+      // 不读真 33.9 万行资产（与 actress_whos_topup_test 同款）。
+      const catalogText =
+          'SSIS-001||第一部标题||https://img.test/1.jpg||https://v.test/1.m3u8\n';
+      final topupPager = WhosCatalogPager.fromText(catalogText);
+      final topupIndex = WhosJsonIndex.fromLines(
+        catalogLines: catalogText.split('\n'),
+        mapLines: const ['SSIS-001||女优甲'],
+      );
       // 2026-11-20：列表页 bootstrap 里 await 平台通道拿 MYTV
       // 绑定（真机上毫秒级）。pumpAndSettle 的假时钟等不到真异步
       // bootstrap（会超时），pump() 也不能放进 runAsync（会挂住）：
@@ -316,8 +281,9 @@ void main() {
               repository: FixtureRepository(),
               store: store,
               database: _NoLibraryTestDb(),
-              syncService: sync,
               fallback: fallback,
+              topupPagerFuture: Future.value(topupPager),
+              topupIndexFuture: Future.value(topupIndex),
             ),
           ),
         );
@@ -329,13 +295,17 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
       }
       // 空库不再自动生成（2026-11-22 用户令最终口径）：不灌
-      // 内置 json 种子、不走互联网同步，同步一次都不跑。
-      expect(sync.runs, 0);
-      // 2026-11-25 只留 .sql 导入：绑定行与“重新加载数据库”
-      // 入口都删了，空态只剩这一句导入提示。
+      // 内置 json 种子、不联网拉数据（同步功能已于 2026-11-25 删除）。
+      // 2026-11-25 晚新口径（用户令「顶上」）：没导过库时内置
+      // who's 目录顶上首页，旧纯空态文案只在内置目录读不出来时
+      // 才回落出现；绑定行与“重新加载数据库”入口都删了。
+      expect(
+        find.text('还没导入数据库，先用内置数据顶上（导入后自动换成数据库）'),
+        findsOneWidget,
+      );
       expect(
         find.text('还没有导入数据库：请在设置里导入 .sql 数据库'),
-        findsOneWidget,
+        findsNothing,
       );
       expect(find.text('重新加载数据库'), findsNothing);
     });

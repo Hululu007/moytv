@@ -8,7 +8,6 @@ import 'package:moyi/actress/actress_play.dart';
 import 'package:moyi/actress/actress_ranking_page.dart';
 import 'package:moyi/actress/actress_roster_sources.dart';
 import 'package:moyi/actress/actress_search.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/actress/actress_widgets.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/crosssite_probe.dart';
@@ -33,11 +32,6 @@ Future<FeedProbeResponse> _alwaysPlayable(
   headBytes: [1],
 );
 
-Future<ActressHttpResponse> _unusedFetch(
-  String url, {
-  Map<String, String> headers = const {},
-  Duration timeout = const Duration(seconds: 20),
-}) async => throw UnimplementedError('fake source must not fetch');
 
 Future<LocalStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
@@ -712,249 +706,6 @@ void main() {
     });
   });
 
-  group('同步服务', () {
-    late MemoryActressDatabase db;
-
-    setUp(() {
-      db = MemoryActressDatabase();
-    });
-
-    RosterPerson person(String id, String name) => RosterPerson(
-      source: ActressRosterSourceId.chaoliu,
-      sourceId: id,
-      name: name,
-      sex: 'female',
-    );
-
-    test('全量同步合并三家并记排行', () async {
-      final chaoliu = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲'), person('B', '演员乙')],
-        ],
-        filmsBySourceId: {
-          'A': const [RosterFilm(code: 'SSIS-00123')],
-          'B': const [RosterFilm(code: 'HMN-927')],
-        },
-      );
-      final missav = FakeRosterSource(
-        sourceId: ActressRosterSourceId.missav,
-        rosterPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.missav,
-              sourceId: '/p-a',
-              name: '演员甲',
-            ),
-          ],
-        ],
-        filmsBySourceId: {
-          '/p-a': const [RosterFilm(code: 'SSIS-123')],
-        },
-        rankingPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.missav,
-              sourceId: '/p-a',
-              name: '演员甲',
-            ),
-            const RosterPerson(
-              source: ActressRosterSourceId.missav,
-              sourceId: '/p-b',
-              name: '演员乙',
-            ),
-          ],
-        ],
-      );
-      final sync = ActressSyncService(
-        db: db,
-        sources: [chaoliu, missav],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
-      final result = await sync.run();
-      expect(result.hasFailures, isFalse);
-      expect(result.persons, 2);
-      // SSIS-00123 与 SSIS-123 归一化后同一部，但来自潮流与 MissAV
-      // 两家名册，按（站，番号）各留一条；加演员乙的 HMN-927 共 3 行。
-      expect(result.works, 3);
-      final persons = await db.listPersons(
-        sex: ActressSexFilter.all,
-        sort: ActressSort.nameAsc,
-        query: '',
-        offset: 0,
-        limit: 10,
-      );
-      final a = persons.firstWhere((p) => p.displayName == '演员甲');
-      expect(a.fromChaoliu, isTrue);
-      expect(a.fromMissav, isTrue);
-      expect(a.missavRank, 1);
-      expect(a.worksCount, 2);
-      final b = persons.firstWhere((p) => p.displayName == '演员乙');
-      expect(b.missavRank, 2);
-      final checkpoint = await db.checkpoint(
-        ActressRosterSourceId.chaoliu,
-        'roster',
-      );
-      expect(checkpoint!.finished, isTrue);
-    });
-
-    test('名册断点续跑不重复拉已完成页', () async {
-      final failing = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲')],
-          [person('B', '演员乙')],
-        ],
-        failRosterPages: {2},
-      );
-      final sync1 = ActressSyncService(
-        db: db,
-        sources: [failing],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync1.dispose);
-      final result1 = await sync1.run();
-      expect(result1.hasFailures, isTrue);
-      // 3 个取页工人并行：页 1、2、3 同时领走；页 2 失败重试 3 次，
-      // 页 3 是超前取到的空页（无更多时停）；断点留在最早缺口第 2 页。
-      expect(failing.fetchedRosterPages.toSet(), {1, 2, 3});
-      expect(failing.fetchedRosterPages.where((p) => p == 2).length, 3);
-      final checkpoint = await db.checkpoint(
-        ActressRosterSourceId.chaoliu,
-        'roster',
-      );
-      expect(checkpoint!.finished, isFalse);
-      expect(checkpoint.cursor, '2');
-
-      final resumed = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲')],
-          [person('B', '演员乙')],
-        ],
-      );
-      final sync2 = ActressSyncService(
-        db: db,
-        sources: [resumed],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync2.dispose);
-      await sync2.run();
-      // 续跑从最早缺口第 2 页续爬，第 1 页不再拉（超前取到的空页
-      // 3、4 不影响断言，只认第 1 页没再拉、第 2 页拉了）。
-      expect(resumed.fetchedRosterPages.contains(1), isFalse);
-      expect(resumed.fetchedRosterPages.contains(2), isTrue);
-      expect(await db.countPersons(sex: ActressSexFilter.all, query: ''), 2);
-    });
-
-    test('作品断点续跑只补失败的人', () async {
-      final failing = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲'), person('B', '演员乙')],
-        ],
-        filmsBySourceId: {
-          'A': const [RosterFilm(code: 'SSIS-00123')],
-          'B': const [RosterFilm(code: 'HMN-927')],
-        },
-        failFilmsFor: {'B'},
-      );
-      final sync1 = ActressSyncService(
-        db: db,
-        sources: [failing],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync1.dispose);
-      await sync1.run();
-      final filmsCheckpoint = await db.checkpoint(
-        ActressRosterSourceId.chaoliu,
-        'films',
-      );
-      expect(filmsCheckpoint!.finished, isFalse);
-
-      final resumed = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲'), person('B', '演员乙')],
-        ],
-        filmsBySourceId: {
-          'A': const [RosterFilm(code: 'SSIS-00123')],
-          'B': const [RosterFilm(code: 'HMN-927')],
-        },
-      );
-      final sync2 = ActressSyncService(
-        db: db,
-        sources: [resumed],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync2.dispose);
-      await sync2.run();
-      expect(resumed.fetchedFilmsFor, ['B']);
-      final done = await db.checkpoint(ActressRosterSourceId.chaoliu, 'films');
-      expect(done!.finished, isTrue);
-    });
-
-    test('单源失败不拖垮其余源', () async {
-      final failing = FakeRosterSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [
-          [person('A', '演员甲')],
-        ],
-        failRosterPages: {1},
-      );
-      final ok = FakeRosterSource(
-        sourceId: ActressRosterSourceId.whos,
-        rosterPages: [
-          [
-            const RosterPerson(
-              source: ActressRosterSourceId.whos,
-              sourceId: 'w1',
-              name: '演员丙',
-            ),
-          ],
-        ],
-      );
-      final sync = ActressSyncService(
-        db: db,
-        sources: [failing, ok],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
-      final result = await sync.run();
-      expect(result.failedSources, [ActressRosterSourceId.chaoliu]);
-      expect(await db.countPersons(sex: ActressSexFilter.all, query: ''), 1);
-    });
-
-    test('取消后断点保留', () async {
-      final persons = [for (var i = 0; i < 20; i++) person('P$i', '演员$i')];
-      final slow = _SlowFilmsSource(
-        sourceId: ActressRosterSourceId.chaoliu,
-        rosterPages: [persons],
-        filmsBySourceId: {
-          for (final p in persons)
-            p.sourceId: const [RosterFilm(code: 'SSIS-00123')],
-        },
-      );
-      final sync = ActressSyncService(
-        db: db,
-        sources: [slow],
-        fetch: _unusedFetch,
-        filmsConcurrency: 1,
-      );
-      addTearDown(sync.dispose);
-      final running = sync.run();
-      await Future<void>.delayed(const Duration(milliseconds: 150));
-      sync.cancel();
-      final result = await running;
-      expect(result.cancelled, isTrue);
-      final pending = await db.personsPendingFilms(
-        ActressRosterSourceId.chaoliu,
-      );
-      expect(pending, isNotEmpty);
-    });
-  });
-
   group('双键合流补全', () {
     late MemoryActressDatabase db;
     late _ScriptedRepository repository;
@@ -1380,19 +1131,12 @@ void main() {
     testWidgets('列表页显示人物，搜索与性别筛选生效', (tester) async {
       await seedPerson('女演员甲', works: 30);
       await seedPerson('男演员乙', sex: 'male', works: 100);
-      final sync = ActressSyncService(
-        db: db,
-        sources: const [],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: ActressListPage(
             repository: repository,
             store: store,
             database: db,
-            syncService: sync,
           ),
         ),
       );
@@ -1423,19 +1167,12 @@ void main() {
     testWidgets('内嵌模式顶栏不重复女优库标题、只留人数', (tester) async {
       await seedPerson('女演员甲', works: 30);
       await seedPerson('男演员乙', sex: 'male', works: 100);
-      final sync = ActressSyncService(
-        db: db,
-        sources: const [],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: ActressListPage(
             repository: repository,
             store: store,
             database: db,
-            syncService: sync,
             showTitle: false,
           ),
         ),
@@ -1460,19 +1197,12 @@ void main() {
       await seedPerson('无码男', sex: 'male', tags: ['无码']);
       await seedPerson('欧美女', tags: ['欧美']);
       await seedPerson('无标签者', tags: []);
-      final sync = ActressSyncService(
-        db: db,
-        sources: const [],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: ActressListPage(
             repository: repository,
             store: store,
             database: db,
-            syncService: sync,
           ),
         ),
       );
@@ -1511,19 +1241,12 @@ void main() {
 
     testWidgets('列表页奖杯钮进排行榜', (tester) async {
       await seedPerson('女演员甲', works: 30);
-      final sync = ActressSyncService(
-        db: db,
-        sources: const [],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: ActressListPage(
             repository: repository,
             store: store,
             database: db,
-            syncService: sync,
           ),
         ),
       );
@@ -1646,157 +1369,7 @@ void main() {
         findsOneWidget,
       );
     });
-
-    Future<void> markAllDone() async {
-      for (final source in ActressRosterSourceId.values) {
-        for (final phase in ['roster', 'films']) {
-          await db.saveCheckpoint(
-            ActressSyncCheckpoint(
-              source: source.name,
-              phase: phase,
-              finished: true,
-            ),
-          );
-        }
-      }
-    }
-
-    // 自动续跑链靠 2 秒 Timer：pumpAndSettle 不等长 Timer，显式推进假时钟。
-    Future<void> advanceAutoChain(WidgetTester tester) async {
-      for (var i = 0; i < 2; i++) {
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pumpAndSettle();
-      }
-    }
-
-    Future<void> pumpListPage(
-      WidgetTester tester,
-      ActressSyncService sync,
-    ) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ActressListPage(
-            repository: repository,
-            store: store,
-            database: db,
-            syncService: sync,
-          ),
-        ),
-      );
-    }
-
-    // 不自动爬取（2026-11-20 用户令）：进页不再自动起爬、自动续跑
-    // 已废除；同步只在用户手动点刷新/继续/开始时跑一次，跑完或
-    // 取消后都不自动再续。
-    testWidgets('没同步完进页不自动跑，手动点继续同步才跑一次', (tester) async {
-      await seedPerson('女演员甲', works: 30);
-      final sync = _CountingSync(db: db);
-      addTearDown(sync.dispose);
-      await pumpListPage(tester, sync);
-      await tester.pumpAndSettle();
-      await advanceAutoChain(tester);
-      expect(sync.runs, 0);
-      await tester.tap(find.text('继续同步'));
-      await tester.pumpAndSettle();
-      expect(sync.runs, 1);
-      expect(sync.refreshArgs, [false]);
-      await advanceAutoChain(tester);
-      expect(sync.runs, 1);
-    });
-
-    testWidgets('已同步完进页不自动跑', (tester) async {
-      await seedPerson('女演员甲', works: 30);
-      await markAllDone();
-      final sync = _CountingSync(db: db);
-      addTearDown(sync.dispose);
-      await pumpListPage(tester, sync);
-      await tester.pumpAndSettle();
-      await advanceAutoChain(tester);
-      expect(sync.runs, 0);
-    });
-
-    testWidgets('库空进页不自动跑，点开始同步才跑一次', (tester) async {
-      final sync = _CountingSync(db: db);
-      addTearDown(sync.dispose);
-      await pumpListPage(tester, sync);
-      await tester.pumpAndSettle();
-      await advanceAutoChain(tester);
-      expect(sync.runs, 0);
-      expect(find.text('还没有数据，点刷新开始同步演员库。'), findsOneWidget);
-      await tester.tap(find.text('开始同步'));
-      await tester.pumpAndSettle();
-      expect(sync.runs, 1);
-      expect(sync.refreshArgs, [false]);
-    });
-
-    testWidgets('手动点刷新跑一次，跑完不自动再续', (tester) async {
-      await seedPerson('女演员甲', works: 30);
-      final sync = _CountingSync(db: db);
-      addTearDown(sync.dispose);
-      await pumpListPage(tester, sync);
-      await tester.pumpAndSettle();
-      await advanceAutoChain(tester);
-      expect(sync.runs, 0);
-      await tester.tap(find.byKey(const ValueKey('refresh-actress-library')));
-      await tester.pumpAndSettle();
-      expect(sync.runs, 1);
-      await advanceAutoChain(tester);
-      expect(sync.runs, 1);
-    });
-
-    testWidgets('取消后不自动续跑', (tester) async {
-      await seedPerson('女演员甲', works: 30);
-      final sync = _CountingSync(db: db)..nextCancelled = true;
-      addTearDown(sync.dispose);
-      await pumpListPage(tester, sync);
-      await tester.pumpAndSettle();
-      await advanceAutoChain(tester);
-      expect(sync.runs, 0);
-      await tester.tap(find.text('继续同步'));
-      await tester.pumpAndSettle();
-      expect(sync.runs, 1);
-      await advanceAutoChain(tester);
-      expect(sync.runs, 1);
-    });
   });
 }
 
-class _CountingSync extends ActressSyncService {
-  _CountingSync({required super.db})
-    : super(sources: const [], fetch: _unusedFetch);
 
-  var runs = 0;
-  final refreshArgs = <bool>[];
-  var nextCancelled = false;
-
-  @override
-  Future<ActressSyncResult> run({bool refresh = false}) {
-    runs++;
-    refreshArgs.add(refresh);
-    return Future.value(
-      ActressSyncResult(
-        persons: 0,
-        works: 0,
-        failedSources: const [],
-        cancelled: nextCancelled,
-      ),
-    );
-  }
-}
-
-class _SlowFilmsSource extends FakeRosterSource {
-  _SlowFilmsSource({
-    required super.sourceId,
-    required super.rosterPages,
-    required super.filmsBySourceId,
-  });
-
-  @override
-  Future<List<RosterFilm>> fetchFilms(
-    String sourceId, {
-    required ActressHttpFetch fetch,
-  }) async {
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    return super.fetchFilms(sourceId, fetch: fetch);
-  }
-}

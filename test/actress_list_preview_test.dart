@@ -15,7 +15,6 @@ import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
-import 'package:moyi/actress/actress_site_crawl.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,28 +28,7 @@ const _previewDir =
 late LocalStore _previewStore;
 late MemoryActressDatabase _previewDb;
 late ActressJsonFallback _previewFallback;
-late _NoopCrawl _previewCrawl;
 
-/// 不真爬：只记下触发的站。
-class _NoopCrawl extends ActressSiteCrawlService {
-  _NoopCrawl({required super.repository, required super.db});
-
-  String? startedSite;
-
-  @override
-  Future<void> start({
-    String site = 'mjv',
-    int maxPagesPerCategory =
-        ActressSiteCrawlService.defaultMaxPagesPerCategory,
-    int enrichPerCategory =
-        ActressSiteCrawlService.defaultEnrichPerCategory,
-    int categoryConcurrency =
-        ActressSiteCrawlService.defaultCategoryConcurrency,
-    Duration timeBudget = ActressSiteCrawlService.defaultTimeBudget,
-  }) async {
-    startedSite = site;
-  }
-}
 
 ThemeData _previewTheme(AppThemeMode mode) {
   final base = AppThemeConfig.forTheme(mode).toThemeData();
@@ -86,7 +64,6 @@ Future<
       LocalStore store,
       MemoryActressDatabase db,
       ActressJsonFallback fallback,
-      _NoopCrawl crawl,
     })> _seed() async {
   SharedPreferences.setMockInitialValues({});
   final store = LocalStore(await SharedPreferences.getInstance());
@@ -156,8 +133,7 @@ Future<
   );
   final fallback = ActressJsonFallback(localJsonDir: jsonDir);
   await fallback.load();
-  final crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
-  return (store: store, db: db, fallback: fallback, crawl: crawl);
+  return (store: store, db: db, fallback: fallback);
 }
 
 Future<void> _capture(
@@ -165,7 +141,6 @@ Future<void> _capture(
   required String name,
   required String label,
   required Future<void> Function(WidgetTester tester) action,
-  ActressSiteCrawlService? crawlService,
 }) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1.0;
@@ -206,7 +181,6 @@ Future<void> _capture(
                     store: _previewStore,
                     database: _previewDb,
                     fallback: _previewFallback,
-                    crawlService: crawlService ?? _previewCrawl,
                   ),
                 ),
               ],
@@ -247,7 +221,6 @@ void main() {
     _previewStore = seed.store;
     _previewDb = seed.db;
     _previewFallback = seed.fallback;
-    _previewCrawl = seed.crawl;
     // MYTV 绑定预解析（树里既定做法，见 actress_count_fix_test.dart）：
     // 列表页 bootstrap 开头 await ensureBound()，它里面有异步文件
     // IO（探针写/删），在 widget 测试 FakeAsync 下挂起；setUp 在
@@ -320,20 +293,4 @@ void main() {
     );
   });
 
-  testWidgets('preview actress list whos', (tester) async {
-    await _capture(
-      tester,
-      name: 'actress_list_whos',
-      label: '预览 · 女优库列表页 · 站点筛选：whos（触发 whos 现爬，报缺口）',
-      // whos 用真服务：选 whos 时它只发缺口错误（不碰仓库不写盘），
-      // 列表页现爬横幅会显示缺口原因；假爬不发进度，横幅画不出来。
-      crawlService: ActressSiteCrawlService(
-        repository: FixtureRepository(),
-        db: _previewDb,
-      ),
-      action: (tester) async {
-        await _selectSite(tester, 'whos');
-      },
-    );
-  });
 }

@@ -10,43 +10,11 @@ import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
-import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_site_crawl.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/imported_site_record.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
-
-/// 空现爬（树里既定做法，见 actress_site_filter_test.dart）：
-/// 真现爬的异步文件 IO 在 widget 测试 FakeAsync 下挂起，选站
-/// 测试只验菜单与选中态，不跑真现爬。
-class _NoopCrawl extends ActressSiteCrawlService {
-  _NoopCrawl({required super.repository, required super.db});
-
-  String? startedSite;
-
-  @override
-  Future<void> start({
-    String site = 'mjv',
-    int maxPagesPerCategory =
-        ActressSiteCrawlService.defaultMaxPagesPerCategory,
-    int enrichPerCategory =
-        ActressSiteCrawlService.defaultEnrichPerCategory,
-    int categoryConcurrency =
-        ActressSiteCrawlService.defaultCategoryConcurrency,
-    Duration timeBudget = ActressSiteCrawlService.defaultTimeBudget,
-  }) async {
-    startedSite = site;
-  }
-}
-
-Future<ActressHttpResponse> _unusedFetch(
-  String url, {
-  Map<String, String> headers = const {},
-  Duration timeout = const Duration(seconds: 20),
-}) async => throw UnimplementedError('fake source must not fetch');
 
 Future<LocalStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
@@ -200,53 +168,8 @@ void main() {
       await ActressMytvBind.instance.ensureBound();
     });
 
-    testWidgets('同步跑着时卡片数随入库增长更新', (tester) async {
-      final person = await _seedPerson(db, '卡片演员', works: 3);
-      final filmsGate = Completer<List<RosterFilm>>();
-      final sync = ActressSyncService(
-        db: db,
-        sources: [_HangingFilmsSource(filmsGate)],
-        fetch: _unusedFetch,
-      );
-      addTearDown(sync.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ActressListPage(
-            repository: repository,
-            store: store,
-            database: db,
-            fallback: fallback,
-            syncService: sync,
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('约 3 部'), findsOneWidget);
-      // 同步还没开始，先入库 5 部：库里已是 8 部，卡片还是旧快照。
-      await db.upsertWorks(
-        person.localId,
-        [for (var i = 0; i < 5; i++) RosterFilm(code: 'NEW-${i + 1}')],
-        site: ActressRosterSourceId.chaoliu.name,
-      );
-      expect(await db.countWorks(person.localId), 8);
-      expect(find.text('约 3 部'), findsOneWidget);
-      // 点刷新开始同步：名册阶段发出进行中进度，列表当即重读。
-      await tester.tap(
-        find.byKey(const ValueKey('refresh-actress-library')),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('约 8 部'), findsOneWidget);
-      // 放行挂起的作品阶段，同步跑完后数仍是 8 部。
-      filmsGate.complete(const []);
-      await tester.pumpAndSettle();
-      expect(find.text('约 8 部'), findsOneWidget);
-    });
-
     testWidgets('新站导入后菜单里有它，选中站被摘掉后回全部', (tester) async {
       await _seedPerson(db, '菜单演员', works: 1);
-      final crawl = _NoopCrawl(repository: repository, db: db);
       await tester.pumpWidget(
         MaterialApp(
           home: ActressListPage(
@@ -254,12 +177,6 @@ void main() {
             store: store,
             database: db,
             fallback: fallback,
-            crawlService: crawl,
-            syncService: ActressSyncService(
-              db: db,
-              sources: const [],
-              fetch: _unusedFetch,
-            ),
           ),
         ),
       );
@@ -293,11 +210,10 @@ void main() {
       await tester.pump();
       await openMenu();
       expect(find.text('新站'), findsOneWidget);
-      // 选中新站：顶栏选中态变成新站，并触发该站分类现爬。
+      // 选中新站：顶栏选中态变成新站。
       await tester.tap(find.text('新站'));
       await tester.pumpAndSettle();
       expect(find.text('新站'), findsOneWidget);
-      expect(crawl.startedSite, 'py:newstation');
       // 摘掉该站：选中态失效，自动回“全部”。
       await tester.runAsync(() => store.syncImportedSites([]));
       await tester.pump();
@@ -307,41 +223,4 @@ void main() {
       expect(find.text('全部'), findsWidgets);
     });
   });
-}
-
-/// 名册只回 1 个人、作品阶段一直挂起的假源：同步停在作品阶段，
-/// 名册阶段的进行中进度照常发出，供“进行中刷新”测试用。
-class _HangingFilmsSource extends ActressRosterSource {
-  _HangingFilmsSource(this._filmsGate);
-
-  final Completer<List<RosterFilm>> _filmsGate;
-
-  @override
-  ActressRosterSourceId get id => ActressRosterSourceId.missav;
-
-  @override
-  Future<ActressRosterPage> fetchRosterPage(
-    int page, {
-    required ActressHttpFetch fetch,
-  }) async {
-    if (page != 1) {
-      return const ActressRosterPage(persons: [], hasMore: false);
-    }
-    return const ActressRosterPage(
-      persons: [
-        RosterPerson(
-          source: ActressRosterSourceId.missav,
-          sourceId: 'missav-hang',
-          name: '同步假人',
-        ),
-      ],
-      hasMore: false,
-    );
-  }
-
-  @override
-  Future<List<RosterFilm>> fetchFilms(
-    String sourceId, {
-    required ActressHttpFetch fetch,
-  }) => _filmsGate.future;
 }

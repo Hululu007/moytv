@@ -16,8 +16,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
-import 'package:moyi/actress/actress_roster_sources.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,11 +28,6 @@ const _previewDir = '/home/hatch/workspace/moyi_tag_filter_20261124/preview';
 /// 都是 c0.jdbstatic.com 这个域名，与女优同一路）。
 const _maleAvatarUrl = 'https://c0.jdbstatic.com/avatars/mm/MmXaX.jpg';
 
-Future<ActressHttpResponse> _unusedFetch(
-  String url, {
-  Map<String, String> headers = const {},
-  Duration timeout = const Duration(seconds: 20),
-}) async => throw UnimplementedError('fake source must not fetch');
 
 ThemeData _previewTheme(AppThemeMode mode) {
   final base = AppThemeConfig.forTheme(mode).toThemeData();
@@ -190,12 +183,6 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(store.dispose);
-    final sync = ActressSyncService(
-      db: db,
-      sources: const [],
-      fetch: _unusedFetch,
-    );
-    addTearDown(sync.dispose);
     final key = GlobalKey();
     await tester.pumpWidget(
       RepaintBoundary(
@@ -214,7 +201,6 @@ void main() {
                       repository: FixtureRepository(),
                       store: store,
                       database: db,
-                      syncService: sync,
                     ),
                   ),
                 ],

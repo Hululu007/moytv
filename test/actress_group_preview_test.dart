@@ -12,7 +12,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
-import 'package:moyi/actress/actress_sync.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
@@ -106,17 +105,6 @@ void main() {
     appThemeNotifier.value = AppThemeMode.purpleNeon;
     final db = await _seedDatabase();
     final repository = _PreviewRepository();
-    final sync = ActressSyncService(
-      db: db,
-      sources: const [],
-      fetch:
-          (
-            String url, {
-            Map<String, String> headers = const {},
-            Duration timeout = const Duration(seconds: 20),
-          }) async => throw UnimplementedError(),
-    );
-    addTearDown(sync.dispose);
     final key = GlobalKey();
     await tester.pumpWidget(
       RepaintBoundary(
@@ -150,7 +138,6 @@ void main() {
                       repository: repository,
                       store: store,
                       database: db,
-                      syncService: sync,
                     ),
                   ),
                 ],

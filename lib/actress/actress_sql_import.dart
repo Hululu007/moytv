@@ -16,9 +16,17 @@ import 'actress_generic_db.dart';
 /// → 关主库连接 → 备份现库为 .bak → 临时库改名顶替主库。
 /// 校验不过、取消、执行出错都在换库之前停下：原库一字不动，
 /// 临时文件删掉。
+/// 单条语句执行出错不炸整单：整批失败后逐条重跑，坏的跳过并
+/// 按表计数、导完汇总写明；整批一条都跑不成（系统性失败）或
+/// 校验缺表/没作品/没播放地址（结构性失败）才整单失败。
 ///
-/// 红线：临时库只在导入时存在，导完即改名成主库；journal_mode /
-/// synchronous 一个字不改（读写库不抄参考文件的 OFF/WAL 写法）。
+/// 红线：临时库只在导入时存在，导完即改名成主库；正式库的
+/// journal_mode / synchronous 一个字不改（读写库不抄参考文件的
+/// OFF/WAL 写法）。唯一例外是导入临时连接自己的提速 PRAGMA
+/// （synchronous=OFF、journal_mode=MEMORY、大缓存）：只作用于
+/// 这条临时连接、不写进库文件（关连接即失效，顶替后的主库被
+/// App 打开时仍是默认档），临时库失败整单丢弃，降档不丢真数据
+/// ——2026-11-25 全量剖析后加（执行占总时长约 97%）。
 /// 导入失败绝不把半成品库留在主库路径上。
 
 /// 导入进度：阶段 + 已执行语句数 + 已读字节 + 文件总字节。
@@ -58,6 +66,9 @@ class ActressSqlImportResult {
     this.covers = 0,
     this.avatars = 0,
     this.skipped = 0,
+    this.skippedStatements = 0,
+    this.skippedStatementTables = const {},
+    this.skippedStatementSample,
     this.warnings = const [],
     this.needsReload = false,
   });
@@ -85,6 +96,17 @@ class ActressSqlImportResult {
   /// 归一化时跳过的行数（没有播放地址的行，不进库）。
   final int skipped;
 
+  /// 执行时出错被跳过的语句数（单条坏语句不炸整单：整批失败后
+  /// 逐条重跑，坏的跳过计数、好的照常进库；整批一条都跑不成是
+  /// 系统性失败、仍整单失败，不走这里）。
+  final int skippedStatements;
+
+  /// 跳过语句按表计数（表名 → 条数）。
+  final Map<String, int> skippedStatementTables;
+
+  /// 第一条跳过语句的信息（头词 + 表名 + 出错原因，排查用）。
+  final String? skippedStatementSample;
+
   /// 非致命提醒（例如封面/头像数为 0 时写在这里，不拦导入）。
   final List<String> warnings;
 
@@ -97,25 +119,35 @@ class ActressSqlImportResult {
 ///
 /// 只认单引号字符串里的分号（`'a;b'` 不切、`''` 是转义不是串尾），
 /// 跨行字符串也认（vod_content 里有换行时一条 INSERT 占多行）。
-/// `--` 行注释（不在字符串里时）整行跳过。sqlite3 .dump 的输出
-/// 就是这个格式：每条 INSERT 一行、建表跨行、字符串里可能有分号
-/// 与换行。
+/// 注释必须在字符串外才算数：`--` 行注释与 `/* */` 块注释都只在
+/// 扫描确认不在字符串里时才丢弃——字符串值里的 `--`（如标题
+/// `K1037 餌食牝 -- 北上尚子`）与 `/*`（如 `[真实故事/**女人]`）
+/// 是数据，不能当注释切掉。2026-11-25 真文件导入失败的根因就是
+/// 这个：旧写法在“行首不在字符串里”时拿整行找 `--` 截断，标题里
+/// 的 `--` 被误杀，语句从中间断开、字符串状态错位，后面连环切坏
+/// （手机报错 near "pfes" 即第二条语句的番号被吞进上一条里）。
+/// sqlite3 .dump 的输出就是这个格式：每条 INSERT 一行、建表跨行、
+/// 字符串里可能有分号与换行。
 class SqlStatementSplitter {
   final _buffer = StringBuffer();
   var _inString = false;
+  var _inBlockComment = false;
 
   /// 喂一行（不带换行符），返回这一行里切完的语句（0 条或多条）。
   List<String> addLine(String line) {
     final out = <String>[];
     var i = 0;
-    // 行注释：不在字符串里时 `--` 后面整行不要。
-    if (!_inString) {
-      final comment = line.indexOf('--');
-      if (comment == 0) return out;
-      if (comment > 0) line = line.substring(0, comment);
-    }
     while (i < line.length) {
       final c = line[i];
+      if (_inBlockComment) {
+        if (c == '*' && i + 1 < line.length && line[i + 1] == '/') {
+          _inBlockComment = false;
+          i += 2;
+        } else {
+          i++;
+        }
+        continue;
+      }
       if (_inString) {
         if (c == "'") {
           if (i + 1 < line.length && line[i + 1] == "'") {
@@ -133,6 +165,15 @@ class SqlStatementSplitter {
         _inString = true;
         _buffer.write(c);
         i++;
+        continue;
+      }
+      if (c == '-' && i + 1 < line.length && line[i + 1] == '-') {
+        // 行注释只在字符串外才算数：本行剩余部分整段丢弃。
+        break;
+      }
+      if (c == '/' && i + 1 < line.length && line[i + 1] == '*') {
+        _inBlockComment = true;
+        i += 2;
         continue;
       }
       if (c == ';') {
@@ -156,6 +197,7 @@ class SqlStatementSplitter {
     final rest = _buffer.toString().trim();
     _buffer.clear();
     _inString = false;
+    _inBlockComment = false;
     return rest.isEmpty ? null : rest;
   }
 }
@@ -283,18 +325,70 @@ class ActressSqlImporter {
       // .dump 开头自带 PRAGMA foreign_keys=OFF；这里再关一次，
       // 导入中途外键不拦批量写。
       await executor.execute('PRAGMA foreign_keys=OFF');
+      // 导入提速（只作用于这条临时连接，见文件头红线说明）：
+      // 关同步刷盘 + 回滚日志放内存 + 256MB 页缓存。逐条单独试，
+      // 哪条被执行器拒了也不拦导入（慢一点而已）。
+      for (final pragma in const [
+        'PRAGMA journal_mode=MEMORY',
+        'PRAGMA synchronous=OFF',
+        'PRAGMA cache_size=-262144',
+        'PRAGMA temp_store=MEMORY',
+        'PRAGMA mmap_size=268435456',
+      ]) {
+        try {
+          await executor.execute(pragma);
+        } catch (_) {}
+      }
       var statements = 0;
       var bytesRead = 0;
       var lastReportedBytes = 0;
       final splitter = SqlStatementSplitter();
       final pendingInserts = <String>[];
+      // 索引后建：CREATE INDEX 先攒着，数据灌完再统一建（转储把
+      // 索引写在前面的文件，逐行执行会让每条 INSERT 都维护索引，
+      // 越灌越慢）。建索引仍在归一化之前：归一化改名表时索引跟
+      // 着表走，不会丢。本文件自带的索引本来就写在末尾时无差别。
+      final deferredIndexes = <String>[];
+      // 坏语句跳过计数（单条坏语句不炸整单）：按表归类，第一条
+      // 记下出错原因，导完写进结果与汇总，不静默。
+      var skippedStatements = 0;
+      final skippedByTable = <String, int>{};
+      String? skippedSample;
+      void recordSkip(String statement, Object error) {
+        skippedStatements++;
+        final table = _statementTable(statement);
+        skippedByTable[table] = (skippedByTable[table] ?? 0) + 1;
+        skippedSample ??= '${_statementHead(statement)} $table：'
+            '${error.toString().split('\n').first}';
+      }
 
       Future<void> flushInserts() async {
         if (pendingInserts.isEmpty) return;
         final batch = List<String>.of(pendingInserts);
         pendingInserts.clear();
-        await executor!.executeBatch(batch);
-        statements += batch.length;
+        try {
+          await executor!.executeBatch(batch);
+          statements += batch.length;
+        } catch (_) {
+          // 整批失败多半是批里混了一条坏语句：整批已回滚，逐条
+          // 重跑定位——坏的跳过计数、好的照常进库。一条都跑不成
+          // 是系统性失败（库锁死、磁盘满之类），抛出去按整单失败
+          // 收尾，绝不把整批静默吞掉。
+          var okCount = 0;
+          for (final statement in batch) {
+            try {
+              await executor!.execute(statement);
+              okCount++;
+            } catch (e) {
+              recordSkip(statement, e);
+            }
+          }
+          if (okCount == 0) {
+            throw StateError('整批 ${batch.length} 条语句全部执行失败'
+                '（首条出错：$skippedSample）');
+          }
+          statements += okCount;
+        }
         onProgress(
           ActressSqlImportProgress(
             phase: '正在导入',
@@ -334,10 +428,19 @@ class ActressSqlImporter {
               await flushInserts();
               checkCancelled();
             }
+          } else if (head == 'CREATE' &&
+              statement.toUpperCase().contains(' INDEX ')) {
+            deferredIndexes.add(statement);
           } else {
             await flushInserts();
-            await executor.execute(statement);
-            statements++;
+            try {
+              await executor.execute(statement);
+              statements++;
+            } catch (e) {
+              // 单条非 INSERT 语句出错同样跳过计数（建表失败会在
+              // 后面校验缺表时按结构性失败整单拦下）。
+              recordSkip(statement, e);
+            }
           }
         }
         // 每读 1MB 报一次进度（读得比写快时进度条也走）。
@@ -360,12 +463,27 @@ class ActressSqlImporter {
           if (head == 'INSERT') {
             pendingInserts.add(tail);
           } else {
-            await executor.execute(tail);
-            statements++;
+            try {
+              await executor.execute(tail);
+              statements++;
+            } catch (e) {
+              recordSkip(tail, e);
+            }
           }
         }
       }
       await flushInserts();
+      checkCancelled();
+
+      // 数据灌完，统一补建攒下的索引（坏的同样跳过计数）。
+      for (final indexSql in deferredIndexes) {
+        try {
+          await executor.execute(indexSql);
+          statements++;
+        } catch (e) {
+          recordSkip(indexSql, e);
+        }
+      }
       checkCancelled();
 
       // 字段归一化：标准库直接过；字段不一样的库按字段名宽容映射
@@ -402,6 +520,12 @@ class ActressSqlImporter {
       if (counts.avatars == 0) warnings.add('导入的库里没有头像');
       if (counts.actresses == 0) warnings.add('导入的库里没有演员信息');
       if (skipped > 0) warnings.add('跳过 $skipped 行（没有播放地址）');
+      if (skippedStatements > 0) {
+        final byTable = skippedByTable.entries
+            .map((e) => '${e.key} ${e.value} 条')
+            .join('、');
+        warnings.add('跳过 $skippedStatements 条出错语句（$byTable）');
+      }
       await executor.close();
       executor = null;
 
@@ -441,6 +565,9 @@ class ActressSqlImporter {
         covers: counts.covers,
         avatars: counts.avatars,
         skipped: skipped,
+        skippedStatements: skippedStatements,
+        skippedStatementTables: skippedByTable,
+        skippedStatementSample: skippedSample,
         warnings: warnings,
         needsReload: true,
       );
@@ -451,9 +578,11 @@ class ActressSqlImporter {
         needsReload: closedDb,
       );
     } catch (e) {
+      // 失败原因只放原文：展示处（设置区、SnackBar）自己带
+      // “导入失败：”前缀，这里再加就会叠成两层。
       return ActressSqlImportResult(
         ok: false,
-        error: '导入失败：${e.toString().split('\n').first}',
+        error: e.toString().split('\n').first,
         needsReload: closedDb,
       );
     } finally {
@@ -468,12 +597,27 @@ class ActressSqlImporter {
   }
 
   /// 语句头一个词（INSERT / CREATE / PRAGMA / BEGIN / COMMIT …）。
+  /// 分号也算分隔符：转储尾巴的 `COMMIT;` 头词必须是 COMMIT，
+  /// 否则事务起止跳过判定漏掉它、会被当普通语句执行（无活动
+  /// 事务时报错，旧版没跳过韧性时会把导入在最后一步炸掉）。
   static String _statementHead(String statement) {
     final text = statement.trimLeft();
-    final end = text.indexOf(RegExp(r'\s|\('));
+    final end = text.indexOf(RegExp(r'[\s(;]'));
     final head = (end < 0 ? text : text.substring(0, end)).toUpperCase();
     // CREATE TABLE / CREATE INDEX / CREATE UNIQUE INDEX：头词都是 CREATE。
     return head;
+  }
+
+  /// 语句的目标表名（跳过计数按表归类用）：INSERT INTO / CREATE
+  /// TABLE / ALTER TABLE / DROP TABLE 取表名，其余取头词小写。
+  static String _statementTable(String statement) {
+    final match = RegExp(
+      r'(?:INSERT\s+INTO|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|'
+      r'ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+"?(\w+)',
+      caseSensitive: false,
+    ).firstMatch(statement.trimLeft());
+    if (match != null) return match.group(1)!.toLowerCase();
+    return _statementHead(statement).toLowerCase();
   }
 
   /// 校验临时库：四张必备表都在、作品与播放地址都大于 0。

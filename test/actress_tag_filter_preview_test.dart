@@ -15,7 +15,6 @@ import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
-import 'package:moyi/actress/actress_site_crawl.dart';
 import 'package:moyi/actress/actress_tag_sheet.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
@@ -69,28 +68,7 @@ const _realTopTags = <(String, int)>[
 late LocalStore _previewStore;
 late MemoryActressDatabase _previewDb;
 late ActressJsonFallback _previewFallback;
-late _NoopCrawl _previewCrawl;
 
-/// 不真爬：只记下触发的站。
-class _NoopCrawl extends ActressSiteCrawlService {
-  _NoopCrawl({required super.repository, required super.db});
-
-  String? startedSite;
-
-  @override
-  Future<void> start({
-    String site = 'mjv',
-    int maxPagesPerCategory =
-        ActressSiteCrawlService.defaultMaxPagesPerCategory,
-    int enrichPerCategory =
-        ActressSiteCrawlService.defaultEnrichPerCategory,
-    int categoryConcurrency =
-        ActressSiteCrawlService.defaultCategoryConcurrency,
-    Duration timeBudget = ActressSiteCrawlService.defaultTimeBudget,
-  }) async {
-    startedSite = site;
-  }
-}
 
 ThemeData _previewTheme(AppThemeMode mode) {
   final base = AppThemeConfig.forTheme(mode).toThemeData();
@@ -162,7 +140,6 @@ Future<
       LocalStore store,
       MemoryActressDatabase db,
       ActressJsonFallback fallback,
-      _NoopCrawl crawl,
     })> _seed() async {
   SharedPreferences.setMockInitialValues({});
   final store = LocalStore(await SharedPreferences.getInstance());
@@ -235,8 +212,7 @@ Future<
   );
   final fallback = ActressJsonFallback(localJsonDir: jsonDir);
   await fallback.load();
-  final crawl = _NoopCrawl(repository: FixtureRepository(), db: db);
-  return (store: store, db: db, fallback: fallback, crawl: crawl);
+  return (store: store, db: db, fallback: fallback);
 }
 
 Future<ui.Image> _captureImage(WidgetTester tester, GlobalKey key) async {
@@ -300,7 +276,6 @@ void main() {
     _previewStore = seed.store;
     _previewDb = seed.db;
     _previewFallback = seed.fallback;
-    _previewCrawl = seed.crawl;
     await ActressMytvBind.instance.ensureBound();
   });
 
@@ -368,7 +343,6 @@ void main() {
                       store: _previewStore,
                       database: _previewDb,
                       fallback: _previewFallback,
-                      crawlService: _previewCrawl,
                     ),
                   ),
                 ],

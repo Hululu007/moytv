@@ -186,6 +186,20 @@ class WhosJsonIndex {
     return _actorToCodes[key] ?? const [];
   }
 
+  /// 全部演员按作品数降序（无库顶上首页的「按女优看」用）：名字 +
+  /// 她在映射里的番号数。映射里没有的人不出现，不编造。
+  List<({String name, int works})> actorsByWorks() {
+    final rows = <({String name, int works})>[
+      for (final entry in _actorToCodes.entries)
+        (name: entry.key, works: entry.value.length),
+    ];
+    rows.sort((a, b) {
+      final byWorks = b.works.compareTo(a.works);
+      return byWorks != 0 ? byWorks : a.name.compareTo(b.name);
+    });
+    return rows;
+  }
+
   /// 番号 → 视频行（标题/封面/播放地址）；没有返回 null。
   WhosVideo? videoForCode(String code) {
     final key = code.trim().toUpperCase();

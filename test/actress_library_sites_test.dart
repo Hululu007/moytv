@@ -11,7 +11,6 @@ import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_m3u_index.dart';
 import 'package:moyi/actress/actress_search.dart';
-import 'package:moyi/actress/actress_stacking.dart';
 import 'package:moyi/builtin_py_sites.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
@@ -337,22 +336,6 @@ void main() {
       );
     });
 
-    test('叠加服务：零作品的人也进队列，爬到作品新增', () async {
-      final person = await seedEmptyPerson();
-      final service = ActressStackingService(
-        db: db,
-        enrichment: ActressEnrichment(
-          repository: repository,
-          store: store,
-          db: db,
-        ),
-      );
-      addTearDown(service.dispose);
-      final result = await service.run();
-      expect(result.processed, 1);
-      expect(result.worksAdded, 1);
-      expect(await db.countWorks(person.localId), 1);
-    });
   });
 }
 

@@ -17,11 +17,38 @@ class _RecordingExecutor implements SqlImportExecutor {
   /// 遇到往这张表 INSERT 就抛错（换库失败注入用）。
   String? failOnTable;
 
+  /// 含这个子串的语句执行时抛错（单条坏语句注入用）。
+  String? failOnStatementContaining;
+
   /// 校验查询一律抛错。
   var failQuery = false;
 
+  /// 失败注入判定：批量与单条执行共用（真 sqflite 里一条 INSERT
+  /// 无论走批还是走单条都会失败）。
+  void _checkFail(String sql) {
+    final marker = failOnStatementContaining;
+    if (marker != null && sql.contains(marker)) {
+      throw StateError('fake fail on statement');
+    }
+    final table = RegExp(
+      r'INSERT INTO\s+"?(\w+)',
+      caseSensitive: false,
+    ).firstMatch(sql)?.group(1)?.toLowerCase();
+    if (table != null && failOnTable == table) {
+      throw StateError('fake fail on $table');
+    }
+  }
+
+  static String? _insertTable(String sql) {
+    return RegExp(
+      r'INSERT INTO\s+"?(\w+)',
+      caseSensitive: false,
+    ).firstMatch(sql)?.group(1)?.toLowerCase();
+  }
+
   @override
   Future<void> execute(String sql) async {
+    _checkFail(sql);
     singles.add(sql);
     final upper = sql.trimLeft().toUpperCase();
     if (upper.startsWith('CREATE TABLE')) {
@@ -31,18 +58,22 @@ class _RecordingExecutor implements SqlImportExecutor {
       ).firstMatch(sql)?.group(1)?.toLowerCase();
       if (name != null) tables.add(name);
     }
+    // 单条 INSERT 也计数：整批回滚后逐条重跑时校验数要对得上。
+    final table = _insertTable(sql);
+    if (table != null) counts[table] = (counts[table] ?? 0) + 1;
   }
 
   @override
   Future<void> executeBatch(List<String> statements) async {
     batches.add(List<String>.of(statements));
+    // 先全检一遍再计数：真 sqflite 的批是原子的，一条坏全批回滚、
+    // 一条不落库。
     for (final statement in statements) {
-      final table = RegExp(
-        r'INSERT INTO\s+"?(\w+)',
-        caseSensitive: false,
-      ).firstMatch(statement)?.group(1)?.toLowerCase();
+      _checkFail(statement);
+    }
+    for (final statement in statements) {
+      final table = _insertTable(statement);
       if (table == null) continue;
-      if (failOnTable == table) throw StateError('fake fail on $table');
       counts[table] = (counts[table] ?? 0) + 1;
     }
   }
@@ -122,6 +153,70 @@ void main() {
       final done = splitter.addLine('title TEXT);');
       expect(done, hasLength(1));
       expect(done.first.startsWith('CREATE TABLE videos('), isTrue);
+    });
+
+    test('字符串里的 -- 不是注释（真文件 k1037 根因）', () {
+      final splitter = SqlStatementSplitter();
+      final out = splitter.addLine(
+        "INSERT INTO videos VALUES('k1037','K1037 餌食牝 -- 北上尚子','x');",
+      );
+      expect(out, hasLength(1));
+      expect(out.first, contains('餌食牝 -- 北上尚子'));
+      // 下一行不被污染：旧写法在这里会把下一条吞进上一条的
+      // 字符串里，切出 near "pfes" 的合并坏语句。
+      final next = splitter.addLine(
+        "INSERT INTO videos VALUES('pfes-065','PFES-065','y');",
+      );
+      expect(next, hasLength(1));
+      expect(
+        next.first,
+        "INSERT INTO videos VALUES('pfes-065','PFES-065','y');",
+      );
+    });
+
+    test('字符串里的 /* 不是块注释', () {
+      final splitter = SqlStatementSplitter();
+      final out = splitter.addLine(
+        "INSERT INTO videos VALUES('a','[真实故事/**女人]','x');",
+      );
+      expect(out, hasLength(1));
+      expect(out.first, contains('[真实故事/**女人]'));
+    });
+
+    test('字符串外的块注释被丢弃（可跨行）', () {
+      final splitter = SqlStatementSplitter();
+      final out = splitter.addLine(
+        'INSERT INTO videos /* 列注释; 不算分号 */ VALUES(1);',
+      );
+      expect(out, ['INSERT INTO videos  VALUES(1);']);
+      final s2 = SqlStatementSplitter();
+      expect(s2.addLine('/* 跨行注释'), isEmpty);
+      expect(s2.addLine('还没完 */'), isEmpty);
+      expect(
+        s2.addLine('INSERT INTO videos VALUES(2);'),
+        ['INSERT INTO videos VALUES(2);'],
+      );
+    });
+
+    test('跨行字符串中间一行以 -- 开头也是数据', () {
+      final splitter = SqlStatementSplitter();
+      expect(
+        splitter.addLine("INSERT INTO videos VALUES('第一行"),
+        isEmpty,
+      );
+      final out = splitter.addLine("-- 这行在字符串里');");
+      expect(out, hasLength(1));
+      expect(out.first, contains('\n-- 这行在字符串里'));
+    });
+
+    test('语句后跟行注释不污染下一条', () {
+      final splitter = SqlStatementSplitter();
+      final out = splitter.addLine('INSERT INTO videos VALUES(1); -- 完了');
+      expect(out, ['INSERT INTO videos VALUES(1);']);
+      expect(
+        splitter.addLine('INSERT INTO videos VALUES(2);'),
+        ['INSERT INTO videos VALUES(2);'],
+      );
     });
   });
 
@@ -453,6 +548,114 @@ void main() {
       );
       expect(result.ok, isFalse);
       expect(result.error, contains('.sql'));
+    });
+
+    // 2026-11-25 用户令：单条坏语句不许再炸掉整个导入——跳过
+    // 计数、导完汇总写明；只有整批全灭（系统性）才整单失败。
+    test('单条坏语句跳过计数、不炸整单', () async {
+      final sql = File('${tempDir.path}/one_bad.sql');
+      await sql.writeAsString(
+        'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
+        'CREATE TABLE actresses(cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT);\n'
+        'CREATE TABLE video_actress(vod_id TEXT, cate_id TEXT);\n'
+        'CREATE TABLE video_play_urls(vod_id TEXT, play_url TEXT);\n'
+        "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
+        "INSERT INTO videos VALUES('BAD','坏片','p','m','u','成人影片');\n"
+        "INSERT INTO videos VALUES('v2','片二','p','m','u','成人影片');\n"
+        "INSERT INTO video_play_urls VALUES('v1','u');\n"
+        "INSERT INTO video_play_urls VALUES('v2','u');\n",
+      );
+      final executor = _RecordingExecutor()
+        ..failOnStatementContaining = "'BAD'";
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      final importer = ActressSqlImporter(
+        executorFactory: factoryFor(executor),
+      );
+      final result = await importer.importFile(
+        sqlPath: sql.path,
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(result.ok, isTrue, reason: result.error);
+      expect(result.videos, 2);
+      expect(result.playUrls, 2);
+      expect(result.skippedStatements, 1);
+      expect(result.skippedStatementTables, {'videos': 1});
+      expect(result.skippedStatementSample, contains('videos'));
+      expect(result.warnings.join('\n'), contains('跳过 1 条出错语句'));
+      expect(await File(livePath).readAsString(), 'NEWDB');
+    });
+
+    // 转储自带的 BEGIN TRANSACTION; / COMMIT; 是事务包装，导入器
+    // 自己按批管事务，必须跳过不执行：COMMIT; 的头词曾因带分号
+    // 没被认出来、被真执行（无活动事务报错），全量验收抓到。
+    test('转储的 BEGIN/COMMIT 包装不执行、不计数', () async {
+      final sql = File('${tempDir.path}/wrapped.sql');
+      await sql.writeAsString(
+        'BEGIN TRANSACTION;\n'
+        'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
+        'CREATE TABLE actresses(cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT);\n'
+        'CREATE TABLE video_actress(vod_id TEXT, cate_id TEXT);\n'
+        'CREATE TABLE video_play_urls(vod_id TEXT, play_url TEXT);\n'
+        "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
+        "INSERT INTO video_play_urls VALUES('v1','u');\n"
+        'COMMIT;\n',
+      );
+      // 执行到 COMMIT 就抛错：修前它会被真执行、记一条跳过。
+      final executor = _RecordingExecutor()
+        ..failOnStatementContaining = 'COMMIT';
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      final importer = ActressSqlImporter(
+        executorFactory: factoryFor(executor),
+      );
+      final result = await importer.importFile(
+        sqlPath: sql.path,
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(result.ok, isTrue, reason: result.error);
+      expect(result.videos, 1);
+      expect(result.skippedStatements, 0);
+      expect(
+        executor.singles.where((s) => s.toUpperCase().contains('COMMIT')),
+        isEmpty,
+      );
+    });
+
+    test('整批全灭是系统性失败：整单失败、原库不动', () async {
+      final sql = File('${tempDir.path}/all_bad.sql');
+      await sql.writeAsString(
+        'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
+        'CREATE TABLE actresses(cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT);\n'
+        'CREATE TABLE video_actress(vod_id TEXT, cate_id TEXT);\n'
+        'CREATE TABLE video_play_urls(vod_id TEXT, play_url TEXT);\n'
+        "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
+        "INSERT INTO video_play_urls VALUES('v1','u');\n",
+      );
+      // 所有 INSERT 都执行失败（模拟库锁死/磁盘满那类系统性失败）。
+      final executor = _RecordingExecutor()
+        ..failOnStatementContaining = 'VALUES(';
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      final importer = ActressSqlImporter(
+        executorFactory: factoryFor(executor),
+      );
+      final result = await importer.importFile(
+        sqlPath: sql.path,
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(result.ok, isFalse);
+      expect(result.error, contains('全部执行失败'));
+      // 失败原因不带“导入失败：”前缀（展示处自己带，防双层）。
+      expect(result.error, isNot(startsWith('导入失败')));
+      expect(await File(livePath).readAsString(), 'OLDDB');
+      expect(await File('$livePath.importing').exists(), isFalse);
     });
   });
 }

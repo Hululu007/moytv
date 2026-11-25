@@ -38,7 +38,6 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
-import 'actress/actress_play_record.dart';
 import 'actress/actress_widgets.dart';
 import 'actress/code_meta_section.dart';
 import 'actress/jav_code_meta.dart';
@@ -250,27 +249,6 @@ class _DetailScreenState extends State<DetailScreen> {
     );
     if (!mounted || generation != _generation) return;
     setState(() => _codeMeta = meta);
-  }
-
-  /// 播放器第一次真播起来：开关开着才把这集记进内部工作库
-  /// （.sql 导入落成的演员库，不再写站点库.db 文件）。
-  /// 开关以触发时的值为准（不在进页时缓存的值），写失败不挡播放。
-  void _handlePlaybackStarted(
-    DramaDetail detail,
-    PlaybackPlan plan,
-    int episodeIndex,
-  ) {
-    if (plan.local) return;
-    if (episodeIndex < 0 || episodeIndex >= detail.episodes.length) return;
-    unawaited(
-      ViewingExperienceSettings.load().then((settings) async {
-        if (!settings.autoRecordPlays) return;
-        await ActressPlayRecorder.instance.recordPlay(
-          drama: detail.drama,
-          playUrl: plan.url,
-        );
-      }),
-    );
   }
 
   Future<void> _loadTmdb(Drama drama) async {
@@ -662,8 +640,6 @@ class _DetailScreenState extends State<DetailScreen> {
         onPlaybackExhausted: widget.nextLineOnExhausted == null
             ? null
             : _onPushedPlayerExhausted,
-        onPlaybackStarted: (context, plan, episodeIndex) =>
-            _handlePlaybackStarted(detail, plan, episodeIndex),
       );
       if (mounted) {
         setState(() {});
@@ -736,8 +712,6 @@ class _DetailScreenState extends State<DetailScreen> {
           ? null
           : _onPushedPlayerExhausted,
       onRetryProbe: widget.onRetryProbe == null ? null : _onPlayerRetry,
-      onPlaybackStarted: (context, plan, episodeIndex) =>
-          _handlePlaybackStarted(detail, plan, episodeIndex),
     );
     if (mounted) {
       setState(() {});
@@ -894,8 +868,6 @@ class _DetailScreenState extends State<DetailScreen> {
       onPlaybackExhausted: widget.nextLineOnExhausted == null
           ? null
           : _onEmbeddedExhausted,
-      onPlaybackStarted: (context, plan, episodeIndex) =>
-          _handlePlaybackStarted(detail, plan, episodeIndex),
       playerFactory: widget.playerFactory,
       videoBuilder: widget.videoBuilder,
     );
