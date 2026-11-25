@@ -225,6 +225,60 @@
       "adult": true,
       "description": "AI淫航（aiyinhang.top）。AI成人短剧/AI成人漫剧/AI换脸/AI魔改 4 分类与站导航 1:1，封面走 media.hgpicimg.cc，播放走站内 huangguo 接口 + hgmedia 代理真 m3u8。由 TVBox py 蜘蛛 aiyinhang.py 移植（该版 2026-11-07/08 全链实测通过）；2026-11-25 本机出口被该站断连，离线探针用真实抓包验过，待手机终验。",
       "manifest": "aiyinhang/aiyinhang.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hmav",
+      "name": "河马AV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "河马AV（5.hmav8451.cc:8888 等现行镜像域名，原 7911 系已跳转发布页，插件带发布页自愈探活）。17 个分类与站点导航 1:1，播放为详情页现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "hmav/hmav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.abjav",
+      "name": "ABJAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "ABJAV（abjav.com）。201 个分类（3 个固定榜单 + 站点分类接口实时返回，与站导航一致），播放为 videofile 接口现取、B164 解码后拼 HLS 并跟随 CDN 重定向。由内置 py 蜘蛛改写。",
+      "manifest": "abjav/abjav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ai2026",
+      "name": "2026短剧AI",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "2026短剧AI（2026aidj789.lol，经跳转页解析现行域名）。5 个分类与站点导航 1:1，播放为详情页现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "ai2026/ai2026.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ai4k",
+      "name": "4K.AI短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "4K.AI短剧（wyswspqjtr.click）。22 个分类，HTML 解析卡片与详情，播放页现取 playUrl 的 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "ai4k/ai4k.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aidj",
+      "name": "AI短剧AV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AI短剧AV（aisee10w29.buzz）。2 个分类，播放页取数后经黄果接口换 m3u8 代理地址直播。由内置 py 蜘蛛改写。",
+      "manifest": "aidj/aidj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aiduanju",
+      "name": "AI短剧网",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AI短剧网（ai.aiduanjuwang8.cc，备 wap.aiduanjuwang6.cc）。6 个分类，HTML 页解析卡片与详情，播放页 player_aaaa 现取 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "aiduanju/aiduanju.idjplugin"
     }
   ],
   "cms": []
