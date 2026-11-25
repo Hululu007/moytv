@@ -14,6 +14,40 @@ class AppDatabase {
   Database? _db;
   bool _opening = false;
 
+  /// 供同步层（playback_history_store 的 SQLite 后端）共用同一 app.db。
+  Future<Database> database() => _open();
+
+  static Future<void> _createPlaybackSyncTables(Database db) async {
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS playback_records('
+      'profile TEXT NOT NULL, '
+      'config_key TEXT NOT NULL, '
+      'history_key TEXT NOT NULL, '
+      'record_json TEXT NOT NULL, '
+      'updated_at INTEGER NOT NULL, '
+      'PRIMARY KEY(profile, history_key))',
+    );
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS playback_tombstones('
+      'profile TEXT NOT NULL, '
+      'config_key TEXT NOT NULL, '
+      'history_key TEXT NOT NULL, '
+      'site_key TEXT NOT NULL, '
+      'vod_id TEXT NOT NULL, '
+      'scope TEXT NOT NULL, '
+      'deleted_at INTEGER NOT NULL, '
+      'PRIMARY KEY(profile, config_key, history_key, scope))',
+    );
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS playback_sync_state('
+      'profile TEXT NOT NULL, '
+      'source_key TEXT NOT NULL, '
+      'config_key TEXT NOT NULL, '
+      'since_ms INTEGER NOT NULL, '
+      'PRIMARY KEY(profile, source_key, config_key))',
+    );
+  }
+
   Future<Database> _open() async {
     final existing = _db;
     if (existing != null && existing.isOpen) return existing;
@@ -28,7 +62,10 @@ class AppDatabase {
       final filePath = path.join(documents.path, 'app.db');
       final db = await openDatabase(
         filePath,
-        version: 1,
+        version: 2,
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) await _createPlaybackSyncTables(db);
+        },
         onCreate: (db, version) async {
           await db.execute(
             'CREATE TABLE history('
@@ -54,6 +91,7 @@ class AppDatabase {
             'key TEXT PRIMARY KEY, '
             'value TEXT NOT NULL)',
           );
+          await _createPlaybackSyncTables(db);
         },
       );
       _db = db;
