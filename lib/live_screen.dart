@@ -40,6 +40,15 @@ const _videoOverlayStyle = TextStyle(
   shadows: [Shadow(color: Color(0xCC000000), blurRadius: 4)],
 );
 
+/// 截图版式配色：绿灰底 + 选中黄字，与用户截图逐项对应。
+/// 直播页是固定“电视机”观感，不跟随 App 主题换色。
+const _livePanelTop = Color(0xFF7C8C80);
+const _livePanelBottom = Color(0xFF66796D);
+const _liveCardBg = Color(0xFF5A6E62);
+const _liveCellBg = Color(0xFF5E7166);
+const _liveCellSelectedBg = Color(0xFF4B5D54);
+const _liveSelectedText = Color(0xFFFFDF00);
+
 class LiveScreen extends StatefulWidget {
   const LiveScreen({
     super.key,
@@ -79,8 +88,11 @@ class LiveScreen extends StatefulWidget {
 
 class _LiveScreenState extends State<LiveScreen> {
   static const _favouritesId = '__favourites';
-  static const _playbackShare = 9;
-  static const _listShare = 14;
+  // 手机端视频区占比照截图（约 3:7）；电视端保持原来的 9:14。
+  static const _playbackShare = 7;
+  static const _listShare = 16;
+  static const _tvPlaybackShare = 9;
+  static const _tvListShare = 14;
 
   LiveSource? _source;
   List<LivePlatform> _platforms = const [];
@@ -144,7 +156,6 @@ class _LiveScreenState extends State<LiveScreen> {
   final _groupTileKeys = <String, GlobalKey>{};
   late final LivePlaybackController _playback;
   final _listKey = GlobalKey<RemoteListState>();
-  final _groupScroll = ScrollController();
   final _channelScroll = ScrollController();
   late final NetworkSpeedTracker _speedTracker;
   StreamSubscription<Duration>? _positionSubscription;
@@ -202,7 +213,6 @@ class _LiveScreenState extends State<LiveScreen> {
     _vodPositionSubscription?.cancel();
     _speedTracker.dispose();
     _playback.dispose();
-    _groupScroll.dispose();
     _channelScroll.dispose();
     super.dispose();
   }
@@ -810,6 +820,193 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
+  /// 频道信息单：只列源数据真实带有的字段（频道名/号、源、分组、
+  /// 线路、分辨率），没有节目单数据就不写节目名；下面是原来散在
+  /// 视频区底部条与面板行里的入口（全屏/换源/刷新/收藏/睡眠定时），
+  /// 截图版式里它们不再占常驻位置，改放这里。
+  Future<void> _showChannelInfo() async {
+    final channel = _playback.channel;
+    final source = _source;
+    if (source == null) return;
+    final size = _playback.videoSize;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) {
+        final favourite =
+            channel != null && widget.store.isFavourite(channel.key);
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.live_tv_rounded),
+                  title: Text(channel?.name ?? '未选择频道'),
+                  subtitle: Text(
+                    [
+                      if (channel != null && channel.number.isNotEmpty)
+                        '频道号 ${channel.number}',
+                      '直播源 ${source.name}',
+                      if (channel != null && channel.group.isNotEmpty)
+                        '分组 ${channel.group}',
+                    ].join(' · '),
+                  ),
+                ),
+                if (channel != null)
+                  ListTile(
+                    leading: const Icon(Icons.route_rounded),
+                    title: Text(
+                      '线路 ${_playback.route + 1}/${channel.urls.length}',
+                    ),
+                    subtitle: channel.subtitle.isNotEmpty
+                        ? Text(channel.subtitle)
+                        : null,
+                  ),
+                if (size != null)
+                  ListTile(
+                    leading: const Icon(Icons.high_quality_rounded),
+                    title: Text(
+                      '分辨率 ${size.width.toInt()} x ${size.height.toInt()}',
+                    ),
+                  ),
+                const Divider(height: 1),
+                ListTile(
+                  key: const ValueKey('live-info-fullscreen'),
+                  leading: const Icon(Icons.fullscreen_rounded),
+                  title: const Text('全屏播放'),
+                  onTap: () => Navigator.of(sheetContext).pop('fullscreen'),
+                ),
+                ListTile(
+                  key: const ValueKey('live-info-switch-source'),
+                  leading: const Icon(Icons.tv_rounded),
+                  title: const Text('切换直播源'),
+                  onTap: () => Navigator.of(sheetContext).pop('source'),
+                ),
+                ListTile(
+                  key: const ValueKey('live-info-refresh'),
+                  leading: const Icon(Icons.refresh_rounded),
+                  title: const Text('刷新直播'),
+                  onTap: () => Navigator.of(sheetContext).pop('refresh'),
+                ),
+                if (channel != null)
+                  ListTile(
+                    key: const ValueKey('live-info-favourite'),
+                    leading: Icon(
+                      favourite
+                          ? Icons.star_rounded
+                          : Icons.star_border_rounded,
+                    ),
+                    title: Text(favourite ? '取消收藏' : '收藏频道'),
+                    onTap: () => Navigator.of(sheetContext).pop('favourite'),
+                  ),
+                ListTile(
+                  key: const ValueKey('live-info-sleep'),
+                  leading: const Icon(Icons.bedtime_outlined),
+                  title: Text(
+                    _playback.sleepTimer.active
+                        ? '睡眠定时 · ${_playback.sleepTimer.label}'
+                        : '睡眠定时',
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop('sleep'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'fullscreen':
+        await _openFullscreen();
+      case 'source':
+        await _pickSource();
+      case 'refresh':
+        await _refreshLive();
+      case 'favourite':
+        final current = _playback.channel;
+        if (current != null) widget.store.toggleFavourite(current);
+      case 'sleep':
+        await _openSleepTimer();
+    }
+  }
+
+  /// 播放设置单：解码模式（点一下换下一个）、恢复默认、睡眠定时。
+  /// 原来视频区底部条里的睡眠定时与已删功能键排的解码/默认入口都在这里。
+  Future<void> _showPlaybackSettings() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: StatefulBuilder(
+            builder: (sheetContext, setSheetState) {
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      key: const ValueKey('live-settings-decoder'),
+                      leading: const Icon(Icons.memory_rounded),
+                      title: const Text('解码模式'),
+                      subtitle: Text(
+                        '当前：${_playback.decoderMode.label}，点一下换下一个',
+                      ),
+                      trailing: Text(_playback.decoderMode.label),
+                      onTap: () async {
+                        await _playback.setDecoderMode(
+                          _playback.decoderMode.next,
+                        );
+                        setSheetState(() {});
+                      },
+                    ),
+                    ListTile(
+                      key: const ValueKey('live-settings-reset'),
+                      leading: const Icon(Icons.restart_alt_rounded),
+                      title: const Text('恢复默认'),
+                      subtitle: const Text('线路回到第 1 条、解码回到自动'),
+                      onTap: () => Navigator.of(sheetContext).pop('reset'),
+                    ),
+                    ListTile(
+                      key: const ValueKey('live-settings-sleep'),
+                      leading: const Icon(Icons.bedtime_outlined),
+                      title: Text(
+                        _playback.sleepTimer.active
+                            ? '睡眠定时 · ${_playback.sleepTimer.label}'
+                            : '睡眠定时',
+                      ),
+                      onTap: () => Navigator.of(sheetContext).pop('sleep'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'reset':
+        final changed = await _playback.resetDefaults();
+        if (mounted) {
+          AppNotice.show(context, changed ? '已恢复默认设置' : '已经是默认设置');
+        }
+      case 'sleep':
+        await _openSleepTimer();
+    }
+  }
+
+  Future<void> _openSleepTimer() async {
+    await showSleepTimerSheet(
+      context,
+      controller: _playback.sleepTimer,
+      showFinishEpisode: false,
+      onSelect: (choice) {
+        if (mounted) _playback.sleepTimer.select(choice);
+      },
+    );
+  }
+
   List<LiveSource> get _sources => LiveSource.visible(widget.greenMode);
 
   /// 绿色模式下隐藏成人分类，收藏入口始终保留在最前。
@@ -877,8 +1074,14 @@ class _LiveScreenState extends State<LiveScreen> {
     }
     return Column(
       children: [
-        Expanded(flex: _playbackShare, child: _video(context, television)),
-        Expanded(flex: _listShare, child: _panel(context, television)),
+        Expanded(
+          flex: television ? _tvPlaybackShare : _playbackShare,
+          child: _video(context, television),
+        ),
+        Expanded(
+          flex: television ? _tvListShare : _listShare,
+          child: _panel(context, television),
+        ),
       ],
     );
   }
@@ -930,7 +1133,8 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             )
-          else if (_playback.loading || _playback.buffering)
+          else if (television &&
+              (_playback.loading || _playback.buffering))
             const Center(
               child: SizedBox(
                 width: 34,
@@ -938,40 +1142,14 @@ class _LiveScreenState extends State<LiveScreen> {
                 child: CircularProgressIndicator(strokeWidth: 3),
               ),
             ),
-          if (_playback.channel != null && error == null)
+          // 电视端保持原来的底部信息条与分组名角标，不动。
+          if (television &&
+              _playback.channel != null &&
+              error == null)
             Align(
               alignment: Alignment.bottomCenter,
               child: _nowPlaying(context),
             ),
-          // 视频区角标：左上实时网速、右上日期时间。内嵌舞台没有控制层
-          // 可跟随、点按要保留进全屏，所以角标常驻显示；全屏里网速本就
-          // 在控制条里、随控制层显隐。电视端保留原有的分组名角标，不叠加。
-          if (!television && _playback.channel != null && error == null) ...[
-            Positioned(
-              top: 8,
-              left: 10,
-              child: IgnorePointer(
-                child: ValueListenableBuilder<String?>(
-                  valueListenable: _speedTracker.speedText,
-                  builder: (_, text, _) {
-                    if (text == null || text.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-                    return Text(
-                      text,
-                      key: const ValueKey('live-speed-badge'),
-                      style: _videoOverlayStyle,
-                    );
-                  },
-                ),
-              ),
-            ),
-            const Positioned(
-              top: 8,
-              right: 10,
-              child: IgnorePointer(child: _LiveClock()),
-            ),
-          ],
           if (television)
             Positioned.fill(
               child: IgnorePointer(
@@ -990,7 +1168,140 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
+          // 手机端截图版式：中间播放键/转圈/速率 + 顶部频道名/分辨率/信息/设置。
+          // 顶栏画在错误遮罩之上，断流时照样能点信息换源；中间层只在无错时显示。
+          if (!television) ...[
+            if (error == null) _videoCenterOverlay(context),
+            _videoHeader(context),
+          ],
         ],
+      ),
+    );
+  }
+
+  /// 截图播放区顶栏：左频道名，右真实分辨率（拿不到就不显示）+
+  /// 信息 + 设置。顶栏本身不拦手势，只有两个按钮吃点按，其余位置
+  /// 仍落到下面的全屏手势层。
+  Widget _videoHeader(BuildContext context) {
+    final channel = _playback.channel;
+    final size = _playback.videoSize;
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                channel?.name ?? _source?.name ?? '直播',
+                key: const ValueKey('live-video-title'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _videoOverlayStyle.copyWith(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (size != null)
+              Text(
+                '[ ${size.width.toInt()} x ${size.height.toInt()} ]',
+                key: const ValueKey('live-video-resolution'),
+                style: _videoOverlayStyle,
+              ),
+            IconButton(
+              key: const ValueKey('live-video-info'),
+              visualDensity: VisualDensity.compact,
+              tooltip: '频道信息',
+              onPressed: _showChannelInfo,
+              icon: const Icon(
+                Icons.info_outlined,
+                size: 22,
+                color: Colors.white,
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('live-video-settings'),
+              visualDensity: VisualDensity.compact,
+              tooltip: '播放设置',
+              onPressed: _showPlaybackSettings,
+              icon: const Icon(
+                Icons.settings_outlined,
+                size: 22,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 截图播放区中间层：缓冲时大三角 + 右上角小转圈 + 下方实时速率；
+  /// 已暂停时只留大三角，点它继续播（播放器自带的播放/暂停）；
+  /// 正在播时什么都不盖，不挡画面。
+  Widget _videoCenterOverlay(BuildContext context) {
+    if (_playback.loading || _playback.buffering) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  Icons.play_arrow_rounded,
+                  size: 72,
+                  color: Colors.white,
+                ),
+                Positioned(
+                  right: -2,
+                  top: 2,
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ValueListenableBuilder<String?>(
+              valueListenable: _speedTracker.speedText,
+              builder: (_, text, _) {
+                if (text == null || text.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return Text(
+                  text,
+                  key: const ValueKey('live-speed-badge'),
+                  style: _videoOverlayStyle,
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
+    final channel = _playback.channel;
+    final player = _playback.player;
+    if (channel == null || player == null || player.state.playing) {
+      return const SizedBox.shrink();
+    }
+    return Center(
+      child: GestureDetector(
+        key: const ValueKey('live-video-play'),
+        onTap: () => unawaited(player.play()),
+        child: const Icon(
+          Icons.play_arrow_rounded,
+          size: 72,
+          color: Colors.white,
+        ),
       ),
     );
   }
@@ -1116,45 +1427,180 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  Widget _panel(BuildContext context, bool television) => Column(
-    children: [
-      _current(context),
-      if (_resumeEntry != null) _resumeRow(context),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextButton.icon(
-                key: const ValueKey('live-favourites-button'),
-                onPressed: () => _loadChannels(_favouritesId),
-                icon: Icon(
-                  _group == _favouritesId
-                      ? Icons.star_rounded
-                      : Icons.star_border_rounded,
+  Widget _panel(BuildContext context, bool television) {
+    // 电视端保持原来的面板（频道卡 + 上次观看 + 收藏/分类/刷新行 +
+    // 遥控列表），只改手机端。
+    if (television) {
+      return Column(
+        children: [
+          _current(context),
+          if (_resumeEntry != null) _resumeRow(context),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextButton.icon(
+                    key: const ValueKey('live-favourites-button'),
+                    onPressed: () => _loadChannels(_favouritesId),
+                    icon: Icon(
+                      _group == _favouritesId
+                          ? Icons.star_rounded
+                          : Icons.star_border_rounded,
+                    ),
+                    label: Text(
+                      '直播收藏（${widget.store.favourites.length}）',
+                    ),
+                  ),
                 ),
-                label: Text('直播收藏（${widget.store.favourites.length}）'),
-              ),
+                if (_group == _favouritesId)
+                  TextButton.icon(
+                    key: const ValueKey('live-categories-button'),
+                    onPressed: _loadPlatforms,
+                    icon: const Icon(Icons.list_rounded),
+                    label: const Text('直播分类'),
+                  ),
+                IconButton(
+                  key: const ValueKey('live-refresh-button'),
+                  tooltip: '刷新直播',
+                  onPressed: _loading ? null : () => unawaited(_refreshLive()),
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+              ],
             ),
-            if (_group == _favouritesId)
-              TextButton.icon(
-                key: const ValueKey('live-categories-button'),
-                onPressed: _loadPlatforms,
-                icon: const Icon(Icons.list_rounded),
-                label: const Text('直播分类'),
-              ),
-            IconButton(
-              key: const ValueKey('live-refresh-button'),
-              tooltip: '刷新直播',
-              onPressed: _loading ? null : () => unawaited(_refreshLive()),
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-          ],
+          ),
+          Expanded(child: _lists(context, television)),
+        ],
+      );
+    }
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [_livePanelTop, _livePanelBottom],
         ),
       ),
-      Expanded(child: _lists(context, television)),
-    ],
-  );
+      child: Column(
+        children: [
+          _infoCards(context),
+          if (_resumeEntry != null) _resumeRow(context),
+          Expanded(child: _lists(context, television)),
+        ],
+      ),
+    );
+  }
+
+  /// 截图播放区下方的一行两卡：左卡大频道号 + 频道名，右卡
+  /// “正在播放 / 即将播放”。节目信息没有真实数据就照实写
+  /// “暂无节目信息”，绝不编节目单；有真实 subtitle（平台源的
+  /// 房间/主播名）时“正在播放”显示它。
+  Widget _infoCards(BuildContext context) {
+    final channel = _playback.channel;
+    final number = channel == null
+        ? '--'
+        : channel.number.isNotEmpty
+        ? channel.number
+        : '${_playback.index + 1}'.padLeft(3, '0');
+    final now = channel != null && channel.subtitle.isNotEmpty
+        ? channel.subtitle
+        : '暂无节目信息';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      // 两卡等高：Row 在竖向 Column 里高度无界，不能直接 stretch，
+      // 先由 IntrinsicHeight 按最高那张卡定高，再拉伸另一张。
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+          Expanded(
+            flex: 25,
+            child: Material(
+              key: const ValueKey('live-number-card'),
+              color: _liveCardBg,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      number,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 34,
+                        fontWeight: FontWeight.bold,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    // 左卡窄，频道名一行放不下会被截成“CCTV-1 …”，
+                    // 截图里是整名：等比缩小整名显示，不换行不截断。
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        channel?.name ?? '未选择频道',
+                        maxLines: 1,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 70,
+            child: Material(
+              key: const ValueKey('live-epg-card'),
+              color: _liveCardBg,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '正在播放：$now',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const Divider(color: Colors.white24, height: 12),
+                    const Text(
+                      '即将播放：暂无节目信息',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+        ),
+      ),
+    );
+  }
 
   Widget _current(BuildContext context) {
     final theme = Theme.of(context);
@@ -1280,7 +1726,13 @@ class _LiveScreenState extends State<LiveScreen> {
     }
     if (television) {
       if (_group == _favouritesId) {
-        if (_channels.isEmpty) return _channelList(context);
+        if (_channels.isEmpty) {
+          return StatusPanel(
+            title: '还没有收藏频道',
+            message: '播放时点星标即可加入收藏。',
+            icon: Icons.live_tv_rounded,
+          );
+        }
         final current = _playback.channel?.key;
         return RemoteList(
           key: const ValueKey('live-favourites-list'),
@@ -1321,16 +1773,17 @@ class _LiveScreenState extends State<LiveScreen> {
         ),
       );
     }
-    return Row(
-      children: [
-        Expanded(flex: 31, child: _groupRail(context, entries)),
-        Expanded(flex: 57, child: _channelPane(context)),
-      ],
-    );
+    return _grid(context, entries);
   }
 
-  Widget _channelPane(BuildContext context) {
-    if (_loading) {
+  /// 截图三列网格：左分组/收藏、中频道、右线路，三列同行对齐、
+  /// 同一个列表一起滚。选中项黄字、未选中白字；行数取三列中最长
+  /// 的一列，短的列空着。频道多时滑到底自动续载（与原来频道列一致）。
+  Widget _grid(
+    BuildContext context,
+    List<({String id, String name, int count})> entries,
+  ) {
+    if (_loading && _channels.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     final error = _error;
@@ -1342,83 +1795,25 @@ class _LiveScreenState extends State<LiveScreen> {
         onRetry: () => _loadChannels(_group),
       );
     }
-    return _channelList(context);
-  }
-
-  Widget _groupRail(
-    BuildContext context,
-    List<({String id, String name, int count})> entries,
-  ) {
-    final theme = Theme.of(context);
-    return Scrollbar(
-      controller: _groupScroll,
-      child: ListView.builder(
-        key: const ValueKey('live-group-rail'),
-        controller: _groupScroll,
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        itemCount: entries.length,
-        itemBuilder: (context, index) {
-          final entry = entries[index];
-          final selected = entry.id == _group;
-          return InkWell(
-            key: ValueKey('live-group-${entry.id}'),
-            onTap: () => _loadChannels(entry.id),
-            child: Container(
-              key: _groupTileKeys.putIfAbsent(entry.id, GlobalKey.new),
-              margin: const EdgeInsets.fromLTRB(12, 2, 6, 2),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-              decoration: BoxDecoration(
-                color: selected
-                    ? theme.colorScheme.primaryContainer
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    entry.name,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                      color: selected
-                          ? theme.colorScheme.onPrimaryContainer
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  // 分组频道数只显示源数据真实带有的 count，没有就不画。
-                  if (entry.count > 0)
-                    Text(
-                      '${entry.count} 个',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontSize: 11,
-                        color: selected
-                            ? theme.colorScheme.onPrimaryContainer
-                            : theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _channelList(BuildContext context) {
-    final theme = Theme.of(context);
     if (_channels.isEmpty) {
       return StatusPanel(
         title: _group == _favouritesId ? '还没有收藏频道' : '没有可用频道',
-        message: _group == _favouritesId ? '播放时点星标即可加入收藏。' : '可以切换其他分类或直播源。',
+        message: _group == _favouritesId
+            ? '播放时点星标即可加入收藏。'
+            : '可以切换其他分类或直播源。',
         icon: Icons.live_tv_rounded,
       );
     }
-    final current = _playback.channel?.key;
+    final current = _playback.channel;
+    final lineCount = current?.urls.length ?? 0;
+    // 只有直连型源（面板/列表）支持同一频道内切线路；api 型源
+    // 的线路走仓库解析，切线重播没有意义，右列只作展示、不点。
+    final multiRoute =
+        _source?.protocol == LiveProtocol.pingtai ||
+        _source?.protocol == LiveProtocol.list;
+    var rows = entries.length;
+    if (_channels.length > rows) rows = _channels.length;
+    if (lineCount > rows) rows = lineCount;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.metrics.extentAfter < 600 &&
@@ -1430,144 +1825,143 @@ class _LiveScreenState extends State<LiveScreen> {
         return false;
       },
       child: ListView.builder(
-        key: const ValueKey('live-channel-list'),
+        key: const ValueKey('live-grid'),
         controller: _channelScroll,
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        itemCount: _channels.length + (_more ? 1 : 0),
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+        itemCount: rows + (_more ? 1 : 0),
         itemBuilder: (context, index) {
-          if (index >= _channels.length) {
+          if (index >= rows) {
             return const Padding(
               padding: EdgeInsets.all(16),
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          final channel = _channels[index];
-          final selected = channel.key == current;
-          // 第二行只显示真实信息（房间名/分组/线路数），没有就不画，
-          // 绝不编假节目单，见 liveChannelRowCaption。
-          final caption = liveChannelRowCaption(
-            channel,
-            inFavourites: _group == _favouritesId,
-          );
-          return InkWell(
-            key: ValueKey('live-channel-${channel.key}'),
-            onTap: () => _open(channel),
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(6, 2, 12, 2),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-              decoration: BoxDecoration(
-                color: selected
-                    ? theme.colorScheme.secondaryContainer
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 34,
-                    // 当前频道以播放三角代替序号；其余行显示序号。
-                    child: selected
-                        ? Icon(
-                            Icons.play_arrow_rounded,
-                            size: 18,
-                            color: theme.colorScheme.onSecondaryContainer,
-                          )
-                        : Text(
-                            channel.number,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                  ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          channel.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: selected
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                            color: selected
-                                ? theme.colorScheme.onSecondaryContainer
-                                : null,
-                          ),
-                        ),
-                        // 节目行只显示源数据真实带有的信息，没有就不画
-                        // 第二行，只留频道名，绝不编假节目单。
-                        if (caption.isNotEmpty)
-                          Text(
-                            caption,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: selected
-                                  ? theme.colorScheme.onSecondaryContainer
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ],
-              ),
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(
+              children: [
+                Expanded(flex: 25, child: _groupCell(entries, index)),
+                const SizedBox(width: 6),
+                Expanded(flex: 44, child: _channelCell(index)),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 26,
+                  child: _lineCell(index, lineCount, multiRoute),
+                ),
+              ],
             ),
           );
         },
       ),
     );
   }
-}
 
-/// 视频区右上角的日期时间角标：每秒刷新一次，只重建自己这一小块，
-/// 不牵动整个直播页。显示设备本地时间，两行：`M/d 周X` 与 `HH:mm:ss`。
-class _LiveClock extends StatefulWidget {
-  const _LiveClock();
+  Widget _gridCell({
+    required bool selected,
+    required Widget child,
+  }) => Container(
+    height: 48,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: selected ? _liveCellSelectedBg : _liveCellBg,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: child,
+  );
 
-  @override
-  State<_LiveClock> createState() => _LiveClockState();
-}
+  TextStyle _gridCellText(bool selected) => TextStyle(
+    fontSize: 13,
+    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+    color: selected ? _liveSelectedText : Colors.white,
+  );
 
-class _LiveClockState extends State<_LiveClock> {
-  Timer? _timer;
-  DateTime _now = DateTime.now();
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
-    });
+  Widget _groupCell(
+    List<({String id, String name, int count})> entries,
+    int index,
+  ) {
+    if (index >= entries.length) return const SizedBox(height: 48);
+    final entry = entries[index];
+    final selected = entry.id == _group;
+    return InkWell(
+      key: ValueKey('live-group-${entry.id}'),
+      onTap: () => _loadChannels(entry.id),
+      child: Container(
+        key: _groupTileKeys.putIfAbsent(entry.id, GlobalKey.new),
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? _liveCellSelectedBg : _liveCellBg,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              entry.name,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _gridCellText(selected),
+            ),
+            // 分组频道数只显示源数据真实带有的 count，没有就不画。
+            if (entry.count > 0)
+              Text(
+                '${entry.count} 个',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: selected
+                      ? _liveSelectedText.withValues(alpha: .85)
+                      : Colors.white70,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+  Widget _channelCell(int index) {
+    if (index >= _channels.length) return const SizedBox(height: 48);
+    final channel = _channels[index];
+    final selected = channel.key == _playback.channel?.key;
+    return InkWell(
+      key: ValueKey('live-channel-${channel.key}'),
+      onTap: () => _open(channel),
+      child: _gridCell(
+        selected: selected,
+        child: Text(
+          channel.name,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: _gridCellText(selected),
+        ),
+      ),
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      key: const ValueKey('live-clock'),
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(liveClockDateLine(_now), style: _videoOverlayStyle),
-        Text(liveClockTimeLine(_now), style: _videoOverlayStyle),
-      ],
+  Widget _lineCell(int index, int lineCount, bool multiRoute) {
+    if (index >= lineCount) return const SizedBox(height: 48);
+    final selected = multiRoute && index == _playback.route;
+    final cell = _gridCell(
+      selected: selected,
+      child: Text(
+        '线路${index + 1}',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: _gridCellText(selected),
+      ),
+    );
+    if (!multiRoute) return cell;
+    return InkWell(
+      key: ValueKey('live-line-$index'),
+      onTap: () => unawaited(_playback.playRoute(index)),
+      child: cell,
     );
   }
 }
+
+/// 时钟格式函数（liveClockDateLine/liveClockTimeLine）仍在文件顶部，
+/// 供单测钉住格式；视频区角标时钟已随截图版式撤掉（手机状态栏已有时间）。

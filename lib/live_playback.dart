@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show Size;
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
@@ -102,6 +103,10 @@ class LivePlaybackController extends ChangeNotifier {
   bool _disposed = false;
   String? _error;
 
+  /// 播放中流的真实输出分辨率（videoParams 给出的显示尺寸）：
+  /// 拿到之前为 null，界面不硬写分辨率；只随首帧/分辨率变化更新。
+  Size? _videoSize;
+
   Player? get player => _player;
   VideoController? get controller => _controller;
   LiveSource? get source => _source;
@@ -118,6 +123,7 @@ class LivePlaybackController extends ChangeNotifier {
   LiveDecoderMode get decoderMode => _decoderMode;
   String? get error => _error;
   double get aspectRatio => _aspectRatio;
+  Size? get videoSize => _videoSize;
 
   void _ensurePlayer() {
     if (_player != null || _disposed) return;
@@ -172,10 +178,14 @@ class LivePlaybackController extends ChangeNotifier {
         _frames = true;
         _stall?.cancel();
         final ratio = size.width / size.height;
+        final sizeChanged = _videoSize != size;
+        if (sizeChanged) _videoSize = size;
         if (ratio.isFinite &&
             ratio > 0 &&
             (ratio - _aspectRatio).abs() > 0.01) {
           _aspectRatio = ratio;
+          notifyListeners();
+        } else if (sizeChanged) {
           notifyListeners();
         }
       }),
@@ -254,6 +264,9 @@ class LivePlaybackController extends ChangeNotifier {
       final plan = await _resolve(source, channel);
       if (_disposed || token != _generation) return;
       _frames = false;
+      // 换台先清掉上条流的分辨率，新流拿到 videoParams 后再显示，
+      // 不拿旧分辨率冒充新台。
+      _videoSize = null;
       await player.open(
         Media(
           plan.url,
