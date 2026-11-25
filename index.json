@@ -414,6 +414,51 @@
       "adult": true,
       "description": "AI小视频·ficeforand（ficeforand.aicjjc.cc）。4 个分类与站点导航 1:1，HTML 解析列表/详情，播放页经黄果接口换 HLS 代理地址播放。由内置 py 蜘蛛改写。",
       "manifest": "ficeforand/ficeforand.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.xhongyan",
+      "name": "X红颜",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "X红颜（xhongyan.com）。MacCMS 站，分类从首页导航实时解析（原档/onlyfans/网黄/品牌/美图），详情页 sid 线路，播放页 player_data 取本站签名 mp4 直链。由内置 py 蜘蛛改写。",
+      "manifest": "xhongyan/xhongyan.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aiwu",
+      "name": "AI污短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AI污短剧（aiwu.ai-wu.cc）。4 个分类与原蜘蛛 1:1 对应，播放走站内 huangguo.php 接口现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "aiwu/aiwu.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.kankux",
+      "name": "看裤X",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "看裤X（kankux.com）。分类与原 py 1:1：站点导航动态解析（不到 50 个合并首页导航、再回退原 py 写死的 75 个分类），屏蔽集 {14, 76} 照搬过滤后按编号排序，home 首位加「全部」共 76 项。HTML 正则解析列表/详情/搜索，详情给全球/亚洲/中国大陆三条加速节点，播放页依次现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "kankux/kankux.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.porncgw",
+      "name": "Porn吃瓜网",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Porn吃瓜网（porncgw.com）。25 个分类，HTML 解析列表/详情/搜索，playback 接口现取 HLS 播放地址（CDN 鉴权头透传）。由内置 py 蜘蛛改写。",
+      "manifest": "porncgw/porncgw.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.guohnsqj",
+      "name": "欲望乐园",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "欲望乐园（接口 zdap.gkquu.cn:4438，站点 guohnsqj.hdyubao.cyou）。1 个分类「全部视频」与原 py 完全一致，列表/详情/搜索走签名接口（returnData 可能 AES-CBC 加密），播放为详情现取 videoUrlOne/videoUrlTwo 直链。由内置 py 蜘蛛改写。",
+      "manifest": "guohnsqj/guohnsqj.idjplugin"
     }
   ],
   "cms": []
