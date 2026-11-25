@@ -1,5 +1,6 @@
 import 'package:moyi/global_search_page.dart';
 import 'package:moyi/models.dart';
+import 'package:moyi/site_health.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -90,5 +91,52 @@ void main() {
       Drama(id: 'vod1:1', source: 'vod1', title: '点播剧'),
     ], sites);
     expect(appendGlobalVideoGroup(groups, const [], sites), same(groups));
+  });
+
+  group('站点健康组序', () {
+    setUp(() {
+      SiteHealthStore.instance = SiteHealthStore(
+        saveDelay: const Duration(days: 1),
+      );
+    });
+
+    tearDown(() {
+      SiteHealthStore.instance = SiteHealthStore();
+    });
+
+    void seed(String siteId, {required bool ok}) {
+      for (var i = 0; i < 3; i++) {
+        SiteHealthStore.instance.recordSearch(siteId, ok: ok);
+      }
+    }
+
+    test('同区健康分高的在前，跨区仍分区优先', () {
+      // vod1（点播站）健康、mid1（午夜站）不健康：同属点播区时
+      // 健康分压过站名序（站名序本是午夜站在前）；hongguo 不健康
+      // 也仍排第一（短剧区 rank 优先于健康分）。
+      seed('vod1', ok: true);
+      seed('mid1', ok: false);
+      seed('hongguo', ok: false);
+      final groups = groupGlobalVideoResults(const [
+        Drama(id: 'mid1:1', source: 'mid1', title: '午夜剧'),
+        Drama(id: 'hongguo:1', source: 'hongguo', title: '短剧一'),
+        Drama(id: 'vod1:1', source: 'vod1', title: '点播剧'),
+      ], sites);
+      expect(groups.map((g) => g.siteId).toList(), ['hongguo', 'vod1', 'mid1']);
+    });
+
+    test('健康分相同回站名序，增量追加与整批一致', () {
+      seed('vod1', ok: true);
+      seed('mid1', ok: true);
+      const items = [
+        Drama(id: 'vod1:1', source: 'vod1', title: '点播剧'),
+        Drama(id: 'mid1:1', source: 'mid1', title: '午夜剧'),
+      ];
+      final batch = groupGlobalVideoResults(items, sites);
+      expect(batch.map((g) => g.siteId).toList(), ['mid1', 'vod1']);
+      var appended = appendGlobalVideoGroup(const [], [items[0]], sites);
+      appended = appendGlobalVideoGroup(appended, [items[1]], sites);
+      expect(appended.map((g) => g.siteId).toList(), ['mid1', 'vod1']);
+    });
   });
 }

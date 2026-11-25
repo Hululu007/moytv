@@ -12,6 +12,7 @@ import 'local_store.dart';
 import 'models.dart';
 import 'novel_reader_page.dart';
 import 'novel_source_store.dart';
+import 'site_health.dart';
 
 /// 视频腿整批预算：流式搜索 150 秒只拦桥接卡死，不砍健康腿；
 /// 超时只记本腿失败，已上屏的组保留（O1 之后不再整腿清零），
@@ -102,13 +103,18 @@ int globalSearchSectionRank(String section) => switch (section) {
   _ => 5,
 };
 
-/// 视频组排序：区 rank 优先，同区按站名；整批分组与增量追加
-/// 共用这一个比较器，最终顺序才一致。
+/// 视频组排序：区 rank 优先，同区先按站点健康分降序、再按
+/// 站名；整批分组与增量追加共用这一个比较器，最终顺序才一致。
+/// 健康总开关关时 scoreOf 恒回中性分，等同旧的站名序。
 int compareGlobalVideoGroups(GlobalVideoGroup a, GlobalVideoGroup b) {
   final rank = globalSearchSectionRank(
     a.section,
   ).compareTo(globalSearchSectionRank(b.section));
-  return rank != 0 ? rank : a.siteName.compareTo(b.siteName);
+  if (rank != 0) return rank;
+  final health = SiteHealthStore.instance
+      .scoreOf(b.siteId)
+      .compareTo(SiteHealthStore.instance.scoreOf(a.siteId));
+  return health != 0 ? health : a.siteName.compareTo(b.siteName);
 }
 
 List<GlobalVideoGroup> groupGlobalVideoResults(

@@ -26,6 +26,7 @@ import 'download_preferences.dart';
 import 'catalog_sort.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
+import 'site_health.dart';
 import 'xigua/watch_stats.dart';
 
 class LocalStore extends ChangeNotifier {
@@ -33,6 +34,18 @@ class LocalStore extends ChangeNotifier {
     _m3uLoader = loadM3uChannels;
     loadImportedLiveChannels = _m3uLoader;
     _initialize();
+    _registerSiteHealth();
+  }
+
+  /// 站点健康学习门面注册：把已存记录载入单例、挂延迟落盘回调
+  /// 与总开关初值。放构造里做，main.dart 不用改。
+  void _registerSiteHealth() {
+    final health = SiteHealthStore.instance;
+    health.loadFromJson(_string('site_health_v1'));
+    health.enabled = siteHealthEnabled;
+    health.onSave = (json) {
+      unawaited(setSiteHealthJson(json).catchError((_) {}));
+    };
   }
 
   /// 直播仓库按需加载 m3u 频道时走的加载器（见 loadM3uChannels）。
@@ -949,6 +962,36 @@ class LocalStore extends ChangeNotifier {
 
   Future<void> setSiteCheckLastRun(DateTime value) =>
       _setting('site_check_last_run', value.millisecondsSinceEpoch.toString());
+
+  /// 站点健康记录全量 JSON（独立键，不进用户配置、不随源列表走）。
+  String? get siteHealthJson => _string('site_health_v1');
+
+  Future<void> setSiteHealthJson(String value) =>
+      _setting('site_health_v1', value);
+
+  /// 健康排序总开关（默认开）：关时不打点、不重排。
+  bool get siteHealthEnabled => _configurationError == null
+      ? _bool(_key('siteHealthEnabled')) ?? true
+      : true;
+
+  Future<void> setSiteHealthEnabled(bool value) {
+    SiteHealthStore.instance.enabled = value;
+    return _setting(_key('siteHealthEnabled'), value);
+  }
+
+  /// 选站弹窗按健康排序（默认关，保持配置顺序）。
+  bool get sitePickerHealthSort => _configurationError == null
+      ? _bool(_key('sitePickerHealthSort')) ?? false
+      : false;
+
+  Future<void> setSitePickerHealthSort(bool value) =>
+      _setting(_key('sitePickerHealthSort'), value);
+
+  /// 清空全部站点健康学习记录（内存表 + 落盘一并清）。
+  Future<void> clearSiteHealth() async {
+    SiteHealthStore.instance.clear();
+    await setSiteHealthJson(SiteHealthStore.instance.encode());
+  }
 
   bool get customHeadersEnabled => _configurationError == null
       ? _bool(_key('customHeadersEnabled')) ?? false

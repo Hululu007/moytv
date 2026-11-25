@@ -31,6 +31,7 @@ import 'whos_fallback.dart';
 import 'whos_local_library.dart';
 import 'background_downloads.dart';
 import 'local_store.dart';
+import 'site_health.dart';
 import 'playback_parse.dart';
 import 'app_build.dart';
 import 'source_status.dart';
@@ -724,6 +725,33 @@ void _emitSiteItems(
   for (final source in order) {
     if (shouldStop != null && shouldStop()) return;
     onSite(source, bySource[source]!);
+  }
+}
+
+/// 站点健康打点（Go 整批腿）：整批成功时按结果里出现的站逐站
+/// 记搜索成功 + 条数，未出现的站不打点；整批失败由
+/// [_recordGoSearchFailure] 对全部目标站各记一次失败。总开关
+/// 关时 store 内部短路，这里不用再判。
+void _recordGoSearchLeg(List<String> rest, List<Drama> items, int elapsedMs) {
+  final counts = <String, int>{};
+  for (final drama in items) {
+    counts[drama.source] = (counts[drama.source] ?? 0) + 1;
+  }
+  for (final source in rest) {
+    final count = counts[source];
+    if (count == null) continue;
+    SiteHealthStore.instance.recordSearch(
+      source,
+      ok: true,
+      items: count,
+      elapsedMs: elapsedMs,
+    );
+  }
+}
+
+void _recordGoSearchFailure(List<String> rest) {
+  for (final source in rest) {
+    SiteHealthStore.instance.recordSearch(source, ok: false);
   }
 }
 
@@ -2595,6 +2623,9 @@ class NativeRepository extends AppRepository {
       for (final source in sources)
         JarHaijiaoTakeover.goSourceForJarSite(source) ?? source,
     ].toSet().toList();
+    // 健康调度：按健康分降序的副本再分腿，只改发起顺序，
+    // 不改结果合并语义；总开关关时 orderSources 原样返回。
+    sources = SiteHealthStore.instance.orderSources(sources);
     final jarSources = sources.where(JarBridge.isJarSource).toList();
     final pyTargets = sources.where(isPySource).toList();
     final jsTargets = sources.where(isJsSource).toList();
@@ -2607,13 +2638,23 @@ class NativeRepository extends AppRepository {
         )
         .toList();
     if (jarSources.isEmpty && pyTargets.isEmpty && jsTargets.isEmpty) {
-      return CatalogPage.fromJson(
-        await _call({
-          'action': 'searchAcross',
-          'sources': sources,
-          'query': query,
-        }),
-      );
+      // 纯 Go 腿：整批成败按 Go 腿口径打点，抛错语义不变。
+      final watch = Stopwatch()..start();
+      try {
+        final page = CatalogPage.fromJson(
+          await _call({
+            'action': 'searchAcross',
+            'sources': sources,
+            'query': query,
+          }),
+        );
+        watch.stop();
+        _recordGoSearchLeg(sources, page.items, watch.elapsedMilliseconds);
+        return page;
+      } catch (_) {
+        _recordGoSearchFailure(sources);
+        rethrow;
+      }
     }
     // 混合搜索：Go 核腿与 jar/py/js 腿并发跑，jar/py/js 腿内部 6 路
     // 有界并发、每站 10 秒预算。原先三腿串行、每站无预算：站一多，
@@ -2622,6 +2663,7 @@ class NativeRepository extends AppRepository {
     final failures = <String>[];
     Future<List<Drama>> restLeg() async {
       if (rest.isEmpty) return const [];
+      final watch = Stopwatch()..start();
       try {
         final corePage = CatalogPage.fromJson(
           await _call({
@@ -2630,9 +2672,12 @@ class NativeRepository extends AppRepository {
             'query': query,
           }),
         );
+        watch.stop();
+        _recordGoSearchLeg(rest, corePage.items, watch.elapsedMilliseconds);
         return corePage.items;
       } catch (_) {
         failures.addAll(rest);
+        _recordGoSearchFailure(rest);
         return const [];
       }
     }
@@ -2651,10 +2696,24 @@ class NativeRepository extends AppRepository {
     ];
     final restFuture = restLeg();
     final legsFuture = fanoutOrdered(legs, (leg) async {
+      final watch = Stopwatch()..start();
       try {
         final page = await leg.run().timeout(_searchPerSiteTimeout);
+        watch.stop();
+        SiteHealthStore.instance.recordSearch(
+          leg.source,
+          ok: true,
+          items: page.items.length,
+          elapsedMs: watch.elapsedMilliseconds,
+        );
         return page.items;
       } catch (_) {
+        watch.stop();
+        SiteHealthStore.instance.recordSearch(
+          leg.source,
+          ok: false,
+          elapsedMs: watch.elapsedMilliseconds,
+        );
         failures.add(leg.source);
         return const <Drama>[];
       }
@@ -2690,6 +2749,8 @@ class NativeRepository extends AppRepository {
       for (final source in sources)
         JarHaijiaoTakeover.goSourceForJarSite(source) ?? source,
     }.toList();
+    // 健康调度同 searchAcross：只改发起顺序，渐进显示仍先回先上屏。
+    sources = SiteHealthStore.instance.orderSources(sources);
     final jarSources = sources.where(JarBridge.isJarSource).toList();
     final pyTargets = sources.where(isPySource).toList();
     final jsTargets = sources.where(isJsSource).toList();
@@ -2706,15 +2767,23 @@ class NativeRepository extends AppRepository {
       // 纯 Go 腿：Go 侧一次整批回，拆包后按站回调；抛错语义与
       // 批回 searchAcross 一致（上抛，调用方记本腿失败）。在途
       // 调用无法撤回，停了也只能等它回完、结果不写回。
-      final corePage = CatalogPage.fromJson(
-        await _call({
-          'action': 'searchAcross',
-          'sources': sources,
-          'query': query,
-        }),
-      );
-      _emitSiteItems(corePage.items, onSite, shouldStop);
-      return;
+      final watch = Stopwatch()..start();
+      try {
+        final corePage = CatalogPage.fromJson(
+          await _call({
+            'action': 'searchAcross',
+            'sources': sources,
+            'query': query,
+          }),
+        );
+        watch.stop();
+        _recordGoSearchLeg(sources, corePage.items, watch.elapsedMilliseconds);
+        _emitSiteItems(corePage.items, onSite, shouldStop);
+        return;
+      } catch (_) {
+        _recordGoSearchFailure(sources);
+        rethrow;
+      }
     }
     // 混合搜索：Go 腿与 jar/py/js 腿并发跑；jar/py/js 腿逐站回调
     // 先出，Go 腿整批结果后到时再按站追加。单站失败只丢该站不
@@ -2722,6 +2791,7 @@ class NativeRepository extends AppRepository {
     // 页面只看结果条目）。
     Future<List<Drama>> restLeg() async {
       if (rest.isEmpty) return const [];
+      final watch = Stopwatch()..start();
       try {
         final corePage = CatalogPage.fromJson(
           await _call({
@@ -2730,8 +2800,11 @@ class NativeRepository extends AppRepository {
             'query': query,
           }),
         );
+        watch.stop();
+        _recordGoSearchLeg(rest, corePage.items, watch.elapsedMilliseconds);
         return corePage.items;
       } catch (_) {
+        _recordGoSearchFailure(rest);
         return const [];
       }
     }
@@ -2752,10 +2825,24 @@ class NativeRepository extends AppRepository {
     await fanoutEach(
       legs,
       (leg) async {
+        final watch = Stopwatch()..start();
         try {
           final page = await leg.run().timeout(_searchPerSiteTimeout);
+          watch.stop();
+          SiteHealthStore.instance.recordSearch(
+            leg.source,
+            ok: true,
+            items: page.items.length,
+            elapsedMs: watch.elapsedMilliseconds,
+          );
           return page.items;
         } catch (_) {
+          watch.stop();
+          SiteHealthStore.instance.recordSearch(
+            leg.source,
+            ok: false,
+            elapsedMs: watch.elapsedMilliseconds,
+          );
           return const <Drama>[];
         }
       },
@@ -2873,8 +2960,32 @@ class NativeRepository extends AppRepository {
     return converted;
   }
 
+  /// 详情健康打点包装：最终成败以对外返回为准只记一次；内部
+  /// 分支（含 haijiao 回退递归）走 [_detailImpl] 不重复记。
   @override
   Future<DramaDetail> detail(Drama drama) async {
+    final watch = Stopwatch()..start();
+    try {
+      final result = await _detailImpl(drama);
+      watch.stop();
+      SiteHealthStore.instance.recordDetail(
+        drama.source,
+        ok: true,
+        elapsedMs: watch.elapsedMilliseconds,
+      );
+      return result;
+    } catch (_) {
+      watch.stop();
+      SiteHealthStore.instance.recordDetail(
+        drama.source,
+        ok: false,
+        elapsedMs: watch.elapsedMilliseconds,
+      );
+      rethrow;
+    }
+  }
+
+  Future<DramaDetail> _detailImpl(Drama drama) async {
     if (CloudDriveEngine.isCloudSource(drama.source)) {
       final engine = await _cloudDriveEngine();
       return engine.detail(drama);
@@ -2891,7 +3002,7 @@ class NativeRepository extends AppRepository {
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(drama.source);
     if (haijiaoGo != null) {
       try {
-        return await detail(JarHaijiaoTakeover.remapDrama(drama, haijiaoGo));
+        return await _detailImpl(JarHaijiaoTakeover.remapDrama(drama, haijiaoGo));
       } catch (_) {
         return _jarCall(drama.source, (spec) => JarBridge.detail(spec, drama));
       }
@@ -3043,8 +3154,35 @@ class NativeRepository extends AppRepository {
     }
   }
 
+  /// 播放健康打点包装：只记「取流成败」，不记播放器起播后的
+  /// 卡顿（那是 PlaybackHealth 的事）；内部递归走 [_resolveImpl]。
   @override
   Future<PlaybackPlan> resolve(
+    Drama drama,
+    Episode episode, {
+    int quality = 0,
+    int route = 0,
+    bool adBlock = true,
+  }) async {
+    final watch = Stopwatch()..start();
+    try {
+      final plan = await _resolveImpl(
+        drama,
+        episode,
+        quality: quality,
+        route: route,
+        adBlock: adBlock,
+      );
+      watch.stop();
+      SiteHealthStore.instance.recordPlay(drama.source, ok: true);
+      return plan;
+    } catch (_) {
+      SiteHealthStore.instance.recordPlay(drama.source, ok: false);
+      rethrow;
+    }
+  }
+
+  Future<PlaybackPlan> _resolveImpl(
     Drama drama,
     Episode episode, {
     int quality = 0,
@@ -3058,7 +3196,7 @@ class NativeRepository extends AppRepository {
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(drama.source);
     if (haijiaoGo != null) {
       try {
-        return await resolve(
+        return await _resolveImpl(
           JarHaijiaoTakeover.remapDrama(drama, haijiaoGo),
           episode,
           quality: quality,
