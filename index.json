@@ -279,6 +279,60 @@
       "adult": true,
       "description": "AI短剧网（ai.aiduanjuwang8.cc，备 wap.aiduanjuwang6.cc）。6 个分类，HTML 页解析卡片与详情，播放页 player_aaaa 现取 m3u8 直链播放。由内置 py 蜘蛛改写。",
       "manifest": "aiduanju/aiduanju.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aimove",
+      "name": "新黄果短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "新黄果短剧（aimove.click）。14 个分类与站点导航 1:1，播放为接口直出 HLS 主列表（已解锁集免费播，锁定集需金币、插件内受宿主剥离 Authorization 头限制无法解锁）。由内置 py 蜘蛛改写。",
+      "manifest": "aimove/aimove.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aisxpc",
+      "name": "Ai小视频",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Ai小视频（aicjjc.cc）。4 个分类，HTML 解析列表/详情，黄果接口换 HLS 地址播放。由内置 py 蜘蛛改写。",
+      "manifest": "aisxpc/aisxpc.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.asextv",
+      "name": "A色TV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "A色TV（asextv.xyz）。116 个分类与原 py 1:1 对应，详情页 HTML 直取 m3u8 播放。由内置 py 蜘蛛改写。",
+      "manifest": "asextv/asextv.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.avhwa",
+      "name": "AVHWA",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AVHWA（avhwa.com）。11 个分类，详情页 base64 解出 get_file 地址再 302 到 CDN 的 mp4 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "avhwa/avhwa.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.avtoday",
+      "name": "AV Today",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AV Today（avtoday.io）。16 个分类与原 py 1:1 对应，播放页现取 mp4 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "avtoday/avtoday.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.avyanjiuyuan",
+      "name": "AV研究院",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AV研究院（avyan2026.lol）。13 个分类，MacCMS HTML 直出，播放页内嵌 player_aaaa JSON 现取 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "avyanjiuyuan/avyanjiuyuan.idjplugin"
     }
   ],
   "cms": []
