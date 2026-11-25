@@ -258,3 +258,37 @@ class _ModuleTabItem extends StatelessWidget {
     );
   }
 }
+
+/// 海报中央透明播放键（2026-11-25 女优库详情页/卡片墙修复）：
+/// 与详情页 `_hero` 的 playButton 同款——半透明黑圆底 + 白圈 +
+/// 白三角；纯装饰、不接手势，点按由外层海报/卡片的 InkWell 或
+/// GestureDetector 接管（点海报/点卡即播，行为与原来一字不差）。
+/// 大海报用 72/44（与 `_hero` 同尺寸），卡片墙用默认 48/30。
+class ActressPosterPlayKey extends StatelessWidget {
+  const ActressPosterPlayKey({
+    super.key,
+    this.diameter = 48,
+    this.iconSize = 30,
+  });
+
+  final double diameter;
+  final double iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: diameter,
+      height: diameter,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.black.withValues(alpha: 0.3),
+        border: Border.all(color: Colors.white70, width: 1.5),
+      ),
+      child: Icon(
+        Icons.play_arrow_rounded,
+        color: Colors.white,
+        size: iconSize,
+      ),
+    );
+  }
+}

@@ -1128,12 +1128,37 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                               );
                             }
                             final work = _works[index];
-                            return DramaTile(
-                              key: ValueKey('actress-work-${work.id}'),
-                              drama: actressWorkDrama(work),
-                              repository: widget.repository,
-                              subtitle: actressWorkSubtitle(work),
-                              onTap: () => _playWork(work),
+                            // 海报中央透明播放键（2026-11-25）：DramaTile
+                            // 是全站共用卡片，不动它；只在本页叠一层纯
+                            // 装饰键（IgnorePointer，点按仍由卡片接管，
+                            // 走 _playWork 秒进详情页播，行为一字不差）。
+                            // 键只盖海报区（DramaTile 海报 2/3，高 =
+                            // 宽 × 1.5），不盖下面的标题/副标题。
+                            return LayoutBuilder(
+                              builder: (context, constraints) {
+                                return Stack(
+                                  children: [
+                                    DramaTile(
+                                      key: ValueKey('actress-work-${work.id}'),
+                                      drama: actressWorkDrama(work),
+                                      repository: widget.repository,
+                                      subtitle: actressWorkSubtitle(work),
+                                      onTap: () => _playWork(work),
+                                    ),
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      height: constraints.maxWidth * 1.5,
+                                      child: const IgnorePointer(
+                                        child: Center(
+                                          child: ActressPosterPlayKey(),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
                             );
                           }, childCount: _works.length + (_hasMore ? 1 : 0)),
                         ),

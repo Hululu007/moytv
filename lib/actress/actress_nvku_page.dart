@@ -1423,6 +1423,13 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                             ),
                     ),
                   ),
+                  // 海报中央透明播放键（2026-11-25）：纯装饰不接手势，
+                  // 点按仍由外层 InkWell 接管，走 _play（点卡行为不变）。
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: Center(child: ActressPosterPlayKey()),
+                    ),
+                  ),
                   Positioned(
                     right: 2,
                     top: 2,

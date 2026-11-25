@@ -2689,6 +2689,8 @@ class _FilmCard extends StatelessWidget {
 
 /// 影视库详情页：FongMiTV 式（海报 + 头项 + 简介 + 播放线路行），
 /// 点卡只进详情不直播放；播放从海报或“正片”行点，播放器自带暂停。
+/// 海报中央有透明播放键（2026-11-25，与详情页 _hero 同款 72/44；
+/// 点海报或点键都走 _play，与“正片”行同一条播放链）。
 class FilmDetailPage extends StatefulWidget {
   const FilmDetailPage({
     super.key,
@@ -2819,19 +2821,35 @@ class _FilmDetailPageState extends State<FilmDetailPage> {
               borderRadius: BorderRadius.circular(12),
               child: AspectRatio(
                 aspectRatio: 16 / 9,
-                child: _entry.coverUrl.isEmpty
-                    ? Container(
-                      color: colors.surfaceContainerHighest,
-                      child: const Icon(Icons.movie_outlined, size: 48),
-                    )
-                    : Image.network(
-                      _entry.coverUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
-                        color: colors.surfaceContainerHighest,
-                        child: const Icon(Icons.movie_outlined, size: 48),
+                // 海报中央透明播放键（2026-11-25）：与详情页 _hero 同款
+                // 72/44；纯装饰不接手势，点按仍由外层 GestureDetector
+                // 接管，走 _play（与“正片”行同一条播放链）。
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _entry.coverUrl.isEmpty
+                        ? Container(
+                          color: colors.surfaceContainerHighest,
+                          child: const Icon(Icons.movie_outlined, size: 48),
+                        )
+                        : Image.network(
+                          _entry.coverUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            color: colors.surfaceContainerHighest,
+                            child: const Icon(
+                              Icons.movie_outlined,
+                              size: 48,
+                            ),
+                          ),
+                        ),
+                    const Center(
+                      child: IgnorePointer(
+                        child: ActressPosterPlayKey(diameter: 72, iconSize: 44),
                       ),
                     ),
+                  ],
+                ),
               ),
             ),
           ),
