@@ -2240,6 +2240,9 @@ class NativeRepository extends AppRepository {
         input['force'] = true;
       }
       final body = jsonEncode(input);
+      // idj 播放调用：Go 侧预算单独放宽到 90 秒，Dart 兜底给 100 秒，
+      // 让 Go 的 E_TIMEOUT 先触发；其余 idj 调用 Go 预算 30 秒，
+      // 70 秒兜底足够。
       final encoded = await Isolate.run(() => _nativeRequest(body)).timeout(
         Duration(
           seconds: action == 'moveDownloads'
@@ -2248,6 +2251,8 @@ class NativeRepository extends AppRepository {
               ? 15
               : action == 'preload'
               ? 20
+              : action == 'idjCall' && input['fn'] == 'player'
+              ? 100
               : 70,
         ),
       );

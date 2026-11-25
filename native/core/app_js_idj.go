@@ -78,11 +78,15 @@ const (
 )
 
 // 超时预算（iDuanJu 值，RE §8.4）。包级变量只为测试能收紧预算，生产
-// 不改：初始化 15 秒、has 5 秒、普通调用 30 秒；Dart 层另有 70 秒总兜底。
+// 不改：初始化 15 秒、has 5 秒、普通调用 30 秒；播放（player/play）
+// 单独 90 秒——play 要串行发两个请求（播放页 + 换链），弱网下 30 秒
+// 会被打爆（AI短剧AV 实证）。Dart 层总兜底：普通调用 70 秒、播放
+// 路径 100 秒（大于 Go 侧预算，让 E_TIMEOUT 先在 Go 侧触发）。
 var (
 	idjInitTimeout = 15 * time.Second
 	idjHasTimeout  = 5 * time.Second
 	idjCallTimeout = 30 * time.Second
+	idjPlayTimeout = 90 * time.Second
 )
 
 // 仅测试用的开关与可调限额（生产保持默认值）：
@@ -725,6 +729,8 @@ func idjCallWithDirectory(directory, pluginID, script, manifestJSON, fn, argJSON
 		budget = idjInitTimeout
 	case "__has":
 		budget = idjHasTimeout
+	case "player", "play":
+		budget = idjPlayTimeout
 	}
 	state, err := newIdjCallState(directory, pluginID, manifest)
 	if err != nil {

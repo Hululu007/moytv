@@ -1018,6 +1018,47 @@ export default {
 	idjAssertCode(t, err, "E_TIMEOUT")
 }
 
+// TestIdjPlayCallTimeout：播放（player）走单独的 idjPlayTimeout 预算，
+// 不受普通调用 idjCallTimeout 约束；普通函数仍受普通预算约束。
+func TestIdjPlayCallTimeout(t *testing.T) {
+	idjEnableLoopback(t)
+	oldCall, oldPlay := idjCallTimeout, idjPlayTimeout
+	idjCallTimeout = 300 * time.Millisecond
+	idjPlayTimeout = 5 * time.Second
+	t.Cleanup(func() { idjCallTimeout, idjPlayTimeout = oldCall, oldPlay })
+	dir := t.TempDir()
+	manifest := idjTestManifest(t, "127.0.0.1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(800 * time.Millisecond)
+		_, _ = w.Write([]byte("slow-ok"))
+	}))
+	defer server.Close()
+	script := `
+export default {
+  async play(arg) {
+    const r = await host.http.request({url: arg.base + "/slow", timeout: 20000});
+    return {streams: [{url: "https://a.com/x.m3u8", format: "hls"}]};
+  },
+  async home(arg) {
+    const r = await host.http.request({url: arg.base + "/slow", timeout: 20000});
+    return {categories: [], items: [], hasMore: false};
+  }
+};
+`
+	args := `{"base": "` + server.URL + `", "playId": "ep1", "flag": ""}`
+	// 播放：800ms 慢请求在普通预算（300ms）下必超时，播放预算（5s）下成功。
+	out, err := idjTestCall(t, dir, "com.test.playtimeout", script, manifest, "player", args)
+	if err != nil {
+		t.Fatalf("player 调用失败: %v", err)
+	}
+	if out == nil {
+		t.Fatalf("player 调用无结果")
+	}
+	// 普通函数：同样的慢请求仍被普通预算掐掉。
+	_, err = idjTestCall(t, dir, "com.test.playtimeout", script, manifest, "home", args)
+	idjAssertCode(t, err, "E_TIMEOUT")
+}
+
 // TestIdjHas：__has 探查函数是否存在。
 func TestIdjHas(t *testing.T) {
 	dir := t.TempDir()
