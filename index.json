@@ -1134,6 +1134,33 @@
       "adult": true,
       "description": "火速资源（api.huosuapi.cc）。6 个分类（与原 py 完全一致：接口 class 实时返回 47 国产伦理/48 香港伦理/49 台湾伦理/50 韩国伦理/51 日本伦理/52 西方伦理，经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，接口无分类时用同 py 兜底 6 类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
       "manifest": "huosuzy/huosuzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.iqiyizy",
+      "name": "爱奇艺影视",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "爱奇艺影视（www.iqiyizyapi.com）。43 个分类（与原 py 完全一致：接口 class 实时返回 43 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 43 类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 媒体清单、play 内预解析主清单到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "iqiyizy/iqiyizy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jkunzy",
+      "name": "jkun资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "jkun资源（jkunzyapi.com）。25 个分类（与原 py 完全一致：接口 class 实时返回 25 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 为空），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "jkunzy/jkunzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jjzy",
+      "name": "吉吉资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "吉吉资源（caiji.jjzyapi.com）。33 个分类（与原 py 完全一致：接口 class 实时返回 33 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 33 类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放双线：jjm3u8 直给 m3u8（play 内预解析主清单）、jjzy 线为 watch 播放页、play 内提取页内签名 m3u8。由内置 py 蜘蛛改写。",
+      "manifest": "jjzy/jjzy.idjplugin"
     }
   ],
   "cms": []
