@@ -3,40 +3,100 @@ package core
 import (
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dop251/goja"
 	"golang.org/x/net/html"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 type legadoJSCtx struct {
-	rt        *goja.Runtime
-	javaObj   *goja.Object
-	vars      map[string]string
-	bookVars  map[string]string
-	baseURL   string
-	sourceURL string
-	page      int
-	key       string
-	sourceObj interface{}
-	bookTitle string
-	bookURL   string
-	curBlock  string
-	curJSON   interface{}
-	curJSONOK bool
-	jsErr     error
-	headers   map[string]string
+	rt           *goja.Runtime
+	javaObj      *goja.Object
+	vars         map[string]string
+	bookVars     map[string]string
+	cacheVars    map[string]string
+	loginInfo    map[string]string
+	baseURL      string
+	sourceURL    string
+	page         int
+	key          string
+	sourceObj    interface{}
+	sourceFields map[string]interface{}
+	jsLib        string
+	jsLibLoaded  bool
+	jsLibErr     error
+	bookTitle    string
+	bookURL      string
+	curBlock     string
+	curJSON      interface{}
+	curJSONOK    bool
+	jsErr        error
+	headers      map[string]string
+}
+
+// legadoDeviceID is a stable per-process pseudo device id used by
+// java.androidId()/java.deviceID(). The core has no real device identity;
+// a random id per process is enough for sources that just need *some*
+// id in a header or a query string. It is NOT persisted across restarts.
+var (
+	legadoDeviceIDOnce sync.Once
+	legadoDeviceIDVal  string
+)
+
+func legadoDeviceID() string {
+	legadoDeviceIDOnce.Do(func() {
+		var b [10]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			legadoDeviceIDVal = fmt.Sprintf("moyi-%d", time.Now().UnixNano())
+			return
+		}
+		legadoDeviceIDVal = fmt.Sprintf("moyi-%x", b[:])
+	})
+	return legadoDeviceIDVal
+}
+
+// legadoEncodeURI percent-encodes s the way Legado's java.encodeURI does.
+// With no charset (or utf-8) it is url.QueryEscape; with gbk/gb2312 the
+// string is first encoded to GBK bytes and each byte is percent-encoded.
+func legadoEncodeURI(s, charset string) string {
+	if strings.EqualFold(strings.TrimSpace(charset), "gbk") ||
+		strings.EqualFold(strings.TrimSpace(charset), "gb2312") {
+		b, _, err := transform.String(simplifiedchinese.GBK.NewEncoder(), s)
+		if err == nil {
+			var sb strings.Builder
+			for i := 0; i < len(b); i++ {
+				c := b[i]
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+					c == '-' || c == '_' || c == '.' || c == '~' {
+					sb.WriteByte(c)
+				} else {
+					fmt.Fprintf(&sb, "%%%02X", c)
+				}
+			}
+			return sb.String()
+		}
+	}
+	return url.QueryEscape(s)
 }
 
 func (c *legadoJSCtx) setSource(src LegadoSource) {
 	c.headers = src.Headers
-	c.sourceObj = map[string]interface{}{
+	c.jsLib = src.JsLib
+	c.sourceFields = map[string]interface{}{
 		"bookSourceName":    src.Name,
 		"bookSourceUrl":     src.URL,
 		"bookSourceType":    src.Type,
@@ -45,12 +105,15 @@ func (c *legadoJSCtx) setSource(src LegadoSource) {
 		"loginUrl":          src.LoginURL,
 		"bookSourceComment": src.Comment,
 	}
+	c.sourceObj = c.sourceFields
 }
 
 func newLegadoJSCtx(sourceURL string) *legadoJSCtx {
 	return &legadoJSCtx{
 		vars:      map[string]string{},
 		bookVars:  map[string]string{},
+		cacheVars: map[string]string{},
+		loginInfo: map[string]string{},
 		sourceURL: sourceURL,
 		baseURL:   sourceURL,
 		page:      1,
@@ -92,6 +155,32 @@ func (c *legadoJSCtx) runtime() *goja.Runtime {
 	}
 	rt := goja.New()
 	c.rt = rt
+	// Compatibility shim for JSON.parse: evalJSCur pre-parses a JSON
+	// response body into an object and hands it to the rule as `result`,
+	// so rules can read result.data... directly. Real Legado hands rules
+	// the raw string, and the common rule idiom JSON.parse(result) then
+	// works. Under goja, JSON.parse(anObject) coerces the object to
+	// "[object Object]" and throws "invalid character 'o'" (6873
+	// Lofter, 7939 墨阅）. Return a non-string argument unchanged so
+	// both idioms work; string arguments still go through the real
+	// parser (including an optional reviver).
+	if jsonVal := rt.Get("JSON"); jsonVal != nil {
+		if jsonObj := jsonVal.ToObject(rt); jsonObj != nil {
+			if parseFn, ok := goja.AssertFunction(jsonObj.Get("parse")); ok {
+				jsonObj.Set("parse", func(call goja.FunctionCall) goja.Value {
+					arg := call.Argument(0)
+					if _, isStr := arg.Export().(string); isStr {
+						v, err := parseFn(goja.Undefined(), call.Arguments...)
+						if err != nil {
+							panic(err)
+						}
+						return v
+					}
+					return arg
+				})
+			}
+		}
+	}
 	javaObj := rt.NewObject()
 	c.javaObj = javaObj
 	javaObj.Set("ajax", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
@@ -108,7 +197,12 @@ func (c *legadoJSCtx) runtime() *goja.Runtime {
 	}))
 	javaObj.Set("put", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) >= 2 {
-			c.vars[call.Arguments[0].String()] = legadoJSValueString(rt, call.Arguments[1])
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.vars[call.Arguments[0].String()] = v
+			// Return the stored value (not undefined): Legado rule
+			// templates such as {{java.put("page",page)}} evaluate to
+			// the last expression, so the put must yield its value.
+			return rt.ToValue(v)
 		}
 		return goja.Undefined()
 	}))
@@ -172,6 +266,123 @@ func (c *legadoJSCtx) runtime() *goja.Runtime {
 		}
 		return rt.ToValue(string(b))
 	}))
+	// java.encodeURI(str[, charset]): percent-encode a string, as Legado
+	// sources use it (java.encodeURI(key), java.encodeURI(key,'gbk')).
+	// The global encodeURI exists in goja, but sources call it on java.
+	javaObj.Set("encodeURI", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		charset := ""
+		if len(call.Arguments) > 1 {
+			charset = call.Arguments[1].String()
+		}
+		return rt.ToValue(legadoEncodeURI(call.Arguments[0].String(), charset))
+	}))
+	javaObj.Set("encodeURIComponent", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(legadoEncodeURI(call.Arguments[0].String(), ""))
+	}))
+	// Device identity: the core has no real device id; return a stable
+	// per-process pseudo id so sources that embed one (Lofter's
+	// java.androidId(), 墨阅 header's java.deviceID()) get *some* id.
+	javaObj.Set("androidId", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(legadoDeviceID())
+	}))
+	javaObj.Set("deviceID", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(legadoDeviceID())
+	}))
+	// java.t2s / java.s2t: traditional<->simplified conversion. No
+	// conversion table is bundled with the core, so these currently
+	// return the input unchanged (the source still works end to end;
+	// titles and text stay in the site's original script). A real
+	// mapping table can replace the body later without touching callers.
+	javaObj.Set("t2s", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(call.Arguments[0].String())
+	}))
+	javaObj.Set("s2t", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(call.Arguments[0].String())
+	}))
+	javaObj.Set("openUrl", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return goja.Undefined()
+	}))
+	// Browser automation is unavailable in the core: return "" so rules
+	// that wait on a rendered page fall through instead of throwing a
+	// ReferenceError. Such sources can still work when their rules have
+	// a non-browser fallback; when they don't, the step fails with an
+	// empty result rather than crashing the whole evaluation.
+	javaObj.Set("startBrowserAwait", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	javaObj.Set("startBrowser", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	javaObj.Set("post", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		body := ""
+		if len(call.Arguments) > 1 {
+			body = call.Arguments[1].String()
+		}
+		resp, err := legadoRequest(call.Arguments[0].String(), "POST", body, c.headers)
+		if err != nil {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(resp)
+	}))
+	javaObj.Set("getCookie", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	javaObj.Set("clearCookie", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return goja.Undefined()
+	}))
+	javaObj.Set("copyText", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return goja.Undefined()
+	}))
+	javaObj.Set("getWebViewUA", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
+	}))
+	javaObj.Set("getStrResponse", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	javaObj.Set("getElement", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return c.jsArray(nil)
+	}))
+	javaObj.Set("hexDecodeToString", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		s := strings.TrimSpace(call.Arguments[0].String())
+		if len(s)%2 != 0 {
+			return rt.ToValue("")
+		}
+		out := make([]byte, 0, len(s)/2)
+		for i := 0; i+1 < len(s); i += 2 {
+			hi, ok1 := hexVal(s[i])
+			lo, ok2 := hexVal(s[i+1])
+			if !ok1 || !ok2 {
+				return rt.ToValue("")
+			}
+			out = append(out, hi<<4|lo)
+		}
+		return rt.ToValue(string(out))
+	}))
+	javaObj.Set("digestHex", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		sum := md5.Sum([]byte(call.Arguments[0].String()))
+		return rt.ToValue(fmt.Sprintf("%x", sum))
+	}))
 	rt.Set("java", javaObj)
 	bookObj := rt.NewObject()
 	bookObj.Set("getVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
@@ -186,9 +397,192 @@ func (c *legadoJSCtx) runtime() *goja.Runtime {
 		}
 		return goja.Undefined()
 	}))
+	// book.putCustomVariable/getCustomVariable: Legado's per-book
+	// annotation store (6873 Lofter intro, 1751 chapterList, 8019
+	// init). One argument stores the whole custom-variable string;
+	// two arguments store key -> value. Returns the stored value so
+	// expression contexts keep working.
+	bookObj.Set("putCustomVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.bookVars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		v := legadoJSValueString(rt, call.Arguments[0])
+		c.bookVars["customVariable"] = v
+		return rt.ToValue(v)
+	}))
+	bookObj.Set("getCustomVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue(c.bookVars["customVariable"])
+		}
+		return rt.ToValue(c.bookVars[call.Arguments[0].String()])
+	}))
 	bookObj.Set("bookUrl", c.bookURL)
 	bookObj.Set("name", c.bookTitle)
 	rt.Set("book", bookObj)
+	// The `source` object: the source's own fields plus the variable
+	// accessors Legado sources use (source.getVariable(),
+	// source.setVariable(), source.get()/put(), source.getLoginInfo(),
+	// source.putLoginInfo(), source.getLoginInfoMap()). The variable
+	// store is shared with java.put/java.get: jsLib code such as
+	// SRCFG(source) reads it via source.getVariable(), and searchUrl
+	// templates write it via java.put().
+	sourceObj := rt.NewObject()
+	for k, v := range c.sourceFields {
+		sourceObj.Set(k, v)
+	}
+	sourceObj.Set("getVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			if len(c.vars) == 0 {
+				return rt.ToValue("")
+			}
+			b, err := json.Marshal(c.vars)
+			if err != nil {
+				return rt.ToValue("")
+			}
+			return rt.ToValue(string(b))
+		}
+		return rt.ToValue(c.vars[call.Arguments[0].String()])
+	}))
+	sourceObj.Set("setVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Undefined()
+		}
+		var m map[string]string
+		if json.Unmarshal([]byte(call.Arguments[0].String()), &m) == nil {
+			c.vars = m
+		}
+		return goja.Undefined()
+	}))
+	sourceObj.Set("putVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.vars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		return goja.Undefined()
+	}))
+	sourceObj.Set("get", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		k := call.Arguments[0].String()
+		if v, ok := c.vars[k]; ok {
+			return rt.ToValue(v)
+		}
+		if v, ok := c.sourceFields[k]; ok {
+			return rt.ToValue(legadoJSExportString(v))
+		}
+		return rt.ToValue("")
+	}))
+	sourceObj.Set("put", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.vars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		return goja.Undefined()
+	}))
+	sourceObj.Set("getLoginInfo", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(c.loginInfo) == 0 {
+			return rt.ToValue("")
+		}
+		b, err := json.Marshal(c.loginInfo)
+		if err != nil {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(string(b))
+	}))
+	sourceObj.Set("putLoginInfo", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Undefined()
+		}
+		var m map[string]string
+		if json.Unmarshal([]byte(call.Arguments[0].String()), &m) == nil {
+			c.loginInfo = m
+		}
+		return goja.Undefined()
+	}))
+	sourceObj.Set("getLoginInfoMap", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		obj := rt.NewObject()
+		for k, v := range c.loginInfo {
+			obj.Set(k, v)
+		}
+		return obj
+	}))
+	// Login header string (1751, 6873, 7814, 8011, 8019, 8124, 8128):
+	// getHeaderMap() reads source.getLoginHeader() and JSON-parses it;
+	// putLoginHeader stores the header JSON and returns it, so callers
+	// such as `token = source.putLoginHeader(JSON.stringify(head))`
+	// receive the stored value. No login ever happens in the core, so
+	// the stored header is empty unless a rule put one there.
+	sourceObj.Set("getLoginHeader", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(c.loginInfo["header"])
+	}))
+	sourceObj.Set("putLoginHeader", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Undefined()
+		}
+		v := legadoJSValueString(rt, call.Arguments[0])
+		c.loginInfo["header"] = v
+		return rt.ToValue(v)
+	}))
+	rt.Set("source", sourceObj)
+	// Per-source in-memory cache (cache.get/put/getFromMemory/putMemory).
+	// There is no on-disk file cache in the core, so getFile returns "".
+	cacheObj := rt.NewObject()
+	cacheObj.Set("get", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(c.cacheVars[call.Arguments[0].String()])
+	}))
+	cacheObj.Set("put", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.cacheVars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		return goja.Undefined()
+	}))
+	cacheObj.Set("getFromMemory", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(c.cacheVars[call.Arguments[0].String()])
+	}))
+	cacheObj.Set("putMemory", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.cacheVars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		return goja.Undefined()
+	}))
+	cacheObj.Set("getFile", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	rt.Set("cache", cacheObj)
+	// Bare getVariable/putVariable: some sources call them without a
+	// receiver. They read/write the same variable store as java.put.
+	rt.Set("getVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return rt.ToValue("")
+		}
+		return rt.ToValue(c.vars[call.Arguments[0].String()])
+	}))
+	rt.Set("putVariable", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) >= 2 {
+			v := legadoJSValueString(rt, call.Arguments[1])
+			c.vars[call.Arguments[0].String()] = v
+			return rt.ToValue(v)
+		}
+		return goja.Undefined()
+	}))
 	rt.Set("Reload", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) == 0 {
 			return rt.ToValue("")
@@ -208,7 +602,464 @@ func (c *legadoJSCtx) runtime() *goja.Runtime {
 	orgObj := rt.NewObject()
 	orgObj.Set("jsoup", jsoupObj)
 	rt.Set("org", orgObj)
+	// Cookie manager (7632): the core keeps no cookies, so getCookie
+	// returns "" and removeCookie is a no-op; the object only exists so
+	// `typeof cookieManager.getCookie === 'function'` checks pass and
+	// the rule falls through to its no-cookie branch.
+	cookieObj := rt.NewObject()
+	cookieObj.Set("getCookie", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	cookieObj.Set("getCookies", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue([]interface{}{})
+	}))
+	cookieObj.Set("removeCookie", legadoJSGuard(func(call goja.FunctionCall) goja.Value {
+		return goja.Undefined()
+	}))
+	rt.Set("cookie", cookieObj)
+	// Rhino-style Packages bridge (7895, 7814, 8006, 8007, 8011, ...).
+	// Only the shapes these sources actually use are emulated; real
+	// Java classes (Cipher, StrResponse, ...) are out of scope.
+	rt.Set("Packages", legadoPackagesObject(rt))
 	return rt
+}
+
+// legadoJSInt reads a goja value as an int64 (JS numbers, numeric
+// strings, booleans).
+func legadoJSInt(v goja.Value) int64 {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return 0
+	}
+	if n, ok := v.Export().(int64); ok {
+		return n
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(v.String()), 64)
+	if err != nil {
+		return 0
+	}
+	return int64(f)
+}
+
+// legadoEncodeBytes encodes s in the named charset (UTF-8 default,
+// GBK/GB2312 via the simplifiedchinese encoder).
+func legadoEncodeBytes(s, charset string) []byte {
+	switch strings.ToUpper(strings.TrimSpace(charset)) {
+	case "GBK", "GB2312", "GB18030":
+		b, _, err := transform.Bytes(simplifiedchinese.GBK.NewEncoder(), []byte(s))
+		if err == nil {
+			return b
+		}
+	}
+	return []byte(s)
+}
+
+// legadoJSBytes converts a JS value to bytes: a string becomes its
+// bytes (UTF-8), a JS array of numbers becomes the byte values, a
+// []byte passed from Go stays as-is.
+func legadoJSBytes(rt *goja.Runtime, v goja.Value) []byte {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil
+	}
+	if b, ok := v.Export().([]byte); ok {
+		return b
+	}
+	if s, ok := v.Export().(string); ok {
+		return []byte(s)
+	}
+	obj := v.ToObject(rt)
+	if obj == nil {
+		return []byte(v.String())
+	}
+	if length := obj.Get("length"); length != nil {
+		n := int(legadoJSInt(length))
+		if n >= 0 && n <= 1<<26 {
+			out := make([]byte, n)
+			for i := 0; i < n; i++ {
+				out[i] = byte(legadoJSInt(obj.Get(strconv.Itoa(i))))
+			}
+			return out
+		}
+	}
+	return []byte(v.String())
+}
+
+// legadoJSByteArray builds a JS array of numbers from bytes, so JS code
+// can index it (b[i] & 0xff) and read b.length.
+func legadoJSByteArray(rt *goja.Runtime, b []byte) goja.Value {
+	arr := make([]interface{}, len(b))
+	for i, v := range b {
+		arr[i] = int64(v)
+	}
+	return rt.ToValue(arr)
+}
+
+func legadoMD5Hex(b []byte) string {
+	sum := md5.Sum(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// legadoPackagesObject builds the minimal Packages tree used by Legado
+// sources: java.lang (Thread.sleep, System.currentTimeMillis,
+// String constructor with getBytes, Byte.TYPE, reflect.Array),
+// java.security.MessageDigest (MD5/SHA-1/SHA-256/SHA-512),
+// java.util (Base64, Arrays.copyOf/copyOfRange, HashMap),
+// java.io.ByteArrayOutputStream, android.util.Base64,
+// cn.hutool.crypto.digest.DigestUtil.md5Hex, and the Legado
+// TimeoutCancellationException type. Deliberately NOT emulated:
+// javax.crypto.Cipher (7814 AES-GCM) and
+// io.legado.app.help.http.StrResponse (8019).
+func legadoPackagesObject(rt *goja.Runtime) *goja.Object {
+	guard := func(f func(goja.FunctionCall) goja.Value) func(goja.FunctionCall) goja.Value {
+		return legadoJSGuard(f)
+	}
+	// NOTE: this goja version only treats func(ConstructorCall)
+	// *Object as a native constructor; a func returning goja.Value
+	// is a plain function and `new` on it throws "not a
+	// constructor". All Packages constructors below return *Object.
+	guardCtor := func(f func(goja.ConstructorCall) *goja.Object) func(goja.ConstructorCall) *goja.Object {
+		return func(call goja.ConstructorCall) (v *goja.Object) {
+			defer func() {
+				if r := recover(); r != nil {
+					v = rt.NewObject()
+				}
+			}()
+			return f(call)
+		}
+	}
+
+	javaObj := rt.NewObject()
+	langObj := rt.NewObject()
+	threadObj := rt.NewObject()
+	threadObj.Set("sleep", guard(func(call goja.FunctionCall) goja.Value {
+		ms := int64(0)
+		if len(call.Arguments) > 0 {
+			ms = legadoJSInt(call.Arguments[0])
+		}
+		// Cap the sleep: rule evaluation runs under a 10s timer, a
+		// longer sleep would only time the rule out.
+		if ms > 5000 {
+			ms = 5000
+		}
+		if ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+		return goja.Undefined()
+	}))
+	langObj.Set("Thread", threadObj)
+	systemObj := rt.NewObject()
+	systemObj.Set("currentTimeMillis", guard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(time.Now().UnixMilli())
+	}))
+	systemObj.Set("nanoTime", guard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(time.Now().UnixNano())
+	}))
+	systemObj.Set("getenv", guard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue("")
+	}))
+	langObj.Set("System", systemObj)
+	// new java.lang.String(s): getBytes(charset) + toString.
+	langObj.Set("String", guardCtor(func(call goja.ConstructorCall) *goja.Object {
+		s := ""
+		if len(call.Arguments) > 0 {
+			s = legadoJSValueString(rt, call.Arguments[0])
+		}
+		obj := call.This
+		obj.Set("getBytes", guard(func(c goja.FunctionCall) goja.Value {
+			cs := "UTF-8"
+			if len(c.Arguments) > 0 {
+				cs = legadoJSValueString(rt, c.Arguments[0])
+			}
+			return legadoJSByteArray(rt, legadoEncodeBytes(s, cs))
+		}))
+		obj.Set("toString", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue(s)
+		}))
+		obj.Set("length", len([]rune(s)))
+		return obj
+	}))
+	byteObj := rt.NewObject()
+	byteObj.Set("TYPE", "byte")
+	langObj.Set("Byte", byteObj)
+	reflectObj := rt.NewObject()
+	arrayObj := rt.NewObject()
+	arrayObj.Set("newInstance", guard(func(call goja.FunctionCall) goja.Value {
+		n := int64(0)
+		if len(call.Arguments) > 1 {
+			n = legadoJSInt(call.Arguments[1])
+		}
+		if n < 0 || n > 1<<26 {
+			return rt.ToValue([]interface{}{})
+		}
+		return legadoJSByteArray(rt, make([]byte, n))
+	}))
+	reflectObj.Set("Array", arrayObj)
+	langObj.Set("reflect", reflectObj)
+	javaObj.Set("lang", langObj)
+
+	securityObj := rt.NewObject()
+	mdObj := rt.NewObject()
+	mdObj.Set("getInstance", guard(func(call goja.FunctionCall) goja.Value {
+		alg := strings.ToUpper(strings.ReplaceAll(legadoJSValueString(rt, call.Argument(0)), "-", ""))
+		d := rt.NewObject()
+		var buf []byte
+		digest := func(data []byte) goja.Value {
+			var sum []byte
+			switch alg {
+			case "SHA1":
+				h := sha1.Sum(data)
+				sum = h[:]
+			case "SHA256":
+				h := sha256.Sum256(data)
+				sum = h[:]
+			case "SHA512":
+				h := sha512.Sum512(data)
+				sum = h[:]
+			default: // MD5 and anything unknown fall back to MD5.
+				h := md5.Sum(data)
+				sum = h[:]
+			}
+			buf = nil
+			return legadoJSByteArray(rt, sum)
+		}
+		d.Set("update", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) > 0 {
+				buf = append(buf, legadoJSBytes(rt, c.Arguments[0])...)
+			}
+			return goja.Undefined()
+		}))
+		d.Set("digest", guard(func(c goja.FunctionCall) goja.Value {
+			data := buf
+			if len(c.Arguments) > 0 && !goja.IsUndefined(c.Arguments[0]) && !goja.IsNull(c.Arguments[0]) {
+				data = append(append([]byte{}, buf...), legadoJSBytes(rt, c.Arguments[0])...)
+			}
+			return digest(data)
+		}))
+		return d
+	}))
+	securityObj.Set("MessageDigest", mdObj)
+	javaObj.Set("security", securityObj)
+
+	utilObj := rt.NewObject()
+	b64Obj := rt.NewObject()
+	b64Obj.Set("getDecoder", guard(func(call goja.FunctionCall) goja.Value {
+		dec := rt.NewObject()
+		dec.Set("decode", guard(func(c goja.FunctionCall) goja.Value {
+			s := legadoJSValueString(rt, c.Argument(0))
+			b, err := base64.StdEncoding.DecodeString(s)
+			if err != nil {
+				b, _ = base64.RawURLEncoding.DecodeString(s)
+			}
+			return legadoJSByteArray(rt, b)
+		}))
+		return dec
+	}))
+	b64Obj.Set("getEncoder", guard(func(call goja.FunctionCall) goja.Value {
+		enc := rt.NewObject()
+		enc.Set("encodeToString", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue(base64.StdEncoding.EncodeToString(legadoJSBytes(rt, c.Argument(0))))
+		}))
+		enc.Set("encode", guard(func(c goja.FunctionCall) goja.Value {
+			return legadoJSByteArray(rt, []byte(base64.StdEncoding.EncodeToString(legadoJSBytes(rt, c.Argument(0)))))
+		}))
+		return enc
+	}))
+	utilObj.Set("Base64", b64Obj)
+	arraysObj := rt.NewObject()
+	arraysObj.Set("copyOf", guard(func(call goja.FunctionCall) goja.Value {
+		src := legadoJSBytes(rt, call.Argument(0))
+		n := int(legadoJSInt(call.Argument(1)))
+		if n < 0 {
+			n = 0
+		}
+		out := make([]byte, n)
+		copy(out, src)
+		return legadoJSByteArray(rt, out)
+	}))
+	arraysObj.Set("copyOfRange", guard(func(call goja.FunctionCall) goja.Value {
+		src := legadoJSBytes(rt, call.Argument(0))
+		from := int(legadoJSInt(call.Argument(1)))
+		to := int(legadoJSInt(call.Argument(2)))
+		if from < 0 {
+			from = 0
+		}
+		if to > len(src) {
+			to = len(src)
+		}
+		if from > to {
+			from = to
+		}
+		return legadoJSByteArray(rt, src[from:to])
+	}))
+	utilObj.Set("Arrays", arraysObj)
+	utilObj.Set("HashMap", guardCtor(func(call goja.ConstructorCall) *goja.Object {
+		m := map[string]goja.Value{}
+		obj := call.This
+		obj.Set("put", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) < 2 {
+				return goja.Undefined()
+			}
+			k := c.Arguments[0].String()
+			prev, ok := m[k]
+			m[k] = c.Arguments[1]
+			if !ok {
+				return goja.Null()
+			}
+			return prev
+		}))
+		obj.Set("get", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) == 0 {
+				return goja.Null()
+			}
+			if v, ok := m[c.Arguments[0].String()]; ok {
+				return v
+			}
+			return goja.Null()
+		}))
+		obj.Set("containsKey", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) == 0 {
+				return rt.ToValue(false)
+			}
+			_, ok := m[c.Arguments[0].String()]
+			return rt.ToValue(ok)
+		}))
+		obj.Set("remove", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) == 0 {
+				return goja.Null()
+			}
+			k := c.Arguments[0].String()
+			v, ok := m[k]
+			delete(m, k)
+			if !ok {
+				return goja.Null()
+			}
+			return v
+		}))
+		obj.Set("size", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue(len(m))
+		}))
+		obj.Set("keySet", guard(func(c goja.FunctionCall) goja.Value {
+			keys := make([]interface{}, 0, len(m))
+			for k := range m {
+				keys = append(keys, k)
+			}
+			return rt.ToValue(keys)
+		}))
+		return obj
+	}))
+	javaObj.Set("util", utilObj)
+
+	ioObj := rt.NewObject()
+	ioObj.Set("ByteArrayOutputStream", guardCtor(func(call goja.ConstructorCall) *goja.Object {
+		var buf []byte
+		obj := call.This
+		obj.Set("write", guard(func(c goja.FunctionCall) goja.Value {
+			if len(c.Arguments) == 0 {
+				return goja.Undefined()
+			}
+			if len(c.Arguments) == 1 {
+				if n, ok := c.Arguments[0].Export().(int64); ok {
+					buf = append(buf, byte(n))
+					return goja.Undefined()
+				}
+			}
+			buf = append(buf, legadoJSBytes(rt, c.Arguments[0])...)
+			return goja.Undefined()
+		}))
+		obj.Set("toByteArray", guard(func(c goja.FunctionCall) goja.Value {
+			return legadoJSByteArray(rt, buf)
+		}))
+		obj.Set("toString", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue(string(buf))
+		}))
+		obj.Set("size", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue(len(buf))
+		}))
+		obj.Set("reset", guard(func(c goja.FunctionCall) goja.Value {
+			buf = nil
+			return goja.Undefined()
+		}))
+		return obj
+	}))
+	// java.io lives under Packages.java.io, not Packages.io.
+	javaObj.Set("io", ioObj)
+
+	androidObj := rt.NewObject()
+	androidB64 := rt.NewObject()
+	androidB64.Set("DEFAULT", 0)
+	androidB64.Set("NO_WRAP", 2)
+	androidB64.Set("URL_SAFE", 8)
+	androidB64.Set("encodeToString", guard(func(call goja.FunctionCall) goja.Value {
+		b := legadoJSBytes(rt, call.Argument(0))
+		flags := int64(0)
+		if len(call.Arguments) > 1 {
+			flags = legadoJSInt(call.Arguments[1])
+		}
+		if flags&8 != 0 {
+			return rt.ToValue(base64.RawURLEncoding.EncodeToString(b))
+		}
+		return rt.ToValue(base64.StdEncoding.EncodeToString(b))
+	}))
+	androidB64.Set("decode", guard(func(call goja.FunctionCall) goja.Value {
+		s := legadoJSValueString(rt, call.Argument(0))
+		flags := int64(0)
+		if len(call.Arguments) > 1 {
+			flags = legadoJSInt(call.Arguments[1])
+		}
+		var b []byte
+		var err error
+		if flags&8 != 0 {
+			b, err = base64.RawURLEncoding.DecodeString(s)
+		} else {
+			b, err = base64.StdEncoding.DecodeString(s)
+		}
+		if err != nil {
+			b, _ = base64.RawStdEncoding.DecodeString(s)
+		}
+		return legadoJSByteArray(rt, b)
+	}))
+	androidUtil := rt.NewObject()
+	androidUtil.Set("Base64", androidB64)
+	androidObj.Set("util", androidUtil)
+
+	cnObj := rt.NewObject()
+	hutoolObj := rt.NewObject()
+	hutoolCrypto := rt.NewObject()
+	hutoolDigest := rt.NewObject()
+	digestUtil := rt.NewObject()
+	digestUtil.Set("md5Hex", guard(func(call goja.FunctionCall) goja.Value {
+		return rt.ToValue(legadoMD5Hex([]byte(legadoJSValueString(rt, call.Argument(0)))))
+	}))
+	hutoolDigest.Set("DigestUtil", digestUtil)
+	hutoolCrypto.Set("digest", hutoolDigest)
+	hutoolObj.Set("crypto", hutoolCrypto)
+	cnObj.Set("hutool", hutoolObj)
+
+	legadoObj := rt.NewObject()
+	legadoKazusa := rt.NewObject()
+	legadoUtils := rt.NewObject()
+	legadoUtils.Set("TimeoutCancellationException", guardCtor(func(call goja.ConstructorCall) *goja.Object {
+		msg := ""
+		if len(call.Arguments) > 0 {
+			msg = legadoJSValueString(rt, call.Arguments[0])
+		}
+		obj := call.This
+		obj.Set("message", msg)
+		obj.Set("toString", guard(func(c goja.FunctionCall) goja.Value {
+			return rt.ToValue("TimeoutCancellationException: " + msg)
+		}))
+		return obj
+	}))
+	legadoKazusa.Set("utils", legadoUtils)
+	legadoObj.Set("kazusa", legadoKazusa)
+
+	packagesObj := rt.NewObject()
+	packagesObj.Set("java", javaObj)
+	packagesObj.Set("android", androidObj)
+	packagesObj.Set("cn", cnObj)
+	ioTop := rt.NewObject()
+	ioTop.Set("legado", legadoObj)
+	packagesObj.Set("io", ioTop)
+	return packagesObj
 }
 
 func (c *legadoJSCtx) javaAjax(call goja.FunctionCall) string {
@@ -482,6 +1333,18 @@ func (c *legadoJSCtx) javaTimeFormat(call goja.FunctionCall) string {
 	return raw
 }
 
+func hexVal(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10, true
+	}
+	return 0, false
+}
+
 func legadoJSValueString(rt *goja.Runtime, v goja.Value) string {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return ""
@@ -526,6 +1389,49 @@ func (c *legadoJSCtx) evalJSCur(script, cur string) (goja.Value, error) {
 		var parsed interface{}
 		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
 			v = rt.ToValue(parsed)
+			if m, isMap := parsed.(map[string]interface{}); isMap {
+				// ToValue(map) yields a host object on which
+				// defineProperty fails ("Host object field ...
+				// cannot be made configurable"); rebuild the top
+				// level as a plain JS object so the hidden
+				// toString/length below can be attached.
+				obj := rt.NewObject()
+				for k, val := range m {
+					obj.Set(k, rt.ToValue(val))
+				}
+				v = obj
+			}
+			// The parsed value stands in for the raw response string
+			// real Legado hands rules, so make the string idioms work
+			// too: String(result) must return the JSON text (rules do
+			// JSON.parse(String(result)), 8146 墨阅·起点）, and
+			// result.length on an object must read as the text length
+			// (6873 chapterList tests result.length). Both are hidden
+			// (non-enumerable) so JSON.stringify(result) stays clean.
+			if obj := v.ToObject(rt); obj != nil {
+				text := trimmed
+				// Hidden (non-enumerable) own properties, defined
+				// through the builtin Object.defineProperty: this
+				// goja version does not export DefineOwnProperty.
+				defineProp, _ := goja.AssertFunction(rt.Get("Object").ToObject(rt).Get("defineProperty"))
+				setHidden := func(name string, val goja.Value) {
+					if defineProp == nil {
+						return
+					}
+					desc := rt.NewObject()
+					desc.Set("value", val)
+					desc.Set("writable", true)
+					desc.Set("enumerable", false)
+					desc.Set("configurable", true)
+					_, _ = defineProp(goja.Undefined(), obj, rt.ToValue(name), desc)
+				}
+				setHidden("toString", rt.ToValue(func(call goja.FunctionCall) goja.Value {
+					return rt.ToValue(text)
+				}))
+				if _, isMap := parsed.(map[string]interface{}); isMap {
+					setHidden("length", rt.ToValue(len(text)))
+				}
+			}
 		}
 	}
 	return c.evalJS(script, v)
@@ -537,9 +1443,6 @@ func (c *legadoJSCtx) evalJS(script string, result goja.Value) (goja.Value, erro
 	rt.Set("baseUrl", c.baseURL)
 	rt.Set("page", c.page)
 	rt.Set("key", c.key)
-	if c.sourceObj != nil {
-		rt.Set("source", c.sourceObj)
-	}
 	if c.javaObj != nil {
 		c.javaObj.Set("baseUrl", c.baseURL)
 	}
@@ -549,6 +1452,29 @@ func (c *legadoJSCtx) evalJS(script string, result goja.Value) (goja.Value, erro
 	}
 	done := make(chan evalOut, 1)
 	go func() {
+		// A bad jsLib must fail the rule, never the process: recover
+		// any panic from the script (or from a callback that escaped
+		// its guard) and report it as a plain evaluation error. The
+		// runtime belongs to this request's context, so a poisoned
+		// runtime dies with the context.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- evalOut{nil, fmt.Errorf("legado js panic: %v", r)}
+			}
+		}()
+		// Load the source's jsLib once per context, under the same
+		// timeout guard as the rule script. jsLib holds the helper
+		// functions the rules call (SRCFG, qmSearch, TX_search,
+		// ensureConfig, ...); without it every such source fails with
+		// "X is not defined". A jsLib load error is recorded but does
+		// not block the rule: functions declared before the failing
+		// statement are still usable.
+		if !c.jsLibLoaded && strings.TrimSpace(c.jsLib) != "" {
+			c.jsLibLoaded = true
+			if _, err := rt.RunString(c.jsLib); err != nil {
+				c.jsLibErr = err
+			}
+		}
 		v, err := rt.RunString(script)
 		done <- evalOut{v: v, err: err}
 	}()
@@ -650,7 +1576,158 @@ func legadoSelectNodes(htmlText, selector string) []*html.Node {
 
 var legadoPutRe = regexp.MustCompile(`@put:\{([^:}]+):([^}]*)\}`)
 var legadoGetRe = regexp.MustCompile(`@get:\{([^}]+)\}`)
-var legadoTemplateRe = regexp.MustCompile(`\{\{([^{}]*)\}\}`)
+
+// legadoTemplateSpan returns the end index (exclusive) of the {{...}}
+// template starting at start, or -1 when the template never closes.
+// Braces inside string literals, comments and regex literals do not
+// count, so a whole-URL IIFE such as {{(function(){...})()}} is one
+// span even though its body contains braces. The old [^{}]* regex
+// could not match those at all.
+func legadoTemplateSpan(s string, start int) int {
+	depth := 2 // the opening {{
+	i := start + 2
+	var str byte
+	esc := false
+	lineComment := false
+	blockComment := false
+	regexOK := true
+	for i < len(s) {
+		c := s[i]
+		if lineComment {
+			if c == '\n' {
+				lineComment = false
+			}
+			i++
+			continue
+		}
+		if blockComment {
+			if c == '*' && i+1 < len(s) && s[i+1] == '/' {
+				blockComment = false
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if str != 0 {
+			if esc {
+				esc = false
+				i++
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				i++
+				continue
+			}
+			if c == str {
+				str = 0
+			}
+			i++
+			continue
+		}
+		if c == '/' && i+1 < len(s) {
+			if s[i+1] == '/' {
+				lineComment = true
+				i += 2
+				continue
+			}
+			if s[i+1] == '*' {
+				blockComment = true
+				i += 2
+				continue
+			}
+			if regexOK {
+				i++
+				inClass := false
+				for i < len(s) {
+					rc := s[i]
+					if rc == '\\' {
+						i += 2
+						continue
+					}
+					if rc == '[' {
+						inClass = true
+					}
+					if rc == ']' {
+						inClass = false
+					}
+					if rc == '/' && !inClass {
+						i++
+						for i < len(s) && ((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')) {
+							i++
+						}
+						break
+					}
+					if rc == '\n' {
+						break
+					}
+					i++
+				}
+				regexOK = false
+				continue
+			}
+		}
+		if c == '\'' || c == '"' || c == '`' {
+			str = c
+			regexOK = false
+			i++
+			continue
+		}
+		if c == '{' {
+			depth++
+			regexOK = true
+			i++
+			continue
+		}
+		if c == '}' {
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+			regexOK = false
+			i++
+			continue
+		}
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == ')' || c == ']' {
+			regexOK = false
+		} else if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			regexOK = true
+		}
+		i++
+	}
+	return -1
+}
+
+// legadoReplaceTemplates replaces every {{...}} span in s. fn gets the
+// trimmed inner text and returns (replacement, true), or ("", false) to
+// keep the original span untouched.
+func legadoReplaceTemplates(s string, fn func(inner string) (string, bool)) string {
+	var out strings.Builder
+	i := 0
+	for {
+		j := strings.Index(s[i:], "{{")
+		if j < 0 {
+			out.WriteString(s[i:])
+			break
+		}
+		start := i + j
+		end := legadoTemplateSpan(s, start)
+		if end < 0 {
+			out.WriteString(s[i:])
+			break
+		}
+		out.WriteString(s[i:start])
+		inner := strings.TrimSpace(s[start+2 : end-2])
+		if rep, ok := fn(inner); ok {
+			out.WriteString(rep)
+		} else {
+			out.WriteString(s[start:end])
+		}
+		i = end
+	}
+	return out.String()
+}
 
 func legadoApplyPutGet(rule, block string, ctx *legadoJSCtx) string {
 	rule = legadoPutRe.ReplaceAllStringFunc(rule, func(m string) string {
@@ -682,46 +1759,45 @@ func legadoApplyPutGet(rule, block string, ctx *legadoJSCtx) string {
 }
 
 func (c *legadoJSCtx) expandTemplates(s, block string) string {
-	return legadoTemplateRe.ReplaceAllStringFunc(s, func(m string) string {
-		inner := strings.TrimSpace(m[2 : len(m)-2])
+	return legadoReplaceTemplates(s, func(inner string) (string, bool) {
 		if inner == "" {
-			return m
+			return "", false
 		}
 		if strings.HasPrefix(inner, "book.") {
 			switch inner {
 			case "book.name":
-				return c.bookTitle
+				return c.bookTitle, true
 			case "book.url":
-				return c.bookURL
+				return c.bookURL, true
 			}
-			return ""
+			return "", true
 		}
 		if strings.HasPrefix(inner, "$") {
-			return legadoJSONFieldAny(block, inner)
+			return legadoJSONFieldAny(block, inner), true
 		}
 		rt := c.runtime()
 		v, err := c.evalJSCur(inner, block)
 		if err != nil {
 			c.jsErr = err
-			return ""
+			return "", true
 		}
-		return legadoJSValueString(rt, v)
+		return legadoJSValueString(rt, v), true
 	})
 }
 
 func (c *legadoJSCtx) expandURLTemplate(tmpl string) string {
 	tmpl = strings.ReplaceAll(tmpl, "{{page}}", strconv.Itoa(c.page))
 	rt := c.runtime()
-	return legadoTemplateRe.ReplaceAllStringFunc(tmpl, func(m string) string {
-		inner := strings.TrimSpace(m[2 : len(m)-2])
+	return legadoReplaceTemplates(tmpl, func(inner string) (string, bool) {
 		if inner == "" || strings.HasPrefix(inner, "$") {
-			return m
+			return "", false
 		}
 		v, err := c.evalJS(inner, rt.ToValue(""))
 		if err != nil {
-			return ""
+			c.jsErr = err
+			return "", true
 		}
-		return legadoJSValueString(rt, v)
+		return legadoJSValueString(rt, v), true
 	})
 }
 
@@ -841,7 +1917,7 @@ func (c *legadoJSCtx) evalScalarNoReplace(block, rule string) string {
 	expanded := c.expandTemplates(putRule, block)
 	probe := legadoPutRe.ReplaceAllString(rule, "")
 	probe = legadoGetRe.ReplaceAllString(probe, "")
-	probe = legadoTemplateRe.ReplaceAllString(probe, "")
+	probe = legadoReplaceTemplates(probe, func(string) (string, bool) { return "", true })
 	if strings.TrimSpace(probe) == "" {
 		return expanded
 	}

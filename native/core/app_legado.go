@@ -41,6 +41,7 @@ type LegadoSource struct {
 	ReplaceRegex    string
 	ExploreURL      string `json:"exploreUrl"`
 	ImageStyle      string `json:"imageStyle"`
+	JsLib           string `json:"jsLib"`
 	Headers         map[string]string
 	BookInfo        map[string]string
 	ExploreBookList string
@@ -51,21 +52,88 @@ type LegadoSource struct {
 	ExploreIntro    string
 }
 
+type legadoRuleMap map[string]string
+
+// Legado rule maps accept both the object form and the array form
+// (an array of rule objects, merged first-wins; an empty array is an
+// empty map). Some yckceo sources ship ruleExplore/ruleBookInfo as [].
+func (m *legadoRuleMap) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*m = nil
+		return nil
+	}
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := legadoRuleMap{}
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		for k, val := range v {
+			out[k] = legadoJSONScalarString(val)
+		}
+	case []interface{}:
+		for _, el := range v {
+			em, ok := el.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			for k, val := range em {
+				if _, dup := out[k]; !dup {
+					out[k] = legadoJSONScalarString(val)
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("legado rule map must be an object or array, got %s", trimmed)
+	}
+	*m = out
+	return nil
+}
+
+// legadoJSONScalarString renders a rule-map value as a string. Rule
+// values are strings, but sources also put booleans (ruleToc
+// isVolume) and numbers in these maps; those used to fail the whole
+// source parse (legado_8050_0 ruleBookInfo, legado_8116_0 ruleToc).
+func legadoJSONScalarString(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+}
+
 type legadoRaw struct {
-	Name         string            `json:"bookSourceName"`
-	URL          string            `json:"bookSourceUrl"`
-	Type         int               `json:"bookSourceType"`
-	Comment      string            `json:"bookSourceComment"`
-	LoginURL     string            `json:"loginUrl"`
-	SearchURL    string            `json:"searchUrl"`
-	ExploreURL   string            `json:"exploreUrl"`
-	ImageStyle   string            `json:"imageStyle"`
-	HeaderRaw    json.RawMessage   `json:"header"`
-	RuleSearch   map[string]string `json:"ruleSearch"`
-	RuleBookInfo map[string]string `json:"ruleBookInfo"`
-	RuleToc      map[string]string `json:"ruleToc"`
-	RuleContent  map[string]string `json:"ruleContent"`
-	RuleExplore  map[string]string `json:"ruleExplore"`
+	Name         string          `json:"bookSourceName"`
+	URL          string          `json:"bookSourceUrl"`
+	Type         int             `json:"bookSourceType"`
+	Comment      string          `json:"bookSourceComment"`
+	LoginURL     string          `json:"loginUrl"`
+	SearchURL    string          `json:"searchUrl"`
+	ExploreURL   string          `json:"exploreUrl"`
+	ImageStyle   string          `json:"imageStyle"`
+	JsLib        string          `json:"jsLib"`
+	HeaderRaw    json.RawMessage `json:"header"`
+	RuleSearch   legadoRuleMap   `json:"ruleSearch"`
+	RuleBookInfo legadoRuleMap   `json:"ruleBookInfo"`
+	RuleToc      legadoRuleMap   `json:"ruleToc"`
+	RuleContent  legadoRuleMap   `json:"ruleContent"`
+	RuleExplore  legadoRuleMap   `json:"ruleExplore"`
 }
 
 var legadoHTTP = &http.Client{Timeout: 20 * time.Second}
@@ -75,7 +143,7 @@ func legadoParseSource(data []byte) (LegadoSource, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return LegadoSource{}, err
 	}
-	s := LegadoSource{Name: raw.Name, URL: raw.URL, Type: raw.Type, Comment: raw.Comment, LoginURL: raw.LoginURL, SearchURL: raw.SearchURL, ExploreURL: raw.ExploreURL, ImageStyle: raw.ImageStyle, Headers: legadoParseHeaders(raw.HeaderRaw), BookInfo: raw.RuleBookInfo}
+	s := LegadoSource{Name: raw.Name, URL: raw.URL, Type: raw.Type, Comment: raw.Comment, LoginURL: raw.LoginURL, SearchURL: raw.SearchURL, ExploreURL: raw.ExploreURL, ImageStyle: raw.ImageStyle, JsLib: raw.JsLib, Headers: legadoParseHeaders(raw.HeaderRaw), BookInfo: raw.RuleBookInfo}
 	if raw.RuleSearch != nil {
 		s.BookList = raw.RuleSearch["bookList"]
 		s.NameRule = raw.RuleSearch["name"]
@@ -174,13 +242,38 @@ func legadoFetch(rawurl string) (string, error) {
 }
 
 func legadoFetchSrc(src LegadoSource, rawurl string) (string, error) {
-	return legadoRequest(rawurl, "GET", "", src.Headers)
+	// Book/chapter URLs may carry a ,{...} options suffix (method,
+	// body, headers) exactly like search URLs do (6873 Lofter book
+	// URLs are POSTs with a form body); without splitting it, the
+	// suffix goes out as part of the URL and the fetch returns
+	// nothing usable. Plain URLs without a suffix are untouched.
+	method := "GET"
+	body := ""
+	headers := src.Headers
+	if base, suffix, ok := legadoSplitPostSuffix(rawurl); ok {
+		m, b, h := legadoURLOptions(suffix)
+		method, body = m, b
+		headers = legadoMergeHeaders(src.Headers, h)
+		rawurl = base
+	}
+	return legadoRequest(rawurl, method, body, headers)
 }
 
 func legadoRequest(rawurl, method, body string, headers map[string]string) (string, error) {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
+	}
+	// Normalize the URL before sending: rule-built URLs often carry
+	// the raw (unescaped) search keyword in the query (e.g. Lofter
+	// 6873 builds key=斗破苍穹). Go's client sends raw non-ASCII as-is
+	// and strict servers answer 400 (curl refuses to send it at all);
+	// real Legado (OkHttp) percent-encodes the query. Re-encoding the
+	// parsed query fixes that without touching already-escaped values
+	// (they round-trip through Query/Encode unchanged).
+	if u, err := url.Parse(rawurl); err == nil && u.RawQuery != "" {
+		u.RawQuery = u.Query().Encode()
+		rawurl = u.String()
 	}
 	req, err := http.NewRequest(method, rawurl, reader)
 	if err != nil {
@@ -628,30 +721,36 @@ func legadoJSONListBlocks(body, rule string) []string {
 	}
 	for _, alt := range strings.Split(rule, "||") {
 		alt = strings.TrimSpace(alt)
-		segs, ok := legadoParseJSONPath(alt)
-		if !ok {
-			continue
-		}
-		nodes := legadoJSONEval(root, segs)
-		if len(nodes) == 0 {
-			continue
-		}
+		// A `&&` chain is a union: merge the matches of every branch
+		// in order, skipping branches that match nothing (6873 Lofter:
+		// $.data.collections[*]&&$.data.posts[*]&&... — the response
+		// has posts but no collections; requiring every branch would
+		// return nothing at all). The `||` between alts still means
+		// first alt with any match wins.
 		blocks := []string{}
-		for _, n := range nodes {
-			if arr, ok := n.([]interface{}); ok {
-				for _, el := range arr {
-					b, err := json.Marshal(el)
+		for _, branch := range strings.Split(alt, "&&") {
+			branch = strings.TrimSpace(branch)
+			segs, ok := legadoParseJSONPath(branch)
+			if !ok {
+				continue
+			}
+			nodes := legadoJSONEval(root, segs)
+			for _, n := range nodes {
+				if arr, ok := n.([]interface{}); ok {
+					for _, el := range arr {
+						b, err := json.Marshal(el)
+						if err != nil {
+							continue
+						}
+						blocks = append(blocks, string(b))
+					}
+				} else {
+					b, err := json.Marshal(n)
 					if err != nil {
 						continue
 					}
 					blocks = append(blocks, string(b))
 				}
-			} else {
-				b, err := json.Marshal(n)
-				if err != nil {
-					continue
-				}
-				blocks = append(blocks, string(b))
 			}
 		}
 		if len(blocks) > 0 {
@@ -719,6 +818,14 @@ func legadoSearch(src LegadoSource, keyword string, page int) (interface{}, erro
 				u2 = base
 			}
 			u2 = legadoAbs(src.URL, u2)
+			// Legado expands {{...}} in the final URL whatever produced
+			// it: an @js: script may itself emit a template block (e.g.
+			// 6873 builds the literal text {{(page-1) *20}} into the
+			// URL), so expand here too, not only on the literal path.
+			u2 = ctx.expandURLTemplate(u2)
+			if ctx.jsErr != nil {
+				return nil, ctx.jsErr
+			}
 			pageBody, err := legadoRequest(u2, method2, body2, legadoMergeHeaders(src.Headers, headers2))
 			if err != nil {
 				return nil, err
@@ -756,7 +863,15 @@ func legadoSearch(src LegadoSource, keyword string, page int) (interface{}, erro
 		v = strings.ReplaceAll(v, "{page}", fmt.Sprint(page))
 		return v
 	}
-	u := legadoAbs(src.URL, subURL(rawURL))
+	// Literal {{key}}/{{page}} first, then evaluate any remaining {{...}}
+	// blocks as JS ({{java.put("key",key);key}}, {{key;java.put("key",key)}},
+	// {{(function(){...})()}} ...). expandURLTemplate is a no-op when no
+	// {{...}} block is left. java.put returns the stored value, so a block
+	// whose last expression is a put still evaluates to the put value.
+	u := legadoAbs(src.URL, ctx.expandURLTemplate(subURL(rawURL)))
+	if ctx.jsErr != nil {
+		return nil, ctx.jsErr
+	}
 	body = subBody(body)
 	for k := range headers {
 		headers[k] = subBody(headers[k])
@@ -907,10 +1022,6 @@ func legadoApplyReplaceRegex(text, rr string) string {
 }
 
 func legadoJSONPathStrings(body, rule string) []string {
-	segs, ok := legadoParseJSONPath(strings.TrimSpace(rule))
-	if !ok {
-		return nil
-	}
 	cleaned := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body), "\uFEFF"))
 	var root interface{}
 	if err := json.Unmarshal([]byte(cleaned), &root); err != nil {
@@ -930,8 +1041,16 @@ func legadoJSONPathStrings(body, rule string) []string {
 			}
 		}
 	}
-	for _, n := range legadoJSONEval(root, segs) {
-		add(n)
+	// A `&&` chain is a union of branches (same as in list rules);
+	// a branch that matches nothing is skipped, not fatal.
+	for _, branch := range strings.Split(strings.TrimSpace(rule), "&&") {
+		segs, ok := legadoParseJSONPath(strings.TrimSpace(branch))
+		if !ok {
+			continue
+		}
+		for _, n := range legadoJSONEval(root, segs) {
+			add(n)
+		}
 	}
 	return out
 }

@@ -65,7 +65,7 @@ void main() {
     // zakatvBuiltinSites -1（missav30 jar 已摘）。
     expect(BuiltinPySites.entries.length, 125);
     expect(zakatvBuiltinSites.length, 137);
-    expect(builtinLegadoSources.length, 52);
+    expect(builtinLegadoSources.length, 101);
   });
 
   test('查表：jar 形态 id 取 key 段，未映射回空', () {

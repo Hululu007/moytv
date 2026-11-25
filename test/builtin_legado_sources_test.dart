@@ -12,11 +12,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('内置 JSON 书源清单', () {
-    test('共 52 个，id 唯一，全部在阅读区', () {
+    test('共 101 个，id 唯一，全部在阅读区', () {
       final builtins = ContentRegistry.novelJsonBuiltins;
-      expect(builtins, hasLength(52));
+      expect(builtins, hasLength(101));
       final ids = builtins.map((s) => s.id).toList();
-      expect(ids.toSet(), hasLength(52));
+      expect(ids.toSet(), hasLength(101));
       for (final source in builtins) {
         expect(source.section, ContentSection.novel);
         expect(source.name.trim(), isNotEmpty);

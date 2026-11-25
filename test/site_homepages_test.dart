@@ -90,7 +90,7 @@ void main() {
       expect(mapped, isNotNull, reason: '${source.id} 无主页映射');
       expect(mapped, originOf(bookUrl), reason: '${source.id} 映射值与源文件不一致');
     }
-    expect(legadoSiteHomepages.length, 51);
+    expect(legadoSiteHomepages.length, 93);
   });
 
   test('桥接查表：三种 id 形态都解析，查不到回空', () {
