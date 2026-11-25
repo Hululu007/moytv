@@ -792,6 +792,24 @@
       "adult": true,
       "description": "360资源（360zyzz.com）。分类与原 py 完全一致：接口 class 实时返回、经原 py 旗标过滤（名称含游戏/棋牌/博彩/彩票/赌剔除），兜底 51 类同 py，MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的直链、主清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
       "manifest": "zy360/zy360.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.nvku",
+      "name": "女优库在线",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "女优库在线（nvku-8m2c.web.zaka.live）。纯静态女优库镜像 32.2 万条，分类与原 py 完全一致：最新上架/有码/无码/4K/其它（条数读 meta 实时值），列表走 meta.js 与分片文件解析，播放为 v.hersav.me 的 hash 直拼 m3u8。由内置 py 蜘蛛改写。",
+      "manifest": "nvku/nvku.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.feikuai",
+      "name": "飞快TV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "飞快TV（feikuai.in）。分类与原 py 1:1：写死电影/剧集/综艺/动漫 4 个分类，HTML 正则解析列表/详情/搜索，播放页按原 py 多路顺序现取 m3u8/mp4 直链。由内置 py 蜘蛛改写。",
+      "manifest": "feikuai/feikuai.idjplugin"
     }
   ],
   "cms": []
