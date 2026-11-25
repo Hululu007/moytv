@@ -136,6 +136,22 @@ class PlaybackSettingsScreen extends StatelessWidget {
                         ),
                 ),
                 SwitchListTile(
+                  key: const ValueKey('intro-outro-skip-switch'),
+                  value: store.introOutroSkipEnabled,
+                  title: const Text('自动跳过片头片尾'),
+                  subtitle: const Text(
+                    '按剧生效：从头播时跳过片头，播到片尾段自动切下一集。'
+                    '每部剧的片头/片尾秒数在播放器菜单的播放设置里改；'
+                    '片头加片尾超过单集一半时长时不跳，防短剧误跳。',
+                  ),
+                  onChanged: !enabled
+                      ? null
+                      : (value) => saveUserChange(
+                          context,
+                          () => store.setIntroOutroSkipEnabled(value),
+                        ),
+                ),
+                SwitchListTile(
                   key: const ValueKey('season-autoplay-switch'),
                   value: store.hongguoSeasonAutoplay,
                   title: const Text('跨季自动连播'),

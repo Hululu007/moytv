@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import 'package:moyi/models.dart';
 import 'package:moyi/episode_browser.dart';
+import 'package:moyi/intro_outro_editor.dart';
+import 'package:moyi/intro_outro_skip.dart';
 import 'package:moyi/playback_preferences.dart';
 import 'package:moyi/picture_quality_ui.dart';
 import 'package:moyi/video_enhancement.dart';
@@ -32,6 +34,9 @@ class PlayerMenu extends StatefulWidget {
     this.preloadStatus = '',
     this.enhancement,
     this.onCompareEnhancement,
+    this.introOutro,
+    this.introOutroEnabled = true,
+    this.onIntroOutroChanged,
   });
 
   final PlayerMenuSection section;
@@ -49,6 +54,11 @@ class PlayerMenu extends StatefulWidget {
   final String preloadStatus;
   final VideoEnhancementController? enhancement;
   final VoidCallback? onCompareEnhancement;
+
+  /// 当前剧的片头/片尾分段（第 7 点）；为空时菜单不显示编辑区。
+  final IntroOutroSettings? introOutro;
+  final bool introOutroEnabled;
+  final Future<void> Function(IntroOutroSettings)? onIntroOutroChanged;
   final ValueChanged<int> onEpisode;
   final Future<void> Function(PlaybackPreferences) onPreferences;
   final Future<void> Function() onFavorite;
@@ -308,6 +318,16 @@ class _PlayerMenuState extends State<PlayerMenu> {
                   ),
           ),
           const SizedBox(height: 8),
+          if (widget.introOutro != null &&
+              widget.onIntroOutroChanged != null) ...[
+            IntroOutroEditor(
+              key: const ValueKey('player-intro-outro'),
+              value: widget.introOutro!,
+              enabled: widget.introOutroEnabled,
+              onChanged: (next) => _run(() => widget.onIntroOutroChanged!(next)),
+            ),
+            const SizedBox(height: 8),
+          ],
           OutlinedButton.icon(
             key: const ValueKey('player-favorite'),
             onPressed: _busy ? null : () => _run(widget.onFavorite),

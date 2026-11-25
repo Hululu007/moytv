@@ -32,6 +32,7 @@ import 'episode_frame_cache.dart';
 import 'episode_preview_card.dart';
 import 'exo_subtitle.dart';
 import 'follow_state.dart';
+import 'intro_outro_skip.dart';
 import 'local_store.dart';
 import 'live_subtitle_audio.dart';
 import 'live_subtitle_engine.dart';
@@ -192,6 +193,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   final Set<String> _frameCaptureAttempted = {};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final _recovery = PlaybackRecovery();
+  final IntroOutroSkipEngine _skipEngine = IntroOutroSkipEngine();
   String? _savedProgressKey;
   final _health = PlaybackHealth();
   late final NetworkSpeedTracker _speedTracker;
@@ -620,6 +622,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         _syncDanmaku();
         _syncPreload();
+        _maybeSkipOutro();
         _maybeCaptureEpisodeFrame(position);
         _claimOrReportExternalAudio();
         if (_updateLiveSubtitleLines(position)) setState(() {});
@@ -682,6 +685,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _healthTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _maybeNotifyPlaybackStarted();
+      _maybeSkipOutro();
       unawaited(_speedTracker.tick());
       if (!_closed &&
           _acceptErrors &&
@@ -1614,6 +1618,49 @@ class _PlayerScreenState extends State<PlayerScreen>
     return true;
   }
 
+  /// 跳过片头片尾（第 7 点，与西瓜播放器共用 intro_outro_skip 判定）：
+  /// 本剧的分段设置。
+  IntroOutroSettings get _introOutroSettings => widget.store.introOutroFor(
+    widget.detail.drama.source,
+    widget.detail.drama.id,
+  );
+
+  /// 起播位置过一遍片头判定：从头播或进度落在片头段内时挪到片头
+  /// 结束处；进度已越过片头时原样返回，续播位置不被冲掉。
+  double _applyIntroSkip(double position) {
+    final decision = decideIntroSkip(
+      enabled: widget.store.introOutroSkipEnabled,
+      settings: _introOutroSettings,
+      resumePositionSeconds: position,
+    );
+    return decision.targetSeconds ?? position;
+  }
+
+  /// 片尾判定（1 秒健康定时器与 media_kit 位置流共用）：进入片尾段
+  /// 且有下一集时切下一集，每集只触发一次（引擎记已触发集）。
+  void _maybeSkipOutro() {
+    if (_closed ||
+        _loading ||
+        _error != null ||
+        _openedIndex != _index ||
+        _panelOpen ||
+        !_playIntent) {
+      return;
+    }
+    final fired = _skipEngine.consumeOutro(
+      episodeKey: '${widget.detail.drama.id}:$_index',
+      enabled: widget.store.introOutroSkipEnabled,
+      settings: _introOutroSettings,
+      positionSeconds: _enginePosition.inMilliseconds / 1000,
+      durationSeconds: _engineDuration.inMilliseconds / 1000,
+      hasNextEpisode: _index + 1 < widget.detail.episodes.length,
+    );
+    if (!fired) return;
+    _audioMode
+        ? _playAudio(_index + 1)
+        : unawaited(_play(_index + 1, showControlsOnReady: false));
+  }
+
   Future<void> _play(
     int index, {
     double position = 0,
@@ -1630,6 +1677,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         index >= widget.detail.episodes.length) {
       return;
     }
+    position = _applyIntroSkip(position);
     _sniffEmbedded = false;
     final baseEpisode = widget.detail.episodes[index];
     if (!_audioMode && _isAudioEpisode(baseEpisode)) {
@@ -2703,6 +2751,13 @@ class _PlayerScreenState extends State<PlayerScreen>
               },
               onFavorite: () =>
                   widget.store.toggleFavorite(widget.detail.drama),
+              introOutro: _introOutroSettings,
+              introOutroEnabled: widget.store.introOutroSkipEnabled,
+              onIntroOutroChanged: (next) => widget.store.setIntroOutroFor(
+                widget.detail.drama.source,
+                widget.detail.drama.id,
+                next,
+              ),
             ),
           ),
         ),

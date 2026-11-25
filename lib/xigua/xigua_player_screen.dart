@@ -27,6 +27,7 @@ import 'package:moyi/danmaku_overlay.dart';
 import 'package:moyi/follow_state.dart';
 import 'package:moyi/glass_panel.dart';
 import 'package:moyi/jar_bridge.dart';
+import 'package:moyi/intro_outro_skip.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/ijk_video_pane.dart';
 import 'package:moyi/models.dart';
@@ -187,6 +188,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
   String? _saveWarning;
   PlaybackPlan? _plan;
   NonVideoContent? _nonVideo;
+  final IntroOutroSkipEngine _skipEngine = IntroOutroSkipEngine();
 
   /// 开始播放回调已通知过的（集序号|取流地址）：同一集同一地址只
   /// 通知一次；换集/换线重播时地址变了再通知一次。
@@ -546,6 +548,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     );
     _healthTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _maybeNotifyPlaybackStarted();
+      _maybeSkipOutro();
       unawaited(_speedTracker.tick());
       if (!_closed &&
           _acceptErrors &&
@@ -1368,6 +1371,44 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
     return next;
   }
 
+  /// 跳过片头片尾（第 7 点，与主播放器共用 intro_outro_skip 判定）。
+  IntroOutroSettings get _introOutroSettings => widget.store.introOutroFor(
+    widget.detail.drama.source,
+    widget.detail.drama.id,
+  );
+
+  double _applyIntroSkip(double position) {
+    final decision = decideIntroSkip(
+      enabled: widget.store.introOutroSkipEnabled,
+      settings: _introOutroSettings,
+      resumePositionSeconds: position,
+    );
+    return decision.targetSeconds ?? position;
+  }
+
+  /// 片尾判定（1 秒健康定时器调用）：进入片尾段且有下一集时切
+  /// 下一集，每集只触发一次（引擎记已触发集）。
+  void _maybeSkipOutro() {
+    if (_closed ||
+        _loading ||
+        _error != null ||
+        _openedIndex != _index ||
+        _panelOpen ||
+        !_playIntent) {
+      return;
+    }
+    final fired = _skipEngine.consumeOutro(
+      episodeKey: '${widget.detail.drama.id}:$_index',
+      enabled: widget.store.introOutroSkipEnabled,
+      settings: _introOutroSettings,
+      positionSeconds: _enginePosition.inMilliseconds / 1000,
+      durationSeconds: _engineDuration.inMilliseconds / 1000,
+      hasNextEpisode: _index + 1 < widget.detail.episodes.length,
+    );
+    if (!fired) return;
+    unawaited(_play(_index + 1, showControlsOnReady: false));
+  }
+
   Future<void> _play(
     int index, {
     double position = 0,
@@ -1383,6 +1424,7 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
         index >= widget.detail.episodes.length) {
       return;
     }
+    position = _applyIntroSkip(position);
     final earlyNonVideo = nonVideoFromEpisode(widget.detail.episodes[index]);
     if (earlyNonVideo != null) {
       _preloader.clear();
@@ -1955,6 +1997,13 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
               },
               onFavorite: () =>
                   widget.store.toggleFavorite(widget.detail.drama),
+              introOutro: _introOutroSettings,
+              introOutroEnabled: widget.store.introOutroSkipEnabled,
+              onIntroOutroChanged: (next) => widget.store.setIntroOutroFor(
+                widget.detail.drama.source,
+                widget.detail.drama.id,
+                next,
+              ),
             ),
           ),
         ),
