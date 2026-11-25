@@ -369,6 +369,51 @@
       "adult": true,
       "description": "69短剧（69dj16.vip，兜底 69dj05.vip，入口跳转链动态下发域名）。23 个分类，播放页 player_aaaa 直取 m3u8 播放。由内置 py 蜘蛛改写。",
       "manifest": "dj69/dj69.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.djwo",
+      "name": "短剧窝",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "短剧窝（langwonqyl.forum）。分类由首页动态解析（约 67 个，旗标过滤后），播放页 var playUrl 直取 m3u8。由内置 py 蜘蛛改写。",
+      "manifest": "djwo/djwo.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.dj91",
+      "name": "91短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "91短剧（app.91dju.cyou）。动态分类 3 个（接口批量分类经原 py 旗标过滤后），播放为 m3u8 直链、非直链走 /parse_video 现取。由内置 py 蜘蛛改写。",
+      "manifest": "dj91/dj91.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aihi",
+      "name": "AIHI",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AIHI（aihi.cc）。4 个分类与原蜘蛛 1:1 对应，播放走站内 huangguo.php 接口现取 m3u8 直链（AES-128 加密 HLS）。由内置 py 蜘蛛改写。",
+      "manifest": "aihi/aihi.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aipornx",
+      "name": "AiPorn",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AiPorn（aipornx.cc）。7 个分类与原 py 1:1，HTML 抓取列表/详情，播放走 huangguo.php 接口取 HLS 直链或站内媒体代理。由内置 py 蜘蛛改写。",
+      "manifest": "aipornx/aipornx.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ficeforand",
+      "name": "AI小视频·ficeforand",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AI小视频·ficeforand（ficeforand.aicjjc.cc）。4 个分类与站点导航 1:1，HTML 解析列表/详情，播放页经黄果接口换 HLS 代理地址播放。由内置 py 蜘蛛改写。",
+      "manifest": "ficeforand/ficeforand.idjplugin"
     }
   ],
   "cms": []
