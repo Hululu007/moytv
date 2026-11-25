@@ -1489,6 +1489,74 @@ class CatalogPage {
   );
 }
 
+
+/// 播放 DRM 信息（源侧随播放结果带回，字段口径与 FongMi 系
+/// `drm:{key,type,header,forceKey}` 对齐）：
+/// - [type]：许可证体系，如 com.widevine.alpha / org.w3.clearkey /
+///   com.microsoft.playready（也认 widevine / clearkey 短名）。
+/// - [key]：type 为服务器型时是许可证服务器地址（可带 `|头=值&...`
+///   后缀形式的请求头，由归一化层拆开）；ClearKey 本地键时是
+///   十六进制 `kid:key` 对或现成的 JWK JSON，归一化在
+///   tvbox_player_bridge / live_drm 里完成，这里只存原样。
+/// - [headers]：许可证请求头。
+/// 只有 EXO 核（Media3）能消费这组信息；带 drm 的计划在播放器
+/// 路由时强制走 EXO（见 player_screen 的 useNativeForPlan）。
+class PlaybackDrm {
+  const PlaybackDrm({
+    required this.type,
+    required this.key,
+    this.headers = const {},
+    this.forceKey = false,
+  });
+
+  final String type;
+  final String key;
+  final Map<String, String> headers;
+  final bool forceKey;
+
+  bool get isValid => type.isNotEmpty && key.isNotEmpty;
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'key': key,
+    'headers': headers,
+    'forceKey': forceKey,
+  };
+
+  /// 容忍两种形态：本站 toJson 的 {type,key,headers,forceKey} 与
+  /// FongMi 系的 {key,type,header,forceKey}（header 可为 Map 或
+  /// JSON 字符串）。字段不全返回 null，不硬造。
+  static PlaybackDrm? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final map = value.map((k, v) => MapEntry(k.toString(), v));
+    final type = (map['type'] ?? '').toString().trim();
+    final key = (map['key'] ?? '').toString().trim();
+    if (type.isEmpty || key.isEmpty) return null;
+    final headers = <String, String>{};
+    void absorb(Object? raw) {
+      if (raw is Map) {
+        raw.forEach((k, v) {
+          if (v != null) headers[k.toString()] = v.toString();
+        });
+      } else if (raw is String && raw.trim().startsWith('{')) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map) absorb(decoded);
+        } catch (_) {}
+      }
+    }
+
+    absorb(map['headers']);
+    absorb(map['header']);
+    return PlaybackDrm(
+      type: type,
+      key: key,
+      headers: headers,
+      forceKey: map['forceKey'] == true,
+    );
+  }
+}
+
 class PlaybackPlan {
   const PlaybackPlan({
     required this.url,
@@ -1506,6 +1574,7 @@ class PlaybackPlan {
     this.local = false,
     this.needsParse = false,
     this.forceMpv = false,
+    this.drm,
   });
   final String url;
   final String originalUrl;
@@ -1526,6 +1595,12 @@ class PlaybackPlan {
   /// mpv 能播，原生/ijk 播不了；引擎在取流时置真，播放器路由时
   /// 认它（与 decryptionKey 的强制 mpv 语义一致）。复制方法必须透传。
   final bool forceMpv;
+
+  /// DRM 信息；null 表示明流。带值时只有 EXO 核能播，
+  /// 路由层据此强制走 EXO（decryptionKey 的强制 mpv 与此互斥，
+  /// 两者同时出现时 decryptionKey 优先，保持既有口径）。
+  final PlaybackDrm? drm;
+  bool get hasDrm => drm?.isValid ?? false;
   bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
 
   PlaybackPlan withDanmaku(String sessionValue, String danmakuIdValue) =>
@@ -1545,6 +1620,7 @@ class PlaybackPlan {
         local: local,
         needsParse: needsParse,
         forceMpv: forceMpv,
+        drm: drm,
       );
 
   PlaybackPlan withUrl(String value) => PlaybackPlan(
@@ -1563,6 +1639,7 @@ class PlaybackPlan {
     local: local,
     needsParse: needsParse,
     forceMpv: forceMpv,
+        drm: drm,
   );
 
   PlaybackPlan withHeaders(Map<String, String> value) => PlaybackPlan(
@@ -1581,6 +1658,7 @@ class PlaybackPlan {
     local: local,
     needsParse: needsParse,
     forceMpv: forceMpv,
+        drm: drm,
   );
 
   PlaybackPlan withNeedsParse(bool value) => PlaybackPlan(
@@ -1599,6 +1677,7 @@ class PlaybackPlan {
     local: local,
     needsParse: value,
     forceMpv: forceMpv,
+        drm: drm,
   );
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',
@@ -1620,6 +1699,7 @@ class PlaybackPlan {
         ? intValue(json['routeCount'])
         : 1,
     needsParse: json['parse'] == true || json['needsParse'] == true,
+    drm: PlaybackDrm.fromJson(json['drm']),
   );
 }
 

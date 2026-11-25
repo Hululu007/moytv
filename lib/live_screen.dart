@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'app_layout.dart';
 import 'app_notice.dart';
 import 'core_bridge.dart';
+import 'live_catchup.dart';
+import 'live_epg.dart';
 import 'live_models.dart';
 import 'live_playback.dart';
 import 'live_player_screen.dart';
@@ -13,8 +17,12 @@ import 'live_repository.dart';
 import 'live_sources.dart';
 import 'live_store.dart';
 import 'local_store.dart';
+import 'm3u_subscriptions.dart';
+import 'models.dart';
 import 'network_speed.dart';
+import 'playback_preferences.dart';
 import 'player_route.dart';
+import 'tvbox_video_pane.dart';
 import 'remote_widgets.dart';
 import 'source_picker_sheet.dart';
 import 'widgets.dart';
@@ -40,13 +48,9 @@ const _videoOverlayStyle = TextStyle(
   shadows: [Shadow(color: Color(0xCC000000), blurRadius: 4)],
 );
 
-/// 截图版式配色：绿灰底 + 选中黄字，与用户截图逐项对应。
-/// 直播页是固定“电视机”观感，不跟随 App 主题换色。
-const _livePanelTop = Color(0xFF7C8C80);
-const _livePanelBottom = Color(0xFF66796D);
-const _liveCardBg = Color(0xFF5A6E62);
-const _liveCellBg = Color(0xFF5E7166);
-const _liveCellSelectedBg = Color(0xFF4B5D54);
+/// 选中态文字色：用户定的“选中变黄”口径保留这一项；其余配色
+/// （面板、卡、格、未选中文字）全部跟随应用主题——改版时写死的
+/// 灰绿整页一色已按用户口径删除恢复。
 const _liveSelectedText = Color(0xFFFFDF00);
 
 class LiveScreen extends StatefulWidget {
@@ -153,6 +157,19 @@ class _LiveScreenState extends State<LiveScreen> {
   /// 直播中每次换台都会重记记忆（当前频道），按钮不能跟它走，
   /// 否则永远等于正在播的频道、永不出现。
   LiveLastWatched? _entryResume;
+
+  /// 「+」导入进行中：防重复点（选文件/拉远程都是慢操作）。
+  bool _importing = false;
+
+  /// 当前源的节目单（源带 epg 地址时才拉）：拉到后信息行改用
+  /// 真节目名显示正在播/即将播；拉不到或源没给地址就保持 null，
+  /// 信息行走原来的频道名口径，绝不编节目名。
+  LiveEpgGuide? _epgGuide;
+  String _epgUrl = '';
+
+  /// 节目单到手后每分钟重算一次正在播/即将播（节目到点切换时
+  /// 信息行要跟上）；没有节目单时不启这个计时器。
+  Timer? _epgTick;
   final _groupTileKeys = <String, GlobalKey>{};
   late final LivePlaybackController _playback;
   final _listKey = GlobalKey<RemoteListState>();
@@ -203,6 +220,7 @@ class _LiveScreenState extends State<LiveScreen> {
 
   @override
   void dispose() {
+    _epgTick?.cancel();
     _cancelRetryDelay();
     _rememberChannelOffset();
     _flushVodPosition();
@@ -469,12 +487,43 @@ class _LiveScreenState extends State<LiveScreen> {
     }
   }
 
+  /// 当前源带节目单地址时把节目单跟上：切源/进直播都走
+  /// _loadPlatforms，在这里按地址比对——地址没变不重拉，
+  /// 变了就换一份；源没给地址就清掉旧节目单，信息行回落
+  /// 原来的频道名口径。
+  void _syncEpgForSource(LiveSource source) {
+    final url = source.epg.trim();
+    if (url == _epgUrl) return;
+    _epgUrl = url;
+    _epgGuide = null;
+    _epgTick?.cancel();
+    _epgTick = null;
+    if (url.isEmpty) return;
+    unawaited(_loadEpg());
+  }
+
+  Future<void> _loadEpg({bool force = false}) async {
+    final url = _epgUrl;
+    if (url.isEmpty) return;
+    try {
+      final guide = await LiveEpgService.instance.load(url, force: force);
+      if (!mounted || url != _epgUrl) return;
+      setState(() => _epgGuide = guide);
+      _epgTick ??= Timer.periodic(const Duration(minutes: 1), (_) {
+        if (mounted && _epgGuide != null) setState(() {});
+      });
+    } catch (_) {
+      // 节目单是增强项：拉不到就不显示节目名，不打扰用户。
+    }
+  }
+
   Future<void> _loadPlatforms({
     bool force = false,
     String keepGroup = '',
   }) async {
     final source = _source;
     if (source == null) return;
+    _syncEpgForSource(source);
     final token = ++_generation;
     widget.repository.cancel();
     setState(() {
@@ -670,14 +719,51 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   /// 手动刷新：强制重新抓取直播分类与当前分类的频道列表，
-  /// 不读 LiveRepository 的会话内缓存。
+  /// 不读 LiveRepository 的会话内缓存。当前源是远程 m3u 订阅
+  /// 时先重新拉取订阅本身（与导入中心的刷新同款），再重读
+  /// 本地副本；拉取失败会提示并继续用本地副本刷新。
   Future<void> _refreshLive() async {
     if (_loading) return;
     if (_group == _favouritesId) {
       setState(() => _channels = widget.store.favourites);
       return;
     }
+    await _refreshImportedRemote();
+    if (_epgUrl.isNotEmpty) unawaited(_loadEpg(force: true));
     await _loadPlatforms(force: true, keepGroup: _group);
+  }
+
+  /// 远程 m3u 订阅的手动刷新：按原地址重拉、重解析、写回本地
+  /// 副本与订阅记录。不是远程订阅（本地文件/内置源）直接跳过。
+  Future<void> _refreshImportedRemote() async {
+    final store = widget.appStore;
+    final source = _source;
+    if (store == null || source == null || !source.id.startsWith('m3u:')) {
+      return;
+    }
+    final sub = store.m3uSubscriptions
+        .where((item) => item.sourceId == source.id)
+        .firstOrNull;
+    if (sub == null || !sub.isUrl) return;
+    try {
+      final text = await M3uSubscriptionService.fetchText(sub.url);
+      final updated = await M3uSubscriptionService.build(
+        name: sub.name,
+        kind: sub.kind,
+        text: text,
+        rawBytes: utf8.encode(text),
+        url: sub.url,
+        existing: sub.id,
+      );
+      await store.syncM3uSubscriptions([
+        for (final item in store.m3uSubscriptions)
+          if (item.id == sub.id) updated else item,
+      ]);
+    } catch (error) {
+      if (mounted) {
+        AppNotice.show(context, '远程订阅刷新失败，先用本地副本：$error');
+      }
+    }
   }
 
   void _changeSource(LiveSource source, {bool cancelResume = true}) {
@@ -862,6 +948,18 @@ class _LiveScreenState extends State<LiveScreen> {
                         ? Text(channel.subtitle)
                         : null,
                   ),
+                if (channel != null &&
+                    _epgGuide != null &&
+                    _epgGuide!.programmesFor(channel).isNotEmpty)
+                  ListTile(
+                    key: const ValueKey('live-info-epg'),
+                    leading: const Icon(Icons.event_note_rounded),
+                    title: const Text('节目单'),
+                    subtitle: channel.catchup != null
+                        ? const Text('过去的节目可点回看')
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop('epg'),
+                  ),
                 if (size != null)
                   ListTile(
                     leading: const Icon(Icons.high_quality_rounded),
@@ -926,74 +1024,136 @@ class _LiveScreenState extends State<LiveScreen> {
       case 'favourite':
         final current = _playback.channel;
         if (current != null) widget.store.toggleFavourite(current);
+      case 'epg':
+        final current = _playback.channel;
+        if (current != null) await _showProgrammeSheet(current);
       case 'sleep':
         await _openSleepTimer();
     }
   }
 
-  /// 播放设置单：解码模式（点一下换下一个）、恢复默认、睡眠定时。
-  /// 原来视频区底部条里的睡眠定时与已删功能键排的解码/默认入口都在这里。
-  Future<void> _showPlaybackSettings() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: StatefulBuilder(
-            builder: (sheetContext, setSheetState) {
-              return SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListTile(
-                      key: const ValueKey('live-settings-decoder'),
-                      leading: const Icon(Icons.memory_rounded),
-                      title: const Text('解码模式'),
-                      subtitle: Text(
-                        '当前：${_playback.decoderMode.label}，点一下换下一个',
-                      ),
-                      trailing: Text(_playback.decoderMode.label),
-                      onTap: () async {
-                        await _playback.setDecoderMode(
-                          _playback.decoderMode.next,
-                        );
-                        setSheetState(() {});
-                      },
-                    ),
-                    ListTile(
-                      key: const ValueKey('live-settings-reset'),
-                      leading: const Icon(Icons.restart_alt_rounded),
-                      title: const Text('恢复默认'),
-                      subtitle: const Text('线路回到第 1 条、解码回到自动'),
-                      onTap: () => Navigator.of(sheetContext).pop('reset'),
-                    ),
-                    ListTile(
-                      key: const ValueKey('live-settings-sleep'),
-                      leading: const Icon(Icons.bedtime_outlined),
-                      title: Text(
-                        _playback.sleepTimer.active
-                            ? '睡眠定时 · ${_playback.sleepTimer.label}'
-                            : '睡眠定时',
-                      ),
-                      onTap: () => Navigator.of(sheetContext).pop('sleep'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
+  static String _epgClock(DateTime time) =>
+      '${time.hour.toString().padLeft(2, '0')}:'
+      '${time.minute.toString().padLeft(2, '0')}';
+
+  /// 节目单弹层：当前频道今天的节目（按时间正序，打开时滚到
+  /// 正在播的那条）。正在播的标「正在播」；已播完的在频道带
+  /// 回看模板时可点，点完按模板生成回看地址起播；没回看模板
+  /// 时只看单子，不给假入口。
+  Future<void> _showProgrammeSheet(LiveChannel channel) async {
+    final guide = _epgGuide;
+    if (guide == null) return;
+    final all = guide.programmesFor(channel);
+    if (all.isEmpty) return;
+    final now = DateTime.now();
+    // 只列今天这一天的节目：结束晚于今天零点、开始早于明天
+    // 零点（跨零点的节目按这个口径不会被漏掉）；节目单文件
+    // 常含多天，全列出来太长。一条都不剩时回落全表。
+    final dayStart = DateTime(now.year, now.month, now.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final todays = [
+      for (final item in all)
+        if (item.end.isAfter(dayStart) && item.start.isBefore(dayEnd)) item,
+    ];
+    final list = todays.isEmpty ? all : todays;
+    final currentIndex = list.indexWhere((item) => item.contains(now));
+    final scroll = ScrollController(
+      initialScrollOffset: currentIndex > 0 ? currentIndex * 56.0 : 0,
     );
-    if (!mounted) return;
-    switch (action) {
-      case 'reset':
-        final changed = await _playback.resetDefaults();
-        if (mounted) {
-          AppNotice.show(context, changed ? '已恢复默认设置' : '已经是默认设置');
-        }
-      case 'sleep':
-        await _openSleepTimer();
+    final picked = await showModalBottomSheet<LiveEpgProgramme>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Text(
+                  '${channel.name} · 节目单',
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  key: const ValueKey('live-epg-list'),
+                  controller: scroll,
+                  itemCount: list.length,
+                  itemBuilder: (itemContext, index) {
+                    final item = list[index];
+                    final playing = item.contains(now);
+                    final past = item.end.isBefore(now) || item.end == now;
+                    final canCatchup = past && channel.catchup != null;
+                    return ListTile(
+                      key: ValueKey('live-epg-item-$index'),
+                      leading: Text(
+                        _epgClock(item.start),
+                        style: Theme.of(itemContext).textTheme.bodyMedium,
+                      ),
+                      title: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${_epgClock(item.start)}–${_epgClock(item.end)}',
+                      ),
+                      trailing: playing
+                          ? const Chip(label: Text('正在播'))
+                          : canCatchup
+                          ? const Icon(Icons.replay_rounded)
+                          : null,
+                      onTap: canCatchup
+                          ? () => Navigator.of(sheetContext).pop(item)
+                          : null,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    scroll.dispose();
+    if (picked == null || !mounted) return;
+    final catchup = channel.catchup;
+    if (catchup == null) return;
+    final url = formatLiveCatchupUrl(
+      catchup: catchup,
+      liveUrl: channel.url,
+      start: picked.start,
+      end: picked.end,
+    );
+    if (url == null) {
+      AppNotice.show(context, '这个节目生成不了回看地址');
+      return;
     }
+    _playCatchup(channel, picked, url);
+  }
+
+  /// 回看起播：播放列表里只把该频道这一条的地址换成回看地址
+  /// （key 不变，分组/选中态都跟着走），其余频道不动；用户
+  /// 再切分组/切源重拉列表后，该频道自然恢复直播地址。
+  void _playCatchup(
+    LiveChannel channel,
+    LiveEpgProgramme programme,
+    String url,
+  ) {
+    final source = _source;
+    if (source == null) return;
+    final base = _playback.channels.isNotEmpty
+        ? _playback.channels
+        : _channels;
+    final index = base.indexWhere((entry) => entry.key == channel.key);
+    if (index < 0) return;
+    final replaced = [
+      for (final entry in base)
+        if (entry.key == channel.key) entry.withUrls([url]) else entry,
+    ];
+    unawaited(_playback.load(source, replaced, index: index));
+    AppNotice.show(context, '回看：${programme.title}');
   }
 
   Future<void> _openSleepTimer() async {
@@ -1037,13 +1197,21 @@ class _LiveScreenState extends State<LiveScreen> {
       context,
       sectionName: '直播',
       currentId: _source?.id ?? '',
+      // 删除只走弹窗自带的 onDeleteSite 入口（长按删除），弹窗
+      // 样子与用法不动；可删的只有 m3u 订阅源（deletable 只给
+      // 它们），内置源与 TVBox 配置源都不给删除。
+      onDeleteSite: widget.appStore == null ? null : _deleteImportedSource,
       groups: [
         if (builtin.isNotEmpty)
           SourcePickerGroup(
             title: grouped ? '平台源' : '',
             entries: [
               for (final source in builtin)
-                SourcePickerEntry(id: source.id, name: source.name),
+                SourcePickerEntry(
+                  id: source.id,
+                  name: source.name,
+                  deletable: false,
+                ),
             ],
           ),
         if (imported.isNotEmpty)
@@ -1051,7 +1219,11 @@ class _LiveScreenState extends State<LiveScreen> {
             title: grouped ? '导入源' : '',
             entries: [
               for (final source in imported)
-                SourcePickerEntry(id: source.id, name: source.name),
+                SourcePickerEntry(
+                  id: source.id,
+                  name: source.name,
+                  deletable: source.id.startsWith('m3u:'),
+                ),
             ],
           ),
       ],
@@ -1064,31 +1236,303 @@ class _LiveScreenState extends State<LiveScreen> {
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
+    final Widget content;
     if (_source == null) {
-      return StatusPanel(
+      content = StatusPanel(
         key: const ValueKey('live-green-empty'),
         title: '暂无可用直播源',
         message: '当前没有可用的直播源。',
         icon: Icons.verified_user_outlined,
       );
+    } else {
+      content = Column(
+        children: [
+          Expanded(
+            flex: television ? _tvPlaybackShare : _playbackShare,
+            child: _video(context, television),
+          ),
+          Expanded(
+            flex: television ? _tvListShare : _listShare,
+            child: _panel(context, television),
+          ),
+        ],
+      );
     }
-    return Column(
-      children: [
-        Expanded(
-          flex: television ? _tvPlaybackShare : _playbackShare,
-          child: _video(context, television),
+    // 没有 LocalStore（测试注入缺省）时不挂导入钮，页面与原来一致。
+    if (widget.appStore == null) return content;
+    return Stack(
+      fit: StackFit.expand,
+      children: [content, _importButton(context)],
+    );
+  }
+
+  /// 左下角「+」导入钮：悬浮固定在页面左下角的独立层上——
+  /// 不在频道列表的布局里、不随列表上下滑动而动，滑动时纹丝
+  /// 不动；位置在列表区左下角，不挡信息行左槽的预览帧（那行
+  /// 在列表区顶部）。点开给两个入口：导入本地文件 / 添加远程
+  /// 链接（见 _showImportMenu）。
+  Widget _importButton(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Positioned(
+      left: 12,
+      bottom: 12,
+      child: Tooltip(
+        message: '导入直播源',
+        child: Material(
+          key: const ValueKey('live-import-add'),
+          color: colors.primary,
+          shape: const CircleBorder(),
+          elevation: 4,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: _importing
+                ? null
+                : () => unawaited(_showImportMenu()),
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Icon(Icons.add_rounded, color: colors.onPrimary),
+            ),
+          ),
         ),
-        Expanded(
-          flex: television ? _tvListShare : _listShare,
-          child: _panel(context, television),
+      ),
+    );
+  }
+
+  /// 「+」菜单：导入本地 m3u/txt 文件、添加远程直播链接。
+  /// 两条都走既有的 m3u 订阅机件（M3uSubscriptionService +
+  /// LocalStore.syncM3uSubscriptions），与导入中心同一套，
+  /// 不另起解析/存盘。
+  Future<void> _showImportMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('live-import-local'),
+              leading: const Icon(Icons.folder_open_rounded),
+              title: const Text('导入本地文件'),
+              subtitle: const Text('m3u / txt 直播列表'),
+              onTap: () => Navigator.of(sheetContext).pop('local'),
+            ),
+            ListTile(
+              key: const ValueKey('live-import-remote'),
+              leading: const Icon(Icons.link_rounded),
+              title: const Text('添加远程链接'),
+              subtitle: const Text('粘贴 http(s) 直播订阅地址'),
+              onTap: () => Navigator.of(sheetContext).pop('remote'),
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'local') {
+      await _importLocalFile();
+    } else if (action == 'remote') {
+      await _importRemoteLink();
+    }
+  }
+
+  /// 导入本地文件：选文件走与导入中心同款的 FilePicker 调用；
+  /// 源名用文件名（去掉扩展名），不另问名字。解析失败由
+  /// analyzeM3u 给明确原因（格式不对/没有可用频道），原样提示。
+  Future<void> _importLocalFile() async {
+    final store = widget.appStore;
+    if (store == null || _importing) return;
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: ['m3u', 'm3u8', 'txt'],
+    );
+    if (file == null || !mounted) return;
+    setState(() => _importing = true);
+    try {
+      final bytes = await file.readAsBytes();
+      final text = utf8.decode(bytes, allowMalformed: true);
+      final name = file.name.replaceAll(
+        RegExp(r'\.(m3u8?|txt)$', caseSensitive: false),
+        '',
+      );
+      final record = await M3uSubscriptionService.build(
+        name: name,
+        kind: M3uSubscription.kindFile,
+        text: text,
+        rawBytes: bytes,
+      );
+      await store.syncM3uSubscriptions([
+        ...store.m3uSubscriptions,
+        record,
+      ]);
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        '已导入「${record.name}」：${record.channelCount} 个频道，已切换到该源',
+      );
+      _switchToImported(record.sourceId);
+    } catch (error) {
+      if (mounted) AppNotice.show(context, '导入失败：$error');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  /// 添加远程链接：只收 http/https；拉回来解析，源名用文件头
+  /// #EXTM3U 的 name、没有就用链接主机名（m3uRemoteName）。
+  /// 拉不到与解析失败分别由 fetchText / analyzeM3u 给原因。
+  Future<void> _importRemoteLink() async {
+    final store = widget.appStore;
+    if (store == null || _importing) return;
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('添加远程直播链接'),
+        content: TextField(
+          key: const ValueKey('live-import-url-field'),
+          controller: controller,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            labelText: '直播订阅地址',
+            hintText: 'https://example.com/live.m3u',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('live-import-url-confirm'),
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('添加'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (url == null || !mounted) return;
+    if (url.isEmpty) {
+      AppNotice.show(context, '请填写订阅地址');
+      return;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      AppNotice.show(context, '订阅地址无效：只支持 http/https 链接');
+      return;
+    }
+    setState(() => _importing = true);
+    try {
+      final text = await M3uSubscriptionService.fetchText(url);
+      final record = await M3uSubscriptionService.build(
+        name: m3uRemoteName(text, url),
+        kind: M3uSubscription.kindUrl,
+        text: text,
+        rawBytes: utf8.encode(text),
+        url: url,
+      );
+      await store.syncM3uSubscriptions([
+        ...store.m3uSubscriptions,
+        record,
+      ]);
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        '已添加「${record.name}」：${record.channelCount} 个频道，已切换到该源',
+      );
+      _switchToImported(record.sourceId);
+    } catch (error) {
+      if (mounted) AppNotice.show(context, '添加失败：$error');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  /// 导入成功后自动切到新源并刷新频道列表（与「导入数据库
+  /// 自动刷新」同一口径）：新源已在可见列表里就直接切；
+  /// 切的正是当前源时强制重拉。
+  void _switchToImported(String sourceId) {
+    final target = LiveSource.visible(
+      widget.greenMode,
+    ).where((item) => item.id == sourceId).firstOrNull;
+    if (target == null) return;
+    if (target.id == _source?.id) {
+      unawaited(_loadPlatforms(force: true));
+    } else {
+      _changeSource(target);
+    }
+  }
+
+  /// 选源弹窗里删导入的 m3u 订阅：走弹窗自带的删除入口
+  /// （onDeleteSite，长按删除，弹窗的样子与用法没动），只对
+  /// m3u 订阅条目开放（条目 deletable 也只给它们）。确认文案
+  /// 与导入中心删订阅同款；删的正是当前源时，订阅表变化会
+  /// 触发 _appStoreChanged 把当前源切走，不用在这里处理。
+  Future<bool> _deleteImportedSource(SourcePickerEntry entry) async {
+    final store = widget.appStore;
+    if (store == null || !entry.id.startsWith('m3u:')) return false;
+    final sub = store.m3uSubscriptions
+        .where((item) => item.sourceId == entry.id)
+        .firstOrNull;
+    if (sub == null) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除直播订阅'),
+        content: Text('确定删除「${sub.name}」吗？其频道将从直播区移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await M3uFileStore.delete(sub.fileName);
+    await store.syncM3uSubscriptions([
+      for (final item in store.m3uSubscriptions)
+        if (item.id != sub.id) item,
+    ]);
+    return true;
+  }
+
+  /// 直播解码模式 → EXO 核的解码模式（只在 DRM 频道走 EXO 时用）。
+  TelevisionDecoder get _exoDecoderMode => switch (_playback.decoderMode) {
+    LiveDecoderMode.auto => TelevisionDecoder.optimized,
+    LiveDecoderMode.hardware => TelevisionDecoder.hardware,
+    LiveDecoderMode.software => TelevisionDecoder.software,
+  };
+
+  /// DRM 频道的主画面：EXO pane（点播侧同款接法，drm 随计划带上）。
+  /// pane 自带播放/暂停控制条，所以不再叠 mpv 那套点画面进全屏的
+  /// 手势层；全屏走信息单里的全屏入口（全屏页同样走 EXO）。
+  Widget _exoStage(BuildContext context, PlaybackPlan plan) {
+    return TvboxVideoPane(
+      key: const ValueKey('live-exo-pane'),
+      plan: plan,
+      startPosition: 0,
+      autoplay: true,
+      decoderMode: _exoDecoderMode,
+      handle: _playback.exoHandle,
+      onCompleted: _playback.reportExoCompleted,
+      onError: _playback.reportExoError,
     );
   }
 
   Widget _video(BuildContext context, bool television) {
     final controller = _playback.controller;
     final error = _playback.error;
+    final exoPlan = _playback.exoPlan;
     return ColoredBox(
       key: const ValueKey('live-stage'),
       color: Colors.black,
@@ -1097,6 +1541,8 @@ class _LiveScreenState extends State<LiveScreen> {
         children: [
           if (widget.videoBuilder != null)
             widget.videoBuilder!(_playback, false)
+          else if (exoPlan != null)
+            _exoStage(context, exoPlan)
           else if (controller != null)
             Video(
               controller: controller,
@@ -1111,7 +1557,9 @@ class _LiveScreenState extends State<LiveScreen> {
                 style: TextStyle(color: Color(0xFF8B8F99), fontSize: 12),
               ),
             ),
-          if (error == null)
+          // DRM/EXO 频道不叠这层手势：pane 自带控制条要吃点按，
+          // 全屏走信息单入口。普通频道（mpv）保持原手势不变。
+          if (error == null && exoPlan == null)
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -1168,7 +1616,7 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
-          // 手机端截图版式：中间播放键/转圈/速率 + 顶部频道名/分辨率/信息/设置。
+          // 手机端播放区：中间居中转圈/速率 + 顶部频道名/分辨率/信息。
           // 顶栏画在错误遮罩之上，断流时照样能点信息换源；中间层只在无错时显示。
           if (!television) ...[
             if (error == null) _videoCenterOverlay(context),
@@ -1179,12 +1627,16 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  /// 截图播放区顶栏：左频道名，右真实分辨率（拿不到就不显示）+
-  /// 信息 + 设置。顶栏本身不拦手势，只有两个按钮吃点按，其余位置
-  /// 仍落到下面的全屏手势层。
+  /// 截图播放区顶栏：左频道名，右真实分辨率 + 帧率（帧率拿到时
+  /// 拼在分辨率后面，拿不到就不显示那一段、绝不编数）+ 信息。
+  /// 设置齿轮已按用户口径撤掉：解码模式/睡眠定时/恢复默认三项
+  /// 挪进软件设置页「直播设置」节（见 live_settings.dart）。
+  /// 顶栏本身不拦手势，只有信息按钮吃点按，其余位置仍落
+  /// 到下面的全屏手势层。
   Widget _videoHeader(BuildContext context) {
     final channel = _playback.channel;
     final size = _playback.videoSize;
+    final fps = _playback.videoFps;
     return Positioned(
       top: 0,
       left: 0,
@@ -1207,7 +1659,8 @@ class _LiveScreenState extends State<LiveScreen> {
             ),
             if (size != null)
               Text(
-                '[ ${size.width.toInt()} x ${size.height.toInt()} ]',
+                '[ ${size.width.toInt()} x ${size.height.toInt()}'
+                '${fps != null ? ' · ${fps.round()} 帧/秒' : ''} ]',
                 key: const ValueKey('live-video-resolution'),
                 style: _videoOverlayStyle,
               ),
@@ -1222,53 +1675,31 @@ class _LiveScreenState extends State<LiveScreen> {
                 color: Colors.white,
               ),
             ),
-            IconButton(
-              key: const ValueKey('live-video-settings'),
-              visualDensity: VisualDensity.compact,
-              tooltip: '播放设置',
-              onPressed: _showPlaybackSettings,
-              icon: const Icon(
-                Icons.settings_outlined,
-                size: 22,
-                color: Colors.white,
-              ),
-            ),
           ],
         ),
       ),
     );
   }
 
-  /// 截图播放区中间层：缓冲时大三角 + 右上角小转圈 + 下方实时速率；
-  /// 已暂停时只留大三角，点它继续播（播放器自带的播放/暂停）；
-  /// 正在播时什么都不盖，不挡画面。
+  /// 播放区中间层（恢复改版前口径）：缓冲时只有正中心一个 34×34
+  /// 转圈 + 下方实时速率，没有大播放三角——改版时加的 72px 三角
+  /// 把转圈挤到右上角，用户实拍截图里两者不在同一中心。暂停态
+  /// 也不盖三角（改版前就没有），点画面本身切换播放/暂停。
   Widget _videoCenterOverlay(BuildContext context) {
     if (_playback.loading || _playback.buffering) {
       return Center(
+        key: const ValueKey('live-center-overlay'),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  Icons.play_arrow_rounded,
-                  size: 72,
-                  color: Colors.white,
-                ),
-                Positioned(
-                  right: -2,
-                  top: 2,
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-              ],
+            const SizedBox(
+              key: ValueKey('live-center-spinner'),
+              width: 34,
+              height: 34,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: Colors.white,
+              ),
             ),
             const SizedBox(height: 10),
             ValueListenableBuilder<String?>(
@@ -1288,22 +1719,7 @@ class _LiveScreenState extends State<LiveScreen> {
         ),
       );
     }
-    final channel = _playback.channel;
-    final player = _playback.player;
-    if (channel == null || player == null || player.state.playing) {
-      return const SizedBox.shrink();
-    }
-    return Center(
-      child: GestureDetector(
-        key: const ValueKey('live-video-play'),
-        onTap: () => unawaited(player.play()),
-        child: const Icon(
-          Icons.play_arrow_rounded,
-          size: 72,
-          color: Colors.white,
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   Widget _nowPlaying(BuildContext context) {
@@ -1473,103 +1889,92 @@ class _LiveScreenState extends State<LiveScreen> {
         ],
       );
     }
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_livePanelTop, _livePanelBottom],
-        ),
-      ),
-      child: Column(
-        children: [
-          _infoCards(context),
-          if (_resumeEntry != null) _resumeRow(context),
-          Expanded(child: _lists(context, television)),
-        ],
-      ),
+    // 配色恢复改版前口径：面板不铺自己的底色，透出页面背景跟随
+    // 应用主题。改版时写死的灰绿渐变（_livePanelTop/_livePanelBottom）
+    // 让整页下半部一个颜色，用户明确说没让改成一样的，已删。
+    return Column(
+      children: [
+        _infoCards(context),
+        if (_resumeEntry != null) _resumeRow(context),
+        Expanded(child: _lists(context, television)),
+      ],
     );
   }
 
-  /// 截图播放区下方的一行两卡：左卡大频道号 + 频道名，右卡
-  /// “正在播放 / 即将播放”。节目信息没有真实数据就照实写
-  /// “暂无节目信息”，绝不编节目单；有真实 subtitle（平台源的
-  /// 房间/主播名）时“正在播放”显示它。
+  /// 播放区下方一行：左槽实时预览帧，中卡“正在播放 /
+  /// 即将播放”，右端切源按钮卡（恢复改版前 _current 卡右端
+  /// 的直达按钮：key live-source-button、电视图标、点开 _pickSource；
+  /// 改版时手机端把它删了、切源只能绕 ⓘ 信息单）。
+  /// 比例按用户参考截图瘦身：整行固定 80 高（约一颗半频道胶囊），
+  /// 不再由内容撑高——此前大数字卡 + 两行文字 + 内边距把这行撑
+  /// 到近 20% 屏高，用户嫌又大又丑。左槽原是显示频道号数字的
+  /// 卡，用户改令整个换成预览帧（见 _infoPreviewSlot），频道号
+  /// 只作小角标叠在帧一角，不另占卡；节目卡两行小字紧排、中间
+  /// 细分隔线；切源钮随行高做成 56 宽的小方钮，不再是一根独立
+  /// 高柱。
+  /// 节目信息按用户口径接真数据：当前源带节目单（epg 地址）
+  /// 且节目单对得上当前频道时，“正在播放 / 即将播放”用节目单
+  /// 里的真节目名；没有节目单、或对不上台时回落原口径——
+  /// “正在播放”= 当前条目标题（subtitle 是另一份真实信息且
+  /// 与标题不同才拼在后面），“即将播放”= 频道列表里下一条的
+  /// 标题，列表到尾、没有下一条才写“暂无节目信息”。绝不编
+  /// 节目名。卡面与文字跟随应用主题（改版前口径）。
   Widget _infoCards(BuildContext context) {
+    final theme = Theme.of(context);
+    final cardColor = theme.colorScheme.surfaceContainerHighest;
+    final textColor = theme.colorScheme.onSurface;
     final channel = _playback.channel;
     final number = channel == null
         ? '--'
         : channel.number.isNotEmpty
         ? channel.number
         : '${_playback.index + 1}'.padLeft(3, '0');
-    final now = channel != null && channel.subtitle.isNotEmpty
-        ? channel.subtitle
+    final guide = _epgGuide;
+    final epgHit = guide != null && channel != null
+        ? guide.nowNext(channel, DateTime.now())
+        : null;
+    final epgMatched =
+        guide != null &&
+        channel != null &&
+        guide.programmesFor(channel).isNotEmpty;
+    final now = epgHit?.now != null
+        ? epgHit!.now!.title
+        : channel == null
+        ? '暂无节目信息'
+        : channel.subtitle.isNotEmpty && channel.subtitle != channel.name
+        ? '${channel.name} · ${channel.subtitle}'
+        : channel.name;
+    final channels = _playback.channels;
+    final nextIndex = _playback.index + 1;
+    final next = epgMatched
+        ? epgHit?.next?.title ?? '暂无节目信息'
+        : channel != null && nextIndex < channels.length
+        ? channels[nextIndex].name
         : '暂无节目信息';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-      // 两卡等高：Row 在竖向 Column 里高度无界，不能直接 stretch，
-      // 先由 IntrinsicHeight 按最高那张卡定高，再拉伸另一张。
-      child: IntrinsicHeight(
+      // 整行高度钉死 80（用户截图比例，约一颗半胶囊高）：不再由
+      // 内容定高，内容再多也只在这 80 里排，两卡直接 stretch 等高。
+      child: SizedBox(
+        height: 80,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
           Expanded(
-            flex: 25,
-            child: Material(
-              key: const ValueKey('live-number-card'),
-              color: _liveCardBg,
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      number,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.bold,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    // 左卡窄，频道名一行放不下会被截成“CCTV-1 …”，
-                    // 截图里是整名：等比缩小整名显示，不换行不截断。
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        channel?.name ?? '未选择频道',
-                        maxLines: 1,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            flex: 20,
+            child: _infoPreviewSlot(context, channel, number),
           ),
           const SizedBox(width: 8),
           Expanded(
-            flex: 70,
+            flex: 75,
             child: Material(
               key: const ValueKey('live-epg-card'),
-              color: _liveCardBg,
+              color: cardColor,
               borderRadius: BorderRadius.circular(12),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
+                  horizontal: 12,
+                  vertical: 8,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1577,27 +1982,141 @@ class _LiveScreenState extends State<LiveScreen> {
                   children: [
                     Text(
                       '正在播放：$now',
+                      key: const ValueKey('live-epg-now'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                      ),
+                      style: TextStyle(color: textColor, fontSize: 13),
                     ),
-                    const Divider(color: Colors.white24, height: 12),
-                    const Text(
-                      '即将播放：暂无节目信息',
+                    Divider(color: theme.dividerColor, height: 8),
+                    Text(
+                      '即将播放：$next',
+                      key: const ValueKey('live-epg-next'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.white, fontSize: 13),
+                      style: TextStyle(color: textColor, fontSize: 13),
                     ),
                   ],
                 ),
               ),
             ),
           ),
+          const SizedBox(width: 8),
+          // 切源钮：随瘦行做成 56 宽的小方钮（与行同高 80），
+          // 不再是 46 宽撑满整行高的独立高柱。
+          SizedBox(
+            width: 56,
+            child: Material(
+              key: const ValueKey('live-source-card'),
+              color: cardColor,
+              borderRadius: BorderRadius.circular(12),
+              child: IconButton(
+                key: const ValueKey('live-source-button'),
+                tooltip: '切换直播源',
+                onPressed: _pickSource,
+                icon: const Icon(Icons.tv_rounded),
+              ),
+            ),
+          ),
         ],
         ),
+      ),
+    );
+  }
+
+  /// 信息行左槽：实时预览帧（用户改令，原来显示频道号数字的卡
+  /// 整个换成它）。尺寸就是原数字卡的槽位（行高 80、flex 20 宽、
+  /// 圆角 12 与原卡一致），里面是与上方播放区同一个播放器的实时
+  /// 画面，完整显示不裁剪（contain）。频道号不另占卡，只以左上
+  /// 角小角标（半透明黑底白字）叠在帧上。没在播时显示占位：
+  /// 黑底 + 频道名小字（未选频道时写“未选择频道”）。
+  /// 画面仍只用真 Video——不用 widget.videoBuilder 那个测试
+  /// 接缝，它的契约是“主播放面有且只有一个”（全屏退出流程靠
+  /// 这个不变量）；没有真控制器时（测试环境）落占位，不造第二
+  /// 个假面。
+  Widget _infoPreviewSlot(
+    BuildContext context,
+    LiveChannel? channel,
+    String number,
+  ) {
+    // DRM 频道走 EXO、没有 mpv 纹理可镜像：小槽降级为不出预览帧，
+    // 只留下面的频道号角标（任务口径）。普通频道照旧镜像真画面。
+    final controller = _playback.usingExo ? null : _playback.controller;
+    return Container(
+      key: const ValueKey('live-info-preview'),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (controller != null)
+            Video(
+              controller: controller,
+              fit: BoxFit.contain,
+              wakelock: false,
+              controls: (_) => const SizedBox.shrink(),
+            )
+          else
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      '实时预览',
+                      style: TextStyle(color: Color(0xFF8B8F99), fontSize: 10),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      channel?.name ?? '未选择频道',
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF8B8F99),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (_playback.buffering)
+            const Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          if (channel != null)
+            Positioned(
+              left: 4,
+              top: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .55),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  number,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1776,9 +2295,11 @@ class _LiveScreenState extends State<LiveScreen> {
     return _grid(context, entries);
   }
 
-  /// 截图三列网格：左分组/收藏、中频道、右线路，三列同行对齐、
-  /// 同一个列表一起滚。选中项黄字、未选中白字；行数取三列中最长
-  /// 的一列，短的列空着。频道多时滑到底自动续载（与原来频道列一致）。
+  /// 三列区：左分组/收藏、中频道、右线路（同行对齐、同一个列表
+  /// 一起滚、占满全宽），全是同款胶囊格。选中项黄字（用户口径
+  /// 保留）、未选中跟主题正文色；行数取三列中最长的一列，短的
+  /// 列空着。没有右侧大预览区——预览收进正在播的那颗频道胶囊
+  /// 本身（见 _channelCell）。频道多时滑到底自动续载。
   Widget _grid(
     BuildContext context,
     List<({String id, String name, int count})> entries,
@@ -1807,13 +2328,16 @@ class _LiveScreenState extends State<LiveScreen> {
     final current = _playback.channel;
     final lineCount = current?.urls.length ?? 0;
     // 只有直连型源（面板/列表）支持同一频道内切线路；api 型源
-    // 的线路走仓库解析，切线重播没有意义，右列只作展示、不点。
+    // 的线路走仓库解析，切线重播没有意义，线路按钮只作展示、不点。
     final multiRoute =
         _source?.protocol == LiveProtocol.pingtai ||
         _source?.protocol == LiveProtocol.list;
     var rows = entries.length;
     if (_channels.length > rows) rows = _channels.length;
     if (lineCount > rows) rows = lineCount;
+    // 布局（用户口径）：分组/频道/线路三列同行对齐、一起滚、占满
+    // 全宽，全是同款胶囊格；行数取三列中最长的一列，短的列空着。
+    // 频道多时滑到底自动续载（与原来频道列一致）。
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.metrics.extentAfter < 600 &&
@@ -1840,13 +2364,16 @@ class _LiveScreenState extends State<LiveScreen> {
             padding: const EdgeInsets.symmetric(vertical: 3),
             child: Row(
               children: [
-                Expanded(flex: 25, child: _groupCell(entries, index)),
+                Expanded(
+                  flex: 25,
+                  child: _groupCell(context, entries, index),
+                ),
                 const SizedBox(width: 6),
-                Expanded(flex: 44, child: _channelCell(index)),
+                Expanded(flex: 44, child: _channelCell(context, index)),
                 const SizedBox(width: 6),
                 Expanded(
                   flex: 26,
-                  child: _lineCell(index, lineCount, multiRoute),
+                  child: _lineCell(context, index, lineCount, multiRoute),
                 ),
               ],
             ),
@@ -1856,30 +2383,68 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  Widget _gridCell({
+  /// 线路列格：与分组/频道同款胶囊（同高、同圆角、同选中口径），
+  /// 点按仍是同一播放器打开该线路真地址重播。只有直连型源可点；
+  /// api 型源的线路走仓库解析、切线重播没有意义，只作展示不挂
+  /// 点按（key 也不挂，与上一批预览区小按钮的口径一致）。
+  Widget _lineCell(
+    BuildContext context,
+    int index,
+    int lineCount,
+    bool multiRoute,
+  ) {
+    if (index >= lineCount) return const SizedBox(height: 48);
+    final selected = multiRoute && index == _playback.route;
+    final cell = _gridCell(
+      context,
+      selected: selected,
+      child: Text(
+        '线路${index + 1}',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: _gridCellText(context, selected),
+      ),
+    );
+    if (!multiRoute) return cell;
+    return InkWell(
+      key: ValueKey('live-line-$index'),
+      onTap: () => unawaited(_playback.playRoute(index)),
+      child: cell,
+    );
+  }
+
+  Widget _gridCell(
+    BuildContext context, {
     required bool selected,
     required Widget child,
   }) => Container(
     height: 48,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: selected ? _liveCellSelectedBg : _liveCellBg,
+      color: selected
+          ? Theme.of(context).colorScheme.primaryContainer
+          : Theme.of(context).colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(10),
     ),
     child: child,
   );
 
-  TextStyle _gridCellText(bool selected) => TextStyle(
+  TextStyle _gridCellText(BuildContext context, bool selected) => TextStyle(
     fontSize: 13,
     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-    color: selected ? _liveSelectedText : Colors.white,
+    color: selected
+        ? _liveSelectedText
+        : Theme.of(context).colorScheme.onSurface,
   );
 
   Widget _groupCell(
+    BuildContext context,
     List<({String id, String name, int count})> entries,
     int index,
   ) {
     if (index >= entries.length) return const SizedBox(height: 48);
+    final scheme = Theme.of(context).colorScheme;
     final entry = entries[index];
     final selected = entry.id == _group;
     return InkWell(
@@ -1890,7 +2455,9 @@ class _LiveScreenState extends State<LiveScreen> {
         height: 48,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: selected ? _liveCellSelectedBg : _liveCellBg,
+          color: selected
+              ? scheme.primaryContainer
+              : scheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Column(
@@ -1901,7 +2468,7 @@ class _LiveScreenState extends State<LiveScreen> {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: _gridCellText(selected),
+              style: _gridCellText(context, selected),
             ),
             // 分组频道数只显示源数据真实带有的 count，没有就不画。
             if (entry.count > 0)
@@ -1912,7 +2479,7 @@ class _LiveScreenState extends State<LiveScreen> {
                   fontSize: 10,
                   color: selected
                       ? _liveSelectedText.withValues(alpha: .85)
-                      : Colors.white70,
+                      : scheme.onSurfaceVariant,
                 ),
               ),
           ],
@@ -1921,7 +2488,7 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  Widget _channelCell(int index) {
+  Widget _channelCell(BuildContext context, int index) {
     if (index >= _channels.length) return const SizedBox(height: 48);
     final channel = _channels[index];
     final selected = channel.key == _playback.channel?.key;
@@ -1929,36 +2496,16 @@ class _LiveScreenState extends State<LiveScreen> {
       key: ValueKey('live-channel-${channel.key}'),
       onTap: () => _open(channel),
       child: _gridCell(
+        context,
         selected: selected,
         child: Text(
           channel.name,
           textAlign: TextAlign.center,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: _gridCellText(selected),
+          style: _gridCellText(context, selected),
         ),
       ),
-    );
-  }
-
-  Widget _lineCell(int index, int lineCount, bool multiRoute) {
-    if (index >= lineCount) return const SizedBox(height: 48);
-    final selected = multiRoute && index == _playback.route;
-    final cell = _gridCell(
-      selected: selected,
-      child: Text(
-        '线路${index + 1}',
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: _gridCellText(selected),
-      ),
-    );
-    if (!multiRoute) return cell;
-    return InkWell(
-      key: ValueKey('live-line-$index'),
-      onTap: () => unawaited(_playback.playRoute(index)),
-      child: cell,
     );
   }
 }

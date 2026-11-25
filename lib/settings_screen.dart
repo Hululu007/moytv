@@ -12,6 +12,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core_bridge.dart';
+import 'app_notice.dart';
 import 'app_update.dart';
 import 'dns_settings.dart';
 import 'dns_settings_screen.dart';
@@ -22,6 +23,8 @@ import 'app_icon_picker_page.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
 import 'custom_headers_screen.dart';
+import 'live_playback.dart';
+import 'live_settings.dart';
 import 'live_subtitle_settings_screen.dart';
 import 'jar_bridge.dart';
 import 'py_bridge.dart';
@@ -97,6 +100,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     ensureTelevisionFocus(context);
     _loadAppUpdateSummary();
     _loadCapsuleState();
+    unawaited(LiveSettingsStore.instance.ensureLoaded());
   }
 
   @override
@@ -190,6 +194,81 @@ class _SettingsScreenState extends State<SettingsScreen>
     }
   }
 
+  /// 直播解码模式：选项与原直播页齿轮单一致（自动/硬解/软解），
+  /// 写的是 LiveSettingsStore 那一份偏好，直播控制器订阅同一份，
+  /// 改完正在播的直播立刻切模式重播，不是只改个显示。
+  Future<void> _chooseLiveDecoderMode() async {
+    final current = LiveSettingsStore.instance.settings.decoderMode;
+    final selection = await showDialog<LiveDecoderMode>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('解码模式'),
+        children: [
+          RadioGroup<LiveDecoderMode>(
+            groupValue: current,
+            onChanged: (value) => Navigator.pop(context, value),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final mode in LiveDecoderMode.values)
+                  RadioListTile<LiveDecoderMode>(
+                    value: mode,
+                    autofocus: mode == current,
+                    title: Text(mode.label),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selection != null) {
+      await LiveSettingsStore.instance.setDecoderMode(selection);
+    }
+  }
+
+  /// 直播睡眠定时默认时长：选项与原齿轮单打开的时长单一致
+  /// （关闭/15/30/60/90 分钟）。存的是默认时长，进直播时控制器
+  /// 按它给睡眠计时器起算，到点照旧停播。
+  Future<void> _chooseLiveSleepMinutes() async {
+    final current = LiveSettingsStore.instance.settings.sleepMinutes;
+    final selection = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('睡眠定时'),
+        children: [
+          RadioGroup<int>(
+            groupValue: current,
+            onChanged: (value) => Navigator.pop(context, value),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final minutes in LiveSettings.sleepChoices)
+                  RadioListTile<int>(
+                    value: minutes,
+                    autofocus: minutes == current,
+                    title: Text(minutes <= 0 ? '关闭' : '$minutes 分钟'),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selection != null) {
+      await LiveSettingsStore.instance.setSleepMinutes(selection);
+    }
+  }
+
+  /// 直播恢复默认：解码回到自动、睡眠定时关闭；提示文案与原
+  /// 齿轮单的恢复默认一致。
+  Future<void> _resetLiveSettings() async {
+    final changed = await LiveSettingsStore.instance.resetDefaults();
+    if (mounted) {
+      AppNotice.show(context, changed ? '已恢复默认设置' : '已经是默认设置');
+    }
+  }
+
   void _openSavedDrama(Drama drama, {bool resume = false}) {
     if (vodOpenAction(
           isVodZone: isVodZoneSource(SourceSite.byId(drama.source)),
@@ -258,6 +337,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     animation: Listenable.merge([
       widget.store,
       NetworkConfigService.instance,
+      LiveSettingsStore.instance,
     ]),
     builder: (_, _) {
       final body = glassDesign(context) ? _glassBody() : _materialBody();
@@ -274,6 +354,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   List<_SettingsGroup> _settingGroups() {
     final store = widget.store;
     final admin = store.profile.admin;
+    final liveSettings = LiveSettingsStore.instance.settings;
     return [
       _SettingsGroup('播放与画面', [
         // 原片库设置页五项并入通用设置（2026-11-14）：播放设置、解析接口
@@ -341,6 +422,35 @@ class _SettingsScreenState extends State<SettingsScreen>
             switchValue: false,
             onSwitchChanged: (_) => _hideAdultOnce(),
           ),
+      ]),
+      // 直播三项原在直播页顶栏齿轮单里，已按用户口径挪进软件设置：
+      // 解码模式、睡眠定时（默认时长）、恢复默认，偏好走
+      // LiveSettingsStore，直播控制器订阅同一份、改完真实生效。
+      _SettingsGroup('直播设置', [
+        _SettingsItem(
+          keyName: 'live-decoder-entry',
+          icon: Icons.memory_rounded,
+          lucide: LucideIcons.cpu,
+          title: '解码模式',
+          detail: '当前：${liveSettings.decoderMode.label}',
+          onTap: _chooseLiveDecoderMode,
+        ),
+        _SettingsItem(
+          keyName: 'live-sleep-entry',
+          icon: Icons.bedtime_outlined,
+          lucide: LucideIcons.moon,
+          title: '睡眠定时',
+          detail: '当前：${liveSettings.sleepLabel} · 进直播后起算，到点停播',
+          onTap: _chooseLiveSleepMinutes,
+        ),
+        _SettingsItem(
+          keyName: 'live-reset-entry',
+          icon: Icons.restart_alt_rounded,
+          lucide: LucideIcons.rotateCcw,
+          title: '恢复默认',
+          detail: '解码回到自动、睡眠定时关闭',
+          onTap: _resetLiveSettings,
+        ),
       ]),
       _SettingsGroup('外观与界面', [
         _SettingsItem(

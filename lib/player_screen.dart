@@ -1841,8 +1841,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (!continueChain) {
           _backendManager = null;
         }
+        // 带 DRM 的计划只有 EXO 核能解：与 decryptionKey 强制 mpv
+        // 对称，这里强制走原生（tvbox/EXO）后端；decryptionKey
+        // 非空时仍按既有口径回 mpv，两者互斥、后者优先。
         final useNativeForPlan =
-            (_useTvbox || _useExoCore) &&
+            ((_useTvbox || _useExoCore) || plan.hasDrm) &&
             plan.decryptionKey.isEmpty &&
             !plan.forceMpv;
         final useIjkForPlan =

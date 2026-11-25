@@ -429,7 +429,16 @@ class LiveRepository {
   Future<WhosLocalLibrary> _whosLib() async {
     final library = WhosLocalLibrary.shared;
     if (!await library.ensureLoaded()) {
-      throw AppFailure('内置片库没读出来，退出直播重进一次看看');
+      // 透出底层真实原因（如“还没有导入数据库：请在设置里导入
+      // .sql 数据库”）。旧文案“没读出来，退出直播重进一次看看”
+      // 是误导：库没导入时重进多少次都读不出来，何况失败曾被
+      // ensureLoaded 缓存一整个进程，重进直播页根本不会重试。
+      final note = library.loadFailureNote;
+      throw AppFailure(
+        note != null && note.isNotEmpty
+            ? note
+            : '片库没有数据：请先在设置里导入 .sql 数据库',
+      );
     }
     return library;
   }

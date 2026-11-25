@@ -158,6 +158,17 @@ class WhosLocalLibrary {
   Map<String, WhosLocalWork>? _byCode;
   Future<bool>? _loading;
 
+  /// 最近一次加载失败的真实原因（打开库时底层给出的原话，如
+  /// “还没有导入数据库：请在设置里导入 .sql 数据库”）。上层报错
+  /// 直接透出它，不再拿一句笼统的“没读出来”盖住真原因。
+  String? _loadFailureNote;
+
+  String? get loadFailureNote => _loadFailureNote;
+
+  /// 测试注入点：非空时 _load 用它代替真实读库（真库在测试环境
+  /// 打不开，只能在这一层验加载状态机）。
+  Future<bool> Function()? loadOverrideForTest;
+
   bool get isLoaded => _works.isNotEmpty || _dbService != null;
 
   int get count => _dbService != null ? (_dbTotal ?? 0) : _works.length;
@@ -167,15 +178,24 @@ class WhosLocalLibrary {
 
   /// 首次调用时加载；已加载直接返回。失败（资源缺失之类）返回 false，
   /// 但不抛异常——降级失败也要让上层照常走在线报错，不掩盖真问题。
+  /// 失败不缓存：以前 _load 返回 false（不抛错）时 _loading 永远不
+  /// 清，第一次没读出来就一整个进程都读不出来，用户导入数据库后
+  /// 也必须重启 App 才恢复——与文件夹翻页标志卡死同类。现在失败
+  /// 落地就清掉 _loading，下次调用重新真读。
   Future<bool> ensureLoaded() {
     if (isLoaded) return Future.value(true);
-    return _loading ??= _load().catchError((Object _) {
+    return _loading ??= _load().then((ok) {
+      if (!ok) _loading = null;
+      return ok;
+    }).catchError((Object _) {
       _loading = null;
       return false;
     });
   }
 
   Future<bool> _load() async {
+    final override = loadOverrideForTest;
+    if (override != null) return override();
     // 2026-11-23 v58 验机：优先读本地数据库（MYTV/db/女优库.db）——
     // 原来只读 documents/actress_json/ 里的 whos.json / mjv011.json，
     // v58 删了包内 whos.json、用户 23:39 又定 App 里不内置任何 JSON，
@@ -219,6 +239,9 @@ class WhosLocalLibrary {
     _works.addAll(merged.values);
     _byBrand = null;
     _byCode = null;
+    if (_works.isEmpty && _loadFailureNote == null) {
+      _loadFailureNote = '片库没有数据：请先在设置里导入 .sql 数据库';
+    }
     return _works.isNotEmpty;
   }
 
@@ -233,15 +256,25 @@ class WhosLocalLibrary {
     try {
       final opened = await service.open();
       if (opened.error != null || !opened.strict || opened.total <= 0) {
+        // 失败原因原样记下给上层透出，不再吞掉：以前这里只回 false，
+        // 直播页只能报一句“没读出来，退出重进”，用户根本不知道是
+        // 还没导入数据库。
+        _loadFailureNote =
+            opened.error ??
+            (!opened.strict
+                ? '不是女优库数据库：请导入 .sql 数据库'
+                : '导入的数据库里没有作品，片库是空的');
         await service.close();
         return false;
       }
+      _loadFailureNote = null;
       unawaited(ensureVideoDbIndexes(service.dbPath));
       _dbService = service;
       _dbTotal = opened.total;
       _dbFacets = null;
       return true;
-    } catch (_) {
+    } catch (error) {
+      _loadFailureNote = error is StateError ? error.message : '$error';
       try {
         await service.close();
       } catch (_) {}

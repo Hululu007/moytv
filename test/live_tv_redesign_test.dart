@@ -1,4 +1,7 @@
-// 直播页截图版式改版断言：三列网格（分组/频道/线路）、信息单、设置单。
+// 直播页版式断言：三列区（分组/频道/线路胶囊）、瘦信息行（左槽
+// 预览帧 + 节目卡 + 切源小方钮）、顶栏分辨率+帧率、右上角只有
+// 信息钮（设置齿轮已撤，三项挪进软件设置页「直播设置」节，
+// 断言在 live_settings_test.dart）、中央居中转圈、信息单。
 // 只测版式与接线，不改直播源数据、不改取流逻辑。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -84,6 +87,26 @@ class _RedesignFakePlayback extends LivePlaybackController {
   int _index = 0;
   int _route = 0;
   LiveDecoderMode _decoderMode = LiveDecoderMode.auto;
+  bool _buffering = false;
+  String? _errorText;
+  Size? _videoSize;
+  double? _videoFps;
+
+  void setBuffering(bool value) {
+    _buffering = value;
+    notifyListeners();
+  }
+
+  void setError(String? value) {
+    _errorText = value;
+    notifyListeners();
+  }
+
+  void setVideoParams({Size? size, double? fps}) {
+    _videoSize = size;
+    _videoFps = fps;
+    notifyListeners();
+  }
 
   @override
   Player get player => _player;
@@ -112,10 +135,16 @@ class _RedesignFakePlayback extends LivePlaybackController {
   bool get loading => false;
 
   @override
-  bool get buffering => false;
+  bool get buffering => _buffering;
 
   @override
-  String? get error => null;
+  String? get error => _errorText;
+
+  @override
+  Size? get videoSize => _videoSize;
+
+  @override
+  double? get videoFps => _videoFps;
 
   @override
   bool get ready => true;
@@ -216,17 +245,34 @@ Future<_RedesignFakePlayback> _pumpLive(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('三列网格：分组/频道/线路同行对齐、选中黄字', (tester) async {
+  testWidgets('三列区：分组/频道同行对齐、选中黄字、未选跟主题', (tester) async {
     await _pumpLive(tester);
-    // 三列都在同一网格里，行数取最长一列（分组 3 行：收藏 + 2 分组）。
+    // 左中两列都在同一网格里，行数取最长一列（分组 3 行：收藏 + 2 分组）。
     expect(find.byKey(const ValueKey('live-group-g1')), findsOneWidget);
     expect(find.byKey(const ValueKey('live-group-g2')), findsOneWidget);
     expect(find.text('收藏'), findsOneWidget);
     expect(find.byKey(const ValueKey('live-channel-k1')), findsOneWidget);
     expect(find.byKey(const ValueKey('live-channel-k2')), findsOneWidget);
+    // 没有右侧大预览面板与它的统计行（用户改令：预览收进胶囊）。
+    expect(find.byKey(const ValueKey('live-preview-pane')), findsNothing);
+    expect(find.byKey(const ValueKey('live-preview-stats')), findsNothing);
+    // 线路恢复成第三列胶囊格，与频道胶囊同高。
     expect(find.byKey(const ValueKey('live-line-0')), findsOneWidget);
     expect(find.byKey(const ValueKey('live-line-1')), findsOneWidget);
-    // 当前分组/频道/线路以黄字表示（与未选中白字区分）。
+    final channelSize = tester.getSize(
+      find.byKey(const ValueKey('live-channel-k2')),
+    );
+    final lineSize = tester.getSize(find.byKey(const ValueKey('live-line-0')));
+    expect(lineSize.height, channelSize.height);
+    expect(channelSize.height, 48);
+    // 频道胶囊全部是普通文字胶囊，胶囊里不放预览（用户改令：
+    // 预览落在信息行左槽，见信息行那条测试）。
+    expect(find.byKey(const ValueKey('live-channel-preview')), findsNothing);
+    // 当前分组/频道/线路以黄字表示；未选中跟应用主题正文色
+    // （改版前口径，不再写死白字/灰绿）。
+    final onSurface = Theme.of(
+      tester.element(find.byKey(const ValueKey('live-grid'))),
+    ).colorScheme.onSurface;
     Text groupText(String text) =>
         tester.widget<Text>(find.text(text).first);
     expect(groupText('测试分组').style?.color, const Color(0xFFFFDF00));
@@ -243,22 +289,147 @@ void main() {
       const Color(0xFFFFDF00),
     );
     expect(groupText('线路1').style?.color, const Color(0xFFFFDF00));
-    expect(groupText('第二分组').style?.color, Colors.white);
-    expect(groupText('频道二').style?.color, Colors.white);
-    expect(groupText('线路2').style?.color, Colors.white);
+    expect(groupText('第二分组').style?.color, onSurface);
+    expect(groupText('频道二').style?.color, onSurface);
+    expect(groupText('线路2').style?.color, onSurface);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('线路切换：点右列线路格切线路、再点回第一条', (tester) async {
+  testWidgets('信息卡：正在播放/即将播放是真标题、切源按钮在原位', (tester) async {
+    await _pumpLive(tester);
+    // 正在播放 = 当前标题（subtitle 不同则拼在后面），
+    // 即将播放 = 列表里下一条标题，不再是“暂无节目信息”占位。
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('live-epg-now')))
+          .data,
+      '正在播放：频道一 · 主播小明',
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('live-epg-next')))
+          .data,
+      '即将播放：频道二',
+    );
+    // 切源直达按钮回到信息卡行右端（改版前位置）。
+    expect(find.byKey(const ValueKey('live-source-button')), findsOneWidget);
+    // 信息行按用户截图比例瘦身并钉死上限，防止以后再长胖：
+    // 整行 80 高（约一颗半胶囊），左槽/节目卡/切源钮同高。
+    // 大数字卡已不存在：左槽整个换成预览帧。
+    expect(find.byKey(const ValueKey('live-number-card')), findsNothing);
+    final previewSize = tester.getSize(
+      find.byKey(const ValueKey('live-info-preview')),
+    );
+    expect(previewSize.height, 80);
+    expect(previewSize.height, lessThanOrEqualTo(84));
+    expect(
+      tester.getSize(find.byKey(const ValueKey('live-epg-card'))).height,
+      80,
+    );
+    // 频道号只作预览帧上的小角标（小字），不再是占满卡的大字。
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const ValueKey('live-info-preview')),
+              matching: find.text('001'),
+            ),
+          )
+          .style
+          ?.fontSize,
+      lessThanOrEqualTo(12),
+    );
+    // 切源钮是随行高的小方钮（56 宽 × 80 高），不是独立高柱。
+    final sourceCardSize = tester.getSize(
+      find.byKey(const ValueKey('live-source-card')),
+    );
+    expect(sourceCardSize.width, 56);
+    expect(sourceCardSize.height, 80);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('顶栏：分辨率与帧率拼一行、没帧率只显示分辨率', (tester) async {
+    final playback = await _pumpLive(tester);
+    playback.setVideoParams(size: const Size(1920, 1080), fps: 25);
+    await tester.pump(const Duration(milliseconds: 100));
+    // 帧率拼在顶栏分辨率后面（原预览区统计行已随大预览面板删除）。
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
+          .data,
+      '[ 1920 x 1080 · 25 帧/秒 ]',
+    );
+    expect(find.byKey(const ValueKey('live-preview-stats')), findsNothing);
+    // 帧率拿不到就不显示那一段，不编数。
+    playback.setVideoParams(size: const Size(1920, 1080));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
+          .data,
+      '[ 1920 x 1080 ]',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('缓冲态：中央只有居中转圈、没有大播放三角', (tester) async {
+    final playback = await _pumpLive(tester);
+    playback.setBuffering(true);
+    await tester.pump(const Duration(milliseconds: 100));
+    final overlay = find.byKey(const ValueKey('live-center-overlay'));
+    expect(overlay, findsOneWidget);
+    expect(
+      find.descendant(
+        of: overlay,
+        matching: find.byKey(const ValueKey('live-center-spinner')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: overlay, matching: find.byIcon(Icons.play_arrow_rounded)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: overlay, matching: find.byIcon(Icons.play_arrow)),
+      findsNothing,
+    );
+    // 转圈与播放区中心同一竖轴（改版时偏在右上角是明确的错）；
+    // 竖直方向只差速率文字那一小截。
+    final spinnerCenter = tester.getCenter(
+      find.byKey(const ValueKey('live-center-spinner')),
+    );
+    final stageCenter = tester.getCenter(
+      find.byKey(const ValueKey('live-stage')),
+    );
+    expect((spinnerCenter.dx - stageCenter.dx).abs(), lessThan(1));
+    expect((spinnerCenter.dy - stageCenter.dy).abs(), lessThan(8));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('右上角：信息钮在、设置齿轮不在，报错态也一样', (tester) async {
+    final playback = await _pumpLive(tester);
+    expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
+    playback.setError('直播中断');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('线路切换：点线路列胶囊切线路、再点回第一条', (tester) async {
     final playback = await _pumpLive(tester);
     expect(playback.route, 0);
     await tester.tap(find.byKey(const ValueKey('live-line-1')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(playback.route, 1);
+    final onSurface = Theme.of(
+      tester.element(find.byKey(const ValueKey('live-grid'))),
+    ).colorScheme.onSurface;
     Text lineText(String text) =>
         tester.widget<Text>(find.text(text).first);
     expect(lineText('线路2').style?.color, const Color(0xFFFFDF00));
-    expect(lineText('线路1').style?.color, Colors.white);
+    expect(lineText('线路1').style?.color, onSurface);
     await tester.tap(find.byKey(const ValueKey('live-line-0')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(playback.route, 0);
@@ -301,21 +472,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('播放设置单：解码模式可切换、恢复默认在', (tester) async {
-    final playback = await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-video-settings')));
-    // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
-    // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('解码模式'), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-decoder')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-reset')), findsOneWidget);
-    expect(find.byKey(const ValueKey('live-settings-sleep')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('live-settings-decoder')));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(playback.decoderMode, LiveDecoderMode.hardware);
-    expect(find.textContaining('硬解'), findsWidgets);
-    expect(tester.takeException(), isNull);
-  });
+  // 原「播放设置单」用例已随齿轮撤除：解码模式/睡眠定时/恢复
+  // 默认三项改在软件设置页断言（live_settings_test.dart：三项
+  // 都在、改解码模式偏好真变、控制器跟着应用）。
 }

@@ -14,6 +14,8 @@ import 'live_playback.dart';
 import 'live_sources.dart';
 import 'live_store.dart';
 import 'playback_foreground.dart';
+import 'playback_preferences.dart';
+import 'tvbox_video_pane.dart';
 import 'package:moyi/xigua/player_controls.dart';
 import 'package:moyi/network_speed.dart';
 import 'package:moyi/xigua/player_interactions.dart';
@@ -50,7 +52,7 @@ class LivePlayerScreen extends StatefulWidget {
 
 class _LivePlayerScreenState extends State<LivePlayerScreen>
     with WidgetsBindingObserver {
-  late final PlayerInteractions _interactions;
+  PlayerInteractions? _interactions;
   late final NetworkSpeedTracker _speedTracker;
   StreamSubscription<Duration>? _positionSubscription;
   final _focus = FocusNode();
@@ -101,17 +103,16 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     super.initState();
     _playback.addListener(_changed);
     WidgetsBinding.instance.addObserver(this);
-    _interactions = PlayerInteractions(
-      player: _playback.player!,
-      available: () => !_panel && _playback.error == null,
-      baseSpeed: () => 1,
-      holdSpeed: () => 1,
-      swipeSeek: widget.swipeSeek ?? () => 60,
-      onTogglePlayback: _toggle,
-      onFullscreen: _exit,
-      onEpisode: _switchHint,
-      onSeek: (duration) async {},
-    );
+    // DRM 频道走 EXO、mpv 播放器可能根本没建：手势/网速采样那套
+    // mpv 专属接线只在 player 存在时挂，EXO 全屏走 build 里的
+    // pane 分支，不碰这里。
+    final mpvPlayer = _playback.player;
+    if (mpvPlayer != null) {
+      _ensureInteractions(mpvPlayer);
+      _positionSubscription = mpvPlayer.stream.position.listen((_) {
+        unawaited(_speedTracker.tick());
+      });
+    }
     _speedTracker = NetworkSpeedTracker(
       sample: () async {
         final player = _playback.player;
@@ -119,9 +120,6 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
         return fetchMpvNetworkSpeedSample(player);
       },
     );
-    _positionSubscription = _playback.player!.stream.position.listen((_) {
-      unawaited(_speedTracker.tick());
-    });
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       _immersed = true;
@@ -226,7 +224,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     }
     _positionSubscription?.cancel();
     _speedTracker.dispose();
-    _interactions.dispose();
+    _interactions?.dispose();
     _focus.dispose();
     unawaited(
       (_orientationController?.releasePlayback(this) ?? Future<void>.value())
@@ -238,8 +236,30 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     super.dispose();
   }
 
+  void _ensureInteractions(Player player) {
+    _interactions ??= PlayerInteractions(
+      player: player,
+      available: () => !_panel && _playback.error == null,
+      baseSpeed: () => 1,
+      holdSpeed: () => 1,
+      swipeSeek: widget.swipeSeek ?? () => 60,
+      onTogglePlayback: _toggle,
+      onFullscreen: _exit,
+      onEpisode: _switchHint,
+      onSeek: (duration) async {},
+    );
+  }
+
   void _changed() {
     if (!mounted) return;
+    // 全屏里从 DRM 频道切到普通频道时 mpv 是这时才建的，补挂手势。
+    final player = _playback.player;
+    if (player != null && _interactions == null) {
+      _ensureInteractions(player);
+      _positionSubscription ??= player.stream.position.listen((_) {
+        unawaited(_speedTracker.tick());
+      });
+    }
     if (_followVideoRatio() && _orientationApplied) {
       unawaited(_applyOrientation());
       if (Platform.isAndroid) {
@@ -291,7 +311,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
   Future<void> _showSleepTimer() async {
     if (_panel) return;
-    _interactions.cancel();
+    _interactions?.cancel();
     setState(() => _panel = true);
     try {
       await showSleepTimerSheet(
@@ -403,6 +423,59 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
   @override
   Widget build(BuildContext context) {
+    // DRM 频道全屏：同样走 EXO pane（与直播页主画面同一计划与
+    // 句柄），不碰 mpv 的控件层。pane 自带返回/全屏钮与播放暂停；
+    // 报错时叠与普通路同款的中断面板，重连仍走 EXO 重开。
+    final exoPlan = _playback.exoPlan;
+    if (exoPlan != null && widget.videoBuilder == null) {
+      final error = _playback.error;
+      return PopScope(
+        canPop: true,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: Theme(
+            data: AppTheme.dark,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                TvboxVideoPane(
+                  key: const ValueKey('live-exo-pane-fullscreen'),
+                  plan: exoPlan,
+                  startPosition: 0,
+                  autoplay: true,
+                  decoderMode: switch (_playback.decoderMode) {
+                    LiveDecoderMode.auto => TelevisionDecoder.optimized,
+                    LiveDecoderMode.hardware => TelevisionDecoder.hardware,
+                    LiveDecoderMode.software => TelevisionDecoder.software,
+                  },
+                  handle: _playback.exoHandle,
+                  onCompleted: _playback.reportExoCompleted,
+                  onError: _playback.reportExoError,
+                  onBack: _exit,
+                  onFullscreen: _exit,
+                  isFullscreen: true,
+                ),
+                if (error != null)
+                  ColoredBox(
+                    color: Colors.black.withValues(alpha: .82),
+                    child: StatusPanel(
+                      title: '直播暂时中断',
+                      message: error,
+                      icon: Icons.wifi_off_rounded,
+                      action: '重新连接',
+                      onRetry: () => unawaited(_playback.retry()),
+                      secondaryAction: TextButton(
+                        onPressed: _selectChannel,
+                        child: const Text('换个频道'),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     final television = AppLayout.isTelevision(context);
     final controller = _playback.controller;
     final channel = _playback.channel;
@@ -432,7 +505,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
         : PlayerControls(
             key: ValueKey('live-controls-$_immersed'),
             player: player,
-            interactions: _interactions,
+            interactions: _interactions!,
             enabled: error == null,
             panelOpen: _panel,
             fullscreen: true,

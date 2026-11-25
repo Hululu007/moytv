@@ -209,6 +209,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
       headers: plan.headers,
       positionMs: (startPosition * 1000).round(),
       decoderMode: widget.decoderMode.name,
+      drm: plan.drm,
     );
     await controller.setSpeed(widget.handle.speed);
     if (!_openedAutoplay) {
