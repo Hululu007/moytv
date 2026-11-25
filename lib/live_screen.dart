@@ -18,8 +18,11 @@ import 'live_sources.dart';
 import 'live_store.dart';
 import 'local_store.dart';
 import 'm3u_subscriptions.dart';
+import 'models.dart';
 import 'network_speed.dart';
+import 'playback_preferences.dart';
 import 'player_route.dart';
+import 'tvbox_video_pane.dart';
 import 'remote_widgets.dart';
 import 'source_picker_sheet.dart';
 import 'widgets.dart';
@@ -1503,9 +1506,33 @@ class _LiveScreenState extends State<LiveScreen> {
     return true;
   }
 
+  /// 直播解码模式 → EXO 核的解码模式（只在 DRM 频道走 EXO 时用）。
+  TelevisionDecoder get _exoDecoderMode => switch (_playback.decoderMode) {
+    LiveDecoderMode.auto => TelevisionDecoder.optimized,
+    LiveDecoderMode.hardware => TelevisionDecoder.hardware,
+    LiveDecoderMode.software => TelevisionDecoder.software,
+  };
+
+  /// DRM 频道的主画面：EXO pane（点播侧同款接法，drm 随计划带上）。
+  /// pane 自带播放/暂停控制条，所以不再叠 mpv 那套点画面进全屏的
+  /// 手势层；全屏走信息单里的全屏入口（全屏页同样走 EXO）。
+  Widget _exoStage(BuildContext context, PlaybackPlan plan) {
+    return TvboxVideoPane(
+      key: const ValueKey('live-exo-pane'),
+      plan: plan,
+      startPosition: 0,
+      autoplay: true,
+      decoderMode: _exoDecoderMode,
+      handle: _playback.exoHandle,
+      onCompleted: _playback.reportExoCompleted,
+      onError: _playback.reportExoError,
+    );
+  }
+
   Widget _video(BuildContext context, bool television) {
     final controller = _playback.controller;
     final error = _playback.error;
+    final exoPlan = _playback.exoPlan;
     return ColoredBox(
       key: const ValueKey('live-stage'),
       color: Colors.black,
@@ -1514,6 +1541,8 @@ class _LiveScreenState extends State<LiveScreen> {
         children: [
           if (widget.videoBuilder != null)
             widget.videoBuilder!(_playback, false)
+          else if (exoPlan != null)
+            _exoStage(context, exoPlan)
           else if (controller != null)
             Video(
               controller: controller,
@@ -1528,7 +1557,9 @@ class _LiveScreenState extends State<LiveScreen> {
                 style: TextStyle(color: Color(0xFF8B8F99), fontSize: 12),
               ),
             ),
-          if (error == null)
+          // DRM/EXO 频道不叠这层手势：pane 自带控制条要吃点按，
+          // 全屏走信息单入口。普通频道（mpv）保持原手势不变。
+          if (error == null && exoPlan == null)
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -2007,7 +2038,9 @@ class _LiveScreenState extends State<LiveScreen> {
     LiveChannel? channel,
     String number,
   ) {
-    final controller = _playback.controller;
+    // DRM 频道走 EXO、没有 mpv 纹理可镜像：小槽降级为不出预览帧，
+    // 只留下面的频道号角标（任务口径）。普通频道照旧镜像真画面。
+    final controller = _playback.usingExo ? null : _playback.controller;
     return Container(
       key: const ValueKey('live-info-preview'),
       decoration: BoxDecoration(

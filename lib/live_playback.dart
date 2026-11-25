@@ -7,17 +7,20 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'core_bridge.dart';
+import 'live_drm.dart';
 import 'live_models.dart';
 import 'live_repository.dart';
 import 'live_settings.dart';
 import 'live_sources.dart';
+import 'models.dart';
 import 'screen_awake.dart';
+import 'tvbox_video_pane.dart';
 import 'video_output_size.dart';
 import 'sleep_timer.dart';
 
-/// 直播解码模式：只调 mpv 的 hwdec，与点播同一套取值（点播见
-/// player_screen 的起播链）。直播没有 Exo 链路，模式名只说硬解/软解，
-/// 不冒充其他解码器。默认自动，与今天不设 hwdec 时点播的默认值一致。
+/// 直播解码模式：普通频道调 mpv 的 hwdec；DRM 频道走 EXO 时由
+/// 直播页把同一取值映射成 EXO 的解码模式（见 live_screen 的
+/// _exoDecoderMode）。默认自动，与今天不设 hwdec 时点播的默认值一致。
 enum LiveDecoderMode { auto, hardware, software }
 
 extension LiveDecoderModeX on LiveDecoderMode {
@@ -42,7 +45,11 @@ extension LiveDecoderModeX on LiveDecoderMode {
 
 /// 直播播放状态：顶部内嵌播放器与全屏播放共用同一实例，换台不重建引擎。
 class LivePlaybackController extends ChangeNotifier {
-  LivePlaybackController({required this.repository}) {
+  LivePlaybackController({
+    required this.repository,
+    this.createPlayer,
+    this.buildVideoController = true,
+  }) {
     sleepTimer.addListener(_sleepChanged);
     // 解码模式与睡眠默认时长是软件设置页「直播设置」节的偏好
     // （LiveSettingsStore 全局一份）：构造时先应用已加载的值
@@ -92,6 +99,14 @@ class LivePlaybackController extends ChangeNotifier {
   static const _vodStallTimeout = Duration(seconds: 90);
 
   final LiveRepository repository;
+
+  /// 测试注入：替换 mpv 播放器的构造（真机不传，走默认 Player()）。
+  final Player Function()? createPlayer;
+
+  /// 测试注入：真实 VideoController 在测试环境建不起来（原生纹理
+  /// 通道不存在），单测关掉它只验播放路由本身；真机恒为 true。
+  final bool buildVideoController;
+
   late final sleepTimer = SleepTimerController(
     onExpire: () => unawaited(pauseForSleep()),
   );
@@ -111,6 +126,9 @@ class LivePlaybackController extends ChangeNotifier {
     _screenAwake.disable();
     try {
       await _player?.pause();
+    } catch (_) {}
+    try {
+      await exoHandle.pause();
     } catch (_) {}
     if (!_disposed) notifyListeners();
   }
@@ -147,6 +165,32 @@ class LivePlaybackController extends ChangeNotifier {
   double? _videoFps;
   Timer? _fpsRetry;
 
+  /// DRM 频道的 EXO 播放计划：非 null 表示当前频道走 EXO 核
+  /// （TvboxVideoPane 消费，见 live_screen），mpv 完全不参与。
+  /// 普通频道恒为 null，走原来的 mpv 路，一行不变。
+  PlaybackPlan? _exoPlan;
+
+  /// EXO pane 的播放句柄（暂停/继续/进度），直播页与全屏页共用。
+  final TvboxPlaybackHandle exoHandle = TvboxPlaybackHandle();
+
+  bool get usingExo => _exoPlan != null;
+  PlaybackPlan? get exoPlan => _exoPlan;
+
+  /// EXO pane 报上来的起播/播放失败：只记明确报错，不回头用
+  /// mpv 无效重连（mpv 解不了 DRM，重连必然重复失败）。
+  void reportExoError(String message) {
+    if (_disposed || _exoPlan == null) return;
+    _loading = false;
+    final text = message.trim();
+    _error = text.isEmpty ? 'DRM 频道播放失败' : 'DRM 频道播放失败：$text';
+    notifyListeners();
+  }
+
+  /// EXO pane 报流结束：直播流结束即中断，按失败口径报错。
+  void reportExoCompleted() {
+    reportExoError('直播流已结束');
+  }
+
   Player? get player => _player;
   VideoController? get controller => _controller;
   LiveSource? get source => _source;
@@ -168,7 +212,7 @@ class LivePlaybackController extends ChangeNotifier {
 
   void _ensurePlayer() {
     if (_player != null || _disposed) return;
-    final player = Player();
+    final player = createPlayer?.call() ?? Player();
     _player = player;
     // 直播流对 mpv 是非可寻址（non-seekable）源，demuxer 打开时会在 OSD/日志里
     // 打印 “not seekable … you can force it with -force -seekable=yes”。设为 yes
@@ -182,7 +226,7 @@ class LivePlaybackController extends ChangeNotifier {
             .catchError((Object _) {}),
       );
     }
-    _controller = VideoController(player);
+    _controller = buildVideoController ? VideoController(player) : null;
     _subscriptions.add(player.stream.error.listen(_onError));
     _subscriptions.add(
       player.stream.buffering.listen((value) {
@@ -303,12 +347,16 @@ class LivePlaybackController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    try {
-      _ensurePlayer();
-    } catch (error) {
-      _error = '直播播放器无法启动：$error';
-      notifyListeners();
-      return;
+    // DRM 频道不预建 mpv：它走 EXO，mpv 建出来也用不上，
+    // 还会让「正在用哪个核」的判断失真。普通频道照旧预建。
+    if (!channel!.hasDrm) {
+      try {
+        _ensurePlayer();
+      } catch (error) {
+        _error = '直播播放器无法启动：$error';
+        notifyListeners();
+        return;
+      }
     }
     await play(_index);
   }
@@ -328,12 +376,45 @@ class LivePlaybackController extends ChangeNotifier {
     if (!reconnect) _error = null;
     notifyListeners();
     try {
+      final plan = await _resolve(source, channel);
+      if (_disposed || token != _generation) return;
+      // DRM 频道改走 EXO 核：mpv 没有 DRM 解密能力，硬播只会
+      // 失败重连。归一化不出 drm 时给明确报错，不黑屏死等、
+      // 也不回头试 mpv。普通频道 _exoPlan 恒为 null，走下面
+      // 原来的 mpv 路，一行不变。
+      if (channel.hasDrm) {
+        final drm = liveDrmForChannel(channel);
+        if (drm == null) {
+          _exoPlan = null;
+          _loading = false;
+          _error = '该频道带 DRM 加密，但授权信息不完整，暂时播不了';
+          notifyListeners();
+          return;
+        }
+        // 上一条普通频道可能还在 mpv 里出声，先停掉再切 EXO。
+        try {
+          await _player?.stop();
+        } catch (_) {}
+        if (_disposed || token != _generation) return;
+        _exoPlan = PlaybackPlan(
+          url: plan.url,
+          headers: plan.headers,
+          drm: drm,
+          // session 每次起播都换新：切台/切线路/重连时 pane 靠它
+          // 判定要重开，同一地址换了 drm 也不会漏重开。
+          session: 'live-drm-$token-$_route',
+        );
+        _loading = false;
+        _error = null;
+        _screenAwake.enable();
+        notifyListeners();
+        return;
+      }
+      _exoPlan = null;
       _ensurePlayer();
       final player = _player;
       if (player == null) throw AppFailure('直播播放器无法启动');
       await _applyDecoderMode(player);
-      final plan = await _resolve(source, channel);
-      if (_disposed || token != _generation) return;
       _frames = false;
       // 换台先清掉上条流的分辨率与帧率，新流拿到 videoParams 后再
       // 显示，不拿旧流的数字冒充新台。
@@ -442,11 +523,11 @@ class LivePlaybackController extends ChangeNotifier {
     if (_sleepPaused) return;
     if (_disposed) return;
     _loading = false;
-    // 带 DRM 的频道在 mpv 上必然解不了：报错换成说清原因的口径，
-    // 且不走重连（换线路也是同一套 DRM，重连只会重复失败）。
-    // 标了 DRM 但其实是明流的频道能正常起播、不会走到这里。
+    // 带 DRM 的频道本应走 EXO（见 play 的分流）；万一还有路径
+    // 落到 mpv 的错误回调，也只报错不重连（mpv 解不了 DRM，
+    // 重连只会重复失败）。
     if (channel?.hasDrm ?? false) {
-      _error = '该频道带 DRM 加密，当前直播播放器无法解密，暂时播不了';
+      _error = '该频道带 DRM 加密，暂时播不了';
       notifyListeners();
       return;
     }

@@ -70,10 +70,9 @@ class LiveChannel {
   final LiveCatchup? catchup;
 
   /// #KODIPROP 的 DRM 授权键与类型（原样存储）。归一化成可播的
-  /// PlaybackDrm 走 live_drm.dart 的 liveDrmForChannel；直播页当前
-  /// 仍走 media_kit/mpv（无 DRM 解密能力），带 DRM 的频道起播失败
-  /// 时给专门口径报错。EXO 核已具备消费这组信息的能力，直播改走
-  /// EXO 是独立接线项，见 REPORT 直播 DRM 一节。
+  /// PlaybackDrm 走 live_drm.dart 的 liveDrmForChannel；带 DRM 的
+  /// 频道起播时由 LivePlaybackController 分流到 EXO 核消费这组
+  /// 信息（mpv 无 DRM 解密能力，不参与），普通频道仍走 mpv。
   final String licenseKey;
   final String licenseType;
 
