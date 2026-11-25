@@ -1,7 +1,8 @@
 // 直播页版式断言：三列区（分组/频道/线路胶囊）、瘦信息行（左槽
-// 预览帧 + 节目卡 + 切源小方钮）、顶栏分辨率+帧率、右上角只有
-// 信息钮（设置齿轮已撤，三项挪进软件设置页「直播设置」节，
-// 断言在 live_settings_test.dart）、中央居中转圈、信息单。
+// 预览帧 + 节目卡 + 切源小方钮）、顶栏只有频道名（分辨率/帧率
+// 读数与右上角信息钮及信息单已按用户口径整个撤掉；设置齿轮也
+// 已撤，三项挪进软件设置页「直播设置」节，断言在
+// live_settings_test.dart）、中央居中转圈、节目卡点开节目单。
 // 只测版式与接线，不改直播源数据、不改取流逻辑。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -348,27 +349,26 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('顶栏：分辨率与帧率拼一行、没帧率只显示分辨率', (tester) async {
+  testWidgets('顶栏：有真实分辨率与帧率也不显示读数', (tester) async {
     final playback = await _pumpLive(tester);
     playback.setVideoParams(size: const Size(1920, 1080), fps: 25);
     await tester.pump(const Duration(milliseconds: 100));
-    // 帧率拼在顶栏分辨率后面（原预览区统计行已随大预览面板删除）。
+    // 分辨率/帧率读数已按用户口径整个撤掉：播放器报上真实
+    // 参数也不在顶栏显示（字段本身保留，只是不显示）。
     expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
-          .data,
-      '[ 1920 x 1080 · 25 帧/秒 ]',
+      find.byKey(const ValueKey('live-video-resolution')),
+      findsNothing,
     );
+    expect(find.text('[ 1920 x 1080 · 25 帧/秒 ]'), findsNothing);
     expect(find.byKey(const ValueKey('live-preview-stats')), findsNothing);
-    // 帧率拿不到就不显示那一段，不编数。
+    // 没帧率时同样不显示。
     playback.setVideoParams(size: const Size(1920, 1080));
     await tester.pump(const Duration(milliseconds: 100));
     expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
-          .data,
-      '[ 1920 x 1080 ]',
+      find.byKey(const ValueKey('live-video-resolution')),
+      findsNothing,
     );
+    expect(find.text('[ 1920 x 1080 ]'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -406,13 +406,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('右上角：信息钮在、设置齿轮不在，报错态也一样', (tester) async {
+  testWidgets('右上角：信息钮与设置齿轮都没有，报错态也一样', (tester) async {
     final playback = await _pumpLive(tester);
-    expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-info')), findsNothing);
     expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
     playback.setError('直播中断');
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-info')), findsNothing);
     expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -444,31 +444,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('频道信息单：真实字段在、入口全在', (tester) async {
+  testWidgets('频道信息单已撤：钮与单子都不存在，节目卡无节目单数据时点了不弹单', (tester) async {
     await _pumpLive(tester);
-    await tester.tap(find.byKey(const ValueKey('live-video-info')));
-    await tester.pump(const Duration(milliseconds: 600));
-    // 只列真实字段：频道名、频道号·源·分组、线路 1/2、subtitle。
-    expect(find.text('频道一'), findsWidgets);
-    expect(find.textContaining('频道号 001'), findsOneWidget);
-    expect(find.textContaining('频道号 001'), findsOneWidget);
-    expect(find.text('线路 1/2'), findsOneWidget);
-    expect(find.text('主播小明'), findsOneWidget);
-    // 没有真实分辨率就不写；信息单里不编节目单（节目信息只在
-    // 下面的节目卡里按真实 subtitle 显示）。
-    expect(find.textContaining('分辨率'), findsNothing);
-    // 入口：全屏/换源/刷新/收藏/睡眠定时。
-    expect(find.byKey(const ValueKey('live-info-fullscreen')), findsOneWidget);
+    // 信息钮已撤，信息单自然不存在：原来只在单子里出现的
+    // 字段与入口（频道号行、线路 x/y、全屏/换源/刷新/收藏/
+    // 睡眠定时格）一概找不到。
+    expect(find.byKey(const ValueKey('live-video-info')), findsNothing);
+    expect(find.textContaining('频道号 001'), findsNothing);
+    expect(find.text('线路 1/2'), findsNothing);
+    expect(find.byKey(const ValueKey('live-info-fullscreen')), findsNothing);
     expect(
       find.byKey(const ValueKey('live-info-switch-source')),
-      findsOneWidget,
+      findsNothing,
     );
-    expect(find.byKey(const ValueKey('live-info-refresh')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-info-refresh')), findsNothing);
     expect(
       find.byKey(const ValueKey('live-info-favourite')),
-      findsOneWidget,
+      findsNothing,
     );
-    expect(find.byKey(const ValueKey('live-info-sleep')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-info-sleep')), findsNothing);
+    expect(find.byKey(const ValueKey('live-info-epg')), findsNothing);
+    // 节目单/回看入口改挂信息行的节目卡：本用例没有节目单
+    // 数据，点卡不弹任何单子、不给假入口（有真节目单时点卡
+    // 开节目单的路径在 live_import_epg_test.dart 里验）。
+    await tester.tap(find.byKey(const ValueKey('live-epg-card')));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const ValueKey('live-epg-list')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

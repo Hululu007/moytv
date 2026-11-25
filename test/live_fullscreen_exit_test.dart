@@ -219,13 +219,10 @@ int _mountedVideoCount(WidgetTester tester) {
 
 Future<void> _enterFullscreen(WidgetTester tester) async {
   expect(_inlineFinder(), findsOneWidget);
-  // 截图版式里全屏入口在频道信息单里：点顶栏信息钮，再点“全屏播放”。
-  // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
-  // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
-  await tester.tap(find.byKey(const ValueKey('live-video-info')));
+  // 全屏入口走点视频区手势（信息单已按用户口径撤掉）：点画面
+  // 区中央的手势层即进全屏。
+  await tester.tap(find.byKey(const ValueKey('live-stage')));
   await tester.pump(const Duration(milliseconds: 100));
-  await tester.pump(const Duration(milliseconds: 600));
-  await tester.tap(find.byKey(const ValueKey('live-info-fullscreen')));
   for (
     var i = 0;
     i < 10 && find.byType(LivePlayerScreen).evaluate().isEmpty;

@@ -85,13 +85,9 @@ void main() {
     await tester.pumpAndSettle();
     // 首个可见源是内置片库（whos_lib 在源表首位），不是旧断言里的秀果。
     expect(find.text('🔞内置片库 直播源暂时不可用'), findsOneWidget);
-    // 切换入口在顶栏信息单里：点信息钮，再点“切换直播源”。
-    // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
-    // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
-    await tester.tap(find.byKey(const ValueKey('live-video-info')));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 600));
-    await tester.tap(find.byKey(const ValueKey('live-info-switch-source')));
+    // 切换入口是信息行右侧的切源直达钮（信息单已按用户口径
+    // 撤掉）：点它直接开选源弹窗。
+    await tester.tap(find.byKey(const ValueKey('live-source-button')));
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsOneWidget);
     // 弹窗无“当前：X”文字，当前源以选中态瓦片表示（渐变 + 对勾）。
@@ -110,6 +106,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsNothing);
     expect(find.text('哔哩哔哩 直播源暂时不可用'), findsOneWidget);
+    // 切源后新源加载失败会排一次 1.5 秒后的自动补拉：把假时钟
+    // 拨过补拉，让重试链在用例结束前走完（旧路径经信息单时
+    // 中间多泵的 700 毫秒恰好替它走完，新路径直达弹窗后要
+    // 在这里补上，否则收尾时挂着未触发的 Timer 判失败）。
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 }

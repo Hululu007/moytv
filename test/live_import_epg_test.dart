@@ -422,20 +422,10 @@ void main() {
       }
       expect(find.text('正在播放：正在播的节目'), findsOneWidget);
       expect(find.text('即将播放：即将播的节目'), findsOneWidget);
-      // 信息单 → 节目单 → 点过去的节目回看。
-      await tester.tap(find.byKey(const ValueKey('live-video-info')));
-      for (
-        var i = 0;
-        i < 20 && find.byKey(const ValueKey('live-info-epg')).evaluate().isEmpty;
-        i++
-      ) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      expect(find.byKey(const ValueKey('live-info-epg')), findsOneWidget);
-      // 信息单是可滚的单子，节目单条目在折叠线以下：先滚到可见再点。
-      await tester.ensureVisible(find.byKey(const ValueKey('live-info-epg')));
+      // 节目卡 → 节目单 → 点过去的节目回看（信息单已按用户
+      // 口径撤掉，节目单入口改挂信息行的节目卡）。
+      await tester.tap(find.byKey(const ValueKey('live-epg-card')));
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.byKey(const ValueKey('live-info-epg')));
       for (
         var i = 0;
         i < 20 && find.byKey(const ValueKey('live-epg-list')).evaluate().isEmpty;

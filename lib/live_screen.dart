@@ -906,132 +906,6 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  /// 频道信息单：只列源数据真实带有的字段（频道名/号、源、分组、
-  /// 线路、分辨率），没有节目单数据就不写节目名；下面是原来散在
-  /// 视频区底部条与面板行里的入口（全屏/换源/刷新/收藏/睡眠定时），
-  /// 截图版式里它们不再占常驻位置，改放这里。
-  Future<void> _showChannelInfo() async {
-    final channel = _playback.channel;
-    final source = _source;
-    if (source == null) return;
-    final size = _playback.videoSize;
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) {
-        final favourite =
-            channel != null && widget.store.isFavourite(channel.key);
-        return SafeArea(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.live_tv_rounded),
-                  title: Text(channel?.name ?? '未选择频道'),
-                  subtitle: Text(
-                    [
-                      if (channel != null && channel.number.isNotEmpty)
-                        '频道号 ${channel.number}',
-                      '直播源 ${source.name}',
-                      if (channel != null && channel.group.isNotEmpty)
-                        '分组 ${channel.group}',
-                    ].join(' · '),
-                  ),
-                ),
-                if (channel != null)
-                  ListTile(
-                    leading: const Icon(Icons.route_rounded),
-                    title: Text(
-                      '线路 ${_playback.route + 1}/${channel.urls.length}',
-                    ),
-                    subtitle: channel.subtitle.isNotEmpty
-                        ? Text(channel.subtitle)
-                        : null,
-                  ),
-                if (channel != null &&
-                    _epgGuide != null &&
-                    _epgGuide!.programmesFor(channel).isNotEmpty)
-                  ListTile(
-                    key: const ValueKey('live-info-epg'),
-                    leading: const Icon(Icons.event_note_rounded),
-                    title: const Text('节目单'),
-                    subtitle: channel.catchup != null
-                        ? const Text('过去的节目可点回看')
-                        : null,
-                    onTap: () => Navigator.of(sheetContext).pop('epg'),
-                  ),
-                if (size != null)
-                  ListTile(
-                    leading: const Icon(Icons.high_quality_rounded),
-                    title: Text(
-                      '分辨率 ${size.width.toInt()} x ${size.height.toInt()}',
-                    ),
-                  ),
-                const Divider(height: 1),
-                ListTile(
-                  key: const ValueKey('live-info-fullscreen'),
-                  leading: const Icon(Icons.fullscreen_rounded),
-                  title: const Text('全屏播放'),
-                  onTap: () => Navigator.of(sheetContext).pop('fullscreen'),
-                ),
-                ListTile(
-                  key: const ValueKey('live-info-switch-source'),
-                  leading: const Icon(Icons.tv_rounded),
-                  title: const Text('切换直播源'),
-                  onTap: () => Navigator.of(sheetContext).pop('source'),
-                ),
-                ListTile(
-                  key: const ValueKey('live-info-refresh'),
-                  leading: const Icon(Icons.refresh_rounded),
-                  title: const Text('刷新直播'),
-                  onTap: () => Navigator.of(sheetContext).pop('refresh'),
-                ),
-                if (channel != null)
-                  ListTile(
-                    key: const ValueKey('live-info-favourite'),
-                    leading: Icon(
-                      favourite
-                          ? Icons.star_rounded
-                          : Icons.star_border_rounded,
-                    ),
-                    title: Text(favourite ? '取消收藏' : '收藏频道'),
-                    onTap: () => Navigator.of(sheetContext).pop('favourite'),
-                  ),
-                ListTile(
-                  key: const ValueKey('live-info-sleep'),
-                  leading: const Icon(Icons.bedtime_outlined),
-                  title: Text(
-                    _playback.sleepTimer.active
-                        ? '睡眠定时 · ${_playback.sleepTimer.label}'
-                        : '睡眠定时',
-                  ),
-                  onTap: () => Navigator.of(sheetContext).pop('sleep'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    if (!mounted) return;
-    switch (action) {
-      case 'fullscreen':
-        await _openFullscreen();
-      case 'source':
-        await _pickSource();
-      case 'refresh':
-        await _refreshLive();
-      case 'favourite':
-        final current = _playback.channel;
-        if (current != null) widget.store.toggleFavourite(current);
-      case 'epg':
-        final current = _playback.channel;
-        if (current != null) await _showProgrammeSheet(current);
-      case 'sleep':
-        await _openSleepTimer();
-    }
-  }
-
   static String _epgClock(DateTime time) =>
       '${time.hour.toString().padLeft(2, '0')}:'
       '${time.minute.toString().padLeft(2, '0')}';
@@ -1154,17 +1028,6 @@ class _LiveScreenState extends State<LiveScreen> {
     ];
     unawaited(_playback.load(source, replaced, index: index));
     AppNotice.show(context, '回看：${programme.title}');
-  }
-
-  Future<void> _openSleepTimer() async {
-    await showSleepTimerSheet(
-      context,
-      controller: _playback.sleepTimer,
-      showFinishEpisode: false,
-      onSelect: (choice) {
-        if (mounted) _playback.sleepTimer.select(choice);
-      },
-    );
   }
 
   List<LiveSource> get _sources => LiveSource.visible(widget.greenMode);
@@ -1558,7 +1421,7 @@ class _LiveScreenState extends State<LiveScreen> {
               ),
             ),
           // DRM/EXO 频道不叠这层手势：pane 自带控制条要吃点按，
-          // 全屏走信息单入口。普通频道（mpv）保持原手势不变。
+          // 全屏走 pane 自带控制条。普通频道（mpv）保持原手势不变。
           if (error == null && exoPlan == null)
             Positioned.fill(
               child: GestureDetector(
@@ -1616,8 +1479,8 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
-          // 手机端播放区：中间居中转圈/速率 + 顶部频道名/分辨率/信息。
-          // 顶栏画在错误遮罩之上，断流时照样能点信息换源；中间层只在无错时显示。
+          // 手机端播放区：中间居中转圈/速率 + 顶部频道名。
+          // 顶栏画在错误遮罩之上；中间层只在无错时显示。
           if (!television) ...[
             if (error == null) _videoCenterOverlay(context),
             _videoHeader(context),
@@ -1627,16 +1490,13 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  /// 截图播放区顶栏：左频道名，右真实分辨率 + 帧率（帧率拿到时
-  /// 拼在分辨率后面，拿不到就不显示那一段、绝不编数）+ 信息。
-  /// 设置齿轮已按用户口径撤掉：解码模式/睡眠定时/恢复默认三项
-  /// 挪进软件设置页「直播设置」节（见 live_settings.dart）。
-  /// 顶栏本身不拦手势，只有信息按钮吃点按，其余位置仍落
-  /// 到下面的全屏手势层。
+  /// 截图播放区顶栏：只剩左边的频道名。分辨率/帧率读数与右上角
+  /// 频道信息钮（及其信息单）已按用户口径整个撤掉；设置齿轮也早
+  /// 已撤掉：解码模式/睡眠定时/恢复默认三项挪进软件设置页「直播
+  /// 设置」节（见 live_settings.dart）。顶栏本身不拦手势，点按
+  /// 仍落到下面的全屏手势层。
   Widget _videoHeader(BuildContext context) {
     final channel = _playback.channel;
-    final size = _playback.videoSize;
-    final fps = _playback.videoFps;
     return Positioned(
       top: 0,
       left: 0,
@@ -1655,24 +1515,6 @@ class _LiveScreenState extends State<LiveScreen> {
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
-              ),
-            ),
-            if (size != null)
-              Text(
-                '[ ${size.width.toInt()} x ${size.height.toInt()}'
-                '${fps != null ? ' · ${fps.round()} 帧/秒' : ''} ]',
-                key: const ValueKey('live-video-resolution'),
-                style: _videoOverlayStyle,
-              ),
-            IconButton(
-              key: const ValueKey('live-video-info'),
-              visualDensity: VisualDensity.compact,
-              tooltip: '频道信息',
-              onPressed: _showChannelInfo,
-              icon: const Icon(
-                Icons.info_outlined,
-                size: 22,
-                color: Colors.white,
               ),
             ),
           ],
@@ -1971,31 +1813,40 @@ class _LiveScreenState extends State<LiveScreen> {
               key: const ValueKey('live-epg-card'),
               color: cardColor,
               borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      '正在播放：$now',
-                      key: const ValueKey('live-epg-now'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: textColor, fontSize: 13),
-                    ),
-                    Divider(color: theme.dividerColor, height: 8),
-                    Text(
-                      '即将播放：$next',
-                      key: const ValueKey('live-epg-next'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: textColor, fontSize: 13),
-                    ),
-                  ],
+              // 节目单/回看入口：信息单撤掉后改挂这张卡——当前
+              // 频道真有节目单数据才可点开节目单，没有就不给
+              // 假入口（点按无反应）。
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: epgMatched
+                    ? () => _showProgrammeSheet(channel)
+                    : null,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '正在播放：$now',
+                        key: const ValueKey('live-epg-now'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: textColor, fontSize: 13),
+                      ),
+                      Divider(color: theme.dividerColor, height: 8),
+                      Text(
+                        '即将播放：$next',
+                        key: const ValueKey('live-epg-next'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: textColor, fontSize: 13),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
