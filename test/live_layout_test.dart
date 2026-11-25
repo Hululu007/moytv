@@ -215,12 +215,12 @@ Future<_LayoutFakePlayback> _pumpLive(WidgetTester tester) async {
   );
   for (
     var i = 0;
-    i < 30 && find.byTooltip('全屏与旋转').evaluate().isEmpty;
+    i < 30 && find.byKey(const ValueKey('live-grid')).evaluate().isEmpty;
     i++
   ) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(find.byTooltip('全屏与旋转'), findsOneWidget);
+  expect(find.byKey(const ValueKey('live-grid')), findsOneWidget);
   return playback;
 }
 
@@ -254,37 +254,42 @@ void main() {
     expect(LiveDecoderMode.software.next, LiveDecoderMode.auto);
   });
 
-  testWidgets('视频区角标：时钟在、网速无数据时不显示', (tester) async {
+  testWidgets('视频区顶栏：频道名+信息+设置在、无分辨率、无网速', (tester) async {
     await _pumpLive(tester);
-    expect(find.byKey(const ValueKey('live-clock')), findsOneWidget);
+    // 截图版式顶栏：左频道名，右信息与设置；没有真实视频流时
+    // 分辨率不硬写、网速无数据时不显示；时钟已随版式撤掉。
+    expect(find.byKey(const ValueKey('live-video-title')), findsOneWidget);
+    expect(find.text('频道一'), findsWidgets);
+    expect(find.byKey(const ValueKey('live-video-info')), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-video-settings')), findsOneWidget);
     expect(
-      find.textContaining(RegExp(r'周[一二三四五六日]')),
-      findsOneWidget,
+      find.byKey(const ValueKey('live-video-resolution')),
+      findsNothing,
     );
+    expect(find.byKey(const ValueKey('live-clock')), findsNothing);
     expect(
       find.byKey(const ValueKey('live-speed-badge')),
       findsNothing,
     );
+    // 未播时中间大三角在（播放器自带的播放键），点它继续播。
+    expect(find.byKey(const ValueKey('live-video-play')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('当前频道卡：首字兜底、节目行显示真实 subtitle', (tester) async {
+  testWidgets('信息卡：频道号卡+节目卡，节目行只显示真实 subtitle', (tester) async {
     await _pumpLive(tester);
-    // 无台标时卡片显示频道名首字“频”。
-    expect(find.text('频'), findsOneWidget);
-    // subtitle 同时出现在频道卡、频道行与视频区底部信息条，三处一致。
-    expect(find.text('主播小明'), findsNWidgets(3));
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k1')),
-        matching: find.text('主播小明'),
-      ),
-      findsOneWidget,
-    );
+    // 左卡大号 + 频道名，右卡“正在播放”显示真实 subtitle。
+    expect(find.byKey(const ValueKey('live-number-card')), findsOneWidget);
+    expect(find.text('001'), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-epg-card')), findsOneWidget);
+    expect(find.text('正在播放：主播小明'), findsOneWidget);
+    expect(find.text('即将播放：暂无节目信息'), findsOneWidget);
+    // subtitle 只在节目卡里出现一次，不再三处重复。
+    expect(find.textContaining('主播小明'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('双栏：点分组切换频道列表、再点回原分组', (tester) async {
+  testWidgets('三列网格：点分组切换频道列、再点回原分组', (tester) async {
     await _pumpLive(tester);
     expect(find.text('频道一'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('live-group-g2')));
@@ -299,54 +304,23 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('换台：点频道行切换当前频道、三角标记跟过去', (tester) async {
+  testWidgets('换台：点频道格切换当前频道、号卡与节目卡跟过去', (tester) async {
     final playback = await _pumpLive(tester);
     expect(playback.channel?.name, '频道一');
+    // 频道一有 2 条线路，右列出现线路 1/2。
+    expect(find.text('线路1'), findsOneWidget);
+    expect(find.text('线路2'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('live-channel-k2')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(playback.channel?.name, '频道二');
     expect(playback.playCalls, greaterThan(0));
-    // 当前行以三角代替序号，非当前行仍显示序号。
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k2')),
-        matching: find.byIcon(Icons.play_arrow_rounded),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k1')),
-        matching: find.byIcon(Icons.play_arrow_rounded),
-      ),
-      findsNothing,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k1')),
-        matching: find.text('001'),
-      ),
-      findsOneWidget,
-    );
-    // 切到无 subtitle 的频道：频道卡与视频区信息条不再显示节目信息，
-    // 只剩频道一自己那行还显示它自己的 subtitle，不编假节目单。
-    expect(find.text('主播小明'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k1')),
-        matching: find.text('主播小明'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('live-channel-k2')),
-        matching: find.text('主播小明'),
-      ),
-      findsNothing,
-    );
-    // 每行末尾有右箭头。
-    expect(find.byIcon(Icons.chevron_right_rounded), findsNWidgets(2));
+    // 号卡跟到 002，节目卡无真实 subtitle 时照实写暂无节目信息。
+    expect(find.text('002'), findsOneWidget);
+    expect(find.text('正在播放：暂无节目信息'), findsOneWidget);
+    expect(find.text('主播小明'), findsNothing);
+    // 频道二只有 1 条线路，线路 2 消失。
+    expect(find.text('线路1'), findsOneWidget);
+    expect(find.text('线路2'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -361,12 +335,10 @@ void main() {
     // 底层仍走默认：首条线路、自动解码。
     expect(playback.route, 0);
     expect(playback.decoderMode, LiveDecoderMode.auto);
-    // 频道卡、收藏行、分组/频道列表都在，布局上移不留空。
-    expect(find.text('频'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('live-favourites-button')),
-      findsOneWidget,
-    );
+    // 收藏入口在网格左列首行，不再是面板行里的按钮；三列网格在。
+    expect(find.byKey(const ValueKey('live-favourites-button')), findsNothing);
+    expect(find.byKey(const ValueKey('live-grid')), findsOneWidget);
+    expect(find.text('收藏'), findsOneWidget);
     expect(find.byKey(const ValueKey('live-channel-k1')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

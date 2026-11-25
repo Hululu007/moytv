@@ -185,11 +185,11 @@ Future<(_FakePlayback, List<LivePlaybackController>)> _pumpLive(
         ? AppOrientationScope(television: false, child: app)
         : app,
   );
-  // 替身画面第一帧就挂载，不能用它判断加载完成；等“全屏与旋转”按钮
-  // 出现（_nowPlaying 要求 channel != null 且无错误），即加载已完成。
+  // 替身画面第一帧就挂载，不能用它判断加载完成；等三列网格出现，
+  // 即分组与频道已加载完成。
   for (
     var i = 0;
-    i < 30 && find.byTooltip('全屏与旋转').evaluate().isEmpty;
+    i < 30 && find.byKey(const ValueKey('live-grid')).evaluate().isEmpty;
     i++
   ) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -219,7 +219,13 @@ int _mountedVideoCount(WidgetTester tester) {
 
 Future<void> _enterFullscreen(WidgetTester tester) async {
   expect(_inlineFinder(), findsOneWidget);
-  await tester.tap(find.byTooltip('全屏与旋转'));
+  // 截图版式里全屏入口在频道信息单里：点顶栏信息钮，再点“全屏播放”。
+  // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
+  // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
+  await tester.tap(find.byKey(const ValueKey('live-video-info')));
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.pump(const Duration(milliseconds: 600));
+  await tester.tap(find.byKey(const ValueKey('live-info-fullscreen')));
   for (
     var i = 0;
     i < 10 && find.byType(LivePlayerScreen).evaluate().isEmpty;
@@ -230,7 +236,7 @@ Future<void> _enterFullscreen(WidgetTester tester) async {
   expect(find.byType(LivePlayerScreen), findsOneWidget);
   // 路由出现不等于过渡完成：再泵 300ms（过渡 260ms）等滑入动画结束，
   // 否则随后的手势面点按可能落在过渡中的错位上。
-  await tester.pump(const Duration(milliseconds: 300));
+  await tester.pump(const Duration(milliseconds: 600));
   // 全屏期间内嵌与全屏画面同时挂载（同一纹理），不卸载内嵌。
   expect(_inlineFinder(), findsOneWidget);
   expect(find.byKey(_fullscreenKey), findsOneWidget);

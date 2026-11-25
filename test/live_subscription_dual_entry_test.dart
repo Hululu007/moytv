@@ -396,9 +396,10 @@ void main() {
         ),
       );
       await _waitForLiveReady(tester);
-      // 频道一带真实 subtitle，频道二多线路：两行真实信息都出现。
-      expect(find.text('主播小明'), findsWidgets);
-      expect(find.text('2 条线路'), findsOneWidget);
+      // 频道一带真实 subtitle，频道二多线路：节目卡显示 subtitle，
+      // 右列显示两条线路。
+      expect(find.textContaining('主播小明'), findsOneWidget);
+      expect(find.text('线路2'), findsOneWidget);
       // 分组栏显示真实频道数。
       expect(find.text('2 个'), findsOneWidget);
 
@@ -412,10 +413,14 @@ void main() {
 }
 
 Future<void> _waitForLiveReady(WidgetTester tester) async {
-  for (var i = 0; i < 30 && find.byTooltip('全屏与旋转').evaluate().isEmpty; i++) {
+  for (
+    var i = 0;
+    i < 30 && find.byKey(const ValueKey('live-grid')).evaluate().isEmpty;
+    i++
+  ) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(find.byTooltip('全屏与旋转'), findsOneWidget);
+  expect(find.byKey(const ValueKey('live-grid')), findsOneWidget);
 }
 
 /// 已在直播页内再次切源/切分组时，全屏按钮早已存在，不能再拿它当

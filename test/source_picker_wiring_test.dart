@@ -21,27 +21,6 @@ class _FailingLiveRepository extends LiveRepository {
   }) async => throw AppFailure('合成直播失败');
 }
 
-/// 把弹窗里的站点瓦片拖进视口：内置源增至 37 个后，虎牙瓦片落到
-/// 测试视口之下（弹窗 ListView 可滚、瓦片全量构建，scrollUntilVisible
-/// 是空操作），直接点按会落空关弹窗、源换不成。真实拖动并按矩形校验。
-Future<void> _dragPickerTileIntoView(WidgetTester tester, Finder finder) async {
-  final listView = find.descendant(
-    of: find.byType(Dialog),
-    matching: find.byType(ListView),
-  );
-  for (var i = 0; i < 12; i++) {
-    final rect = tester.getRect(finder);
-    final height =
-        tester.view.physicalSize.height / tester.view.devicePixelRatio;
-    if (rect.top >= 0 && rect.bottom <= height) return;
-    final direction = rect.top < 0 ? 200.0 : -200.0;
-    await tester.drag(listView, Offset(0, direction));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-  }
-  throw StateError('瓦片拖 12 次仍不在视口内');
-}
-
 void main() {
   Future<LocalStore> makeStore() async {
     SharedPreferences.setMockInitialValues({});
@@ -87,7 +66,7 @@ void main() {
     expect(tester.takeException(), isNull);
   }, skip: !allSourcesEnabled);
 
-  testWidgets('直播区：点切换按钮弹弹窗，点选虎牙立即切换', (tester) async {
+  testWidgets('直播区：点切换按钮弹弹窗，点选哔哩哔哩立即切换', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final preferences = await SharedPreferences.getInstance();
     final liveStore = LiveStore(preferences, 'default')..load();
@@ -104,8 +83,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('🔞秀果 直播源暂时不可用'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('live-source-button')));
+    // 首个可见源是内置片库（whos_lib 在源表首位），不是旧断言里的秀果。
+    expect(find.text('🔞内置片库 直播源暂时不可用'), findsOneWidget);
+    // 切换入口在顶栏信息单里：点信息钮，再点“切换直播源”。
+    // 点按只发事件不跑帧：先 pump 一次让点按生效、单子入栈，
+    // 再 pump 一次让入场动画走完，单子落到屏内再点里面的格。
+    await tester.tap(find.byKey(const ValueKey('live-video-info')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.tap(find.byKey(const ValueKey('live-info-switch-source')));
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsOneWidget);
     // 弹窗无“当前：X”文字，当前源以选中态瓦片表示（渐变 + 对勾）。
@@ -113,14 +99,17 @@ void main() {
       find.byKey(const ValueKey('site-picker-row-xiuguo')),
       findsOneWidget,
     );
-    await _dragPickerTileIntoView(
-      tester,
-      find.byKey(const ValueKey('site-picker-row-huya')),
-    );
-    await tester.tap(find.byKey(const ValueKey('site-picker-row-huya')));
+    // 虎牙已于 2026-11-15 按用户令从内置直播源里删除，改点仍在的哔哩哔哩。
+    // 哔哩哔哩在列表最底（初始 y≈1500，屏外）：手拖 ListView 只能把瓦片
+    // 挪到“布局位置在屏内”，点按仍落空（弹层背景接住）；ensureVisible
+    // 才是框架的正路，滚到位再点按，弹窗即关、源即换。
+    final bilibiliTile = find.byKey(const ValueKey('site-picker-row-bilibili'));
+    await tester.ensureVisible(bilibiliTile);
+    await tester.pumpAndSettle();
+    await tester.tap(bilibiliTile);
     await tester.pumpAndSettle();
     expect(find.text('切换直播源'), findsNothing);
-    expect(find.text('虎牙 直播源暂时不可用'), findsOneWidget);
+    expect(find.text('哔哩哔哩 直播源暂时不可用'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

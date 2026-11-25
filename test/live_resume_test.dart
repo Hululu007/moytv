@@ -200,7 +200,7 @@ Future<(_FakePlayback, LiveStore)> _pumpLive(
   );
   for (
     var i = 0;
-    i < 30 && find.byTooltip('全屏与旋转').evaluate().isEmpty;
+    i < 30 && find.byKey(const ValueKey('live-grid')).evaluate().isEmpty;
     i++
   ) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -284,9 +284,11 @@ void main() {
         'live.lastWatched': _memoryJson(sourceId: 'deleted_source'),
       },
     );
-    expect(playback.source?.id, 'xiuguo');
+    // 首个可见源是内置片库（whos_lib，2026-11-22 插到源表首位），
+    // 不是旧断言里的秀果。
+    expect(playback.source?.id, 'whos_lib');
     expect(playback.channel?.key, 'k1');
-    expect(store.lastWatched?.sourceId, 'xiuguo');
+    expect(store.lastWatched?.sourceId, 'whos_lib');
     expect(store.lastWatched?.channelKey, 'k1');
     expect(tester.takeException(), isNull);
   });
@@ -326,7 +328,8 @@ void main() {
     expect(find.byKey(const ValueKey('live-resume-button')), findsNothing);
 
     // 切到频道一：记忆跟到 k1；按钮出现，目标仍是进直播那一刻的记忆 k2。
-    await tester.tap(find.text('频道一'));
+    // “频道一”同时出现在号卡与网格格里，点网格那格才换台。
+    await tester.tap(find.byKey(const ValueKey('live-channel-k1')));
     for (
       var i = 0;
       i < 30 &&
