@@ -44,7 +44,8 @@ String idjDisplayName(IdjInstalledPlugin item) {
   return item.entry.name;
 }
 
-/// 安装确认里的分区提示文案（设计 §4.3，用户 2026-11-24 定）：
+/// 装完结果提示里的分区文案（原设计 §4.3 给安装确认 sheet 用，
+/// 2026-11-25 免确认后改挂在装完的提示里，用户 2026-11-24 定）：
 /// 按分区（section）写，不按 adult 字段写。
 /// 短剧分区写短剧区文案；视频分区且带 🔞 前缀写午夜组文案；
 /// 视频分区无 🔞 前缀不加提示行（回 null）。
@@ -57,12 +58,6 @@ String? idjSectionNoteForManifest(IdjPluginManifest manifest) {
     return '成人插件：装好后进午夜组，默认不对新用户显示';
   }
   return null;
-}
-
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 Future<void> _showIdjError(BuildContext context, String message) async {
@@ -101,339 +96,6 @@ Future<void> _showIdjMessage(
       ],
     ),
   );
-}
-
-/// 安装确认 sheet 的内容本体（底部动作单形态，与
-/// `MiniAppHomePage._showInstalledActions` 风格一致）。
-/// 预览测试直接渲染这个本体；正式流程走 [showIdjInstallConfirmSheet]。
-class IdjInstallConfirmSheet extends StatelessWidget {
-  const IdjInstallConfirmSheet({
-    super.key,
-    required this.bundle,
-    required this.bundleBytes,
-    this.oldManifest,
-    required this.onConfirm,
-    required this.onCancel,
-  });
-
-  final IdjPluginBundle bundle;
-  final int bundleBytes;
-  final IdjPluginManifest? oldManifest;
-  final VoidCallback onConfirm;
-  final VoidCallback onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final manifest = bundle.manifest;
-    final diff = oldManifest == null
-        ? null
-        : IdjPluginStore.permissionDiff(oldManifest!, manifest);
-    final hasDiff = diff != null && !diff.isEmpty;
-    final sectionNote = idjSectionNoteForManifest(manifest);
-    final domains = <String>{
-      ...manifest.httpDomains,
-      ...manifest.mediaDomains,
-    }.toList();
-    final isUpdate = oldManifest != null;
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: colors.onSurfaceVariant.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    isUpdate ? '更新插件' : '安装插件',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  key: const ValueKey('idj-confirm-close'),
-                  icon: const Icon(Icons.close),
-                  onPressed: onCancel,
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: colors.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    manifest.name.isEmpty
-                        ? '插'
-                        : String.fromCharCode(
-                            manifest.name.runes.first,
-                          ),
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: colors.onPrimaryContainer,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        manifest.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${idjTypeLabel(manifest.type)} · ${manifest.type}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    'v${manifest.version}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                if (manifest.adult) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colors.errorContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '🔞 成人',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colors.onErrorContainer,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (sectionNote != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colors.tertiaryContainer.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  sectionNote,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-            ],
-            if (hasDiff) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colors.errorContainer.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '新版本权限变化',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    for (final line in diff.describe())
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          line,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-            const SizedBox(height: 8),
-            _IdjInfoRow(label: '插件 id', value: manifest.id),
-            if (manifest.author.isNotEmpty)
-              _IdjInfoRow(label: '作者', value: manifest.author),
-            _IdjInfoRow(
-              label: '存储需求',
-              value: '插件包约 ${_formatBytes(bundleBytes)}',
-            ),
-            _IdjInfoRow(
-              label: '更新地址',
-              value: manifest.updateUrl.isEmpty ? '无' : '有',
-            ),
-            if (manifest.description.isNotEmpty)
-              _IdjInfoRow(label: '简介', value: manifest.description),
-            const SizedBox(height: 10),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: Text(
-                '申请域名（${manifest.httpDomains.length} 个）',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final domain in domains)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: colors.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(
-                            domain,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    key: const ValueKey('idj-confirm-cancel'),
-                    onPressed: onCancel,
-                    child: const Text('取消'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    key: const ValueKey('idj-confirm-install'),
-                    onPressed: onConfirm,
-                    child: Text(hasDiff ? '确认更新' : '安装'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _IdjInfoRow extends StatelessWidget {
-  const _IdjInfoRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 84,
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 14, color: colors.onSurfaceVariant),
-            ),
-          ),
-          Expanded(
-            child: Text(value, style: const TextStyle(fontSize: 14)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 弹安装确认 sheet：点「安装」/「确认更新」回 true，取消/关掉回 false。
-/// 安装中按钮置灰 + 转圈由调用方（插件 tab 的 `_installing` 集合）
-/// 负责：sheet 一确认就关掉，调用方随即走安装链并把入口按钮置灰。
-Future<bool> showIdjInstallConfirmSheet(
-  BuildContext context, {
-  required IdjPluginBundle bundle,
-  required int bundleBytes,
-  IdjPluginManifest? oldManifest,
-}) async {
-  final confirmed = await showModalBottomSheet<bool>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (sheetContext) => IdjInstallConfirmSheet(
-      bundle: bundle,
-      bundleBytes: bundleBytes,
-      oldManifest: oldManifest,
-      onConfirm: () => Navigator.pop(sheetContext, true),
-      onCancel: () => Navigator.pop(sheetContext, false),
-    ),
-  );
-  return confirmed == true;
 }
 
 /// 三个安装入口 + 右上角「+」菜单共用的安装器入口（设计 §4.2.1/§4.6）：
@@ -523,7 +185,7 @@ class IdjPluginActions {
 
   /// 网址安装本体：`interpret` 分流后按种类处理。
   /// 订阅地址直接加进订阅列表（先拉取一次成功才保存，见 store）；
-  /// 插件包走确认 sheet 再装；M3U / TVBox / 非法输入只提示，不装。
+  /// 插件包直接装（免确认）；M3U / TVBox / 非法输入只提示，不装。
   static Future<bool> installFromUrlString(
     BuildContext context,
     IdjPluginStore store,
@@ -687,8 +349,9 @@ class IdjPluginActions {
     );
   }
 
-  /// 插件包安装本体：解析 → 确认 sheet（有旧版时算 PermissionDiff）
-  /// → 安装链（probe → 写盘 + 索引 → 注册）。
+  /// 插件包安装本体：解析 → 直接走安装链（probe → 写盘 + 索引 → 注册）。
+  /// 免确认口径（用户 2026-11-25 令）：点安装就装到底，不弹确认 sheet；
+  /// 更新时新版本多申请了域名，只在装完的结果提示里顺带一句。
   /// 失败在对话框里给看得懂的中文报错，不闪退、不留半成品。
   static Future<IdjInstalledPlugin?> installBundleText(
     BuildContext context,
@@ -704,22 +367,22 @@ class IdjPluginActions {
       return null;
     }
     final oldManifest = await store.readInstalledManifest(bundle.manifest.id);
-    final confirmed = await showIdjInstallConfirmSheet(
-      context,
-      bundle: bundle,
-      bundleBytes: utf8.encode(text).length,
-      oldManifest: oldManifest,
-    );
-    if (!confirmed) return null;
     try {
       final installed = await store.installBundleText(
         text,
         sourceLabel: sourceLabel,
-        permissionConfirmed: true,
       );
       if (context.mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('已安装「${installed.entry.name}」')),
+          SnackBar(
+            content: Text(
+              _installResultMessage(
+                bundle.manifest,
+                oldManifest,
+                installed.entry.version,
+              ),
+            ),
+          ),
         );
       }
       return installed;
@@ -729,8 +392,27 @@ class IdjPluginActions {
     }
   }
 
+  /// 装完后的结果提示文案：新装说「已安装」，更新说「已更新到 vX」；
+  /// 更新且权限有扩大时顺带一句差异（只报域名数等概要，不拦路）。
+  static String _installResultMessage(
+    IdjPluginManifest manifest,
+    IdjPluginManifest? oldManifest,
+    String installedVersion,
+  ) {
+    if (oldManifest == null) {
+      final note = idjSectionNoteForManifest(manifest);
+      return '已安装「${manifest.name}」${note == null ? '' : '。$note'}';
+    }
+    final diff = IdjPluginStore.permissionDiff(oldManifest, manifest);
+    final buffer = StringBuffer('已更新「${manifest.name}」到 v$installedVersion');
+    if (!diff.isEmpty) {
+      buffer.write('（${diff.describe().join('；')}）');
+    }
+    return buffer.toString();
+  }
+
   /// 订阅里装一个插件：按 `manifestUrl` 下载正文再分流，
-  /// 拿到包后同样先弹确认 sheet（有旧版时算 PermissionDiff）再装。
+  /// 拿到包后直接装（免确认，更新有权限扩大也只在结果提示里带一句）。
   static Future<IdjInstalledPlugin?> installSubscriptionPlugin(
     BuildContext context,
     IdjPluginStore store,
@@ -1210,7 +892,21 @@ class IdjPluginTabState extends State<IdjPluginTab> {
                 child: Text('还没有安装插件，可用下面的入口安装。'),
               )
             else
-              for (final item in _installed) _installedRow(item, colors),
+              GridView.builder(
+                key: const ValueKey('idj-installed-grid'),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate:
+                    const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 8,
+                      crossAxisSpacing: 8,
+                      childAspectRatio: 0.70,
+                    ),
+                itemCount: _installed.length,
+                itemBuilder: (context, index) =>
+                    _installedCard(_installed[index], colors),
+              ),
           ],
           _IdjSectionTitle(title: '安装入口'),
           Row(
@@ -1335,16 +1031,18 @@ class IdjPluginTabState extends State<IdjPluginTab> {
     );
   }
 
-  Widget _installedRow(IdjInstalledPlugin item, ColorScheme colors) {
+  /// 已安装插件卡片（三列网格）：图标 + 名 + 版本 + 启用状态，
+  /// 管理动作（详情/启停/检查更新/卸载/重新安装）收进右上角小菜单。
+  Widget _installedCard(IdjInstalledPlugin item, ColorScheme colors) {
     final name = idjDisplayName(item);
     final disabled = !item.entry.enabled;
     final damaged = item.damaged;
+    final dimmed = disabled || damaged;
     return Container(
       key: ValueKey('idj-installed-${item.entry.pluginId}'),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
       decoration: BoxDecoration(
-        color: disabled || damaged
+        color: dimmed
             ? colors.surfaceContainerHighest.withValues(alpha: 0.45)
             : colors.surface,
         borderRadius: BorderRadius.circular(12),
@@ -1355,134 +1053,105 @@ class IdjPluginTabState extends State<IdjPluginTab> {
         children: [
           Row(
             children: [
-              Expanded(
-                child: Text(
-                  damaged ? '$name（已损坏）' : name,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: disabled || damaged
-                        ? colors.onSurfaceVariant
-                        : colors.onSurface,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 2,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  'v${item.entry.version}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-              if (disabled && !damaged)
-                Container(
-                  key: ValueKey('idj-disabled-${item.entry.pluginId}'),
-                  margin: const EdgeInsets.only(left: 6),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.errorContainer,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '已停用',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: colors.onErrorContainer,
+              _IdjPluginAvatar(name: name, colors: colors),
+              const Spacer(),
+              PopupMenuButton<String>(
+                key: ValueKey('idj-menu-${item.entry.pluginId}'),
+                icon: const Icon(Icons.more_vert, size: 20),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: '插件操作',
+                onSelected: (action) => _installedCardAction(item, action),
+                itemBuilder: (context) => [
+                  if (!damaged) ...[
+                    PopupMenuItem(
+                      key: ValueKey('idj-detail-${item.entry.pluginId}'),
+                      value: 'detail',
+                      child: const Text('详情'),
                     ),
-                  ),
-                ),
-              if (damaged)
-                Container(
-                  key: ValueKey('idj-damaged-${item.entry.pluginId}'),
-                  margin: const EdgeInsets.only(left: 6),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.errorContainer,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '已损坏',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: colors.onErrorContainer,
+                    PopupMenuItem(
+                      key: ValueKey('idj-toggle-${item.entry.pluginId}'),
+                      value: 'toggle',
+                      child: Text(disabled ? '启用' : '停用'),
                     ),
+                    PopupMenuItem(
+                      key: ValueKey('idj-check-one-${item.entry.pluginId}'),
+                      value: 'check',
+                      child: const Text('检查更新'),
+                    ),
+                  ],
+                  if (damaged)
+                    PopupMenuItem(
+                      key: ValueKey('idj-reinstall-${item.entry.pluginId}'),
+                      value: 'reinstall',
+                      child: const Text('重新安装'),
+                    ),
+                  PopupMenuItem(
+                    key: ValueKey('idj-uninstall-${item.entry.pluginId}'),
+                    value: 'uninstall',
+                    child: const Text('卸载'),
                   ),
-                ),
-              const SizedBox(width: 8),
-              Switch(
-                key: ValueKey('idj-switch-${item.entry.pluginId}'),
-                value: item.entry.enabled && !damaged,
-                onChanged: damaged
-                    ? null
-                    : (value) => _toggleEnabled(item, value),
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ],
               ),
             ],
           ),
-          Text(
-            item.entry.pluginId,
-            style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
-          ),
-          if (damaged)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                item.damageReason,
-                style: TextStyle(fontSize: 12, color: colors.error),
-              ),
-            ),
           const SizedBox(height: 6),
-          Row(
-            children: [
-              if (!damaged) ...[
-                _IdjMiniButton(
-                  key: ValueKey('idj-detail-${item.entry.pluginId}'),
-                  label: '详情',
-                  onTap: () => _showDetails(item),
-                ),
-                const SizedBox(width: 8),
-                _IdjMiniButton(
-                  key: ValueKey('idj-uninstall-${item.entry.pluginId}'),
-                  label: '卸载',
-                  onTap: () => _uninstall(item),
-                ),
-                const SizedBox(width: 8),
-                _IdjMiniButton(
-                  key: ValueKey('idj-check-one-${item.entry.pluginId}'),
-                  label: '检查更新',
-                  onTap: () => _checkOneUpdate(item),
-                ),
-              ] else ...[
-                _IdjMiniButton(
-                  key: ValueKey('idj-uninstall-${item.entry.pluginId}'),
-                  label: '卸载',
-                  onTap: () => _uninstall(item),
-                ),
-                const SizedBox(width: 8),
-                _IdjMiniButton(
-                  key: ValueKey('idj-reinstall-${item.entry.pluginId}'),
-                  label: '重新安装',
-                  onTap: () => _reinstall(item),
-                ),
-              ],
-            ],
+          Text(
+            name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: dimmed ? colors.onSurfaceVariant : colors.onSurface,
+            ),
           ),
+          const SizedBox(height: 2),
+          Text(
+            'v${item.entry.version}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+          ),
+          const Spacer(),
+          if (damaged)
+            _IdjStatusChip(
+              key: ValueKey('idj-damaged-${item.entry.pluginId}'),
+              label: '已损坏',
+              background: colors.errorContainer,
+              foreground: colors.onErrorContainer,
+            )
+          else if (disabled)
+            _IdjStatusChip(
+              key: ValueKey('idj-disabled-${item.entry.pluginId}'),
+              label: '已停用',
+              background: colors.errorContainer,
+              foreground: colors.onErrorContainer,
+            )
+          else
+            _IdjStatusChip(
+              label: '已启用',
+              background: colors.surfaceContainerHighest,
+              foreground: colors.onSurfaceVariant,
+            ),
         ],
       ),
     );
+  }
+
+  void _installedCardAction(IdjInstalledPlugin item, String action) {
+    switch (action) {
+      case 'detail':
+        _showDetails(item);
+      case 'toggle':
+        _toggleEnabled(item, !item.entry.enabled);
+      case 'check':
+        _checkOneUpdate(item);
+      case 'reinstall':
+        _reinstall(item);
+      case 'uninstall':
+        _uninstall(item);
+    }
   }
 
   Widget _subscriptionCard(IdjSubscription subscription, ColorScheme colors) {
@@ -1592,8 +1261,22 @@ class IdjPluginTabState extends State<IdjPluginTab> {
             ),
           if (expanded) ...[
             const Divider(height: 20),
-            for (final plugin in subscription.plugins) ...[
-              _subscriptionPluginRow(plugin, colors),
+            if (subscription.plugins.isNotEmpty) ...[
+              GridView.builder(
+                key: ValueKey('idj-sub-grid-${subscription.url}'),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate:
+                    const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 8,
+                      crossAxisSpacing: 8,
+                      childAspectRatio: 0.58,
+                    ),
+                itemCount: subscription.plugins.length,
+                itemBuilder: (context, index) =>
+                    _subscriptionPluginCard(subscription.plugins[index], colors),
+              ),
               const SizedBox(height: 8),
             ],
             for (final cms in subscription.cms) ...[
@@ -1640,7 +1323,9 @@ class IdjPluginTabState extends State<IdjPluginTab> {
     );
   }
 
-  Widget _subscriptionPluginRow(
+  /// 订阅插件卡片（三列网格）：图标 + 名 + 版本 + 安装/更新/已安装按钮。
+  /// 简介不进卡片（格子放不下），名字过长省略号截断。
+  Widget _subscriptionPluginCard(
     IdjSubscriptionPlugin plugin,
     ColorScheme colors,
   ) {
@@ -1658,53 +1343,59 @@ class IdjPluginTabState extends State<IdjPluginTab> {
         : isNewer
         ? '更新'
         : '已安装';
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      plugin.name,
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                  ),
-                  if (plugin.adult)
-                    const Text('🔞', style: TextStyle(fontSize: 14)),
-                ],
-              ),
-              Text(
-                'v${plugin.version}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-              if (plugin.description.isNotEmpty)
-                Text(
-                  plugin.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
+              _IdjPluginAvatar(name: plugin.name, colors: colors),
+              if (plugin.adult) ...[
+                const Spacer(),
+                const Text('🔞', style: TextStyle(fontSize: 13)),
+              ],
             ],
           ),
-        ),
-        const SizedBox(width: 8),
-        FilledButton.tonal(
-          key: ValueKey('idj-sub-install-${plugin.id}'),
-          onPressed: installing || installed != null && !isNewer
-              ? null
-              : () => _installSubscriptionPlugin(plugin),
-          child: Text(installing ? '安装中…' : actionLabel),
-        ),
-      ],
+          const SizedBox(height: 6),
+          Text(
+            plugin.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'v${plugin.version}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.tonal(
+              key: ValueKey('idj-sub-install-${plugin.id}'),
+              onPressed: installing || installed != null && !isNewer
+                  ? null
+                  : () => _installSubscriptionPlugin(plugin),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                // 只改字号，字样沿用主题（同安装入口三按钮的注释）。
+                textStyle: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontSize: 12),
+              ),
+              child: Text(installing ? '安装中…' : actionLabel),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1766,26 +1457,58 @@ class _IdjSectionTitle extends StatelessWidget {
   }
 }
 
-class _IdjMiniButton extends StatelessWidget {
-  const _IdjMiniButton({super.key, required this.label, required this.onTap});
+/// 网格卡片左上角的插件图标：无图标资源时用名字首字占位，
+/// 不留空白、不报错（显示名带 🔞 前缀时首字就是 🔞）。
+class _IdjPluginAvatar extends StatelessWidget {
+  const _IdjPluginAvatar({required this.name, required this.colors});
 
-  final String label;
-  final VoidCallback onTap;
+  final String name;
+  final ColorScheme colors;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: colors.outline),
-        ),
-        child: Text(label, style: const TextStyle(fontSize: 12)),
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: colors.primaryContainer,
+        borderRadius: BorderRadius.circular(10),
       ),
+      alignment: Alignment.center,
+      child: Text(
+        name.isEmpty ? '插' : String.fromCharCode(name.runes.first),
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: colors.onPrimaryContainer,
+        ),
+      ),
+    );
+  }
+}
+
+/// 已安装卡片底部的状态小标签（已启用 / 已停用 / 已损坏）。
+class _IdjStatusChip extends StatelessWidget {
+  const _IdjStatusChip({
+    super.key,
+    required this.label,
+    required this.background,
+    required this.foreground,
+  });
+
+  final String label;
+  final Color background;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text(label, style: TextStyle(fontSize: 11, color: foreground)),
     );
   }
 }

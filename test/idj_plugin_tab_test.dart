@@ -205,12 +205,23 @@ void main() {
     expect(find.text('橙果短剧'), findsOneWidget);
     expect(find.text('🔞潮流AV'), findsOneWidget);
     expect(find.text('🔞2048AI'), findsOneWidget);
-    // 已停用行置灰标“已停用”，只 2048 一行。
+    // 已停用卡置灰标“已停用”，只 2048 一张。
     expect(find.text('已停用'), findsOneWidget);
-    // 已损坏行标“已损坏”，只给「卸载」「重新安装」。
+    // 已损坏卡标“已损坏”；管理动作收在卡片菜单里：
+    // 打开坏插件的菜单，只给「卸载」「重新安装」，没有「详情」「检查更新」。
     expect(find.text('已损坏'), findsOneWidget);
+    final brokenMenu = find.byKey(
+      const ValueKey('idj-menu-com.idj.ext.broken'),
+    );
+    await tester.ensureVisible(brokenMenu);
+    await tester.tap(brokenMenu);
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('idj-reinstall-com.idj.ext.broken')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('idj-uninstall-com.idj.ext.broken')),
       findsOneWidget,
     );
     expect(
@@ -221,6 +232,8 @@ void main() {
       find.byKey(const ValueKey('idj-check-one-com.idj.ext.broken')),
       findsNothing,
     );
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
     // 安装入口三按钮 + 订阅区 + 更新检查按钮都在。
     expect(find.byKey(const ValueKey('idj-install-url')), findsOneWidget);
     expect(find.byKey(const ValueKey('idj-install-file')), findsOneWidget);
@@ -236,33 +249,41 @@ void main() {
     expect(find.byKey(const ValueKey('idj-add-subscription')), findsOneWidget);
   });
 
-  testWidgets('启用开关：关掉橙果后行变“已停用”', (tester) async {
+  testWidgets('卡片菜单停用：关掉橙果后卡变“已停用”', (tester) async {
     await pumpTab(tester);
 
-    final switchFinder = find.byKey(
-      const ValueKey('idj-switch-com.idj.ext.chengguo'),
+    final menuFinder = find.byKey(
+      const ValueKey('idj-menu-com.idj.ext.chengguo'),
     );
-    await tester.ensureVisible(switchFinder);
-    await tester.tap(switchFinder);
+    await tester.ensureVisible(menuFinder);
+    await tester.tap(menuFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('idj-toggle-com.idj.ext.chengguo')),
+    );
     await drain(
       tester,
       until: () => find.text('已停用').evaluate().length == 2,
     );
 
-    // 橙果 + 2048 两行已停用。
+    // 橙果 + 2048 两张卡已停用。
     expect(find.text('已停用'), findsNWidgets(2));
     expect(SourceSite.importedSites.containsKey('idj_chengguo'), isFalse);
   });
 
-  testWidgets('卸载：确认后行消失、片库登记注销', (tester) async {
+  testWidgets('卸载：菜单点卸载、确认后卡消失、片库登记注销', (tester) async {
     await pumpTab(tester);
     expect(SourceSite.importedSites.containsKey('idj_aiguo'), isTrue);
 
-    final uninstallFinder = find.byKey(
-      const ValueKey('idj-uninstall-com.idj.ext.aiguo'),
+    final menuFinder = find.byKey(
+      const ValueKey('idj-menu-com.idj.ext.aiguo'),
     );
-    await tester.ensureVisible(uninstallFinder);
-    await tester.tap(uninstallFinder);
+    await tester.ensureVisible(menuFinder);
+    await tester.tap(menuFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('idj-uninstall-com.idj.ext.aiguo')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('卸载插件'), findsOneWidget);
 
@@ -400,22 +421,31 @@ void main() {
     );
   });
 
-  group('安装确认 sheet 分区文案', () {
-    Future<void> pumpSheet(
+  group('免确认直装（2026-11-25 口径）', () {
+    // 小 harness：两个按钮分别走 IdjPluginActions.installBundleText，
+    // 与 tab 里三个安装入口、订阅安装共用同一条链。
+    Future<void> pumpHarness(
       WidgetTester tester, {
-      required String text,
-      IdjPluginManifest? oldManifest,
+      required String buttonKey,
+      required String bundleText,
     }) async {
-      final bundle = IdjPluginStore.parseBundleText(text);
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: IdjInstallConfirmSheet(
-              bundle: bundle,
-              bundleBytes: utf8.encode(text).length,
-              oldManifest: oldManifest,
-              onConfirm: () {},
-              onCancel: () {},
+            body: Builder(
+              builder: (context) => FilledButton(
+                key: ValueKey(buttonKey),
+                onPressed: () => IdjPluginActions.installBundleText(
+                  context,
+                  store,
+                  bundleText,
+                ),
+                child: const Text('触发安装'),
+              ),
             ),
           ),
         ),
@@ -423,74 +453,146 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('橙果：短剧区文案，不写午夜组', (tester) async {
+    testWidgets('点安装直接装完：不弹确认 sheet，装完给结果提示', (tester) async {
       final text = _bundleText(
-        id: 'com.idj.ext.chengguo',
-        name: '橙果短剧',
-        version: '1.0.1',
-        adult: true,
-        http: const [
-          'api2.chengguodj.com',
-          'chengguodj.com',
-          'www.chengguodj.com',
-          'hls.ohjzmm.cn',
-          '*.ohjzmm.cn',
-          'mts.hhjd.mobi',
-          '*.hhjd.mobi',
-        ],
-      );
-      await pumpSheet(tester, text: text);
-
-      expect(find.text('橙果短剧'), findsOneWidget);
-      expect(find.text('v1.0.1'), findsOneWidget);
-      expect(find.text('com.idj.ext.chengguo'), findsOneWidget);
-      expect(find.text('申请域名（7 个）'), findsOneWidget);
-      expect(
-        find.text('短剧插件：装好后进短剧区，可在片库短剧区找到'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('午夜组'), findsNothing);
-      expect(find.text('安装'), findsOneWidget);
-    });
-
-    testWidgets('潮流：午夜组文案', (tester) async {
-      final text = _bundleText(
-        id: 'com.idj.ext.chaoliu',
-        name: '潮流AV',
-        version: '1.3.5',
-        adult: true,
-      );
-      await pumpSheet(tester, text: text);
-
-      expect(
-        find.text('成人插件：装好后进午夜组，默认不对新用户显示'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('短剧区'), findsNothing);
-    });
-
-    testWidgets('更新场景：PermissionDiff 差异列出，按钮变“确认更新”', (tester) async {
-      final oldText = _bundleText(
-        id: 'com.idj.ext.chengguo',
-        name: '橙果短剧',
+        id: 'com.idj.ext.newdrama',
+        name: '新短剧插件',
         version: '1.0.0',
-        adult: true,
-        http: const ['chengguodj.com'],
+        type: 'shortdrama',
       );
-      final newText = _bundleText(
-        id: 'com.idj.ext.chengguo',
-        name: '橙果短剧',
-        version: '1.0.1',
-        adult: true,
-        http: const ['chengguodj.com', 'api2.chengguodj.com', 'hls.ohjzmm.cn'],
-      );
-      final oldManifest = IdjPluginStore.parseBundleText(oldText).manifest;
-      await pumpSheet(tester, text: newText, oldManifest: oldManifest);
+      await pumpHarness(tester, buttonKey: 'harness-install', bundleText: text);
 
-      expect(find.text('新版本权限变化'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('harness-install')));
+      await drain(
+        tester,
+        until: () => find.textContaining('已安装「新短剧插件」').evaluate().isNotEmpty,
+      );
+
+      // 全程没有确认 sheet / 确认按钮出现过。
+      expect(find.byKey(const ValueKey('idj-confirm-install')), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      // 装上了，短剧分区文案挂在结果提示里。
+      final listed = (await tester.runAsync(() => store.listInstalled()))!;
+      expect(
+        listed.where((item) => item.entry.pluginId == 'com.idj.ext.newdrama'),
+        hasLength(1),
+      );
+      expect(
+        find.textContaining('短剧插件：装好后进短剧区'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('升级多申请域名：不拦确认，直接装成，结果提示带一句', (tester) async {
+      await tester.runAsync(
+        () => store.installBundleText(
+          _bundleText(
+            id: 'com.idj.ext.upgrademe',
+            name: '升级插件',
+            version: '1.0.0',
+            http: const ['a.test'],
+          ),
+        ),
+      );
+      final widened = _bundleText(
+        id: 'com.idj.ext.upgrademe',
+        name: '升级插件',
+        version: '1.0.1',
+        http: const ['a.test', 'b.test', 'c.test'],
+      );
+      await pumpHarness(tester, buttonKey: 'harness-upgrade', bundleText: widened);
+
+      await tester.tap(find.byKey(const ValueKey('harness-upgrade')));
+      await drain(
+        tester,
+        until: () => find.textContaining('已更新「升级插件」').evaluate().isNotEmpty,
+      );
+
+      expect(find.byKey(const ValueKey('idj-confirm-install')), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      final listed = (await tester.runAsync(() => store.listInstalled()))!;
+      final upgraded = listed.firstWhere(
+        (item) => item.entry.pluginId == 'com.idj.ext.upgrademe',
+      );
+      expect(upgraded.entry.version, '1.0.1');
       expect(find.textContaining('新版本多申请了 2 个域名'), findsOneWidget);
-      expect(find.text('确认更新'), findsOneWidget);
-      expect(find.text('安装'), findsNothing);
+    });
+  });
+
+  group('三列网格排布', () {
+    SliverGridDelegateWithFixedCrossAxisCount gridDelegateOf(
+      WidgetTester tester,
+      Finder finder,
+    ) {
+      final grid = tester.widget<GridView>(finder);
+      return grid.gridDelegate
+          as SliverGridDelegateWithFixedCrossAxisCount;
+    }
+
+    testWidgets('已安装与订阅都是三列网格，小屏无溢出', (tester) async {
+      tester.view.physicalSize = const Size(360, 740);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final subscription = IdjSubscription(
+        url: 'https://example.com/sub.json',
+        name: '测试订阅',
+        plugins: [
+          for (var i = 0; i < 7; i++)
+            IdjSubscriptionPlugin(
+              id: 'com.idj.ext.sub$i',
+              name: '订阅插件$i',
+              version: '1.0.$i',
+              type: 'video',
+              adult: i.isEven,
+              description: '',
+              manifestUrl: 'https://example.com/sub$i.json',
+            ),
+        ],
+        cms: const [],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: IdjPluginTab(
+              store: store,
+              initialSubscriptions: [subscription],
+            ),
+          ),
+        ),
+      );
+      await drain(
+        tester,
+        until: () => find.text('已安装（5）').evaluate().isNotEmpty,
+      );
+
+      // 已安装：三列网格。
+      expect(
+        gridDelegateOf(
+          tester,
+          find.byKey(const ValueKey('idj-installed-grid')),
+        ).crossAxisCount,
+        3,
+      );
+      // 展开订阅：插件也是三列网格。
+      final subscriptionFinder = find.byKey(
+        const ValueKey('idj-subscription-https://example.com/sub.json'),
+      );
+      await tester.ensureVisible(subscriptionFinder);
+      await tester.tap(subscriptionFinder);
+      await tester.pumpAndSettle();
+      expect(
+        gridDelegateOf(
+          tester,
+          find.byKey(
+            const ValueKey('idj-sub-grid-https://example.com/sub.json'),
+          ),
+        ).crossAxisCount,
+        3,
+      );
+      expect(find.text('订阅插件6'), findsOneWidget);
+      // 小屏渲染无溢出异常。
+      expect(tester.takeException(), isNull);
     });
   });
 
