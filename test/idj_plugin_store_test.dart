@@ -261,9 +261,54 @@ void main() {
 
     test('域名形态不合法拒一个', () {
       final manifest = IdjPluginManifest.fromJson(
-        _miniManifestJson(http: ['http://example.com']),
+        _miniManifestJson(http: ['exam_ple.com']),
       );
       expect(manifest.problems().join(), contains('域名不合法'));
+    });
+
+    test('域名带 https:// 头归一化后能装', () {
+      final manifest = IdjPluginManifest.fromJson(
+        _miniManifestJson(http: ['https://ai.example.com']),
+      );
+      expect(manifest.problems(), isEmpty);
+      expect(manifest.httpDomains, ['ai.example.com']);
+      // raw 传给 Go 核运行时，清单同步是归一化后的值。
+      final rawPermissions = (manifest.raw['permissions'] as Map)
+          .cast<String, dynamic>();
+      expect(rawPermissions['http'], ['ai.example.com']);
+    });
+
+    test('域名带 :8888 端口归一化后能装', () {
+      final manifest = IdjPluginManifest.fromJson(
+        _miniManifestJson(http: ['5.example.com:8888']),
+      );
+      expect(manifest.problems(), isEmpty);
+      expect(manifest.httpDomains, ['5.example.com']);
+    });
+
+    test('*.域名带协议头和端口归一化后能装', () {
+      final manifest = IdjPluginManifest.fromJson(
+        _miniManifestJson(media: ['https://*.example.com:8443/img']),
+      );
+      expect(manifest.problems(), isEmpty);
+      expect(manifest.mediaDomains, ['*.example.com']);
+    });
+
+    test('域名大写归一化后能装', () {
+      final manifest = IdjPluginManifest.fromJson(
+        _miniManifestJson(http: ['EXAMPLE.com']),
+      );
+      expect(manifest.problems(), isEmpty);
+      expect(manifest.httpDomains, ['example.com']);
+    });
+
+    test('归一化后仍不合法照旧拒（下划线、空格、IP）', () {
+      for (final bad in ['exam_ple.com', 'exa mple.com', '127.0.0.1']) {
+        final manifest = IdjPluginManifest.fromJson(
+          _miniManifestJson(http: [bad]),
+        );
+        expect(manifest.problems().join(), contains('域名不合法'), reason: bad);
+      }
     });
 
     test('minAppVersion 高于 1.5.2 拒一个', () {

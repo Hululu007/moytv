@@ -91,6 +91,33 @@ class IdjPluginManifest {
     final update = json['update'] is Map
         ? Map<String, dynamic>.from(json['update'] as Map)
         : const <String, dynamic>{};
+    final httpDomains = normalizeDomainList(permissions['http']);
+    final mediaDomains = normalizeDomainList(permissions['media']);
+    // raw 会传给 Go 核做运行时白名单，里面的域名清单同步换成归一化
+    // 后的值，保证校验、落盘登记、运行时三处是同一份清单。
+    final raw = Map<String, dynamic>.from(json);
+    if (raw['permissions'] is Map) {
+      final rawPermissions = Map<String, dynamic>.from(
+        raw['permissions'] as Map,
+      );
+      if (rawPermissions.containsKey('http')) {
+        rawPermissions['http'] = httpDomains;
+      }
+      if (rawPermissions.containsKey('media')) {
+        rawPermissions['media'] = mediaDomains;
+      }
+      if (rawPermissions.containsKey('httpDomains')) {
+        rawPermissions['httpDomains'] = normalizeDomainList(
+          rawPermissions['httpDomains'],
+        );
+      }
+      if (rawPermissions.containsKey('mediaDomains')) {
+        rawPermissions['mediaDomains'] = normalizeDomainList(
+          rawPermissions['mediaDomains'],
+        );
+      }
+      raw['permissions'] = rawPermissions;
+    }
     return IdjPluginManifest(
       id: (json['id'] as Object?)?.toString() ?? '',
       name: (json['name'] as Object?)?.toString() ?? '',
@@ -104,22 +131,40 @@ class IdjPluginManifest {
         for (final row in json['capabilities'] as List? ?? const [])
           if (row != null && row.toString().isNotEmpty) row.toString(),
       ],
-      httpDomains: [
-        for (final row in permissions['http'] as List? ?? const [])
-          if (row != null && row.toString().isNotEmpty) row.toString(),
-      ],
-      mediaDomains: [
-        for (final row in permissions['media'] as List? ?? const [])
-          if (row != null && row.toString().isNotEmpty) row.toString(),
-      ],
+      httpDomains: httpDomains,
+      mediaDomains: mediaDomains,
       cloudflare: permissions['cloudflare'] == true,
       storagePermission: permissions['storage'] == true,
       loginPermission: permissions['login'] == true,
       minAppVersion: (json['minAppVersion'] as Object?)?.toString() ?? '',
       updateUrl: (update['url'] as Object?)?.toString() ?? '',
-      raw: Map<String, dynamic>.from(json),
+      raw: raw,
     );
   }
+
+  /// 域名清单归一化（只做减法，不扩大主机集合）：逐条剥协议头、
+  /// 剥路径/查询/片段、剥端口、转小写。`https://x.com:8888/a` 的真实
+  /// 含义只有主机 x.com，与运行时只比 hostname 的口径一致（Go 核
+  /// idjCheckURL 用 Hostname()、Dart 侧用 Uri.host）。归一化后仍须
+  /// 过 [_domainPattern] 才合法，见 [problems]。
+  static String normalizeDomain(String value) {
+    var v = value.trim().toLowerCase();
+    final schemeEnd = v.indexOf('://');
+    if (schemeEnd >= 0) v = v.substring(schemeEnd + 3);
+    for (final sep in const ['/', '?', '#']) {
+      final idx = v.indexOf(sep);
+      if (idx >= 0) v = v.substring(0, idx);
+    }
+    final portStart = v.indexOf(':');
+    if (portStart >= 0) v = v.substring(0, portStart);
+    return v;
+  }
+
+  static List<String> normalizeDomainList(Object? rows) => [
+    for (final row in rows as List? ?? const [])
+      if (row != null && row.toString().isNotEmpty)
+        normalizeDomain(row.toString()),
+  ];
 
   final String id;
   final String name;
@@ -138,7 +183,8 @@ class IdjPluginManifest {
   final String minAppVersion;
   final String updateUrl;
 
-  /// manifest 原始 JSON（原样传给 Go 核，不做二次加工）。
+  /// manifest JSON（传给 Go 核用；域名清单已在 fromJson 归一化，
+  /// 其余字段原样）。
   final Map<String, dynamic> raw;
 
   /// manifest.id 的末段（`com.idj.ext.chengguo` → `chengguo`）。
@@ -184,9 +230,11 @@ class IdjPluginManifest {
   static final _versionPattern = RegExp(r'^\d+\.\d+\.\d+$');
   static final _entryPattern = RegExp(r'^[A-Za-z0-9_-]+\.js$');
   static final _domainPattern = RegExp(r'^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$');
+  static final _ipv4Pattern = RegExp(r'^\d{1,3}(\.\d{1,3}){3}$');
 
   /// 按设计 §1.3 的 Android 宽松口径校验，失败逐条指明是哪一条。
-  /// 宽松点只有两处：integrity 扁平字符串接受、多文件不拒绝；
+  /// 宽松点三处：integrity 扁平字符串接受、多文件不拒绝、域名清单
+  /// 在 fromJson 先归一化（剥协议头/端口/路径、转小写）再验；
   /// 其余照抄 iDuanJu `problems()`。
   List<String> problems() {
     final found = <String>[];
@@ -219,7 +267,9 @@ class IdjPluginManifest {
       }
     }
     for (final domain in [...httpDomains, ...mediaDomains]) {
-      if (!_domainPattern.hasMatch(domain)) {
+      // IP 字面量不是域名形态：原正则的数字段会放行 127.0.0.1 这类
+      // 值，这里显式拒掉（与 idj_contract 播放地址拒 IP 同口径）。
+      if (!_domainPattern.hasMatch(domain) || _ipv4Pattern.hasMatch(domain)) {
         found.add('域名不合法：$domain（只支持 example.com 或 *.example.com 形态）');
       }
     }
