@@ -567,6 +567,33 @@
       "adult": false,
       "description": "6789影视（www.6789zz.com）。分类与原 py 1:1：电视剧/电影/综艺/动漫/短剧/国产剧 6 类。网页解析（stui 模板），列表/详情/搜索齐全，播放页提取 player_aaaa 等真地址。由内置 py 蜘蛛改写。",
       "manifest": "6789zz/6789zz.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ffv1",
+      "name": "星空影院",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "星空影院（www.ffv1.com）。分类与原 py 1:1：电视剧、电影、综艺、动漫。HTML 正则解析列表/详情/搜索，播放页现取 m3u8/mp4 直链。由内置 py 蜘蛛改写。",
+      "manifest": "ffv1/ffv1.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.anet88",
+      "name": "咕咚影院",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "咕咚影院（anet88.com）。6 个分类（与原 py 完全一致：电影/电视剧/综艺/动漫/短剧/预告），HTML 列表/详情/搜索解析，播放页提取 m3u8/mp4 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "anet88/anet88.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.sc123jf",
+      "name": "老牛影视",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "老牛影视（www.sc123jf.com）。分类与原 py 1:1：写死的 23 个分类（电影/电视剧/动漫/综艺/各类型片/各地区剧/短剧），原 py 无旗标过滤。HTML 正则解析列表/详情/搜索，播放页现取 m3u8/mp4 直链，详情 8 条线路各有独立 CDN。由内置 py 蜘蛛改写。",
+      "manifest": "sc123jf/sc123jf.idjplugin"
     }
   ],
   "cms": []
