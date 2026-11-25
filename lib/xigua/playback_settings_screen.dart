@@ -176,6 +176,23 @@ class PlaybackSettingsScreen extends StatelessWidget {
                           ),
                         ),
                 ),
+                SwitchListTile(
+                  key: const ValueKey('settings-adblock-switch'),
+                  value: preferences.adBlock,
+                  title: const Text('去广告'),
+                  subtitle: const Text(
+                    '播放前清洗 m3u8，剔除插播在时间线里的广告分片；关闭后加载原画。'
+                    '与播放器菜单里的「去广告」是同一个开关；个别片源出现缺集或跳段时，关掉后重试。',
+                  ),
+                  onChanged: !enabled
+                      ? null
+                      : (value) => saveUserChange(
+                          context,
+                          () => store.setPlaybackPreferences(
+                            preferences.copyWith(adBlock: value),
+                          ),
+                        ),
+                ),
                 if (Platform.isAndroid && !AppLayout.isTelevision(context)) ...[
                   const Divider(height: 32),
                   SwitchListTile(
