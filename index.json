@@ -459,6 +459,33 @@
       "adult": true,
       "description": "欲望乐园（接口 zdap.gkquu.cn:4438，站点 guohnsqj.hdyubao.cyou）。1 个分类「全部视频」与原 py 完全一致，列表/详情/搜索走签名接口（returnData 可能 AES-CBC 加密），播放为详情现取 videoUrlOne/videoUrlTwo 直链。由内置 py 蜘蛛改写。",
       "manifest": "guohnsqj/guohnsqj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.51xz",
+      "name": "51X",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "51X（51xz.vip）。21 个分类（与原 py 完全一致），Next.js 页面 RSC 流解析视频/短剧/吃瓜帖，hlsUrl 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "51xz/51xz.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.fuchou",
+      "name": "妇愁者联盟",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "妇愁者联盟（kkb2.sixnicefczlm.cc，原 kkb1 已 301 跳转至此，插件带跳转自愈）。63 个分类与原 py 完全一致（首页动态解析、旗标过滤照搬，兜底分类表与原 py CATS 相同），播放为播放页 player_data 现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "fuchou/fuchou.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.tanhuavip14",
+      "name": "探花AV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "探花AV（tanhuavip14.xyz/853）。4 个分类与原 py 蜘蛛 1:1（国产传媒、日本有码、中文字幕、无码视频），播放为详情页现取 m3u8 并预解析最高码率子列表。由内置 py 蜘蛛改写。",
+      "manifest": "tanhuavip14/tanhuavip14.idjplugin"
     }
   ],
   "cms": []
