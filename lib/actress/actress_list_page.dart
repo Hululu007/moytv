@@ -24,6 +24,8 @@ import 'actress_ranking_page.dart';
 import 'actress_roster_sources.dart';
 import 'actress_search.dart';
 import 'actress_site_crawl.dart';
+import 'actress_sql_import.dart';
+import 'actress_sql_import_section.dart';
 import 'actress_stacking.dart';
 import 'actress_sync.dart';
 import 'actress_tag_sheet.dart';
@@ -283,6 +285,16 @@ class _ActressListPageState extends State<ActressListPage> {
   var _mirrorFile = '';
   String? _mirrorError;
   var _lastMirrorRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 2026-11-25 .sql 导入：设置里选 .sql / .sql.gz 文件导回主库。
+  /// 进度由设置弹窗的 600ms 轮询取走重画，这里只写字段、不逐批
+  /// setState；开始/结束/失败时才 setState。取消只改标志位，
+  /// 导入器在批与批之间检查，停在换库之前、原库不动。
+  var _sqlImportRunning = false;
+  ActressSqlImportProgress? _sqlImportProgress;
+  String? _sqlImportError;
+  ActressSqlImportResult? _sqlImportResult;
+  var _sqlImportCancelRequested = false;
 
   /// 2026-11-20 通用读库：当前库不是女优库结构时为 true，列表
   /// 改走通用作品模式（作品列表 + 点按直播），不走女优库的总览/
@@ -945,6 +957,102 @@ class _ActressListPageState extends State<ActressListPage> {
       unawaited(_maybeStartDbMirror());
     } finally {
       _reloadingDb = false;
+    }
+  }
+
+  /// .sql 导入（2026-11-25 用户令）：设置里选 .sql / .sql.gz 文件，
+  /// 导进临时库、校验四项（作品/人数/播放地址/封面/头像）通过后才
+  /// 换掉 MYTV/db/女优库.db（先备份 .bak）。导完清缓存、重读列表。
+  /// 失败/取消：原库不动，只报原因；换过库连接才重读恢复连接。
+  Future<void> _startSqlImport() async {
+    if (_sqlImportRunning) return;
+    final bind = _mytvBind;
+    if (bind == null || !bind.bound || bind.dbPath.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('先绑定 MYTV 再导入数据库')),
+      );
+      return;
+    }
+    List<PlatformFile> files;
+    try {
+      // file_picker 13.1.0：pickFiles 直接回 List<PlatformFile>。
+      // 选文件调用包进 try/catch：卓易通容器里选择器一抛错就地报，
+      // 不静默（2026-11-25 统一导入入口同款修法）。
+      files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['sql', 'gz'],
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('打不开文件选择器：${e.toString().split('\n').first}')),
+      );
+      return;
+    }
+    if (files.isEmpty) return; // 用户取消选择。
+    final pickedPath = files.first.path;
+    if (pickedPath == null || pickedPath.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('选不到文件路径，请重选一次')));
+      return;
+    }
+    final lower = pickedPath.toLowerCase();
+    if (!lower.endsWith('.sql') && !lower.endsWith('.sql.gz')) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('只认 .sql 或 .sql.gz 文件')));
+      return;
+    }
+    setState(() {
+      _sqlImportRunning = true;
+      _sqlImportProgress = null;
+      _sqlImportError = null;
+      _sqlImportResult = null;
+      _sqlImportCancelRequested = false;
+    });
+    final result = await ActressSqlImporter().importFile(
+      sqlPath: pickedPath,
+      dbPath: bind.dbPath,
+      closeDatabase: _db.close,
+      // 进度只写字段：设置弹窗每 600ms 轮询重画，不逐批 setState。
+      onProgress: (p) => _sqlImportProgress = p,
+      isCancelled: () => _sqlImportCancelRequested,
+    );
+    if (!mounted) return;
+    setState(() {
+      _sqlImportRunning = false;
+      _sqlImportProgress = null;
+      if (result.ok) {
+        _sqlImportResult = result;
+        _sqlImportError = null;
+      } else {
+        _sqlImportError = result.error;
+      }
+    });
+    if (result.ok) {
+      // 库文件换了：会话缓存按文件指纹分 key 也全清一次，再重读列表。
+      _clearListCaches();
+      NvkuEntryCache.clear();
+      await _manualReloadDb();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已导入：${result.videos} 部作品 · ${result.actresses} 人'
+            ' · 封面 ${result.covers} · 头像 ${result.avatars}',
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败：${result.error ?? '未知原因'}')),
+      );
+      // 换过库连接才重读恢复连接；没动主库就不用重读。
+      if (result.needsReload) await _manualReloadDb();
     }
   }
 
@@ -3254,6 +3362,23 @@ class _ActressSettingsSheetState extends State<_ActressSettingsSheet> {
                     ),
                   ],
                 ),
+              // 2026-11-25 .sql 导入：选 .sql / .sql.gz 文件导回主库
+              //（临时库校验通过才换，失败原库不动）。
+              ActressSqlImportSection(
+                bound:
+                    host._mytvBind?.bound == true &&
+                    (host._mytvBind?.dbPath.isNotEmpty ?? false),
+                running: host._sqlImportRunning,
+                progress: host._sqlImportProgress,
+                error: host._sqlImportError,
+                lastResult: host._sqlImportResult,
+                onImport: host._sqlImportRunning
+                    ? null
+                    : host._startSqlImport,
+                onCancel: host._sqlImportRunning
+                    ? () => host._sqlImportCancelRequested = true
+                    : null,
+              ),
               // 2026-11-23 多库勾选：勾上的库一起加载（列表按人名归并、
               // 分类取并集），默认只勾主库；主库永远勾着不可取消。
               _ActressDbChoiceList(host: host),
