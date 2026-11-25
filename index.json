@@ -58,10 +58,10 @@
     {
       "id": "com.idj.ext.rouav",
       "name": "rouAV",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "type": "video",
       "adult": true,
-      "description": "rouAV（肉视频，site2.321av.cc；99dh 的“肉视频”与“rouAV”为同一站）。国产AV/日本/自拍流出/探花/OnlyFans/其他。播放走 rou123.top→rou666.net 真 m3u8，已在线下验通。摸站手写。",
+      "description": "rouAV（肉视频，site2.321av.cc；99dh 的“肉视频”与“rouAV”为同一站）。国产AV/日本/自拍流出/探花/OnlyFans/其他。播放走 rou123.top→rou666.net 真 m3u8。2026-11-25 复核全链实测通过（列表/详情/播放），封面为站方图床原样签名地址。摸站手写。",
       "manifest": "rouav/rouav.idjplugin"
     },
     {
@@ -207,6 +207,24 @@
       "adult": true,
       "description": "XVIDEOS（xvideos.com）。46 个分类，列表纯 HTML 解析，详情取 setVideoHLS / JSON-LD contentUrl 全片。由 CatVod 蜘蛛 xvideos.py 改写。2026-11-24 复核，卡片链接已按 4 段式改版。",
       "manifest": "xvideos/xvideos.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.huanyingai",
+      "name": "幻影AI",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "幻影AI（mfantasy.net，AI 短剧）。13 个分类与站导航 1:1，接口取数，封面走 img.mfantasy.net，播放为 AES-128 HLS（每部已解锁集可播，第 1 集免费）。由海阔规则 🔞幻影AI v2 移植，2026-11-25 全链实测通过。",
+      "manifest": "huanyingai/huanyingai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.aiyinhang",
+      "name": "AI淫航",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AI淫航（aiyinhang.top）。AI成人短剧/AI成人漫剧/AI换脸/AI魔改 4 分类与站导航 1:1，封面走 media.hgpicimg.cc，播放走站内 huangguo 接口 + hgmedia 代理真 m3u8。由 TVBox py 蜘蛛 aiyinhang.py 移植（该版 2026-11-07/08 全链实测通过）；2026-11-25 本机出口被该站断连，离线探针用真实抓包验过，待手机终验。",
+      "manifest": "aiyinhang/aiyinhang.idjplugin"
     }
   ],
   "cms": []
