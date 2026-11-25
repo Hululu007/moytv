@@ -333,6 +333,42 @@
       "adult": true,
       "description": "AV研究院（avyan2026.lol）。13 个分类，MacCMS HTML 直出，播放页内嵌 player_aaaa JSON 现取 m3u8 直链播放。由内置 py 蜘蛛改写。",
       "manifest": "avyanjiuyuan/avyanjiuyuan.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.chinax",
+      "name": "中国X站",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "中国X站（chinaxmovie.com）。4 个分类，HTML 解析列表/详情，播放页现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "chinax/chinax.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.danai",
+      "name": "大奶Ai短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "大奶Ai短剧（danai88.cc，接口走 danai88.cyou 随机子域名）。分类 21 个（接口实时取，兜底 36 个），播放为 play_url 里的 m3u8 直链（HLS）。由内置 py 蜘蛛改写。",
+      "manifest": "danai/danai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.dingjiaseku",
+      "name": "顶级AI色库",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "顶级AI色库（yxql-imh-nh4d.taoquan26s111.cc）。4 个分类，MacCMS 整站 HTML 解析，播放页现取 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "dingjiaseku/dingjiaseku.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.dj69",
+      "name": "69短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "69短剧（69dj16.vip，兜底 69dj05.vip，入口跳转链动态下发域名）。23 个分类，播放页 player_aaaa 直取 m3u8 播放。由内置 py 蜘蛛改写。",
+      "manifest": "dj69/dj69.idjplugin"
     }
   ],
   "cms": []
