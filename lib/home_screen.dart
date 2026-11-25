@@ -327,6 +327,7 @@ class _HomeScreenState extends State<HomeScreen>
     // 听书/阅读已并为“听读”一个标签，顶栏标题同名，子区在页内切换。
     HomeZone.audio => '听读',
     HomeZone.novel => '听读',
+    HomeZone.music => '听读',
   };
 
   /// 片库区容纳全部视频站源（短剧站与点播站），切站决定显示哪站内容，
@@ -1822,6 +1823,7 @@ class _HomeScreenState extends State<HomeScreen>
       HomeZone.live => 1,
       HomeZone.audio => 2,
       HomeZone.novel => 2,
+      HomeZone.music => 2,
     };
   }
 
@@ -1891,7 +1893,9 @@ class _HomeScreenState extends State<HomeScreen>
   void _applyZoneChange(HomeZone zone, {bool recordHistory = false}) {
     if (recordHistory && zone != _zone) _zoneHistory.push(_zone);
     _resetAutoLoad();
-    if (zone == HomeZone.audio || zone == HomeZone.novel) {
+    if (zone == HomeZone.audio ||
+        zone == HomeZone.novel ||
+        zone == HomeZone.music) {
       _lastListenReadZone = zone;
     }
     setState(() {
@@ -2599,6 +2603,18 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  ContentSection _sectionForListenZone(HomeZone zone) => switch (zone) {
+    HomeZone.audio => ContentSection.audio,
+    HomeZone.music => ContentSection.music,
+    _ => ContentSection.novel,
+  };
+
+  HomeZone _zoneForContentSection(ContentSection section) => switch (section) {
+    ContentSection.audio => HomeZone.audio,
+    ContentSection.music => HomeZone.music,
+    ContentSection.novel => HomeZone.novel,
+  };
+
   /// 新开窗口的默认站点：取各区当前选中的站（没有则空，由各区
   /// 自己的默认逻辑接手）。
   String? _win7DefaultSourceId(Win7WindowKind kind) => switch (kind) {
@@ -2608,9 +2624,7 @@ class _HomeScreenState extends State<HomeScreen>
       _liveEntrySourceId.isEmpty ? null : _liveEntrySourceId,
     // 听读窗取当前子区（上次停的子区）选中的站。
     Win7WindowKind.listenRead => _contentBinding.selectedIdFor(
-      _lastListenReadZone == HomeZone.audio
-          ? ContentSection.audio
-          : ContentSection.novel,
+      _sectionForListenZone(_lastListenReadZone),
     ),
     Win7WindowKind.miniApp => null,
     Win7WindowKind.multimedia => null,
@@ -2689,9 +2703,7 @@ class _HomeScreenState extends State<HomeScreen>
         // binding 分区一律不动，只合窗口。
         final section =
             _sectionForSourceId(explicitSourceId) ??
-            (_lastListenReadZone == HomeZone.audio
-                ? ContentSection.audio
-                : ContentSection.novel);
+            _sectionForListenZone(_lastListenReadZone);
         if (explicitSourceId != null &&
             _contentBinding.selectedIdFor(section) != explicitSourceId) {
           for (final source in ContentRegistry.sourcesFor(section)) {
@@ -2701,9 +2713,7 @@ class _HomeScreenState extends State<HomeScreen>
             }
           }
         }
-        _applyZoneChange(
-          section == ContentSection.audio ? HomeZone.audio : HomeZone.novel,
-        );
+        _applyZoneChange(_zoneForContentSection(section));
       case Win7WindowKind.miniApp:
       case Win7WindowKind.multimedia:
       case Win7WindowKind.mine:
@@ -2944,9 +2954,7 @@ class _HomeScreenState extends State<HomeScreen>
         // 单一听读窗口：子区取上次停的子区（胶囊切换与开始菜单
         // 叶子换站都会拨它），窗口内换子区不换窗口实例。
         final zone = _lastListenReadZone;
-        final section = zone == HomeZone.audio
-            ? ContentSection.audio
-            : ContentSection.novel;
+        final section = _sectionForListenZone(zone);
         // key 取 binding 当前选站：只切前台/最小化时选站不变、实例
         // 保留；窗口内换站或树里换站都改选站、key 变、实例重建。
         return ListenReadPage(
@@ -2956,9 +2964,7 @@ class _HomeScreenState extends State<HomeScreen>
           zone: zone,
           onZoneSelected: _win7ListenReadSwitch,
           zoneBuilder: (z) => ContentZoneScreen(
-            section: z == HomeZone.audio
-                ? ContentSection.audio
-                : ContentSection.novel,
+            section: _sectionForListenZone(z),
             binding: _contentBinding,
           ),
         );
@@ -3619,14 +3625,14 @@ class _HomeScreenState extends State<HomeScreen>
         initialSourceNonce: _liveEntryNonce,
       );
     }
-    if (_zone == HomeZone.audio || _zone == HomeZone.novel) {
+    if (_zone == HomeZone.audio ||
+        _zone == HomeZone.novel ||
+        _zone == HomeZone.music) {
       return ListenReadPage(
         zone: _zone,
         onZoneSelected: _setZone,
         zoneBuilder: (zone) => ContentZoneScreen(
-          section: zone == HomeZone.audio
-              ? ContentSection.audio
-              : ContentSection.novel,
+          section: _sectionForListenZone(zone),
           binding: _contentBinding,
         ),
       );

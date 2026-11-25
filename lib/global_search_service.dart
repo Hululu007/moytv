@@ -33,12 +33,14 @@ class GlobalSearchBookTarget {
 List<GlobalSearchBookTarget> globalSearchBookTargets({
   required List<ContentSource> audioSources,
   required List<ContentSource> novelSources,
+  List<ContentSource> musicSources = const [],
 }) {
   final seen = <String>{};
   final targets = <GlobalSearchBookTarget>[];
   for (final entry in [
     (ContentSection.audio, audioSources),
     (ContentSection.novel, novelSources),
+    (ContentSection.music, musicSources),
   ]) {
     for (final source in entry.$2) {
       if (!seen.add(source.id)) continue;

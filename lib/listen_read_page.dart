@@ -6,9 +6,9 @@ import 'neon_glass_kit.dart';
 
 /// 听读页：底部“听读”标签的目的地，一页里能听又能看。
 ///
-/// 顶部是听书/阅读两个子切换，下面只挂当前子区的屏（另一子区
-/// 不建不取数）；听书播放是应用级单例，子区切换卸载区屏不影
-/// 响正在播的书。内部区键（audio/novel）与数据一律不动，只合
+/// 顶部是听书/阅读/音乐三个子切换，下面只挂当前子区的屏（另一
+/// 子区不建不取数）；听书播放是应用级单例，子区切换卸载区屏不
+/// 影响正在播的书。内部区键（audio/novel）与数据一律不动，只合
 /// 并显示与导航。
 class ListenReadPage extends StatelessWidget {
   const ListenReadPage({
@@ -49,6 +49,14 @@ class ListenReadPage extends StatelessWidget {
                 icon: LucideIcons.bookOpen,
                 selected: zone == HomeZone.novel,
                 onTap: () => onZoneSelected(HomeZone.novel),
+              ),
+              const SizedBox(width: 8),
+              NeonCapsule(
+                key: const ValueKey('listenread-music'),
+                label: '音乐',
+                icon: LucideIcons.music,
+                selected: zone == HomeZone.music,
+                onTap: () => onZoneSelected(HomeZone.music),
               ),
             ],
           ),

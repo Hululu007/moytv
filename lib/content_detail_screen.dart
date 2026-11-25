@@ -112,7 +112,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
   }
 
   Future<void> _loadAudioState() async {
-    if (widget.source.section != ContentSection.audio) return;
+    if (!widget.source.section.isAudioLike) return;
     try {
       final resume = await loadAudioResume(widget.source.id, widget.book.id);
       final favorited = await isAudioFavorite(widget.source.id, widget.book.id);
@@ -192,7 +192,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
           _detail = detail;
           _loading = false;
         });
-        if (widget.source.section == ContentSection.audio &&
+        if (widget.source.section.isAudioLike &&
             detail.chapters.isNotEmpty &&
             !_autoPlayed) {
           if (widget.initialChapterIndex != null) {
@@ -531,7 +531,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                           Text(
                             '${widget.source.name} · '
                             '${_detail?.chapters.length ?? 0} '
-                            '${widget.source.section == ContentSection.audio ? '集' : '章'}',
+                            '${widget.source.section.isAudioLike ? '集' : '章'}',
                             style: TextStyle(
                               color: colors.onSurfaceVariant,
                               fontSize: 12,
@@ -566,8 +566,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                               ),
                             ),
                           ],
-                          if (widget.source.section ==
-                              ContentSection.audio) ...[
+                          if (widget.source.section.isAudioLike) ...[
                             const SizedBox(height: 10),
                             Align(
                               alignment: Alignment.centerLeft,
@@ -595,7 +594,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                     ),
                   ],
                 ),
-                if (widget.source.section == ContentSection.audio &&
+                if (widget.source.section.isAudioLike &&
                     _resume != null &&
                     _resume!.started &&
                     _resume!.chapterIndex < (_detail?.chapters.length ?? 0) &&
@@ -640,7 +639,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                 ],
                 const SizedBox(height: 18),
                 Text(
-                  widget.source.section == ContentSection.audio ? '集数' : '章节',
+                  widget.source.section.isAudioLike ? '集数' : '章节',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
                 const SizedBox(height: 6),
@@ -665,7 +664,7 @@ class _ContentDetailScreenState extends State<ContentDetailScreen> {
                     trailing: Icon(
                       i == _playingIndex && _playing
                           ? Icons.volume_up_rounded
-                          : widget.source.section == ContentSection.audio
+                          : widget.source.section.isAudioLike
                           ? Icons.play_circle_outline_rounded
                           : Icons.chevron_right_rounded,
                     ),

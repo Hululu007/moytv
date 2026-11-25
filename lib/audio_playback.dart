@@ -283,7 +283,7 @@ class AudioPlaybackController extends ChangeNotifier
     int index, {
     int seekMs = 0,
   }) async {
-    if (_disposed || source.section != ContentSection.audio) return;
+    if (_disposed || !source.section.isAudioLike) return;
     if (index < 0 || index >= detail.chapters.length) return;
     final generation = ++_generation;
     _takeoverExternal();
@@ -686,7 +686,7 @@ class AudioPlaybackController extends ChangeNotifier
   }
 
   Future<void> _saveChapterStart(int index) async {
-    if (_source?.section != ContentSection.audio) return;
+    if (!(_source?.section.isAudioLike ?? false)) return;
     try {
       final record = _recordFor(index, 0);
       await saveAudioResume(record);
@@ -695,7 +695,7 @@ class AudioPlaybackController extends ChangeNotifier
   }
 
   Future<void> _saveResumeNow() async {
-    if (_source?.section != ContentSection.audio) return;
+    if (!(_source?.section.isAudioLike ?? false)) return;
     if (_playingIndex < 0 || _position.inMilliseconds <= 0) return;
     try {
       final record = _recordFor(_playingIndex, _position.inMilliseconds);
@@ -705,7 +705,7 @@ class AudioPlaybackController extends ChangeNotifier
   }
 
   Future<void> _saveResumeThrottled() async {
-    if (_source?.section != ContentSection.audio) return;
+    if (!(_source?.section.isAudioLike ?? false)) return;
     if (_playingIndex < 0 || !_playing) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     final positionMs = _position.inMilliseconds;
