@@ -114,10 +114,20 @@ class IdjPluginActions {
     BuildContext context,
     IdjPluginStore store,
   ) async {
-    final files = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['idjplugin'],
-    );
+    // 选择器调用原来在 try 外面：选择器本身打不开/抛错会漏出到
+    // 调用方（与统一导入入口 9395cf3 修的是同款毛病）。现包进
+    // try/catch：取消（返回空列表）静默返回 false，抛错弹明确提示。
+    final List<PlatformFile> files;
+    try {
+      files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['idjplugin'],
+      );
+    } catch (error) {
+      if (!context.mounted) return false;
+      await _showIdjError(context, '打开文件选择器失败：$error');
+      return false;
+    }
     if (files.isEmpty) return false;
     final picked = files.single;
     if (!picked.name.toLowerCase().endsWith('.idjplugin')) {
