@@ -276,3 +276,46 @@ func TestCustomSourceDraftsCompat(t *testing.T) {
 		t.Fatalf("api.php drafts = %+v", drafts)
 	}
 }
+
+// 缺口 5：vod_year 落 OnlineDate、vod_area 进 Tags 透传（旧实现两个
+// 字段都丢弃）。
+func TestHTTPAggDramaYearArea(t *testing.T) {
+	drama := httpAggDrama("t4test", httpAggPayload(t, `{"vod_id": "9", "vod_name": "年份片", "vod_year": "2024", "vod_area": "大陆"}`))
+	if drama.OnlineDate != "2024" {
+		t.Fatalf("vod_year not mapped to OnlineDate: %+v", drama)
+	}
+	if len(drama.Tags) != 1 || drama.Tags[0] != "大陆" {
+		t.Fatalf("vod_area not passed through Tags: %+v", drama)
+	}
+
+	plain := httpAggDrama("t4test", httpAggPayload(t, `{"vod_id": "10", "vod_name": "无年份片"}`))
+	if plain.OnlineDate != "" || len(plain.Tags) != 0 {
+		t.Fatalf("missing year/area must stay empty: %+v", plain)
+	}
+}
+
+// 缺口 4：url 数组按 [显示名, 地址] 成对解析，全部候选保留（旧实现
+// 只取 raw[0]，会把显示名误当地址、多地址全丢）。
+func TestHTTPAggPlayPairArray(t *testing.T) {
+	paired := httpAggPlay(httpAggPayload(t, `{"url": ["高清", "https://a.test/hd.m3u8", "标清", "https://a.test/sd.m3u8"]}`))
+	if !paired.hasURL || paired.url != "https://a.test/hd.m3u8" {
+		t.Fatalf("paired play url = %+v", paired)
+	}
+	if len(paired.candidates) != 2 ||
+		paired.candidates[0] != (httpAggPlayCandidate{name: "高清", url: "https://a.test/hd.m3u8"}) ||
+		paired.candidates[1] != (httpAggPlayCandidate{name: "标清", url: "https://a.test/sd.m3u8"}) {
+		t.Fatalf("paired candidates = %+v", paired.candidates)
+	}
+
+	// 裸地址数组：每个元素自成一条无名候选。
+	bare := httpAggPlay(httpAggPayload(t, `{"url": ["https://a.test/1.m3u8", "https://a.test/2.m3u8"]}`))
+	if len(bare.candidates) != 2 || bare.candidates[1].url != "https://a.test/2.m3u8" || bare.candidates[0].name != "" {
+		t.Fatalf("bare candidates = %+v", bare.candidates)
+	}
+
+	// 对象元素 {n, v}。
+	objects := httpAggPlay(httpAggPayload(t, `{"url": [{"n": "线路一", "v": "https://a.test/1.m3u8"}]}`))
+	if len(objects.candidates) != 1 || objects.candidates[0].name != "线路一" || objects.url != "https://a.test/1.m3u8" {
+		t.Fatalf("object candidates = %+v", objects)
+	}
+}

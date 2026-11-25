@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,22 +57,46 @@ type jsFetchRequest struct {
 	method  string
 	body    string
 	headers map[string]string
-	buffer  bool
+	buffer  int
 }
 
-func jsFetchBufferFlag(value interface{}) bool {
+// jsFetchBufferMode 把脚本传入的 buffer 选项归一成 0–3 模式：
+// 0 文本、1 字节数组、2 Base64、3 原始字节（与 easytv/CatVod 的
+// req options.buffer 口径一致）。旧写法 buffer:true 按 Base64（2）
+// 兼容，false/缺省为文本（0）；数字字符串同样认。
+func jsFetchBufferMode(value interface{}) int {
 	switch v := value.(type) {
 	case bool:
-		return v
+		if v {
+			return 2
+		}
+		return 0
 	case float64:
-		return v != 0
+		return jsFetchBufferClamp(int(v))
 	case int64:
-		return v != 0
+		return jsFetchBufferClamp(int(v))
 	case string:
-		return strings.TrimSpace(v) != "" && strings.TrimSpace(v) != "0" && strings.ToLower(strings.TrimSpace(v)) != "false"
+		trimmed := strings.TrimSpace(v)
+		if n, err := strconv.Atoi(trimmed); err == nil {
+			return jsFetchBufferClamp(n)
+		}
+		if trimmed != "" && !strings.EqualFold(trimmed, "false") {
+			return 2
+		}
+		return 0
 	default:
-		return false
+		return 0
 	}
+}
+
+func jsFetchBufferClamp(mode int) int {
+	if mode < 0 {
+		return 0
+	}
+	if mode > 3 {
+		return 3
+	}
+	return mode
 }
 
 func jsFetchParseArgs(call goja.FunctionCall) jsFetchRequest {
@@ -101,7 +126,7 @@ func jsFetchParseArgs(call goja.FunctionCall) jsFetchRequest {
 					}
 				}
 				if buf, ok := val["buffer"]; ok {
-					req.buffer = jsFetchBufferFlag(buf)
+					req.buffer = jsFetchBufferMode(buf)
 				}
 				if params, ok := val["params"].(map[string]interface{}); ok && req.url != "" {
 					req.url = jsFetchAppendParams(req.url, params)
@@ -154,7 +179,7 @@ func jsFetchApplyOptions(req *jsFetchRequest, h map[string]interface{}) {
 		req.method = strings.ToUpper(m)
 	}
 	if buf, ok := h["buffer"]; ok {
-		req.buffer = jsFetchBufferFlag(buf)
+		req.buffer = jsFetchBufferMode(buf)
 	}
 	if b, ok := h["body"].(string); ok && b != "" {
 		req.body = b
@@ -269,14 +294,36 @@ func (c *jsSpiderCtx) jsDoFetch(req jsFetchRequest) (int, map[string]string, []b
 	return resp.StatusCode, headers, data, nil
 }
 
-func (c *jsSpiderCtx) jsResponseObject(status int, headers map[string]string, body []byte, base64Mode bool) goja.Value {
+// jsResponseObject 按 buffer 模式组装 req/fetch 的响应对象：
+//   - 0 文本：content 为响应文本；
+//   - 1 字节数组：goja 侧字节数组的表示尚未定，先按 Base64 与 2 同
+//     处理（与旧的非 0 即 Base64 行为一致），脚本拿到的是无损编码，
+//     不会是被错误解码的文本；
+//   - 2 Base64：content 为响应的 Base64 文本；
+//   - 3 原始字节：content 为字节数组（数字数组，content[i]/length 可用）。
+//
+// code 与 status/statusCode 同值并存：easytv/CatVod 习惯读 .code，
+// 旧脚本读 .status，两边都给。
+func (c *jsSpiderCtx) jsResponseObject(status int, headers map[string]string, body []byte, bufferMode int) goja.Value {
 	rt := c.rt
 	content := string(body)
-	if base64Mode {
+	var contentValue goja.Value
+	switch bufferMode {
+	case 1, 2:
 		content = base64.StdEncoding.EncodeToString(body)
+		contentValue = rt.ToValue(content)
+	case 3:
+		bytes := make([]interface{}, len(body))
+		for i, b := range body {
+			bytes[i] = int(b)
+		}
+		contentValue = rt.ToValue(bytes)
+	default:
+		contentValue = rt.ToValue(content)
 	}
 	obj := rt.NewObject()
-	_ = obj.Set("content", content)
+	_ = obj.Set("content", contentValue)
+	_ = obj.Set("code", status)
 	_ = obj.Set("status", status)
 	_ = obj.Set("statusCode", status)
 	_ = obj.Set("ok", status >= 200 && status < 300)
@@ -306,16 +353,17 @@ func (c *jsSpiderCtx) request(call goja.FunctionCall) goja.Value {
 }
 
 // jsReq 是 CatVod cat 形态的 req/fetch：返回带 content 的响应对象，
-// 与 spider/catLib/http.js 的同步 http 契约一致（options.buffer 非 0
-// 时 content 为 base64，与样本里 req(url, {buffer: 2}).content 用法一致）。
+// 与 spider/catLib/http.js 的同步 http 契约一致（options.buffer 按
+// 0–3 模式分流，见 jsResponseObject；样本里 req(url, {buffer: 2})
+// 的 content 为 Base64）。
 func (c *jsSpiderCtx) jsReq(call goja.FunctionCall) goja.Value {
 	req := jsFetchParseArgs(call)
 	if req.url == "" {
-		return c.jsResponseObject(0, map[string]string{}, nil, false)
+		return c.jsResponseObject(0, map[string]string{}, nil, 0)
 	}
 	status, headers, data, err := c.jsDoFetch(req)
 	if err != nil {
-		return c.jsResponseObject(0, map[string]string{}, nil, false)
+		return c.jsResponseObject(0, map[string]string{}, nil, 0)
 	}
 	return c.jsResponseObject(status, headers, data, req.buffer)
 }
@@ -850,6 +898,13 @@ var jsOperationFunctions = map[string]string{
 }
 
 func jsSpiderRun(script, operation, tid string, page int, query, vodID, flag, playID string) (map[string]interface{}, error) {
+	return jsSpiderRunArgs(script, operation, tid, page, query, vodID, flag, playID, nil, false)
+}
+
+// jsSpiderRunArgs 是带筛选/快速搜索入参的分发：extend 是调用方给
+// category 的筛选值（透传给脚本的 category(tid, pg, filter, extend)，
+// filter 表示 extend 非空），quick 是调用方给 search 的快速搜索标志。
+func jsSpiderRunArgs(script, operation, tid string, page int, query, vodID, flag, playID string, extend map[string]interface{}, quick bool) (map[string]interface{}, error) {
 	fnName, ok := jsOperationFunctions[operation]
 	if !ok {
 		return nil, fmt.Errorf("unsupported JS spider operation: %s", operation)
@@ -904,7 +959,11 @@ func jsSpiderRun(script, operation, tid string, page int, query, vodID, flag, pl
 			args = []goja.Value{}
 		}
 	case "category":
-		args = []goja.Value{rt.ToValue(tid), rt.ToValue(page), rt.ToValue(false), rt.ToValue(map[string]interface{}{})}
+		extendArg := extend
+		if extendArg == nil {
+			extendArg = map[string]interface{}{}
+		}
+		args = []goja.Value{rt.ToValue(tid), rt.ToValue(page), rt.ToValue(len(extendArg) > 0), rt.ToValue(extendArg)}
 	case "detail":
 		// cat 形态 detail(vod_url) 取单个字符串；TVBox detailContent
 		// 取 id 数组。按实际命中的函数名分流（样本：猫测试.js）。
@@ -914,7 +973,10 @@ func jsSpiderRun(script, operation, tid string, page int, query, vodID, flag, pl
 			args = []goja.Value{rt.ToValue([]string{vodID})}
 		}
 	case "search":
-		args = []goja.Value{rt.ToValue(query), rt.ToValue(false), rt.ToValue(page)}
+		// easytv 口径 search(key, quick, pg)：pg 传字符串，quick 透传
+		// 调用方入参（旧实现恒传 false 且 pg 为 int，脚本按字符串拼
+		// 页码时会拼出异常形态）。
+		args = []goja.Value{rt.ToValue(query), rt.ToValue(quick), rt.ToValue(strconv.Itoa(page))}
 	case "player":
 		args = []goja.Value{rt.ToValue(flag), rt.ToValue(playID), rt.ToValue([]string{})}
 	}
@@ -968,5 +1030,17 @@ func jsSpiderDispatch(input nativeInput) (map[string]interface{}, error) {
 	if playID == "" {
 		playID = input.Chapter.ID
 	}
-	return jsSpiderRun(input.Content, input.Command, input.Category, page, input.Query, vodID, input.Flag, playID)
+	// 调用方筛选入参（nativeInput.Filters）组装成 category 的 extend
+	// 透传；其中 quick 键是 search 的快速搜索标志（nativeInput 没有
+	// 独立的 quick 字段，借筛选入参通道传），不进 extend。
+	extend := map[string]interface{}{}
+	quick := false
+	for key, value := range input.Filters {
+		if key == "quick" {
+			quick = value == "1" || strings.EqualFold(strings.TrimSpace(value), "true")
+			continue
+		}
+		extend[key] = value
+	}
+	return jsSpiderRunArgs(input.Content, input.Command, input.Category, page, input.Query, vodID, input.Flag, playID, extend, quick)
 }

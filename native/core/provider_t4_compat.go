@@ -162,6 +162,8 @@ func httpAggClasses(payload map[string]any) []httpAggClass {
 
 // httpAggDrama 把一条记录转成剧集卡片：id/标题/封面/简介/备注/分类
 // 均认 vod_* 主键与常见别名；id 或标题缺失时返回空 Drama（旧口径）。
+// vod_year 落 OnlineDate；vod_area 没有专用模型字段，进 Tags 透传
+// （actor/director 无模型字段，不在此列）。
 func httpAggDrama(source string, item map[string]any) Drama {
 	id := httpAggFirstString(item, "vod_id", "id", "vid", "vodid")
 	title := httpAggFirstString(item, "vod_name", "name", "title", "vod_title")
@@ -169,6 +171,10 @@ func httpAggDrama(source string, item map[string]any) Drama {
 		return Drama{}
 	}
 	cover := httpAggFirstString(item, "vod_pic", "pic", "cover", "vod_pic_slide", "img", "poster")
+	var tags []string
+	if area := httpAggFirstString(item, "vod_area", "area"); area != "" {
+		tags = append(tags, area)
+	}
 	return Drama{
 		ID:          providerDramaID(source, id),
 		Source:      source,
@@ -179,6 +185,8 @@ func httpAggDrama(source string, item map[string]any) Drama {
 		Category:    httpAggFirstString(item, "type_name", "vod_class", "category", "typeName"),
 		ChannelName: duanjuSourceName(source),
 		Remark:      httpAggFirstString(item, "vod_remarks", "remarks", "vod_remark"),
+		OnlineDate:  httpAggFirstString(item, "vod_year", "year"),
+		Tags:        tags,
 	}
 }
 
@@ -386,23 +394,77 @@ func httpAggRoutesFromEpisodes(item map[string]any) []t4Route {
 	return []t4Route{route}
 }
 
-// httpAggPlayResult 是播放接口返回的归一结果。
+// httpAggPlayCandidate 是播放返回里的一条候选地址：name 为显示名
+// （清晰度/线路名，可空），url 为地址。
+type httpAggPlayCandidate struct {
+	name string
+	url  string
+}
+
+// httpAggPlayResult 是播放接口返回的归一结果。candidates 是 url 数组
+// 形态解析出的全部候选（成对多地址），url 仍为首选地址。
 type httpAggPlayResult struct {
 	url        string
+	candidates []httpAggPlayCandidate
 	headers    map[string]string
 	needsParse bool
 	hasURL     bool
 }
 
+// httpAggPlayPairCandidates 把 url 数组按 easytv 规范的成对形态解析：
+// [显示名, 地址, 显示名, 地址, ...]；元素本身是地址时自成一条候选，
+// 元素是 {n,v}/{name,url} 对象时按对象取，都保留顺序不丢多地址。
+func httpAggPlayPairCandidates(raw []any) []httpAggPlayCandidate {
+	candidates := []httpAggPlayCandidate{}
+	for i := 0; i < len(raw); i++ {
+		switch entry := raw[i].(type) {
+		case map[string]any:
+			url := httpAggFirstString(entry, "v", "url", "play_url", "playUrl", "address", "link")
+			if url == "" {
+				continue
+			}
+			candidates = append(candidates, httpAggPlayCandidate{name: httpAggFirstString(entry, "n", "name", "title"), url: url})
+		case string:
+			text := strings.TrimSpace(entry)
+			if text == "" {
+				continue
+			}
+			if httpAggPlayIsAddress(text) {
+				candidates = append(candidates, httpAggPlayCandidate{url: text})
+				continue
+			}
+			// 显示名：与紧随其后的元素成对；没有后继元素时无地址可
+			// 用，丢弃（旧实现把显示名误当地址取走，这里不再犯）。
+			if i+1 < len(raw) {
+				if next, ok := raw[i+1].(string); ok && strings.TrimSpace(next) != "" {
+					candidates = append(candidates, httpAggPlayCandidate{name: text, url: strings.TrimSpace(next)})
+					i++
+				}
+			}
+		}
+	}
+	return candidates
+}
+
+func httpAggPlayIsAddress(text string) bool {
+	return strings.Contains(text, "://") || strings.HasPrefix(text, "//")
+}
+
 // httpAggPlay 解析播放响应：地址认 url/playUrl/video_url 等别名与 data
-// 信封；header 认对象/JSON 字符串/键值对列表三种形态；parse/jx 为 1 时
-// 需要二次解析，playUrl 存在时按旧口径拼成最终地址（playUrl + url）。
+// 信封；url 为数组时按成对形态解析出全部候选（见
+// httpAggPlayPairCandidates），首个候选作主地址；header 认对象/JSON
+// 字符串/键值对列表三种形态；parse/jx 为 1 时需要二次解析，playUrl
+// 存在时按旧口径拼成最终地址（playUrl + url）。
 func httpAggPlay(payload map[string]any) httpAggPlayResult {
 	root := httpAggRoot(payload)
 	address := httpAggFirstString(root, "url", "play_url", "video_url", "videoUrl", "stream_url", "file", "source", "m3u8")
+	var candidates []httpAggPlayCandidate
 	if address == "" {
 		if raw, ok := root["url"].([]any); ok && len(raw) > 0 {
-			address = t4String(raw[0])
+			candidates = httpAggPlayPairCandidates(raw)
+			if len(candidates) > 0 {
+				address = candidates[0].url
+			}
 		}
 	}
 	playURL := httpAggFirstString(root, "playUrl", "playurl")
@@ -412,7 +474,7 @@ func httpAggPlay(payload map[string]any) httpAggPlayResult {
 	}
 	needsParse := httpAggParseFlag(root["parse"]) || httpAggParseFlag(root["jx"]) ||
 		httpAggParseFlag(root["needParse"]) || httpAggParseFlag(root["needsParse"])
-	result := httpAggPlayResult{headers: headers, needsParse: needsParse}
+	result := httpAggPlayResult{headers: headers, needsParse: needsParse, candidates: candidates}
 	switch {
 	case address != "" && needsParse && playURL != "" && playURL != address:
 		result.url = playURL + address
