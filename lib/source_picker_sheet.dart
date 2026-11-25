@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_theme_config.dart';
 import 'neon_glass_kit.dart';
+import 'site_health.dart';
 import 'site_icon.dart';
 import 'site_thumb_cache.dart';
 import 'site_thumb_card.dart';
@@ -14,6 +15,8 @@ class SourcePickerEntry {
     required this.name,
     this.deletable = true,
     this.iconUrls = const [],
+    this.healthTier,
+    this.healthScore,
   });
 
   final String id;
@@ -23,7 +26,23 @@ class SourcePickerEntry {
   /// 调用方给定的站标候选地址（按序尝试）。为空时按 [id] 查 jar 站
   /// ext 与 py/Go/阅读桥接表派生；都为空则宫格显示图案标，不联网。
   final List<String> iconUrls;
+
+  /// 站点健康状态档（可选）：非空时卡片角上画四色状态点；为空时
+  /// 若健康库里已有该站记录则按记录档位画点，无记录不画。
+  final SiteHealthTier? healthTier;
+
+  /// 站点健康分（可选）：弹窗开健康排序时优先用它，缺省查健康库。
+  final double? healthScore;
 }
+
+/// 健康状态点的颜色（绿=近期可用、黄=一般或信息不足、
+/// 红=近期失败较多、灰=未知）。
+Color siteHealthTierColor(SiteHealthTier tier) => switch (tier) {
+  SiteHealthTier.good => const Color(0xFF2EAF4F),
+  SiteHealthTier.fair => const Color(0xFFE3A008),
+  SiteHealthTier.bad => const Color(0xFFD64541),
+  SiteHealthTier.unknown => const Color(0xFF9E9E9E),
+};
 
 class SourcePickerGroup {
   const SourcePickerGroup({
@@ -87,6 +106,9 @@ Future<String?> showSitePickerDialog(
   /// 重开弹窗传新站 id，列表自动滚到新装的站；选中高亮仍以
   /// currentId 为准。
   String? scrollToId,
+
+  /// 按健康分重排组内站点（默认关，保持调用方给的配置顺序）。
+  bool sortByHealth = false,
 }) => showDialog<String>(
   context: context,
   builder: (context) => SitePickerDialog(
@@ -102,6 +124,7 @@ Future<String?> showSitePickerDialog(
     thumbCache: thumbCache,
     thumbFetcher: thumbFetcher,
     thumbImageCache: thumbImageCache,
+    sortByHealth: sortByHealth,
   ),
 );
 
@@ -120,11 +143,15 @@ class SitePickerDialog extends StatefulWidget {
     this.thumbCache,
     this.thumbFetcher,
     this.thumbImageCache,
+    this.sortByHealth = false,
   });
 
   final String sectionName;
   final String currentId;
   final List<SourcePickerGroup> groups;
+
+  /// 按健康分降序重排组内站点（稳定排序）；默认关 = 配置顺序。
+  final bool sortByHealth;
   final bool initialEditMode;
   final Future<bool> Function(SourcePickerEntry entry)? onDeleteSite;
   final Future<void> Function()? onImport;
@@ -202,7 +229,14 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
       for (final group in widget.groups)
         _EditableGroup(
           group.title,
-          List.of(group.entries),
+          widget.sortByHealth
+              ? stableHealthSort(
+                  List.of(group.entries),
+                  (entry) =>
+                      entry.healthScore ??
+                      SiteHealthStore.instance.scoreOf(entry.id),
+                )
+              : List.of(group.entries),
           // 没写区签的组（旧调用方）一律算内置区，不丢进任何区外。
           zone: group.zone.isEmpty ? SourcePickerGroup.zoneBuiltin : group.zone,
         ),
@@ -304,6 +338,15 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   /// 的 handler 自己会弹确认框（导入站删文件、内置站隐藏）。
   bool _canDelete(SourcePickerEntry entry) =>
       entry.deletable && widget.onDeleteSite != null;
+
+  /// 状态点档位：条目自带优先；没带时健康库里有该站记录才画点
+  /// （按记录档位），完全没学过的站不画（不给全站铺灰点）。
+  SiteHealthTier? _healthTierOf(SourcePickerEntry entry) {
+    if (entry.healthTier != null) return entry.healthTier;
+    final store = SiteHealthStore.instance;
+    if (store.recordOf(entry.id) == null) return null;
+    return store.tierOf(entry.id);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -643,6 +686,21 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
                           Icons.check,
                           size: 13,
                           color: config.selectedText,
+                        ),
+                      ),
+                    ),
+                  if (_healthTierOf(entry) != null)
+                    Positioned(
+                      top: 6,
+                      left: 6,
+                      child: Container(
+                        key: ValueKey('site-picker-health-dot-${entry.id}'),
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: siteHealthTierColor(_healthTierOf(entry)!),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.surface, width: 1.5),
                         ),
                       ),
                     ),

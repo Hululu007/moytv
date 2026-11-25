@@ -1,3 +1,4 @@
+import 'package:moyi/site_health.dart';
 import 'package:moyi/source_picker_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -287,5 +288,87 @@ void main() {
     expect(attempted, ['a', 'b']);
     expect(picked, 'all');
     expect(find.byKey(const ValueKey('site-picker-dialog')), findsNothing);
+  });
+
+  group('站点健康状态点与排序', () {
+    const healthGroups = [
+      SourcePickerGroup(
+        title: '内置',
+        entries: [
+          SourcePickerEntry(
+            id: 'low',
+            name: '低分站',
+            healthTier: SiteHealthTier.bad,
+            healthScore: 0.2,
+          ),
+          SourcePickerEntry(
+            id: 'high',
+            name: '高分站',
+            healthTier: SiteHealthTier.good,
+            healthScore: 0.9,
+          ),
+          SourcePickerEntry(id: 'mid', name: '无分站'),
+        ],
+      ),
+    ];
+
+    Widget host({required bool sortByHealth}) => MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => showSitePickerDialog(
+                context,
+                sectionName: '短剧',
+                currentId: 'mid',
+                groups: healthGroups,
+                sortByHealth: sortByHealth,
+              ),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('带 tier 的条目画状态点，无记录的站不画', (tester) async {
+      await tester.pumpWidget(host(sortByHealth: false));
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('site-picker-health-dot-high')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('site-picker-health-dot-low')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('site-picker-health-dot-mid')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('sortByHealth 关时保持入参顺序，开时按分降序同分稳定', (
+      tester,
+    ) async {
+      double dxOf(String id) =>
+          tester.getTopLeft(find.byKey(ValueKey('site-picker-row-$id'))).dx;
+
+      await tester.pumpWidget(host(sortByHealth: false));
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+      expect(dxOf('low') < dxOf('high'), isTrue);
+      expect(dxOf('high') < dxOf('mid'), isTrue);
+      await tester.tap(find.byKey(const ValueKey('site-picker-close')));
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(host(sortByHealth: true));
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+      // 高分（0.9）在前、无分站中性（0.5）居中、低分（0.2）最后。
+      expect(dxOf('high') < dxOf('mid'), isTrue);
+      expect(dxOf('mid') < dxOf('low'), isTrue);
+    });
   });
 }
