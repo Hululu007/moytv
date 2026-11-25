@@ -169,6 +169,39 @@ class WhosLocalLibrary {
   /// 打不开，只能在这一层验加载状态机）。
   Future<bool> Function()? loadOverrideForTest;
 
+  /// 上次真实加载失败时的数据源指纹（见 [_sourceStampSync]）；
+  /// 工作库路径与 documents 路径在真实尝试里记下，之后同步核对。
+  String? _failureStamp;
+  String? _knownDbPath;
+  String? _knownDocsPath;
+
+  /// 数据源指纹：工作库文件 + actress_json 下两个 JSON 的
+  /// 存在性/大小/mtime，全用同步 stat（FakeAsync 区里异步 IO
+  /// 回不来，同步 stat 才靠得住；口径与 NvkuEntryCache.dbStamp
+  /// 一致）。路径还没记下（没真尝试过）时回 null，表示无从核对。
+  String? _sourceStampSync() {
+    final dbPath = _knownDbPath;
+    final docsPath = _knownDocsPath;
+    if (dbPath == null && docsPath == null) return null;
+    String statOf(String path) {
+      try {
+        final stat = File(path).statSync();
+        if (stat.type == FileSystemEntityType.notFound) return 'none';
+        return '${stat.size}|${stat.modified.millisecondsSinceEpoch}';
+      } catch (_) {
+        return 'none';
+      }
+    }
+
+    final parts = <String>[];
+    if (dbPath != null) parts.add('db:${statOf(dbPath)}');
+    if (docsPath != null) {
+      parts.add('whos:${statOf('$docsPath/$localDirName/whos.json')}');
+      parts.add('mjv:${statOf('$docsPath/$localDirName/mjv011.json')}');
+    }
+    return parts.join(';');
+  }
+
   bool get isLoaded => _works.isNotEmpty || _dbService != null;
 
   int get count => _dbService != null ? (_dbTotal ?? 0) : _works.length;
@@ -178,10 +211,15 @@ class WhosLocalLibrary {
 
   /// 首次调用时加载；已加载直接返回。失败（资源缺失之类）返回 false，
   /// 但不抛异常——降级失败也要让上层照常走在线报错，不掩盖真问题。
-  /// 失败不缓存：以前 _load 返回 false（不抛错）时 _loading 永远不
-  /// 清，第一次没读出来就一整个进程都读不出来，用户导入数据库后
+  /// 失败不永久缓存：以前 _load 返回 false（不抛错）时 _loading 永远
+  /// 不清，第一次没读出来就一整个进程都读不出来，用户导入数据库后
   /// 也必须重启 App 才恢复——与文件夹翻页标志卡死同类。现在失败
-  /// 落地就清掉 _loading，下次调用重新真读。
+  /// 落地就清掉 _loading；但重试要过数据源指纹门（见 _load）：失败
+  /// 时记下数据源指纹，之后每次调用先同步核对，数据源没变就直接
+  /// 回 false（不再整链重跑开库/扫目录——合树后实测这条重跑链把
+  /// nvku 页的分类/作品加载拖过断言点、还把上一个测试未完的加载
+  /// future 串进下一个测试挂死）；数据源一变（导入换库、JSON
+  /// 落盘）指纹就变，立刻真重试，不用重启。
   Future<bool> ensureLoaded() {
     if (isLoaded) return Future.value(true);
     return _loading ??= _load().then((ok) {
@@ -196,13 +234,20 @@ class WhosLocalLibrary {
   Future<bool> _load() async {
     final override = loadOverrideForTest;
     if (override != null) return override();
+    // 数据源指纹门：上次失败后数据源（工作库/JSON）没变，同步
+    // 直接回 false，不再重跑整条异步加载链；变了才真重试。
+    final stamp = _sourceStampSync();
+    if (stamp != null && stamp == _failureStamp) return false;
     // 2026-11-23 v58 验机：优先读本地数据库（MYTV/db/女优库.db）——
     // 原来只读 documents/actress_json/ 里的 whos.json / mjv011.json，
     // v58 删了包内 whos.json、用户 23:39 又定 App 里不内置任何 JSON，
     // 没那两个文件就确定性播不了（直播里报“内置片库没读出来”）。
     // 库里 34 万部、地址封面都有；没库/库打不开才读 JSON。
     // 绝不往包里加回内置种子。
-    if (await _loadFromDb()) return true;
+    if (await _loadFromDb()) {
+      _failureStamp = null;
+      return true;
+    }
     final merged = <String, WhosLocalWork>{};
     void absorb(String? text, {required String origin}) {
       if (text == null || text.trim().isEmpty) return;
@@ -222,6 +267,7 @@ class WhosLocalLibrary {
 
     try {
       final docs = await getApplicationDocumentsDirectory();
+      _knownDocsPath = docs.path;
       final dir = Directory('${docs.path}/$localDirName');
       if (await dir.exists()) {
         final files = <String>['whos.json', 'mjv011.json'];
@@ -242,6 +288,12 @@ class WhosLocalLibrary {
     if (_works.isEmpty && _loadFailureNote == null) {
       _loadFailureNote = '片库没有数据：请先在设置里导入 .sql 数据库';
     }
+    if (_works.isEmpty) {
+      // 失败落地记指纹：下次调用先过指纹门（见 _load 开头）。
+      _failureStamp = _sourceStampSync();
+    } else {
+      _failureStamp = null;
+    }
     return _works.isNotEmpty;
   }
 
@@ -255,6 +307,7 @@ class WhosLocalLibrary {
     );
     try {
       final opened = await service.open();
+      if (opened.dbPath.isNotEmpty) _knownDbPath = opened.dbPath;
       if (opened.error != null || !opened.strict || opened.total <= 0) {
         // 失败原因原样记下给上层透出，不再吞掉：以前这里只回 false，
         // 直播页只能报一句“没读出来，退出重进”，用户根本不知道是
@@ -274,6 +327,7 @@ class WhosLocalLibrary {
       _dbFacets = null;
       return true;
     } catch (error) {
+      if (service.dbPath.isNotEmpty) _knownDbPath = service.dbPath;
       _loadFailureNote = error is StateError ? error.message : '$error';
       try {
         await service.close();

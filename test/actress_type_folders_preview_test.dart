@@ -350,13 +350,16 @@ void main() {
   testWidgets('preview nvku folders home', (tester) async {
     await pumpPage(
       tester,
-      '预览 · 文件夹封面为真实 pic_url（测试环境离线，26 张卡共用同一张真实封面样本示意裁剪）· 首页：顶栏库名 + 类型文件夹 + 最新上架',
+      '预览 · 首页：顶栏库名 + 最新上架（类型文件夹已按 2026-11-25 首页/分类归位移到分类页，见下一张预览）',
     );
     expect(find.text('女优库.db'), findsOneWidget);
-    expect(find.text('成人影片'), findsOneWidget);
-    expect(find.text('共339840条'), findsOneWidget);
-    // 26 张卡都有封面图（夹具作品没封面，首页的 Image 全是文件夹卡）。
-    expect(find.byType(Image), findsNWidgets(26));
+    // 2026-11-26 断言订正（证据）：88cc211「首页/分类归位」按用户令
+    // 把类型文件夹网格从首页移到分类页，keepalive 测试同日已改成
+    // 到分类页断言文件夹；本用例的首页文件夹断言当时漏改，在
+    // dffc77c 工作树单跑同样失败（非合树回归）。首页口径以产品
+    // 现行版式为准：文件夹不在首页、最新上架在。
+    expect(find.text('成人影片'), findsNothing);
+    expect(find.text('最新上架'), findsWidgets);
     final boundary = tester
         .element(find.byType(RepaintBoundary).first)
         .findRenderObject() as RenderRepaintBoundary;
