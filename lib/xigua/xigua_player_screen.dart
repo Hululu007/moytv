@@ -19,6 +19,7 @@ import 'package:moyi/player_back.dart';
 import 'package:moyi/tv_theme.dart';
 import 'package:moyi/xigua/android_video_surface.dart';
 import 'package:moyi/catalog_sort.dart';
+import 'package:moyi/track_selection.dart';
 import 'package:moyi/app_theme.dart';
 import 'package:moyi/core_bridge.dart';
 import 'package:moyi/xigua/cross_source_search.dart';
@@ -1658,6 +1659,23 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
             ),
             play: _foreground && _playIntent,
           );
+          // 西瓜 MPV 路径同样挂默认外挂字幕（第 8 点，规则同主播放器）；
+          // 西瓜自有菜单暂未加轨道切换区，见 point8 落地记录。
+          if (plan.subs.isNotEmpty) {
+            final subIndex = chooseDefaultSubtitle(plan.subs);
+            if (subIndex >= 0) {
+              final sub = plan.subs[subIndex];
+              try {
+                await _player.setSubtitleTrack(
+                  SubtitleTrack.uri(
+                    sub.url,
+                    title: sub.name,
+                    language: sub.lang,
+                  ),
+                );
+              } catch (_) {}
+            }
+          }
         }
         if (_closed || ticket != _generation) {
           return;

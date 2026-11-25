@@ -33,6 +33,7 @@ import 'episode_preview_card.dart';
 import 'exo_subtitle.dart';
 import 'follow_state.dart';
 import 'intro_outro_skip.dart';
+import 'track_selection.dart';
 import 'local_store.dart';
 import 'live_subtitle_audio.dart';
 import 'live_subtitle_engine.dart';
@@ -247,6 +248,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _error;
   String? _saveWarning;
   PlaybackPlan? _plan;
+
+  // 音轨/字幕轨（第 8 点，仅 MPV 核）：菜单打开时把 media_kit 当前
+  // 轨道快照存进这两张表，菜单条目 id 据此找回轨道对象；
+  // _externalSubUrl 记录当前选中的外挂字幕，_subtitlesOff 记录关字幕。
+  final Map<String, AudioTrack> _audioTrackById = {};
+  final Map<String, SubtitleTrack> _subtitleTrackById = {};
+  String? _externalSubUrl;
+  bool _subtitlesOff = false;
   NonVideoContent? _nonVideo;
 
   /// 开始播放回调已通知过的（集序号|取流地址）：同一集同一地址只
@@ -2045,6 +2054,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
             play: _foreground && _playIntent,
           );
+          _externalSubUrl = null;
+          _subtitlesOff = false;
+          await _loadDefaultExternalSubtitle(plan);
           // MPV 核：播放器打开后在后台起实时字幕（不 await，
           // 模型加载不拖住加载态）；Exo/TVBox 核走 TvboxVideoPane
           // 里那份，不在这里起。
@@ -2705,6 +2717,104 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// MPV 开播后挂默认外挂字幕：规则见 [chooseDefaultSubtitle]
+  /// （中文语言优先、否则第一条）。挂载失败不挡播放，菜单里可手动再选。
+  Future<void> _loadDefaultExternalSubtitle(PlaybackPlan plan) async {
+    if (plan.subs.isEmpty) return;
+    final index = chooseDefaultSubtitle(plan.subs);
+    if (index < 0) return;
+    final sub = plan.subs[index];
+    try {
+      await _player.setSubtitleTrack(
+        SubtitleTrack.uri(sub.url, title: sub.name, language: sub.lang),
+      );
+      _externalSubUrl = sub.url;
+    } catch (_) {}
+  }
+
+  List<TrackMenuEntry> _buildAudioTrackEntries() {
+    _audioTrackById.clear();
+    final choices = <TrackChoice>[];
+    for (final track in _player.state.tracks.audio) {
+      if (track.id == 'auto' || track.id == 'no') continue;
+      _audioTrackById[track.id] = track;
+      choices.add(
+        TrackChoice(
+          id: track.id,
+          title: track.title ?? '',
+          language: track.language ?? '',
+        ),
+      );
+    }
+    return buildAudioTrackEntries(
+      choices,
+      selectedId: _player.state.track.audio.id,
+    );
+  }
+
+  List<TrackMenuEntry> _buildSubtitleTrackEntries() {
+    _subtitleTrackById.clear();
+    final choices = <TrackChoice>[];
+    for (final track in _player.state.tracks.subtitle) {
+      if (track.id == 'auto' || track.id == 'no') continue;
+      // 已挂上的外挂字幕会以 uri 形态出现在轨道列表里，它由
+      // plan.subs 那组条目承载，内嵌组里跳过避免重复。
+      if (track.uri == true) continue;
+      _subtitleTrackById[track.id] = track;
+      choices.add(
+        TrackChoice(
+          id: track.id,
+          title: track.title ?? '',
+          language: track.language ?? '',
+        ),
+      );
+    }
+    return buildSubtitleTrackEntries(
+      choices,
+      external: _plan?.subs ?? const [],
+      selectedEmbeddedId: _player.state.track.subtitle.id,
+      selectedExternalUrl: _externalSubUrl,
+      subtitlesOff:
+          _subtitlesOff || _player.state.track.subtitle.id == 'no',
+    );
+  }
+
+  Future<void> _onTrackEntry(TrackMenuEntry entry) async {
+    try {
+      switch (entry.kind) {
+        case TrackMenuEntryKind.audio:
+          final track = _audioTrackById[entry.id];
+          if (track != null) await _player.setAudioTrack(track);
+        case TrackMenuEntryKind.subtitleOff:
+          await _player.setSubtitleTrack(SubtitleTrack.no());
+          _externalSubUrl = null;
+          _subtitlesOff = true;
+        case TrackMenuEntryKind.subtitleEmbedded:
+          final track = _subtitleTrackById[entry.id];
+          if (track != null) {
+            await _player.setSubtitleTrack(track);
+            _externalSubUrl = null;
+            _subtitlesOff = false;
+          }
+        case TrackMenuEntryKind.subtitleExternal:
+          final url = entry.externalUrl;
+          final sub = (_plan?.subs ?? const <SubtitleSource>[])
+              .where((item) => item.url == url)
+              .firstOrNull;
+          if (sub != null) {
+            await _player.setSubtitleTrack(
+              SubtitleTrack.uri(sub.url, title: sub.name, language: sub.lang),
+            );
+            _externalSubUrl = sub.url;
+            _subtitlesOff = false;
+          }
+      }
+    } catch (_) {
+      if (mounted && !_closed) _notice('轨道切换失败，请重试');
+    }
+    _menuRevision.value++;
+  }
+
   Future<void> _openPanel(PlayerMenuSection section) async {
     if (_panelOpen || _closed) return;
     _interactions.cancel();
@@ -2751,6 +2861,13 @@ class _PlayerScreenState extends State<PlayerScreen>
               },
               onFavorite: () =>
                   widget.store.toggleFavorite(widget.detail.drama),
+              audioTrackEntries: _useNativeHandle || _useIjkCore
+                  ? const []
+                  : _buildAudioTrackEntries(),
+              subtitleTrackEntries: _useNativeHandle || _useIjkCore
+                  ? const []
+                  : _buildSubtitleTrackEntries(),
+              onTrackEntry: _onTrackEntry,
               introOutro: _introOutroSettings,
               introOutroEnabled: widget.store.introOutroSkipEnabled,
               onIntroOutroChanged: (next) => widget.store.setIntroOutroFor(

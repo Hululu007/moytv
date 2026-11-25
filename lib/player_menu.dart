@@ -8,6 +8,7 @@ import 'intro_outro_editor.dart';
 import 'intro_outro_skip.dart';
 import 'playback_preferences.dart';
 import 'picture_quality_ui.dart';
+import 'track_selection.dart';
 import 'video_enhancement.dart';
 import 'video_enhancement_settings.dart';
 
@@ -48,6 +49,9 @@ class PlayerMenu extends StatefulWidget {
     this.introOutro,
     this.introOutroEnabled = true,
     this.onIntroOutroChanged,
+    this.audioTrackEntries = const [],
+    this.subtitleTrackEntries = const [],
+    this.onTrackEntry,
   });
 
   final PlayerMenuSection section;
@@ -74,6 +78,12 @@ class PlayerMenu extends StatefulWidget {
   final IntroOutroSettings? introOutro;
   final bool introOutroEnabled;
   final Future<void> Function(IntroOutroSettings)? onIntroOutroChanged;
+  /// 音轨/字幕轨菜单条目（第 8 点）；为空时菜单不显示轨道区。
+  /// 只有 MPV（media_kit）核会传，非 MPV 核不传、轨道区不出现。
+  final List<TrackMenuEntry> audioTrackEntries;
+  final List<TrackMenuEntry> subtitleTrackEntries;
+  final ValueChanged<TrackMenuEntry>? onTrackEntry;
+
   final ValueChanged<int> onEpisode;
   final Future<void> Function(PlaybackPreferences) onPreferences;
   final Future<void> Function() onFavorite;
@@ -306,6 +316,52 @@ class _PlayerMenuState extends State<PlayerMenu> {
             ),
             onCompare: widget.onCompareEnhancement ?? () {},
           ),
+        if (all &&
+            (widget.audioTrackEntries.isNotEmpty ||
+                widget.subtitleTrackEntries.isNotEmpty)) ...[
+          if (widget.audioTrackEntries.isNotEmpty) ...[
+            const Text('音轨'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in widget.audioTrackEntries)
+                  ChoiceChip(
+                    key: ValueKey('menu-track-audio-${entry.id}'),
+                    label: Text(entry.label),
+                    selected: entry.selected,
+                    onSelected: widget.onTrackEntry == null
+                        ? null
+                        : (_) => widget.onTrackEntry!(entry),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
+          if (widget.subtitleTrackEntries.isNotEmpty) ...[
+            const Text('字幕'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in widget.subtitleTrackEntries)
+                  ChoiceChip(
+                    key: ValueKey(
+                      'menu-track-sub-${entry.kind.name}-${entry.id}',
+                    ),
+                    label: Text(entry.label),
+                    selected: entry.selected,
+                    onSelected: widget.onTrackEntry == null
+                        ? null
+                        : (_) => widget.onTrackEntry!(entry),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
+        ],
         if (all && (widget.showDanmaku || widget.onSendLocalDanmaku != null)) ...[
           if (widget.showDanmaku)
             SwitchListTile.adaptive(
