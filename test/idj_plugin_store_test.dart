@@ -592,6 +592,22 @@ void main() {
         siteKey: 'idj_aiguo',
       );
       expect(aiguo.section, SourceSite.sectionDrama);
+      final huanyingai = IdjPluginRegistry.siteForPlugin(
+        manifest: IdjPluginManifest.fromJson(
+          _miniManifestJson(id: 'com.idj.ext.huanyingai', name: '幻影AI'),
+        ),
+        siteKey: 'idj_huanyingai',
+      );
+      expect(huanyingai.name, '幻影AI');
+      expect(huanyingai.section, SourceSite.sectionDrama);
+      final aiyinhang = IdjPluginRegistry.siteForPlugin(
+        manifest: IdjPluginManifest.fromJson(
+          _miniManifestJson(id: 'com.idj.ext.aiyinhang', name: 'AI淫航'),
+        ),
+        siteKey: 'idj_aiyinhang',
+      );
+      expect(aiyinhang.name, 'AI淫航');
+      expect(aiyinhang.section, SourceSite.sectionDrama);
     });
   });
 

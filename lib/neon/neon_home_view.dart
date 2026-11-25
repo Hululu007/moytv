@@ -319,14 +319,17 @@ class _NeonHomeViewState extends State<NeonHomeView>
                       drama: drama,
                       repository: widget.repository,
                       radius: 12,
+                      // 标题/副标题由 NeonPoster 画（与热播推荐行同
+                      // 口径）：封面加载失败停在占位图时标题也必须在，
+                      // 不能只剩占位图标。封面自带集数标与副标题同
+                      // 角，关掉防双画，集数由副标题承载（_subtitleOf
+                      // 无标签时回落「N 集」）。
+                      showEpisodeLabel: false,
                     ),
                     title: drama.title,
                     subtitle: _subtitleOf(drama),
                     radius: 12,
                     titleSize: 10,
-                    showTitle: false,
-                    // showTitle 为 false 时 NeonPoster 不画文字，封面集数标
-                    // 是唯一文字，保留默认 showEpisodeLabel:true，不重影。
                     tiltAngle: index.isEven ? 0.1 : -0.1,
                     onTap: () => widget.onOpen(drama),
                     onLongPress: () => widget.onLongPress(drama),

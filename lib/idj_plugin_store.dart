@@ -1590,13 +1590,16 @@ class IdjPluginRegistry {
     'com.idj.ext.hqporner',
   };
 
-  /// 短剧分区的插件 id（用户定的分区：橙果短剧、爱果短剧）。
-  /// 注意：4 个真包的 manifest.type 全是 `video`，只按 type 推导会把
-  /// 橙果 / 爱果也判进视频区；这两个站的短剧分区以用户定为准。
+  /// 短剧分区的插件 id（用户定的分区：橙果短剧、爱果短剧；
+  /// 2026-11-25 新增幻影AI、AI淫航）。
+  /// 注意：真包的 manifest.type 有的是 `video`，只按 type 推导会把
+  /// 名单里的站判进视频区；名单里的短剧分区以用户定为准。
   /// 以后出现的新插件按 manifest.type 推导（shortdrama → 短剧区）。
   static const Set<String> shortDramaPluginIds = {
     'com.idj.ext.chengguo',
     'com.idj.ext.aiguo',
+    'com.idj.ext.huanyingai',
+    'com.idj.ext.aiyinhang',
   };
 
   /// 站 key = `idj_` + manifest.id 末段（`idj_chengguo`、`idj_chaoliu`、
