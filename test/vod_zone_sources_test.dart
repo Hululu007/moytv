@@ -89,7 +89,10 @@ void main() {
       expect(byKey['javtiful']?.name, '🔞Javtiful┃JAV视频');
       expect(byKey.containsKey('ZakaLnkl'), isFalse);
       expect(byKey.containsKey('zakajavverse'), isFalse);
-      expect(zakatvBuiltinSites.length, 140);
+      // 137 条：v27(61af046) whos 改走内置 py 摘 ZakaWhos、v28(b08ee4e) 删
+      // EroShort、v58(bdf4925) MissAV 收拢摘 ZakaMirror，jar 侧三步各 -1，
+      // 与 plugin_manager_test 同一注册集计数（合树验证时同步）。
+      expect(zakatvBuiltinSites.length, 137);
       expect(zakatvJarMd5, '029005c7ce017dc0a412f2d079a29dab');
     });
   });
