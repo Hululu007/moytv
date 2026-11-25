@@ -15,7 +15,6 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
-import androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
@@ -327,21 +326,20 @@ internal class TvboxPlayerView(
         val sourceFactory = DefaultMediaSourceFactory(httpFactory)
         val jwk = localClearKeyJwk
         if (jwk != null) {
+            // 本 provider 只在本地 ClearKey（jwk 非空）时安装，进到这里的
+            // 媒体项必然是 ClearKey，不再回读 DrmConfiguration 字段
+            // （media3 1.4.1 的 DrmSessionManagerProvider.get 收 MediaItem，
+            // 且 DrmConfiguration 无 schemeUuid 字段——云构建实证）。
             sourceFactory.setDrmSessionManagerProvider(
                 object : DrmSessionManagerProvider {
-                    override fun get(
-                        configuration: MediaItem.DrmConfiguration
-                    ): DrmSessionManager {
-                        if (configuration.schemeUuid == C.CLEARKEY_UUID) {
-                            return DefaultDrmSessionManager.Builder()
-                                .setUuidAndExoMediaDrmProvider(
-                                    C.CLEARKEY_UUID,
-                                    FrameworkMediaDrm.DEFAULT_PROVIDER
-                                )
-                                .setMultiSession(false)
-                                .build(LocalMediaDrmCallback(jwk))
-                        }
-                        return DefaultDrmSessionManagerProvider().get(configuration)
+                    override fun get(mediaItem: MediaItem): DrmSessionManager {
+                        return DefaultDrmSessionManager.Builder()
+                            .setUuidAndExoMediaDrmProvider(
+                                C.CLEARKEY_UUID,
+                                FrameworkMediaDrm.DEFAULT_PROVIDER
+                            )
+                            .setMultiSession(false)
+                            .build(LocalMediaDrmCallback(jwk))
                     }
                 }
             )
