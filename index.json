@@ -639,6 +639,60 @@
       "adult": true,
       "description": "Tasexy（www.tasexy.com）。分类与原 py 1:1：国产情色、日本无码、AV明星、中文字幕、网红主播、成人动漫、欧美情色、国模私拍、长腿丝袜、邻家人妻、韩国伦理、香港伦理、精品推荐、AV明星1。HTML 正则解析列表/详情/搜索，embed 播放页现取 m3u8 直链。由内置 py 蜘蛛改写。",
       "manifest": "tasexy/tasexy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.danaizizy",
+      "name": "大奶子资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "大奶子资源（apidanaizi.com）。MacCMS 资源接口站（JSON 主、XML 备），分类由接口动态给出（36 个，与原 py 兜底表一致；同一套旗标过滤：游戏/棋牌/博彩/彩票/赌类分类剔除），列表/详情/搜索走 ac=list/detail 接口，列表无封面靠 detail 批量补，播放为 vod_play_url 直链 m3u8。由内置 py 蜘蛛改写。",
+      "manifest": "danaizizy/danaizizy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.fanhaozy",
+      "name": "番号资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "番号资源（fhapi9.com）。31 个分类（接口 class 实时返回 32 个，经原 py 旗标过滤排除 id 14，兜底分类同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链（主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "fanhaozy/fanhaozy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.honglouzy",
+      "name": "红楼资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "红楼资源（hlzyapi.vip）。MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，分类由接口 class 实时给出（57 个，经原 py 旗标过滤：游戏/棋牌/博彩/彩票/赌，兜底 42 个同原 py），列表无封面时经详情补封面（同原 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "honglouzy/honglouzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ikunzy",
+      "name": "iKun资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "iKun资源（ikunzyapi.com）。53 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py 53 类，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8（主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "ikunzy/ikunzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jipinzy",
+      "name": "极品资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "极品资源（jipinvip1.com）。41 个分类（与原 py 完全一致：接口 class 实时返回、兜底分类同 py，旗标过滤同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链（master 主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "jipinzy/jipinzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jp98zy",
+      "name": "精品98",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "精品98（jp98.vip）。5 个分类与原 py 完全一致（接口 class 实时返回、经原 py 旗标过滤：游戏/棋牌/博彩/彩票/赌，兜底分类为空同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "jp98zy/jp98zy.idjplugin"
     }
   ],
   "cms": []
