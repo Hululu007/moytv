@@ -13,6 +13,7 @@ import 'actress_json_fallback.dart';
 import 'actress_models.dart';
 import 'actress_mytv_bind.dart';
 import 'actress_neon.dart';
+import 'actress_nvku_cache.dart';
 import '../core_bridge.dart';
 import '../local_store.dart';
 import '../models.dart';
@@ -638,6 +639,11 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       );
     }
     final db = await openDatabase(dbPath, readOnly: true, singleInstance: false);
+    // 2026-11-25 读库提速第二阶段：只读连接也设三条安全 PRAGMA
+    // （与 SqfliteActressDatabase._openDbAt 同款，不改持久化；
+    // 红线两条不在其中）。下面 open() 里的 countFilms() 与之后
+    // 全部列表/聚合查询都走这条连接，直接受益。
+    await SqfliteActressDatabase.applyReadSpeedPragmas(db);
     _readDb = db;
     final schema = await probeGenericDbSchema(db);
     _schema = schema;
@@ -899,8 +905,18 @@ class FilmLibraryService implements FilmDbFallbackProvider {
   /// （严格结构 ORDER BY vod_id，通用结构 ORDER BY rowid），即
   /// 点开文件夹后列表里第一条视频的封面。第一条视频没封面
   /// （pic_url 为空）或该类型一条视频都没有时回 ''，调用方
-  /// 回落到原来的文件夹图标。SQL 形状不变：直接复用
-  /// [listFilms]（limit 1），不另写取数 SQL。
+  /// 回落到原来的文件夹图标。
+  /// 严格结构取法（2026-11-25 读库提速第二阶段改形）：原来每个
+  /// 类型逐个调 [listFilms]（limit 1），26 次
+  /// `WHERE type_name = ? ORDER BY vod_id` 无索引全表扫串行，
+  /// 真库实测 5.2 秒（手机冷查 11–14 秒）。改成两条查询：先一次
+  /// GROUP BY 取每类型最小 vod_id（与 listFilms 同过滤、同
+  /// vod_id 升序，即列表第一条），再一次主键 IN 批量取 pic_url；
+  /// 两条查询的结果在真库上与旧取法逐条比对一致（26/26，含
+  /// resolveCoverUrl 同口径）。新索引 idx_moyi_v_type_vod 落下
+  /// 后 GROUP BY 走覆盖索引（约 80ms）；没索引时约 400ms，仍比
+  /// 旧取法快 10 倍。通用结构仍走逐条 listFilms（通用读出自带
+  /// 分页，小库不慢）。
   /// 封面是装饰：调用方取不到也不该挡文件夹网格（页里包了
   /// try/catch，失败时整份回空、卡片全回落图标）。
   Future<Map<String, String>> typeFolderCovers({
@@ -910,6 +926,70 @@ class FilmLibraryService implements FilmDbFallbackProvider {
     String genericTagKey = '',
   }) async {
     final covers = <String, String>{};
+    if (typeNames.isEmpty) return covers;
+    if (isStrict) {
+      final db = _readDb;
+      if (db == null) return covers;
+      if (videoTag.isNotEmpty && !await _hasVideoTagTable(db)) {
+        return {for (final name in typeNames) name: ''};
+      }
+      final where = <String>[
+        "v.type_name IS NOT NULL AND TRIM(v.type_name) <> ''",
+      ];
+      final args = <Object?>[];
+      where.add(
+        'v.type_name IN (${List.filled(typeNames.length, '?').join(',')})',
+      );
+      args.addAll(typeNames);
+      if (videoTag.isNotEmpty) {
+        where.add(
+          'EXISTS (SELECT 1 FROM video_tag vt '
+          'WHERE vt.vod_id = v.vod_id AND vt.tag_name = ?)',
+        );
+        args.add(videoTag);
+      }
+      if (category.isNotEmpty) {
+        where.add(
+          'v.vod_id IN (SELECT vod_id FROM video_category '
+          'WHERE main_category = ?)',
+        );
+        args.add(category);
+      }
+      final mins = await db.rawQuery(
+        'SELECT v.type_name AS name, MIN(v.vod_id) AS first_id '
+        'FROM videos v '
+        'WHERE ${where.join(' AND ')} GROUP BY v.type_name',
+        args,
+      );
+      final firstByType = <String, String>{};
+      final ids = <String>[];
+      for (final row in mins) {
+        final name = row['name']?.toString() ?? '';
+        final firstId = row['first_id']?.toString() ?? '';
+        if (name.isEmpty || firstId.isEmpty) continue;
+        firstByType[name] = firstId;
+        ids.add(firstId);
+      }
+      final picById = <String, String>{};
+      if (ids.isNotEmpty) {
+        final inList = List.filled(ids.length, '?').join(',');
+        final picRows = await db.rawQuery(
+          'SELECT vod_id, pic_url FROM videos WHERE vod_id IN ($inList)',
+          ids,
+        );
+        for (final row in picRows) {
+          picById[row['vod_id']?.toString() ?? ''] =
+              row['pic_url']?.toString() ?? '';
+        }
+      }
+      for (final name in typeNames) {
+        final firstId = firstByType[name];
+        covers[name] = firstId == null
+            ? ''
+            : resolveCoverUrl(picById[firstId] ?? '');
+      }
+      return covers;
+    }
     for (final name in typeNames) {
       final first = await listFilms(
         typeName: name,
@@ -1108,12 +1188,32 @@ class FilmLibraryService implements FilmDbFallbackProvider {
         where.add('(v.title LIKE ? OR v.vod_id LIKE ?)');
         args.addAll([like, like]);
       }
+      // 2026-11-25 读库提速第二阶段：总数按“库指纹 + 过滤条件”
+      // 缓存 5 分钟（NvkuEntryCache，与作品第一页同口径）——带
+      // 类型筛选的总数真库实测约 0.9 秒、带标签约 1.1 秒，文件夹
+      // 每次打开、切分类都重跑；缓存后第二次直接回。手动刷新/
+      // 同步完成调 NvkuEntryCache.clear() 全清。
+      final stamp = NvkuEntryCache.dbStamp(dbPath);
+      final filterKey = [
+        category,
+        site,
+        actress,
+        q,
+        typeName,
+        videoTag,
+        genericTagKey,
+      ].join('|');
+      final cachedCount =
+          NvkuEntryCache.count(stamp, 'countFilms', filterKey);
+      if (cachedCount != null) return cachedCount;
       final rows = await db.rawQuery(
         'SELECT COUNT(DISTINCT v.vod_id) AS c FROM videos v '
         '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}',
         args,
       );
-      return (rows.first['c'] as num?)?.toInt() ?? 0;
+      final total = (rows.first['c'] as num?)?.toInt() ?? 0;
+      NvkuEntryCache.putCount(stamp, 'countFilms', filterKey, total);
+      return total;
     }
     final reader = _genericReader;
     if (reader == null) return 0;
@@ -1237,12 +1337,32 @@ class FilmLibraryService implements FilmDbFallbackProvider {
       if (rankedOnly) {
         where.add('v.vod_id IN (SELECT vod_id FROM video_ranking)');
       }
+      // 2026-11-25 读库提速第二阶段：与 countFilms 同一份总数缓存
+      // （库指纹 + 过滤条件，5 分钟）——分类页切分类、排行榜计数
+      // 每次都重跑，缓存后第二次直接回。
+      final stamp = NvkuEntryCache.dbStamp(dbPath);
+      final filterKey = [
+        cleanBrand,
+        q,
+        cleanVideoCategory,
+        rankedOnly ? 'rank' : '',
+      ].join('|');
+      final cachedCount =
+          NvkuEntryCache.count(stamp, 'countLibraryFilms', filterKey);
+      if (cachedCount != null) return cachedCount;
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS c FROM videos v '
         '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}',
         args,
       );
-      return (rows.first['c'] as num?)?.toInt() ?? 0;
+      final total = (rows.first['c'] as num?)?.toInt() ?? 0;
+      NvkuEntryCache.putCount(
+        stamp,
+        'countLibraryFilms',
+        filterKey,
+        total,
+      );
+      return total;
     } catch (_) {
       return 0;
     }

@@ -692,6 +692,31 @@ class SqfliteActressDatabase implements ActressDatabase {
   @override
   String? get openFallbackNote => _openFallbackNote;
 
+  /// 读加速安全 PRAGMA（2026-11-25 读库提速第二阶段）：只改本连接
+  /// 的缓存/映射行为，不改持久化、不碰同步与日志模式——读写库照
+  /// 样安全（红线：同步关断与日志模式改写那两条绝不加，女优库是
+  /// 读写库，断电丢数据、坏库的风险扛不起；参考文件敢这么写是
+  /// 因为它们的库是只读媒体包）。
+  /// - `cache_size = -8000`：约 8MB 页缓存；
+  /// - `mmap_size = 268435456`：256MB 内存映射；
+  /// - `temp_store = MEMORY`：临时表/排序进内存。
+  /// 真库实测（449,068 部）：文件夹聚合 2952→604ms、标签聚合
+  /// 697→442ms、最新列表 1451→1004ms。开库处统一设，读连接与
+  /// 写连接都可设；单条设不上只影响加速，不影响读。
+  static Future<void> applyReadSpeedPragmas(Database db) async {
+    for (final pragma in const [
+      'PRAGMA cache_size = -8000',
+      'PRAGMA mmap_size = 268435456',
+      'PRAGMA temp_store = MEMORY',
+    ]) {
+      try {
+        await db.execute(pragma);
+      } catch (_) {
+        // 单条设不上不影响读，只是不加速。
+      }
+    }
+  }
+
   /// 按文件探结构再开库（2026-11-20 通用读库）：不存在/空文件
   /// 直接抛没有外置数据库——绝不在用户文件位置新建 persons/works
   /// 库（2026-11-22 用户令：没有外置库就是空库，不悄悄造数据）；
@@ -713,6 +738,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       final db = readOnly
           ? await openDatabase(filePath, readOnly: true)
           : await _openActressDb(filePath);
+      await applyReadSpeedPragmas(db);
       // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
       // 才抛；这里验出来就关掉重抛，不开坏库。
       try {
@@ -731,6 +757,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       final db = readOnly
           ? await openDatabase(filePath, readOnly: true)
           : await openDatabase(filePath);
+      await applyReadSpeedPragmas(db);
       _videoLibraryMode = true;
       try {
         await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
@@ -756,6 +783,7 @@ class SqfliteActressDatabase implements ActressDatabase {
     final db = readOnly
         ? await openDatabase(filePath, readOnly: true)
         : await openDatabase(filePath);
+    await applyReadSpeedPragmas(db);
     // 强制读一次文件头：损坏文件 open 时不一定报错，第一次查询
     // 才抛；这里验出来就关掉重抛，不开坏库。
     try {
@@ -900,6 +928,14 @@ class SqfliteActressDatabase implements ActressDatabase {
       'CREATE INDEX IF NOT EXISTS idx_moyi_v_pubdate ON videos(vod_pubdate)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_vc_vod ON video_category(vod_id)',
       'CREATE INDEX IF NOT EXISTS idx_moyi_vc_cat ON video_category(main_category)',
+      // 2026-11-25 读库提速第二阶段：videos(type_name, vod_id)
+      // 覆盖索引——类型文件夹聚合（GROUP BY type_name）与封面
+      // （MIN(vod_id)）原来无索引全表扫。真库实测（安全 PRAGMA
+      // 已开）：文件夹聚合 604→59ms、封面 GROUP BY 470→81ms、
+      // 单条取封面 497→0ms、带类型筛选的总数 938→59ms；建索引
+      // 一次性约 1 秒（449,068 行），库文件约 +12MB。只加索引，
+      // 不动任何一行数据；已存在时不建。
+      'CREATE INDEX IF NOT EXISTS idx_moyi_v_type_vod ON videos(type_name, vod_id)',
     ]) {
       try {
         await db.execute(sql);
@@ -939,6 +975,17 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 汇总表重建是否已排期（防重复排期）。
   var _videoRollupScheduled = false;
 
+  /// 排行榜会话缓存（2026-11-25 读库提速第二阶段）：视频库模式
+  /// 回退现算 500 人要扫 video_actress 全表 GROUP BY，冷查约
+  /// 2.9 秒；切性别、重进页都重跑。按性别缓存 5 分钟（与
+  /// NvkuEntryCache.worksTtl 同口径）；库关闭/换库时清掉，写库
+  /// 同步后最多 5 分钟旧榜，与作品第一页缓存同一取舍。只盖视频
+  /// 库模式，小库 persons 表那路本来就快，不缓存。
+  final _rankingCache = <ActressSexFilter, ({
+    List<ActressPerson> persons,
+    DateTime savedAt,
+  })>{};
+
   /// 汇总表重建挪到后台：首次开库只建索引就放行，3 秒后再跑；
   /// 库已关/已换时不再是当前连接，不跑。失败不影响读（读取侧
   /// 回退现算）。
@@ -955,6 +1002,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       try {
         if (!identical(_db, db)) return;
         rebuildDb = await openDatabase(filePath, singleInstance: false);
+        await applyReadSpeedPragmas(rebuildDb);
         await _ensureVideoRollup(rebuildDb);
       } catch (_) {
         // 后台重建失败不影响读。
@@ -2246,13 +2294,21 @@ class SqfliteActressDatabase implements ActressDatabase {
     if (_videoLibraryMode) {
       // 视频库没有排行名次/评分：按作品数倒序取前 500 人，走
       // listPersons 的视频库逻辑（同一份 SQL 与映射）。
-      return listPersons(
+      final cached = _rankingCache[sex];
+      if (cached != null &&
+          DateTime.now().difference(cached.savedAt) <
+              const Duration(minutes: 5)) {
+        return cached.persons;
+      }
+      final persons = await listPersons(
         sex: sex,
         sort: ActressSort.worksDesc,
         query: '',
         offset: 0,
         limit: 500,
       );
+      _rankingCache[sex] = (persons: persons, savedAt: DateTime.now());
+      return persons;
     }
     final args = <Object?>[];
     final rows = await db.query(
@@ -3540,6 +3596,9 @@ class SqfliteActressDatabase implements ActressDatabase {
     _openedSignature = null;
     _genericReaderCache = null;
     _genericReaderKey = null;
+    // 2026-11-25 读库提速第二阶段：排行榜缓存也清掉，不让旧库
+    // 的榜挂在新库上。
+    _rankingCache.clear();
     // 2026-11-21 视频库：标志也清掉，下次开库由 _openDbAt 重算，
     // 不让旧标志挂在新库上。
     _videoLibraryMode = false;

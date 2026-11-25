@@ -22,6 +22,12 @@ import '../models.dart';
 ///   文件指纹缓存。
 /// - 作品第一页：key = 分类 + 搜索词，5 分钟内再进直接用、不取；
 ///   过期了先上旧页、后台悄悄刷一遍再换新页（不转圈、不清列表）。
+/// - 总数（2026-11-25 读库提速第二阶段）：countFilms /
+///   countLibraryFilms 按“库指纹 + 过滤条件”缓存 5 分钟——带类型
+///   筛选的总数真库实测约 0.9 秒（无索引）/ 0.06 秒（有新索引），
+///   带标签筛选约 0.4–1.1 秒；文件夹每次打开、切分类都重跑，缓存
+///   后第二次直接回。5 分钟内播片自动存库会让总数差几条，与作品
+///   第一页缓存同一取舍；手动刷新/同步完成调 [clear] 全清。
 ///
 /// 失效（只在“数据真变了”时清，不在每次进库时清）：
 /// - 用户主动刷新（下拉刷新、顶栏刷新钮）→ [clear] 全清再查；
@@ -48,6 +54,13 @@ class NvkuEntryCache {
   static final _localCategories = <String, List<CatalogCategory>>{};
   static final _mainCategories = <String, List<CatalogCategory>>{};
   static final _works = <String, NvkuWorksEntry>{};
+
+  /// 总数缓存（2026-11-25 读库提速第二阶段）：key = 库指纹 +
+  /// 计数种类 + 过滤条件拼串，值 + 存入时间；5 分钟内算新鲜。
+  /// 最多留 32 个 key，超了淘汰最久没用的一个。
+  static const _maxCountKeys = 32;
+  static final _counts =
+      <String, ({int value, DateTime savedAt})>{};
 
   /// 库文件指纹（路径 + mtime + 大小）：文件打不开/不存在时回 ''，
   /// 调用方仍按路径分 key，只是不再靠指纹防内容变化。
@@ -171,6 +184,34 @@ class NvkuEntryCache {
     );
   }
 
+  /// 总数缓存：命中且 5 分钟内回值；未命中或过期回 null（过期
+  /// 的顺手清掉）。[kind] 是计数种类（`countFilms` /
+  /// `countLibraryFilms`），[filters] 是调用方拼好的过滤条件串。
+  static int? count(String stamp, String kind, String filters) {
+    final key = '$stamp|$kind|$filters';
+    final entry = _counts[key];
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.savedAt) < worksTtl) {
+      return entry.value;
+    }
+    _counts.remove(key);
+    return null;
+  }
+
+  static void putCount(
+    String stamp,
+    String kind,
+    String filters,
+    int value,
+  ) {
+    final key = '$stamp|$kind|$filters';
+    _counts.remove(key);
+    while (_counts.length >= _maxCountKeys) {
+      _counts.remove(_counts.keys.first);
+    }
+    _counts[key] = (value: value, savedAt: DateTime.now());
+  }
+
   /// 手动刷新 / 库内容变了时全清，下次进库重查。
   /// 只清缓存，不碰数据库连接与页面状态。
   static void clear() {
@@ -180,6 +221,7 @@ class NvkuEntryCache {
     _localCategories.clear();
     _mainCategories.clear();
     _works.clear();
+    _counts.clear();
   }
 
   /// 测试用：清掉会话缓存，免得一个测试的缓存漏到下一个。
