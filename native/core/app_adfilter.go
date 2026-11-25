@@ -12,10 +12,19 @@ package core
 //   4. 丢弃指纹≠主指纹的分片及其前置注释行。
 // 广告插播的常见形态是主时间线中夹带来自另一 host/目录的片段，
 // 上述规则即可稳定剔除。纯前置贴片（整段同来源）无法与正片区分，不猜删。
+//
+// 保守上限（2026-11-25 学 WebHTV 的 HlsManifestCleaner 安全口径，只学
+// 数值与思路、实现自写）：命中再多也设两道总闸——移除分片数超过全清单
+// 35%、或移除总时长超过 90 秒，就整单放弃清洗、原样放行。指纹高度碎片
+// 化的清单（正片分片轮换多个 CDN 目录）最容易被多数决误杀，这两道闸
+// 保证宁可漏删广告、绝不整段误删正片。另外 #EXT-X-BYTERANGE 清单
+// （删分片会错位字节偏移）与低延迟 LL-HLS 清单（#EXT-X-PART 等）整单
+// 不处理，避免破坏播放器状态。
 
 import (
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +57,14 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "#EXTM3U" {
 		return text, 0
 	}
+	// BYTERANGE 清单删分片会错位后续字节偏移；LL-HLS 的分片提示标签
+	// 与播放器状态强绑定。两类清单整单放行（同 WebHTV 清洗器口径）。
+	if strings.Contains(text, "#EXT-X-BYTERANGE") ||
+		strings.Contains(text, "#EXT-X-SKIP:") ||
+		strings.Contains(text, "#EXT-X-PART:") ||
+		strings.Contains(text, "#EXT-X-PRELOAD-HINT:") {
+		return text, 0
+	}
 	baseFP := "-"
 	if parsed, err := url.Parse(baseURL); err == nil {
 		if fp := m3u8HostDir(parsed); fp != "" {
@@ -56,9 +73,10 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 	}
 	// hasExtinf 用于确认是媒体清单；master 清单没有分片级 #EXTINF 后紧跟 URI。
 	type segment struct {
-		comment []int  // 归属该分片的注释行下标（含 #EXTINF、BYTERANGE、DISCONTINUITY 等）
-		uri     int    // 分片 URI 行下标
-		fp      string // 来源指纹
+		comment []int   // 归属该分片的注释行下标（含 #EXTINF、BYTERANGE、DISCONTINUITY 等）
+		uri     int     // 分片 URI 行下标
+		fp      string  // 来源指纹
+		dur     float64 // #EXTINF 时长（秒），解析失败为 0
 	}
 	var (
 		segments  []segment
@@ -87,7 +105,7 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 			if fp == "" {
 				fp = baseFP
 			}
-			segments = append(segments, segment{comment: pending, uri: index, fp: fp})
+			segments = append(segments, segment{comment: pending, uri: index, fp: fp, dur: m3u8PendingDuration(lines, pending)})
 			pending = nil
 		}
 		if isMaster {
@@ -112,11 +130,13 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 	}
 	remove := map[int]bool{}
 	removed := 0
+	var removedDur float64
 	for _, seg := range segments {
 		if seg.fp == dominant {
 			continue
 		}
 		removed++
+		removedDur += seg.dur
 		remove[seg.uri] = true
 		// 从最靠近分片的注释行向上回溯（与参考实现一致）：
 		// 命中分片级标签（EXTINF/BYTERANGE/KEY/DISCONTINUITY）→ 删除并继续；
@@ -138,6 +158,11 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 	if removed == 0 || removed >= len(segments) {
 		return text, 0
 	}
+	// 保守总闸：移除占比 >35% 或移除总时长 >90 秒，说明指纹分布不可信
+	// （典型是正片分片本身轮换多个来源），整单放弃清洗、原样放行。
+	if float64(removed)/float64(len(segments)) > 0.35 || removedDur > 90 {
+		return text, 0
+	}
 	output := make([]string, 0, len(lines)-removed)
 	for index, line := range lines {
 		if !remove[index] {
@@ -150,6 +175,27 @@ func nativeFilterAdSegments(text, baseURL string) (string, int) {
 		return text, 0
 	}
 	return cleaned, removed
+}
+
+// m3u8PendingDuration 从分片的前置注释行里解析 #EXTINF 时长（秒）；
+// 没有 EXTINF 或解析失败返回 0（时长总闸对该分片按 0 计，偏保守方向
+// 是少触发总闸，但占比总闸仍在，不依赖时长也能兜底）。
+func m3u8PendingDuration(lines []string, pending []int) float64 {
+	for _, index := range pending {
+		trimmed := strings.TrimSpace(lines[index])
+		if !m3u8SegmentTag.MatchString(trimmed) {
+			continue
+		}
+		value := strings.TrimPrefix(trimmed, "#EXTINF:")
+		if comma := strings.Index(value, ","); comma >= 0 {
+			value = value[:comma]
+		}
+		if duration, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && duration > 0 {
+			return duration
+		}
+		return 0
+	}
+	return 0
 }
 
 // m3u8LineFingerprint 计算一行 URI 的来源指纹：绝对地址用自身 host+目录，
