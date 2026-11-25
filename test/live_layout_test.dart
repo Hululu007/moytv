@@ -271,19 +271,20 @@ void main() {
       find.byKey(const ValueKey('live-speed-badge')),
       findsNothing,
     );
-    // 未播时中间大三角在（播放器自带的播放键），点它继续播。
-    expect(find.byKey(const ValueKey('live-video-play')), findsOneWidget);
+    // 未播时中间不盖大播放三角（用户口径：改版前没有，已去掉）。
+    expect(find.byKey(const ValueKey('live-video-play')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('信息卡：频道号卡+节目卡，节目行只显示真实 subtitle', (tester) async {
+  testWidgets('信息卡：频道号卡+节目卡，正在播放是真标题、即将播放是下一条', (tester) async {
     await _pumpLive(tester);
-    // 左卡大号 + 频道名，右卡“正在播放”显示真实 subtitle。
+    // 左卡大号 + 频道名；右卡“正在播放”= 当前标题（subtitle 不同
+    // 则拼在后面），“即将播放”= 列表里下一条标题（用户口径）。
     expect(find.byKey(const ValueKey('live-number-card')), findsOneWidget);
     expect(find.text('001'), findsOneWidget);
     expect(find.byKey(const ValueKey('live-epg-card')), findsOneWidget);
-    expect(find.text('正在播放：主播小明'), findsOneWidget);
-    expect(find.text('即将播放：暂无节目信息'), findsOneWidget);
+    expect(find.text('正在播放：频道一 · 主播小明'), findsOneWidget);
+    expect(find.text('即将播放：频道二'), findsOneWidget);
     // subtitle 只在节目卡里出现一次，不再三处重复。
     expect(find.textContaining('主播小明'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -307,16 +308,18 @@ void main() {
   testWidgets('换台：点频道格切换当前频道、号卡与节目卡跟过去', (tester) async {
     final playback = await _pumpLive(tester);
     expect(playback.channel?.name, '频道一');
-    // 频道一有 2 条线路，右列出现线路 1/2。
+    // 频道一有 2 条线路，预览区出现线路 1/2 小按钮。
     expect(find.text('线路1'), findsOneWidget);
     expect(find.text('线路2'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('live-channel-k2')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(playback.channel?.name, '频道二');
     expect(playback.playCalls, greaterThan(0));
-    // 号卡跟到 002，节目卡无真实 subtitle 时照实写暂无节目信息。
+    // 号卡跟到 002；节目卡“正在播放”跟到新频道标题，频道二是
+    // 最后一条、没有下一条才写暂无节目信息。
     expect(find.text('002'), findsOneWidget);
-    expect(find.text('正在播放：暂无节目信息'), findsOneWidget);
+    expect(find.text('正在播放：频道二'), findsOneWidget);
+    expect(find.text('即将播放：暂无节目信息'), findsOneWidget);
     expect(find.text('主播小明'), findsNothing);
     // 频道二只有 1 条线路，线路 2 消失。
     expect(find.text('线路1'), findsOneWidget);

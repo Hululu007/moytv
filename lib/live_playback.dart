@@ -107,6 +107,13 @@ class LivePlaybackController extends ChangeNotifier {
   /// 拿到之前为 null，界面不硬写分辨率；只随首帧/分辨率变化更新。
   Size? _videoSize;
 
+  /// 播放中流的真实帧率：media_kit 的 videoParams 不带 fps 字段，
+  /// 改从 mpv 属性读（先 estimated-vf-fps 实际输出帧率，没有再退
+  /// container-fps 容器帧率）。两个都拿不到就保持 null，界面不
+  /// 显示帧率，绝不编一个数。
+  double? _videoFps;
+  Timer? _fpsRetry;
+
   Player? get player => _player;
   VideoController? get controller => _controller;
   LiveSource? get source => _source;
@@ -124,6 +131,7 @@ class LivePlaybackController extends ChangeNotifier {
   String? get error => _error;
   double get aspectRatio => _aspectRatio;
   Size? get videoSize => _videoSize;
+  double? get videoFps => _videoFps;
 
   void _ensurePlayer() {
     if (_player != null || _disposed) return;
@@ -188,8 +196,38 @@ class LivePlaybackController extends ChangeNotifier {
         } else if (sizeChanged) {
           notifyListeners();
         }
+        if (_videoFps == null) {
+          unawaited(_readVideoFps(player));
+          // estimated-vf-fps 要等帧跑起来才有值，首帧刚到时可能
+          // 还是 0；3 秒后再补读一次，还没有就不再纠缠。
+          _fpsRetry ??= Timer(const Duration(seconds: 3), () {
+            _fpsRetry = null;
+            if (!_disposed && _videoFps == null && _frames) {
+              unawaited(_readVideoFps(player));
+            }
+          });
+        }
       }),
     );
+  }
+
+  /// 从 mpv 属性读当前流帧率；读不到保持 null（界面不显示）。
+  Future<void> _readVideoFps(Player player) async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    final generation = _generation;
+    for (final property in const ['estimated-vf-fps', 'container-fps']) {
+      try {
+        final raw = await platform.getProperty(property);
+        final value = double.tryParse(raw.trim());
+        if (value != null && value > 0) {
+          if (_disposed || generation != _generation) return;
+          _videoFps = value;
+          notifyListeners();
+          return;
+        }
+      } catch (_) {}
+    }
   }
 
   bool get _hasPlayback {
@@ -264,9 +302,12 @@ class LivePlaybackController extends ChangeNotifier {
       final plan = await _resolve(source, channel);
       if (_disposed || token != _generation) return;
       _frames = false;
-      // 换台先清掉上条流的分辨率，新流拿到 videoParams 后再显示，
-      // 不拿旧分辨率冒充新台。
+      // 换台先清掉上条流的分辨率与帧率，新流拿到 videoParams 后再
+      // 显示，不拿旧流的数字冒充新台。
       _videoSize = null;
+      _videoFps = null;
+      _fpsRetry?.cancel();
+      _fpsRetry = null;
       await player.open(
         Media(
           plan.url,
@@ -401,6 +442,7 @@ class LivePlaybackController extends ChangeNotifier {
     sleepTimer.dispose();
     _reconnect?.cancel();
     _stall?.cancel();
+    _fpsRetry?.cancel();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

@@ -40,13 +40,9 @@ const _videoOverlayStyle = TextStyle(
   shadows: [Shadow(color: Color(0xCC000000), blurRadius: 4)],
 );
 
-/// 截图版式配色：绿灰底 + 选中黄字，与用户截图逐项对应。
-/// 直播页是固定“电视机”观感，不跟随 App 主题换色。
-const _livePanelTop = Color(0xFF7C8C80);
-const _livePanelBottom = Color(0xFF66796D);
-const _liveCardBg = Color(0xFF5A6E62);
-const _liveCellBg = Color(0xFF5E7166);
-const _liveCellSelectedBg = Color(0xFF4B5D54);
+/// 选中态文字色：用户定的“选中变黄”口径保留这一项；其余配色
+/// （面板、卡、格、未选中文字）全部跟随应用主题——改版时写死的
+/// 灰绿整页一色已按用户口径删除恢复。
 const _liveSelectedText = Color(0xFFFFDF00);
 
 class LiveScreen extends StatefulWidget {
@@ -1168,7 +1164,7 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
-          // 手机端截图版式：中间播放键/转圈/速率 + 顶部频道名/分辨率/信息/设置。
+          // 手机端播放区：中间居中转圈/速率 + 顶部频道名/分辨率/信息/设置。
           // 顶栏画在错误遮罩之上，断流时照样能点信息换源；中间层只在无错时显示。
           if (!television) ...[
             if (error == null) _videoCenterOverlay(context),
@@ -1239,36 +1235,25 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  /// 截图播放区中间层：缓冲时大三角 + 右上角小转圈 + 下方实时速率；
-  /// 已暂停时只留大三角，点它继续播（播放器自带的播放/暂停）；
-  /// 正在播时什么都不盖，不挡画面。
+  /// 播放区中间层（恢复改版前口径）：缓冲时只有正中心一个 34×34
+  /// 转圈 + 下方实时速率，没有大播放三角——改版时加的 72px 三角
+  /// 把转圈挤到右上角，用户实拍截图里两者不在同一中心。暂停态
+  /// 也不盖三角（改版前就没有），点画面本身切换播放/暂停。
   Widget _videoCenterOverlay(BuildContext context) {
     if (_playback.loading || _playback.buffering) {
       return Center(
+        key: const ValueKey('live-center-overlay'),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  Icons.play_arrow_rounded,
-                  size: 72,
-                  color: Colors.white,
-                ),
-                Positioned(
-                  right: -2,
-                  top: 2,
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-              ],
+            const SizedBox(
+              key: ValueKey('live-center-spinner'),
+              width: 34,
+              height: 34,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: Colors.white,
+              ),
             ),
             const SizedBox(height: 10),
             ValueListenableBuilder<String?>(
@@ -1288,22 +1273,7 @@ class _LiveScreenState extends State<LiveScreen> {
         ),
       );
     }
-    final channel = _playback.channel;
-    final player = _playback.player;
-    if (channel == null || player == null || player.state.playing) {
-      return const SizedBox.shrink();
-    }
-    return Center(
-      child: GestureDetector(
-        key: const ValueKey('live-video-play'),
-        onTap: () => unawaited(player.play()),
-        child: const Icon(
-          Icons.play_arrow_rounded,
-          size: 72,
-          color: Colors.white,
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   Widget _nowPlaying(BuildContext context) {
@@ -1473,37 +1443,47 @@ class _LiveScreenState extends State<LiveScreen> {
         ],
       );
     }
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_livePanelTop, _livePanelBottom],
-        ),
-      ),
-      child: Column(
-        children: [
-          _infoCards(context),
-          if (_resumeEntry != null) _resumeRow(context),
-          Expanded(child: _lists(context, television)),
-        ],
-      ),
+    // 配色恢复改版前口径：面板不铺自己的底色，透出页面背景跟随
+    // 应用主题。改版时写死的灰绿渐变（_livePanelTop/_livePanelBottom）
+    // 让整页下半部一个颜色，用户明确说没让改成一样的，已删。
+    return Column(
+      children: [
+        _infoCards(context),
+        if (_resumeEntry != null) _resumeRow(context),
+        Expanded(child: _lists(context, television)),
+      ],
     );
   }
 
-  /// 截图播放区下方的一行两卡：左卡大频道号 + 频道名，右卡
-  /// “正在播放 / 即将播放”。节目信息没有真实数据就照实写
-  /// “暂无节目信息”，绝不编节目单；有真实 subtitle（平台源的
-  /// 房间/主播名）时“正在播放”显示它。
+  /// 播放区下方一行：左卡大频道号 + 频道名，中卡“正在播放 /
+  /// 即将播放”，右端 46px 切源按钮卡（恢复改版前 _current 卡右端
+  /// 的直达按钮：key live-source-button、电视图标、点开 _pickSource；
+  /// 改版时手机端把它删了、切源只能绕 ⓘ 信息单）。
+  /// 节目信息按用户口径接真数据：“正在播放”= 当前条目标题
+  /// （subtitle 是另一份真实信息且与标题不同才拼在后面）；“即将
+  /// 播放”= 频道列表里下一条的标题。App 里没有任何节目单（EPG）
+  /// 数据模型，电视源也只有频道名/台标/地址，所以“即将播放”对
+  /// 所有源都按下一条口径；列表到尾、没有下一条才写“暂无节目
+  /// 信息”。卡面与文字跟随应用主题（改版前口径）。
   Widget _infoCards(BuildContext context) {
+    final theme = Theme.of(context);
+    final cardColor = theme.colorScheme.surfaceContainerHighest;
+    final textColor = theme.colorScheme.onSurface;
     final channel = _playback.channel;
     final number = channel == null
         ? '--'
         : channel.number.isNotEmpty
         ? channel.number
         : '${_playback.index + 1}'.padLeft(3, '0');
-    final now = channel != null && channel.subtitle.isNotEmpty
-        ? channel.subtitle
+    final now = channel == null
+        ? '暂无节目信息'
+        : channel.subtitle.isNotEmpty && channel.subtitle != channel.name
+        ? '${channel.name} · ${channel.subtitle}'
+        : channel.name;
+    final channels = _playback.channels;
+    final nextIndex = _playback.index + 1;
+    final next = channel != null && nextIndex < channels.length
+        ? channels[nextIndex].name
         : '暂无节目信息';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
@@ -1517,7 +1497,7 @@ class _LiveScreenState extends State<LiveScreen> {
             flex: 25,
             child: Material(
               key: const ValueKey('live-number-card'),
-              color: _liveCardBg,
+              color: cardColor,
               borderRadius: BorderRadius.circular(12),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -1528,15 +1508,23 @@ class _LiveScreenState extends State<LiveScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      number,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.bold,
-                        fontFeatures: [FontFeature.tabularFigures()],
+                    // 大号数字也等比缩小装下，不用省略号截断：右端加了
+                    // 切源按钮后左卡变窄，34px 的三位号会溢出，省略号
+                    // 在子集字体环境里会整行画空（预览图实测），真机上
+                    // 也会截成半个号。FittedBox 与下面频道名同口径。
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        number,
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 34,
+                          fontWeight: FontWeight.bold,
+                          fontFeatures: const [
+                            FontFeature.tabularFigures(),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -1548,10 +1536,7 @@ class _LiveScreenState extends State<LiveScreen> {
                       child: Text(
                         channel?.name ?? '未选择频道',
                         maxLines: 1,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
+                        style: TextStyle(color: textColor, fontSize: 13),
                       ),
                     ),
                   ],
@@ -1564,7 +1549,7 @@ class _LiveScreenState extends State<LiveScreen> {
             flex: 70,
             child: Material(
               key: const ValueKey('live-epg-card'),
-              color: _liveCardBg,
+              color: cardColor,
               borderRadius: BorderRadius.circular(12),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -1577,22 +1562,35 @@ class _LiveScreenState extends State<LiveScreen> {
                   children: [
                     Text(
                       '正在播放：$now',
+                      key: const ValueKey('live-epg-now'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                      ),
+                      style: TextStyle(color: textColor, fontSize: 13),
                     ),
-                    const Divider(color: Colors.white24, height: 12),
-                    const Text(
-                      '即将播放：暂无节目信息',
+                    Divider(color: theme.dividerColor, height: 12),
+                    Text(
+                      '即将播放：$next',
+                      key: const ValueKey('live-epg-next'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.white, fontSize: 13),
+                      style: TextStyle(color: textColor, fontSize: 13),
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 46,
+            child: Material(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(12),
+              child: IconButton(
+                key: const ValueKey('live-source-button'),
+                tooltip: '切换直播源',
+                onPressed: _pickSource,
+                icon: const Icon(Icons.tv_rounded),
               ),
             ),
           ),
@@ -1776,9 +1774,10 @@ class _LiveScreenState extends State<LiveScreen> {
     return _grid(context, entries);
   }
 
-  /// 截图三列网格：左分组/收藏、中频道、右线路，三列同行对齐、
-  /// 同一个列表一起滚。选中项黄字、未选中白字；行数取三列中最长
-  /// 的一列，短的列空着。频道多时滑到底自动续载（与原来频道列一致）。
+  /// 三列区：左分组/收藏、中频道（同行对齐、同一个列表一起滚，
+  /// 频道列已按用户口径缩窄）、右预览区（固定不滚，见 _previewPane）。
+  /// 选中项黄字（用户口径保留）、未选中跟主题正文色；行数取左中
+  /// 两列中最长的一列，短的列空着。频道多时滑到底自动续载。
   Widget _grid(
     BuildContext context,
     List<({String id, String name, int count})> entries,
@@ -1807,79 +1806,238 @@ class _LiveScreenState extends State<LiveScreen> {
     final current = _playback.channel;
     final lineCount = current?.urls.length ?? 0;
     // 只有直连型源（面板/列表）支持同一频道内切线路；api 型源
-    // 的线路走仓库解析，切线重播没有意义，右列只作展示、不点。
+    // 的线路走仓库解析，切线重播没有意义，线路按钮只作展示、不点。
     final multiRoute =
         _source?.protocol == LiveProtocol.pingtai ||
         _source?.protocol == LiveProtocol.list;
     var rows = entries.length;
     if (_channels.length > rows) rows = _channels.length;
-    if (lineCount > rows) rows = lineCount;
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification.metrics.extentAfter < 600 &&
-            !_more &&
-            _hasMore &&
-            _group != _favouritesId) {
-          unawaited(_loadChannels(_group, append: true));
-        }
-        return false;
-      },
-      child: ListView.builder(
-        key: const ValueKey('live-grid'),
-        controller: _channelScroll,
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-        itemCount: rows + (_more ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= rows) {
-            return const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(
-              children: [
-                Expanded(flex: 25, child: _groupCell(entries, index)),
-                const SizedBox(width: 6),
-                Expanded(flex: 44, child: _channelCell(index)),
-                const SizedBox(width: 6),
-                Expanded(
-                  flex: 26,
-                  child: _lineCell(index, lineCount, multiRoute),
-                ),
-              ],
+    // 布局（用户口径）：左分组列 + 中频道列同行对齐、一起滚，频道
+    // 列比改版时缩窄；右侧整块让给预览区（见 _previewPane），不再
+    // 逐行排线路格。行数取左中两列中最长的一列，短的列空着。
+    // 频道多时滑到底自动续载（与原来频道列一致）。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 55,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                if (notification.metrics.extentAfter < 600 &&
+                    !_more &&
+                    _hasMore &&
+                    _group != _favouritesId) {
+                  unawaited(_loadChannels(_group, append: true));
+                }
+                return false;
+              },
+              child: ListView.builder(
+                key: const ValueKey('live-grid'),
+                controller: _channelScroll,
+                padding: EdgeInsets.zero,
+                itemCount: rows + (_more ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index >= rows) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 25,
+                          child: _groupCell(context, entries, index),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 30, child: _channelCell(context, index)),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
-          );
-        },
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 45,
+            child: _previewPane(context, lineCount, multiRoute),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _gridCell({
+  /// 右侧预览区（用户口径）：放正在播的实时画面 + 帧率。画面与
+  /// 上方播放区共用同一个播放器（同一纹理的镜像显示），是真实时
+  /// 流、不是封面图或静态图；切线路换的也是这一个播放器的地址，
+  /// 上方与预览区同步换台。线路切换收在预览下方的小按钮排里
+  /// （逐行线路格退役后线路不能没地方切）。分辨率与帧率一行小字
+  /// 显示在按钮排下方：分辨率来自 videoParams、帧率来自 mpv
+  /// 属性，哪个没拿到就不显示哪个，绝不编数。
+  Widget _previewPane(BuildContext context, int lineCount, bool multiRoute) {
+    final scheme = Theme.of(context).colorScheme;
+    final controller = _playback.controller;
+    final size = _playback.videoSize;
+    final fps = _playback.videoFps;
+    final stats = [
+      if (size != null) '${size.width.toInt()} x ${size.height.toInt()}',
+      if (fps != null) '${fps.round()} 帧/秒',
+    ].join(' · ');
+    return Material(
+      key: const ValueKey('live-preview-pane'),
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // 注意：这里不用 widget.videoBuilder 那个测试接缝——
+                    // 它的契约是“主播放面有且只有一个”（全屏退出流程
+                    // 靠这个不变量），预览镜像面只能用真 Video；测试
+                    // 环境没有真控制器时落占位，不造第二个假面。
+                    if (controller != null)
+                      Video(
+                        controller: controller,
+                        fit: BoxFit.contain,
+                        wakelock: false,
+                        controls: (_) => const SizedBox.shrink(),
+                      )
+                    else
+                      Center(
+                        child: Text(
+                          _playback.channel == null
+                              ? '选择频道后这里实时预览'
+                              : '实时预览',
+                          style: const TextStyle(
+                            color: Color(0xFF8B8F99),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    if (_playback.buffering)
+                      const Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (lineCount > 0)
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (var i = 0; i < lineCount; i++)
+                    _routeChip(context, i, multiRoute),
+                ],
+              )
+            else
+              Text(
+                '暂无线路',
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            const SizedBox(height: 6),
+            Text(
+              _playback.channel == null
+                  ? ''
+                  : stats.isEmpty
+                  ? '参数读取中…'
+                  : stats,
+              key: const ValueKey('live-preview-stats'),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 预览区下方的线路小按钮：选中态跟全页口径一致（主题选中底
+  /// 色 + 黄字），未选中描边 + 主题正文色。
+  Widget _routeChip(BuildContext context, int index, bool multiRoute) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = multiRoute && index == _playback.route;
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        border: Border.all(
+          color: selected ? scheme.primaryContainer : scheme.outlineVariant,
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        '线路${index + 1}',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          color: selected ? _liveSelectedText : scheme.onSurface,
+        ),
+      ),
+    );
+    if (!multiRoute) return chip;
+    return InkWell(
+      key: ValueKey('live-line-$index'),
+      onTap: () => unawaited(_playback.playRoute(index)),
+      child: chip,
+    );
+  }
+
+  Widget _gridCell(
+    BuildContext context, {
     required bool selected,
     required Widget child,
   }) => Container(
     height: 48,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: selected ? _liveCellSelectedBg : _liveCellBg,
+      color: selected
+          ? Theme.of(context).colorScheme.primaryContainer
+          : Theme.of(context).colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(10),
     ),
     child: child,
   );
 
-  TextStyle _gridCellText(bool selected) => TextStyle(
+  TextStyle _gridCellText(BuildContext context, bool selected) => TextStyle(
     fontSize: 13,
     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-    color: selected ? _liveSelectedText : Colors.white,
+    color: selected
+        ? _liveSelectedText
+        : Theme.of(context).colorScheme.onSurface,
   );
 
   Widget _groupCell(
+    BuildContext context,
     List<({String id, String name, int count})> entries,
     int index,
   ) {
     if (index >= entries.length) return const SizedBox(height: 48);
+    final scheme = Theme.of(context).colorScheme;
     final entry = entries[index];
     final selected = entry.id == _group;
     return InkWell(
@@ -1890,7 +2048,9 @@ class _LiveScreenState extends State<LiveScreen> {
         height: 48,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: selected ? _liveCellSelectedBg : _liveCellBg,
+          color: selected
+              ? scheme.primaryContainer
+              : scheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Column(
@@ -1901,7 +2061,7 @@ class _LiveScreenState extends State<LiveScreen> {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: _gridCellText(selected),
+              style: _gridCellText(context, selected),
             ),
             // 分组频道数只显示源数据真实带有的 count，没有就不画。
             if (entry.count > 0)
@@ -1912,7 +2072,7 @@ class _LiveScreenState extends State<LiveScreen> {
                   fontSize: 10,
                   color: selected
                       ? _liveSelectedText.withValues(alpha: .85)
-                      : Colors.white70,
+                      : scheme.onSurfaceVariant,
                 ),
               ),
           ],
@@ -1921,7 +2081,7 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  Widget _channelCell(int index) {
+  Widget _channelCell(BuildContext context, int index) {
     if (index >= _channels.length) return const SizedBox(height: 48);
     final channel = _channels[index];
     final selected = channel.key == _playback.channel?.key;
@@ -1929,36 +2089,16 @@ class _LiveScreenState extends State<LiveScreen> {
       key: ValueKey('live-channel-${channel.key}'),
       onTap: () => _open(channel),
       child: _gridCell(
+        context,
         selected: selected,
         child: Text(
           channel.name,
           textAlign: TextAlign.center,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: _gridCellText(selected),
+          style: _gridCellText(context, selected),
         ),
       ),
-    );
-  }
-
-  Widget _lineCell(int index, int lineCount, bool multiRoute) {
-    if (index >= lineCount) return const SizedBox(height: 48);
-    final selected = multiRoute && index == _playback.route;
-    final cell = _gridCell(
-      selected: selected,
-      child: Text(
-        '线路${index + 1}',
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: _gridCellText(selected),
-      ),
-    );
-    if (!multiRoute) return cell;
-    return InkWell(
-      key: ValueKey('live-line-$index'),
-      onTap: () => unawaited(_playback.playRoute(index)),
-      child: cell,
     );
   }
 }

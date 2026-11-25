@@ -178,6 +178,47 @@ void main() {
     });
   });
 
+  group('ensureLoaded 加载状态机', () {
+    // 真库在 flutter test 里打不开（sqflite 无桌面实现），用注入点
+    // 只验状态机本身：失败不缓存、成功才缓存。
+    test('失败后不缓存失败：下一次调用重新真加载', () async {
+      final lib = WhosLocalLibrary.fromWorks(const []);
+      var attempts = 0;
+      lib.loadOverrideForTest = () async {
+        attempts++;
+        return attempts >= 2;
+      };
+      expect(await lib.ensureLoaded(), isFalse);
+      expect(await lib.ensureLoaded(), isTrue);
+      expect(attempts, 2);
+    });
+
+    test('成功后走缓存：不再重复加载', () async {
+      final lib = WhosLocalLibrary.fromWorks(const []);
+      var attempts = 0;
+      lib.loadOverrideForTest = () async {
+        attempts++;
+        return true;
+      };
+      expect(await lib.ensureLoaded(), isTrue);
+      expect(await lib.ensureLoaded(), isTrue);
+      expect(attempts, 1);
+    });
+
+    test('抛错同样不缓存：下一次调用重试', () async {
+      final lib = WhosLocalLibrary.fromWorks(const []);
+      var attempts = 0;
+      lib.loadOverrideForTest = () async {
+        attempts++;
+        if (attempts < 2) throw StateError('boom');
+        return true;
+      };
+      expect(await lib.ensureLoaded(), isFalse);
+      expect(await lib.ensureLoaded(), isTrue);
+      expect(attempts, 2);
+    });
+  });
+
   group('取条', () {
     test('按番号或 id 取', () {
       final lib = library();
