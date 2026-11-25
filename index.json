@@ -486,6 +486,42 @@
       "adult": true,
       "description": "探花AV（tanhuavip14.xyz/853）。4 个分类与原 py 蜘蛛 1:1（国产传媒、日本有码、中文字幕、无码视频），播放为详情页现取 m3u8 并预解析最高码率子列表。由内置 py 蜘蛛改写。",
       "manifest": "tanhuavip14/tanhuavip14.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.memojav",
+      "name": "MemoJav",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "MemoJav（memojav.org）。与原 py 一致的 8 个分类（New Videos/Best Videos/Actress/Studio/Series/Categories/Label/Director），HTML 解析列表与索引下钻，详情页取演员/片商/导演/年份/标签/剧照，播放走 get_video_info 签名接口现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "memojav/memojav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jinguo",
+      "name": "金果短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "金果短剧（play.jinguoduanju.app）。13 个分类（接口现解析，兜底同原 py），短剧全量列表本地分页，详情分集完整，播放走游客设备授权换 Bearer 令牌后取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "jinguo/jinguo.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jinguojg",
+      "name": "禁果短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "禁果短剧（play.jinguoduanju.app，与金果短剧共用同一内置 py、同一接口，仅站名不同）。14 个分类（全部+接口现解析 13 标签，兜底同原 py），短剧全量列表本地分页，详情分集完整，播放走游客设备授权换 Bearer 令牌后取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "jinguo_jg/jinguo_jg.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javmenu",
+      "name": "JAV目錄大全",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAV目錄大全（javmenu.com）。39 个分类与原 py 蜘蛛 CATS 1:1 对应（含重复项与语言入口），列表/搜索走站内 HTML 卡片解析，详情页现取 m3u8/mp4 直链播放（master 列表在 play 内预解析到子列表）。由内置 py 蜘蛛改写。",
+      "manifest": "javmenu/javmenu.idjplugin"
     }
   ],
   "cms": []
