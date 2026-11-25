@@ -125,8 +125,11 @@ void main() {
       }
       expect(
         LiveSource.values,
-        hasLength(27),
-      ); // 5 个原有（4 修仙 + 哔哩哔哩）+ 22 个内置 m3u 清单。
+        hasLength(28),
+      ); // 来源：lib/live_sources.dart 的 LiveSource.values 清单逐项数——
+      // 6 个非清单源（内置片库 whos_lib + 秀果/欲火聚合/百年直播/成人点播
+      // 4 个 + 哔哩哔哩）+ 22 个内置 m3u 清单 = 28。旧断言 27 是
+      // 2026-11-22 内置片库加入清单前写的，漏数了它，属断言过期。
       expect(LiveSource.visible(true), hasLength(1));
     });
   });
