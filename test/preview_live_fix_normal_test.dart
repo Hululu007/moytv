@@ -1,8 +1,10 @@
-// 直播修复预览图（正常态）：信息卡真标题、切源按钮回原位、频道列
-// 缩窄 + 右侧预览区（线路小按钮 + 分辨率/帧率）、配色跟主题。
+// 直播胶囊预览预览图（正常态）：三列胶囊占满全宽（分组/频道/线路），
+// 频道胶囊全是文字胶囊；预览在信息行左槽（原数字卡整个换成实时
+// 预览帧，频道号作小角标叠在帧一角）；信息行按用户截图比例瘦身
+// （整行 80 高、切源小方钮）；顶栏分辨率后拼帧率；配色跟主题。
 // 假数据说明：分组/频道名均为测试内合成的演示数据（内置片库风格
 // 的影片频道）；播放画面为占位块（测试环境没有真播放器），产品里
-// 预览区与播放区共用同一播放器、是真实时画面；分辨率 1920x1080、
+// 左槽预览帧与播放区共用同一播放器、是真实时画面；分辨率 1920x1080、
 // 帧率 25 是假播放器给出的假流参数，产品代码只取真实参数、拿不
 // 到就不显示。一测一张：调过 toImage 的测试收尾会挂起（PNG 已落
 // 地），跑单测、超时杀掉只取 PNG。
@@ -73,7 +75,7 @@ void main() {
     } catch (_) {}
   });
 
-  testWidgets('live fix preview normal', (tester) async {
+  testWidgets('live capsule preview normal', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final appStore = LocalStore(prefs);
@@ -108,7 +110,7 @@ void main() {
                       vertical: 6,
                     ),
                     child: const Text(
-                      '预览·演示数据：直播修复版（正常态）',
+                      '预览·演示数据：直播胶囊预览版（正常态）',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 10,
@@ -153,8 +155,8 @@ void main() {
       data.lengthInBytes,
     );
     Directory(_previewDir).createSync(recursive: true);
-    File('$_previewDir/live_fix_normal.png').writeAsBytesSync(bytes);
-    print('preview landed: live_fix_normal');
+    File('$_previewDir/live_capsule_normal.png').writeAsBytesSync(bytes);
+    print('preview landed: live_capsule_normal');
   });
 }
 

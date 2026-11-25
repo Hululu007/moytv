@@ -1,5 +1,6 @@
-// 直播页版式断言：三列区（分组/频道/右侧预览区）、信息卡真标题、
-// 右上角信息+设置两钮、中央居中转圈、信息单、设置单。
+// 直播页版式断言：三列区（分组/频道/线路胶囊）、瘦信息行（左槽
+// 预览帧 + 节目卡 + 切源小方钮）、顶栏分辨率+帧率、右上角信息+
+// 设置两钮、中央居中转圈、信息单、设置单。
 // 只测版式与接线，不改直播源数据、不改取流逻辑。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -251,18 +252,21 @@ void main() {
     expect(find.text('收藏'), findsOneWidget);
     expect(find.byKey(const ValueKey('live-channel-k1')), findsOneWidget);
     expect(find.byKey(const ValueKey('live-channel-k2')), findsOneWidget);
-    // 右侧是预览区，线路小按钮在预览区里。
-    expect(find.byKey(const ValueKey('live-preview-pane')), findsOneWidget);
+    // 没有右侧大预览面板与它的统计行（用户改令：预览收进胶囊）。
+    expect(find.byKey(const ValueKey('live-preview-pane')), findsNothing);
+    expect(find.byKey(const ValueKey('live-preview-stats')), findsNothing);
+    // 线路恢复成第三列胶囊格，与频道胶囊同高。
     expect(find.byKey(const ValueKey('live-line-0')), findsOneWidget);
     expect(find.byKey(const ValueKey('live-line-1')), findsOneWidget);
-    // 频道列已缩窄：频道格比预览区窄。
-    final channelWidth = tester
-        .getSize(find.byKey(const ValueKey('live-channel-k1')))
-        .width;
-    final previewWidth = tester
-        .getSize(find.byKey(const ValueKey('live-preview-pane')))
-        .width;
-    expect(channelWidth, lessThan(previewWidth));
+    final channelSize = tester.getSize(
+      find.byKey(const ValueKey('live-channel-k2')),
+    );
+    final lineSize = tester.getSize(find.byKey(const ValueKey('live-line-0')));
+    expect(lineSize.height, channelSize.height);
+    expect(channelSize.height, 48);
+    // 频道胶囊全部是普通文字胶囊，胶囊里不放预览（用户改令：
+    // 预览落在信息行左槽，见信息行那条测试）。
+    expect(find.byKey(const ValueKey('live-channel-preview')), findsNothing);
     // 当前分组/频道/线路以黄字表示；未选中跟应用主题正文色
     // （改版前口径，不再写死白字/灰绿）。
     final onSurface = Theme.of(
@@ -308,20 +312,56 @@ void main() {
     );
     // 切源直达按钮回到信息卡行右端（改版前位置）。
     expect(find.byKey(const ValueKey('live-source-button')), findsOneWidget);
+    // 信息行按用户截图比例瘦身并钉死上限，防止以后再长胖：
+    // 整行 80 高（约一颗半胶囊），左槽/节目卡/切源钮同高。
+    // 大数字卡已不存在：左槽整个换成预览帧。
+    expect(find.byKey(const ValueKey('live-number-card')), findsNothing);
+    final previewSize = tester.getSize(
+      find.byKey(const ValueKey('live-info-preview')),
+    );
+    expect(previewSize.height, 80);
+    expect(previewSize.height, lessThanOrEqualTo(84));
+    expect(
+      tester.getSize(find.byKey(const ValueKey('live-epg-card'))).height,
+      80,
+    );
+    // 频道号只作预览帧上的小角标（小字），不再是占满卡的大字。
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const ValueKey('live-info-preview')),
+              matching: find.text('001'),
+            ),
+          )
+          .style
+          ?.fontSize,
+      lessThanOrEqualTo(12),
+    );
+    // 切源钮是随行高的小方钮（56 宽 × 80 高），不是独立高柱。
+    final sourceCardSize = tester.getSize(
+      find.byKey(const ValueKey('live-source-card')),
+    );
+    expect(sourceCardSize.width, 56);
+    expect(sourceCardSize.height, 80);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('预览区：分辨率与帧率统计行', (tester) async {
+  testWidgets('顶栏：分辨率与帧率拼一行、没帧率只显示分辨率', (tester) async {
     final playback = await _pumpLive(tester);
     playback.setVideoParams(size: const Size(1920, 1080), fps: 25);
     await tester.pump(const Duration(milliseconds: 100));
+    // 帧率拼在顶栏分辨率后面（原预览区统计行已随大预览面板删除）。
     expect(
       tester
-          .widget<Text>(find.byKey(const ValueKey('live-preview-stats')))
+          .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
           .data,
-      '1920 x 1080 · 25 帧/秒',
+      '[ 1920 x 1080 · 25 帧/秒 ]',
     );
-    // 顶栏分辨率照旧在右上角两钮左边。
+    expect(find.byKey(const ValueKey('live-preview-stats')), findsNothing);
+    // 帧率拿不到就不显示那一段，不编数。
+    playback.setVideoParams(size: const Size(1920, 1080));
+    await tester.pump(const Duration(milliseconds: 100));
     expect(
       tester
           .widget<Text>(find.byKey(const ValueKey('live-video-resolution')))
@@ -376,7 +416,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('线路切换：点预览区线路小按钮切线路、再点回第一条', (tester) async {
+  testWidgets('线路切换：点线路列胶囊切线路、再点回第一条', (tester) async {
     final playback = await _pumpLive(tester);
     expect(playback.route, 0);
     await tester.tap(find.byKey(const ValueKey('live-line-1')));

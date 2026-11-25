@@ -276,11 +276,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('信息卡：频道号卡+节目卡，正在播放是真标题、即将播放是下一条', (tester) async {
+  testWidgets('信息行：左槽预览帧+节目卡，正在播放是真标题、即将播放是下一条', (tester) async {
     await _pumpLive(tester);
-    // 左卡大号 + 频道名；右卡“正在播放”= 当前标题（subtitle 不同
-    // 则拼在后面），“即将播放”= 列表里下一条标题（用户口径）。
-    expect(find.byKey(const ValueKey('live-number-card')), findsOneWidget);
+    // 左槽是预览帧（原数字卡已撤），频道号只作角标小字出现在帧
+    // 上；右卡“正在播放”= 当前标题（subtitle 不同则拼在后面），
+    // “即将播放”= 列表里下一条标题（用户口径）。
+    expect(find.byKey(const ValueKey('live-number-card')), findsNothing);
+    expect(find.byKey(const ValueKey('live-info-preview')), findsOneWidget);
     expect(find.text('001'), findsOneWidget);
     expect(find.byKey(const ValueKey('live-epg-card')), findsOneWidget);
     expect(find.text('正在播放：频道一 · 主播小明'), findsOneWidget);
@@ -308,7 +310,7 @@ void main() {
   testWidgets('换台：点频道格切换当前频道、号卡与节目卡跟过去', (tester) async {
     final playback = await _pumpLive(tester);
     expect(playback.channel?.name, '频道一');
-    // 频道一有 2 条线路，预览区出现线路 1/2 小按钮。
+    // 频道一有 2 条线路，线路列出现线路 1/2 胶囊格。
     expect(find.text('线路1'), findsOneWidget);
     expect(find.text('线路2'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('live-channel-k2')));
