@@ -1,5 +1,36 @@
 import 'dart:convert';
 
+/// 回看模板（m3u 的 catchup / catchup-source / catchup-replace）：
+/// type 为 default 时 source 本身就是回看地址模板；为 append（或空）
+/// 时先按 replace（「正则,替换」）改直播地址、再把 source 模板
+/// 拼到地址后面。模板里 ${(b)格式} / ${(e)格式} 是节目起止时间。
+/// 地址生成见 live_catchup.dart 的 formatLiveCatchupUrl。
+class LiveCatchup {
+  const LiveCatchup({this.type = '', this.source = '', this.replace = ''});
+
+  final String type;
+  final String source;
+  final String replace;
+
+  bool get isEmpty => source.isEmpty;
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'source': source,
+    'replace': replace,
+  };
+
+  static LiveCatchup? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final item = LiveCatchup(
+      type: raw['type'] as String? ?? '',
+      source: raw['source'] as String? ?? '',
+      replace: raw['replace'] as String? ?? '',
+    );
+    return item.isEmpty ? null : item;
+  }
+}
+
 class LiveChannel {
   const LiveChannel({
     required this.key,
@@ -11,8 +42,13 @@ class LiveChannel {
     this.group = '',
     this.source = '',
     this.tvgId = '',
+    this.tvgName = '',
     this.token = '',
     this.subtitle = '',
+    this.catchup,
+    this.licenseKey = '',
+    this.licenseType = '',
+    this.format = '',
   });
 
   final String key;
@@ -24,8 +60,23 @@ class LiveChannel {
   final String group;
   final String source;
   final String tvgId;
+
+  /// #EXTINF 的 tvg-name：节目单对台时 tvg-id 对不上用它按名匹配。
+  final String tvgName;
   final String token;
   final String subtitle;
+
+  /// 回看模板；null 表示该频道没声明回看。
+  final LiveCatchup? catchup;
+
+  /// #KODIPROP 的 DRM 授权键与类型：只解析存储——当前播放器
+  /// （media_kit/mpv）没有 DRM 解密能力，起播时用不上，见报告。
+  final String licenseKey;
+  final String licenseType;
+
+  /// 清单类型提示（#KODIPROP manifest_type / txt 的 format 设置行），
+  /// 如 hls / mpd；只存储，播放器按地址自动识别，不强制。
+  final String format;
 
   String get url => urls.isEmpty ? '' : urls.first;
   bool get playable => urls.any(isPlayableLiveUrl);
@@ -41,8 +92,13 @@ class LiveChannel {
     group: group,
     source: source,
     tvgId: tvgId,
+    tvgName: tvgName,
     token: token,
     subtitle: subtitle,
+    catchup: catchup,
+    licenseKey: licenseKey,
+    licenseType: licenseType,
+    format: format,
   );
 
   LiveChannel withPlayback(String value, Map<String, String> values) =>
@@ -56,8 +112,13 @@ class LiveChannel {
         group: group,
         source: source,
         tvgId: tvgId,
+        tvgName: tvgName,
         token: token,
         subtitle: subtitle,
+        catchup: catchup,
+        licenseKey: licenseKey,
+        licenseType: licenseType,
+        format: format,
       );
 
   static String makeKey(String source, String group, String name) =>
@@ -75,6 +136,12 @@ class LiveChannel {
     'number': number,
     'token': token,
     'subtitle': subtitle,
+    'tvgId': tvgId,
+    'tvgName': tvgName,
+    if (catchup != null) 'catchup': catchup!.toJson(),
+    'licenseKey': licenseKey,
+    'licenseType': licenseType,
+    'format': format,
   };
 
   static LiveChannel fromFavourite(Map<String, dynamic> json) => LiveChannel(
@@ -93,6 +160,12 @@ class LiveChannel {
     number: json['number'] as String? ?? '',
     token: json['token'] as String? ?? '',
     subtitle: json['subtitle'] as String? ?? '',
+    tvgId: json['tvgId'] as String? ?? '',
+    tvgName: json['tvgName'] as String? ?? '',
+    catchup: LiveCatchup.fromJson(json['catchup']),
+    licenseKey: json['licenseKey'] as String? ?? '',
+    licenseType: json['licenseType'] as String? ?? '',
+    format: json['format'] as String? ?? '',
   );
 }
 

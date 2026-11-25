@@ -452,6 +452,7 @@ class LocalStore extends ChangeNotifier {
         description: 'm3u 导入 · ${sub.channelCount} 个频道',
         protocol: LiveProtocol.list,
         builtin: false,
+        epg: sub.epg,
       );
       // 只注册已加载在内存里的频道；没加载的订阅不在表里，
       // 直播页点开时仓库走按需加载器读本地副本重解析。

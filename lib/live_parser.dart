@@ -39,6 +39,11 @@ class _ChannelBuilder {
   String logo = '';
   String number = '';
   String tvgId = '';
+  String tvgName = '';
+  LiveCatchup? catchup;
+  String licenseKey = '';
+  String licenseType = '';
+  String format = '';
 }
 
 class _GroupBuilder {
@@ -153,9 +158,26 @@ class LiveParser {
         final channel = group.channel(name);
         channel.urls.add(url);
         channel.headers = setters.headers();
+        if (setters.licenseKey.isNotEmpty) {
+          channel.licenseKey = setters.licenseKey;
+        }
+        if (setters.licenseType.isNotEmpty) {
+          channel.licenseType = setters.licenseType;
+        }
+        if (setters.format.isNotEmpty) channel.format = setters.format;
       }
     }
     return LiveParseResult(groups: _finalize(groups, source));
+  }
+
+  /// 回看三属性（#EXTM3U 头上是全源默认、#EXTINF 上是本频道覆盖）。
+  static LiveCatchup? _catchupOf(String line) {
+    final item = LiveCatchup(
+      type: _attribute(line, 'catchup') ?? '',
+      source: _attribute(line, 'catchup-source') ?? '',
+      replace: _attribute(line, 'catchup-replace') ?? '',
+    );
+    return item.isEmpty ? null : item;
   }
 
   static LiveParseResult _parseM3u(
@@ -166,6 +188,7 @@ class LiveParser {
     final groups = <_GroupBuilder>[];
     final setters = _Setters();
     var epg = '';
+    LiveCatchup? globalCatchup;
     _GroupBuilder? group;
     _ChannelBuilder? pending;
 
@@ -181,6 +204,7 @@ class LiveParser {
             _attribute(raw, 'tvg-url') ??
             _attribute(raw, 'x-tvg-url') ??
             '';
+        globalCatchup = _catchupOf(raw) ?? globalCatchup;
         continue;
       }
       if (raw.startsWith('#EXTINF:')) {
@@ -200,7 +224,11 @@ class LiveParser {
         pending = group.channel(name);
         pending.logo = _attribute(raw, 'tvg-logo') ?? pending.logo;
         pending.tvgId = _attribute(raw, 'tvg-id') ?? pending.tvgId;
+        pending.tvgName = _attribute(raw, 'tvg-name') ?? pending.tvgName;
         pending.number = _attribute(raw, 'tvg-chno') ?? pending.number;
+        // 频道自己的回看优先，没有才落全源默认（与 easytv 的
+        // Catchup.decide 同口径：major=频道、minor=全源）。
+        pending.catchup = _catchupOf(raw) ?? pending.catchup ?? globalCatchup;
         final userAgent = _attribute(raw, 'http-user-agent');
         if (userAgent != null && userAgent.isNotEmpty) {
           setters.readHeader('User-Agent=$userAgent');
@@ -216,6 +244,13 @@ class LiveParser {
       }
       pending.urls.add(url);
       pending.headers = setters.headers();
+      if (setters.licenseKey.isNotEmpty) {
+        pending.licenseKey = setters.licenseKey;
+      }
+      if (setters.licenseType.isNotEmpty) {
+        pending.licenseType = setters.licenseType;
+      }
+      if (setters.format.isNotEmpty) pending.format = setters.format;
     }
     return LiveParseResult(
       groups: _finalize(groups, source),
@@ -290,6 +325,7 @@ class LiveParser {
         }
         channel.logo = _pick(child, const ['logo', 'tvg-logo']);
         channel.tvgId = _pick(child, const ['tvg-id', 'tvgId']);
+        channel.tvgName = _pick(child, const ['tvg-name', 'tvgName']);
         channel.number = _pick(child, const ['number', 'tvg-chno']);
       }
     }
@@ -330,6 +366,11 @@ class LiveParser {
             group: group.name,
             source: source,
             tvgId: channel.tvgId,
+            tvgName: channel.tvgName,
+            catchup: channel.catchup,
+            licenseKey: channel.licenseKey,
+            licenseType: channel.licenseType,
+            format: channel.format,
           ),
         );
       }
@@ -344,6 +385,9 @@ class _Setters {
   String _userAgent = '';
   String _referer = '';
   String _origin = '';
+  String licenseKey = '';
+  String licenseType = '';
+  String format = '';
 
   static String _value(String line) {
     final at = line.indexOf('=');
@@ -359,6 +403,33 @@ class _Setters {
     if (line.startsWith('#KODIPROP:inputstream.adaptive.stream_headers') ||
         line.startsWith('#KODIPROP:inputstream.adaptive.common_headers')) {
       readHeader(_value(line));
+      return;
+    }
+    if (line.startsWith('#KODIPROP:inputstream.adaptive.license_key')) {
+      licenseKey = _value(line);
+      return;
+    }
+    if (line.startsWith('#KODIPROP:inputstream.adaptive.license_type')) {
+      licenseType = _value(line);
+      return;
+    }
+    if (line.startsWith('#KODIPROP:inputstream.adaptive.drm_legacy')) {
+      // 老式合并写法（类型与键写在一行）：整行存进 licenseKey，
+      // 类型能拆出来就拆（逗号/竖线前一段当类型）。
+      final raw = _value(line);
+      if (licenseKey.isEmpty) licenseKey = raw;
+      if (licenseType.isEmpty) {
+        final split = raw.split(RegExp(r'[,|]'));
+        if (split.length > 1) licenseType = split.first.trim();
+      }
+      return;
+    }
+    if (line.startsWith('#KODIPROP:inputstream.adaptive.manifest_type')) {
+      format = _value(line);
+      return;
+    }
+    if (line.startsWith('format')) {
+      format = _value(line);
       return;
     }
     if (line.startsWith('#EXTVLCOPT:http-cookie')) {
@@ -411,5 +482,8 @@ class _Setters {
     _userAgent = '';
     _referer = '';
     _origin = '';
+    licenseKey = '';
+    licenseType = '';
+    format = '';
   }
 }

@@ -17,6 +17,7 @@ class M3uSubscription {
     this.fileName = '',
     this.groupCount = 0,
     this.updatedAtMs = 0,
+    this.epg = '',
     int? channelCount,
   }) : channelCount = channelCount ?? channels.length;
 
@@ -35,6 +36,9 @@ class M3uSubscription {
   final String fileName;
   final int groupCount;
   final int updatedAtMs;
+
+  /// 文件头声明的节目单地址，随订阅存盘，注册成直播源时带上。
+  final String epg;
   final List<LiveChannel> channels;
 
   /// 订阅的频道总数（解析出的真实条数，不随内存加载状态变）。
@@ -49,6 +53,7 @@ class M3uSubscription {
     int? groupCount,
     int? updatedAtMs,
     String? fileName,
+    String? epg,
     int? channelCount,
   }) => M3uSubscription(
     id: id,
@@ -58,6 +63,7 @@ class M3uSubscription {
     fileName: fileName ?? this.fileName,
     groupCount: groupCount ?? this.groupCount,
     updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+    epg: epg ?? this.epg,
     channels: channels ?? this.channels,
     // 注意：换频道列表时不自动从 channels 推导总数——“卸载”
     // 传的是空列表（表示未加载），不是 0 个频道；换列表的
@@ -78,6 +84,7 @@ class M3uSubscription {
     'groupCount': groupCount,
     'updatedAtMs': updatedAtMs,
     'channelCount': channelCount,
+    'epg': epg,
   };
 
   factory M3uSubscription.fromJson(Map<String, dynamic> json) {
@@ -96,6 +103,7 @@ class M3uSubscription {
       fileName: json['fileName'] as String? ?? '',
       groupCount: json['groupCount'] as int? ?? 0,
       updatedAtMs: json['updatedAtMs'] as int? ?? 0,
+      epg: json['epg'] as String? ?? '',
       channels: legacyChannels,
       channelCount: json['channelCount'] as int? ?? legacyChannels.length,
     );
@@ -107,11 +115,15 @@ class M3uParseReport {
     required this.groups,
     required this.badEntries,
     required this.totalEntries,
+    this.epg = '',
   });
 
   final List<LiveGroup> groups;
   final int badEntries;
   final int totalEntries;
+
+  /// 文件头声明的节目单地址（m3u 的 tvg-url/url-tvg），没有为空。
+  final String epg;
 
   int get channelCount =>
       groups.fold(0, (total, group) => total + group.channels.length);
@@ -145,11 +157,20 @@ M3uParseReport analyzeM3u(String text, {required String source}) {
   }
   final parsed = LiveParser.parse(normalized, source: source);
   if (parsed.channelCount == 0) {
+    // 报错按格式说清：m3u 说条数与坏地址数，txt 说行式要求，
+    // 不再拿 m3u 的话去套 txt 文件。
+    if (parsed.format == LiveFormat.text) {
+      throw const FormatException(
+        '未解析到任何频道：请确认文件是标准 txt 直播列表'
+        '（「分组名,#genre#」分组行 +「频道名,播放地址」行）',
+      );
+    }
     throw FormatException(
       totalEntries > 0
           ? '未解析到任何频道：共 $totalEntries 条 #EXTINF，其中 $badEntries 条地址不可用，'
                 '请确认文件是标准 m3u'
-          : '未解析到任何频道：请确认文件是标准 m3u（含 #EXTINF 与播放地址）',
+          : '未解析到任何频道：请确认文件是标准 m3u（含 #EXTINF 与播放地址）'
+                '或 txt 直播列表',
     );
   }
   // 不再截断：见 M3uSubscription 上的说明。
@@ -157,7 +178,22 @@ M3uParseReport analyzeM3u(String text, {required String source}) {
     groups: parsed.groups,
     badEntries: badEntries,
     totalEntries: totalEntries,
+    epg: parsed.epg,
   );
+}
+
+/// 远程订阅的默认源名（直播页「+」添加远程链接时用，用户没让
+/// 填名字）：拉回来的文件头 #EXTM3U 带 name 属性就用它，没有
+/// 就用链接的主机名；都拿不到回「未命名订阅」。
+String m3uRemoteName(String text, String url) {
+  for (final line in text.split('\n').take(5)) {
+    if (!line.startsWith('#EXTM3U')) continue;
+    final name = RegExp(r'name="([^"]+)"').firstMatch(line)?.group(1)?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    break;
+  }
+  final host = Uri.tryParse(url.trim())?.host ?? '';
+  return host.isEmpty ? '未命名订阅' : host;
 }
 
 class M3uFileStore {
@@ -249,6 +285,7 @@ class M3uSubscriptionService {
       fileName: fileName,
       groupCount: report.groups.length,
       updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      epg: report.epg,
       channels: report.channels,
     );
   }

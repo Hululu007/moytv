@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'app_layout.dart';
 import 'app_notice.dart';
 import 'core_bridge.dart';
+import 'live_catchup.dart';
+import 'live_epg.dart';
 import 'live_models.dart';
 import 'live_playback.dart';
 import 'live_player_screen.dart';
@@ -13,6 +17,7 @@ import 'live_repository.dart';
 import 'live_sources.dart';
 import 'live_store.dart';
 import 'local_store.dart';
+import 'm3u_subscriptions.dart';
 import 'network_speed.dart';
 import 'player_route.dart';
 import 'remote_widgets.dart';
@@ -149,6 +154,19 @@ class _LiveScreenState extends State<LiveScreen> {
   /// 直播中每次换台都会重记记忆（当前频道），按钮不能跟它走，
   /// 否则永远等于正在播的频道、永不出现。
   LiveLastWatched? _entryResume;
+
+  /// 「+」导入进行中：防重复点（选文件/拉远程都是慢操作）。
+  bool _importing = false;
+
+  /// 当前源的节目单（源带 epg 地址时才拉）：拉到后信息行改用
+  /// 真节目名显示正在播/即将播；拉不到或源没给地址就保持 null，
+  /// 信息行走原来的频道名口径，绝不编节目名。
+  LiveEpgGuide? _epgGuide;
+  String _epgUrl = '';
+
+  /// 节目单到手后每分钟重算一次正在播/即将播（节目到点切换时
+  /// 信息行要跟上）；没有节目单时不启这个计时器。
+  Timer? _epgTick;
   final _groupTileKeys = <String, GlobalKey>{};
   late final LivePlaybackController _playback;
   final _listKey = GlobalKey<RemoteListState>();
@@ -199,6 +217,7 @@ class _LiveScreenState extends State<LiveScreen> {
 
   @override
   void dispose() {
+    _epgTick?.cancel();
     _cancelRetryDelay();
     _rememberChannelOffset();
     _flushVodPosition();
@@ -465,12 +484,43 @@ class _LiveScreenState extends State<LiveScreen> {
     }
   }
 
+  /// 当前源带节目单地址时把节目单跟上：切源/进直播都走
+  /// _loadPlatforms，在这里按地址比对——地址没变不重拉，
+  /// 变了就换一份；源没给地址就清掉旧节目单，信息行回落
+  /// 原来的频道名口径。
+  void _syncEpgForSource(LiveSource source) {
+    final url = source.epg.trim();
+    if (url == _epgUrl) return;
+    _epgUrl = url;
+    _epgGuide = null;
+    _epgTick?.cancel();
+    _epgTick = null;
+    if (url.isEmpty) return;
+    unawaited(_loadEpg());
+  }
+
+  Future<void> _loadEpg({bool force = false}) async {
+    final url = _epgUrl;
+    if (url.isEmpty) return;
+    try {
+      final guide = await LiveEpgService.instance.load(url, force: force);
+      if (!mounted || url != _epgUrl) return;
+      setState(() => _epgGuide = guide);
+      _epgTick ??= Timer.periodic(const Duration(minutes: 1), (_) {
+        if (mounted && _epgGuide != null) setState(() {});
+      });
+    } catch (_) {
+      // 节目单是增强项：拉不到就不显示节目名，不打扰用户。
+    }
+  }
+
   Future<void> _loadPlatforms({
     bool force = false,
     String keepGroup = '',
   }) async {
     final source = _source;
     if (source == null) return;
+    _syncEpgForSource(source);
     final token = ++_generation;
     widget.repository.cancel();
     setState(() {
@@ -666,14 +716,51 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   /// 手动刷新：强制重新抓取直播分类与当前分类的频道列表，
-  /// 不读 LiveRepository 的会话内缓存。
+  /// 不读 LiveRepository 的会话内缓存。当前源是远程 m3u 订阅
+  /// 时先重新拉取订阅本身（与导入中心的刷新同款），再重读
+  /// 本地副本；拉取失败会提示并继续用本地副本刷新。
   Future<void> _refreshLive() async {
     if (_loading) return;
     if (_group == _favouritesId) {
       setState(() => _channels = widget.store.favourites);
       return;
     }
+    await _refreshImportedRemote();
+    if (_epgUrl.isNotEmpty) unawaited(_loadEpg(force: true));
     await _loadPlatforms(force: true, keepGroup: _group);
+  }
+
+  /// 远程 m3u 订阅的手动刷新：按原地址重拉、重解析、写回本地
+  /// 副本与订阅记录。不是远程订阅（本地文件/内置源）直接跳过。
+  Future<void> _refreshImportedRemote() async {
+    final store = widget.appStore;
+    final source = _source;
+    if (store == null || source == null || !source.id.startsWith('m3u:')) {
+      return;
+    }
+    final sub = store.m3uSubscriptions
+        .where((item) => item.sourceId == source.id)
+        .firstOrNull;
+    if (sub == null || !sub.isUrl) return;
+    try {
+      final text = await M3uSubscriptionService.fetchText(sub.url);
+      final updated = await M3uSubscriptionService.build(
+        name: sub.name,
+        kind: sub.kind,
+        text: text,
+        rawBytes: utf8.encode(text),
+        url: sub.url,
+        existing: sub.id,
+      );
+      await store.syncM3uSubscriptions([
+        for (final item in store.m3uSubscriptions)
+          if (item.id == sub.id) updated else item,
+      ]);
+    } catch (error) {
+      if (mounted) {
+        AppNotice.show(context, '远程订阅刷新失败，先用本地副本：$error');
+      }
+    }
   }
 
   void _changeSource(LiveSource source, {bool cancelResume = true}) {
@@ -858,6 +945,18 @@ class _LiveScreenState extends State<LiveScreen> {
                         ? Text(channel.subtitle)
                         : null,
                   ),
+                if (channel != null &&
+                    _epgGuide != null &&
+                    _epgGuide!.programmesFor(channel).isNotEmpty)
+                  ListTile(
+                    key: const ValueKey('live-info-epg'),
+                    leading: const Icon(Icons.event_note_rounded),
+                    title: const Text('节目单'),
+                    subtitle: channel.catchup != null
+                        ? const Text('过去的节目可点回看')
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop('epg'),
+                  ),
                 if (size != null)
                   ListTile(
                     leading: const Icon(Icons.high_quality_rounded),
@@ -922,9 +1021,136 @@ class _LiveScreenState extends State<LiveScreen> {
       case 'favourite':
         final current = _playback.channel;
         if (current != null) widget.store.toggleFavourite(current);
+      case 'epg':
+        final current = _playback.channel;
+        if (current != null) await _showProgrammeSheet(current);
       case 'sleep':
         await _openSleepTimer();
     }
+  }
+
+  static String _epgClock(DateTime time) =>
+      '${time.hour.toString().padLeft(2, '0')}:'
+      '${time.minute.toString().padLeft(2, '0')}';
+
+  /// 节目单弹层：当前频道今天的节目（按时间正序，打开时滚到
+  /// 正在播的那条）。正在播的标「正在播」；已播完的在频道带
+  /// 回看模板时可点，点完按模板生成回看地址起播；没回看模板
+  /// 时只看单子，不给假入口。
+  Future<void> _showProgrammeSheet(LiveChannel channel) async {
+    final guide = _epgGuide;
+    if (guide == null) return;
+    final all = guide.programmesFor(channel);
+    if (all.isEmpty) return;
+    final now = DateTime.now();
+    // 只列今天这一天的节目：结束晚于今天零点、开始早于明天
+    // 零点（跨零点的节目按这个口径不会被漏掉）；节目单文件
+    // 常含多天，全列出来太长。一条都不剩时回落全表。
+    final dayStart = DateTime(now.year, now.month, now.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final todays = [
+      for (final item in all)
+        if (item.end.isAfter(dayStart) && item.start.isBefore(dayEnd)) item,
+    ];
+    final list = todays.isEmpty ? all : todays;
+    final currentIndex = list.indexWhere((item) => item.contains(now));
+    final scroll = ScrollController(
+      initialScrollOffset: currentIndex > 0 ? currentIndex * 56.0 : 0,
+    );
+    final picked = await showModalBottomSheet<LiveEpgProgramme>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Text(
+                  '${channel.name} · 节目单',
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  key: const ValueKey('live-epg-list'),
+                  controller: scroll,
+                  itemCount: list.length,
+                  itemBuilder: (itemContext, index) {
+                    final item = list[index];
+                    final playing = item.contains(now);
+                    final past = item.end.isBefore(now) || item.end == now;
+                    final canCatchup = past && channel.catchup != null;
+                    return ListTile(
+                      key: ValueKey('live-epg-item-$index'),
+                      leading: Text(
+                        _epgClock(item.start),
+                        style: Theme.of(itemContext).textTheme.bodyMedium,
+                      ),
+                      title: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${_epgClock(item.start)}–${_epgClock(item.end)}',
+                      ),
+                      trailing: playing
+                          ? const Chip(label: Text('正在播'))
+                          : canCatchup
+                          ? const Icon(Icons.replay_rounded)
+                          : null,
+                      onTap: canCatchup
+                          ? () => Navigator.of(sheetContext).pop(item)
+                          : null,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    scroll.dispose();
+    if (picked == null || !mounted) return;
+    final catchup = channel.catchup;
+    if (catchup == null) return;
+    final url = formatLiveCatchupUrl(
+      catchup: catchup,
+      liveUrl: channel.url,
+      start: picked.start,
+      end: picked.end,
+    );
+    if (url == null) {
+      AppNotice.show(context, '这个节目生成不了回看地址');
+      return;
+    }
+    _playCatchup(channel, picked, url);
+  }
+
+  /// 回看起播：播放列表里只把该频道这一条的地址换成回看地址
+  /// （key 不变，分组/选中态都跟着走），其余频道不动；用户
+  /// 再切分组/切源重拉列表后，该频道自然恢复直播地址。
+  void _playCatchup(
+    LiveChannel channel,
+    LiveEpgProgramme programme,
+    String url,
+  ) {
+    final source = _source;
+    if (source == null) return;
+    final base = _playback.channels.isNotEmpty
+        ? _playback.channels
+        : _channels;
+    final index = base.indexWhere((entry) => entry.key == channel.key);
+    if (index < 0) return;
+    final replaced = [
+      for (final entry in base)
+        if (entry.key == channel.key) entry.withUrls([url]) else entry,
+    ];
+    unawaited(_playback.load(source, replaced, index: index));
+    AppNotice.show(context, '回看：${programme.title}');
   }
 
   Future<void> _openSleepTimer() async {
@@ -968,13 +1194,21 @@ class _LiveScreenState extends State<LiveScreen> {
       context,
       sectionName: '直播',
       currentId: _source?.id ?? '',
+      // 删除只走弹窗自带的 onDeleteSite 入口（长按删除），弹窗
+      // 样子与用法不动；可删的只有 m3u 订阅源（deletable 只给
+      // 它们），内置源与 TVBox 配置源都不给删除。
+      onDeleteSite: widget.appStore == null ? null : _deleteImportedSource,
       groups: [
         if (builtin.isNotEmpty)
           SourcePickerGroup(
             title: grouped ? '平台源' : '',
             entries: [
               for (final source in builtin)
-                SourcePickerEntry(id: source.id, name: source.name),
+                SourcePickerEntry(
+                  id: source.id,
+                  name: source.name,
+                  deletable: false,
+                ),
             ],
           ),
         if (imported.isNotEmpty)
@@ -982,7 +1216,11 @@ class _LiveScreenState extends State<LiveScreen> {
             title: grouped ? '导入源' : '',
             entries: [
               for (final source in imported)
-                SourcePickerEntry(id: source.id, name: source.name),
+                SourcePickerEntry(
+                  id: source.id,
+                  name: source.name,
+                  deletable: source.id.startsWith('m3u:'),
+                ),
             ],
           ),
       ],
@@ -995,26 +1233,274 @@ class _LiveScreenState extends State<LiveScreen> {
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
+    final Widget content;
     if (_source == null) {
-      return StatusPanel(
+      content = StatusPanel(
         key: const ValueKey('live-green-empty'),
         title: '暂无可用直播源',
         message: '当前没有可用的直播源。',
         icon: Icons.verified_user_outlined,
       );
+    } else {
+      content = Column(
+        children: [
+          Expanded(
+            flex: television ? _tvPlaybackShare : _playbackShare,
+            child: _video(context, television),
+          ),
+          Expanded(
+            flex: television ? _tvListShare : _listShare,
+            child: _panel(context, television),
+          ),
+        ],
+      );
     }
-    return Column(
-      children: [
-        Expanded(
-          flex: television ? _tvPlaybackShare : _playbackShare,
-          child: _video(context, television),
-        ),
-        Expanded(
-          flex: television ? _tvListShare : _listShare,
-          child: _panel(context, television),
-        ),
-      ],
+    // 没有 LocalStore（测试注入缺省）时不挂导入钮，页面与原来一致。
+    if (widget.appStore == null) return content;
+    return Stack(
+      fit: StackFit.expand,
+      children: [content, _importButton(context)],
     );
+  }
+
+  /// 左下角「+」导入钮：悬浮固定在页面左下角的独立层上——
+  /// 不在频道列表的布局里、不随列表上下滑动而动，滑动时纹丝
+  /// 不动；位置在列表区左下角，不挡信息行左槽的预览帧（那行
+  /// 在列表区顶部）。点开给两个入口：导入本地文件 / 添加远程
+  /// 链接（见 _showImportMenu）。
+  Widget _importButton(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Positioned(
+      left: 12,
+      bottom: 12,
+      child: Tooltip(
+        message: '导入直播源',
+        child: Material(
+          key: const ValueKey('live-import-add'),
+          color: colors.primary,
+          shape: const CircleBorder(),
+          elevation: 4,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: _importing
+                ? null
+                : () => unawaited(_showImportMenu()),
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Icon(Icons.add_rounded, color: colors.onPrimary),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 「+」菜单：导入本地 m3u/txt 文件、添加远程直播链接。
+  /// 两条都走既有的 m3u 订阅机件（M3uSubscriptionService +
+  /// LocalStore.syncM3uSubscriptions），与导入中心同一套，
+  /// 不另起解析/存盘。
+  Future<void> _showImportMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('live-import-local'),
+              leading: const Icon(Icons.folder_open_rounded),
+              title: const Text('导入本地文件'),
+              subtitle: const Text('m3u / txt 直播列表'),
+              onTap: () => Navigator.of(sheetContext).pop('local'),
+            ),
+            ListTile(
+              key: const ValueKey('live-import-remote'),
+              leading: const Icon(Icons.link_rounded),
+              title: const Text('添加远程链接'),
+              subtitle: const Text('粘贴 http(s) 直播订阅地址'),
+              onTap: () => Navigator.of(sheetContext).pop('remote'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'local') {
+      await _importLocalFile();
+    } else if (action == 'remote') {
+      await _importRemoteLink();
+    }
+  }
+
+  /// 导入本地文件：选文件走与导入中心同款的 FilePicker 调用；
+  /// 源名用文件名（去掉扩展名），不另问名字。解析失败由
+  /// analyzeM3u 给明确原因（格式不对/没有可用频道），原样提示。
+  Future<void> _importLocalFile() async {
+    final store = widget.appStore;
+    if (store == null || _importing) return;
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: ['m3u', 'm3u8', 'txt'],
+    );
+    if (file == null || !mounted) return;
+    setState(() => _importing = true);
+    try {
+      final bytes = await file.readAsBytes();
+      final text = utf8.decode(bytes, allowMalformed: true);
+      final name = file.name.replaceAll(
+        RegExp(r'\.(m3u8?|txt)$', caseSensitive: false),
+        '',
+      );
+      final record = await M3uSubscriptionService.build(
+        name: name,
+        kind: M3uSubscription.kindFile,
+        text: text,
+        rawBytes: bytes,
+      );
+      await store.syncM3uSubscriptions([
+        ...store.m3uSubscriptions,
+        record,
+      ]);
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        '已导入「${record.name}」：${record.channelCount} 个频道，已切换到该源',
+      );
+      _switchToImported(record.sourceId);
+    } catch (error) {
+      if (mounted) AppNotice.show(context, '导入失败：$error');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  /// 添加远程链接：只收 http/https；拉回来解析，源名用文件头
+  /// #EXTM3U 的 name、没有就用链接主机名（m3uRemoteName）。
+  /// 拉不到与解析失败分别由 fetchText / analyzeM3u 给原因。
+  Future<void> _importRemoteLink() async {
+    final store = widget.appStore;
+    if (store == null || _importing) return;
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('添加远程直播链接'),
+        content: TextField(
+          key: const ValueKey('live-import-url-field'),
+          controller: controller,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            labelText: '直播订阅地址',
+            hintText: 'https://example.com/live.m3u',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('live-import-url-confirm'),
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('添加'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (url == null || !mounted) return;
+    if (url.isEmpty) {
+      AppNotice.show(context, '请填写订阅地址');
+      return;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      AppNotice.show(context, '订阅地址无效：只支持 http/https 链接');
+      return;
+    }
+    setState(() => _importing = true);
+    try {
+      final text = await M3uSubscriptionService.fetchText(url);
+      final record = await M3uSubscriptionService.build(
+        name: m3uRemoteName(text, url),
+        kind: M3uSubscription.kindUrl,
+        text: text,
+        rawBytes: utf8.encode(text),
+        url: url,
+      );
+      await store.syncM3uSubscriptions([
+        ...store.m3uSubscriptions,
+        record,
+      ]);
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        '已添加「${record.name}」：${record.channelCount} 个频道，已切换到该源',
+      );
+      _switchToImported(record.sourceId);
+    } catch (error) {
+      if (mounted) AppNotice.show(context, '添加失败：$error');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  /// 导入成功后自动切到新源并刷新频道列表（与「导入数据库
+  /// 自动刷新」同一口径）：新源已在可见列表里就直接切；
+  /// 切的正是当前源时强制重拉。
+  void _switchToImported(String sourceId) {
+    final target = LiveSource.visible(
+      widget.greenMode,
+    ).where((item) => item.id == sourceId).firstOrNull;
+    if (target == null) return;
+    if (target.id == _source?.id) {
+      unawaited(_loadPlatforms(force: true));
+    } else {
+      _changeSource(target);
+    }
+  }
+
+  /// 选源弹窗里删导入的 m3u 订阅：走弹窗自带的删除入口
+  /// （onDeleteSite，长按删除，弹窗的样子与用法没动），只对
+  /// m3u 订阅条目开放（条目 deletable 也只给它们）。确认文案
+  /// 与导入中心删订阅同款；删的正是当前源时，订阅表变化会
+  /// 触发 _appStoreChanged 把当前源切走，不用在这里处理。
+  Future<bool> _deleteImportedSource(SourcePickerEntry entry) async {
+    final store = widget.appStore;
+    if (store == null || !entry.id.startsWith('m3u:')) return false;
+    final sub = store.m3uSubscriptions
+        .where((item) => item.sourceId == entry.id)
+        .firstOrNull;
+    if (sub == null) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除直播订阅'),
+        content: Text('确定删除「${sub.name}」吗？其频道将从直播区移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await M3uFileStore.delete(sub.fileName);
+    await store.syncM3uSubscriptions([
+      for (final item in store.m3uSubscriptions)
+        if (item.id != sub.id) item,
+    ]);
+    return true;
   }
 
   Widget _video(BuildContext context, bool television) {
@@ -1395,12 +1881,13 @@ class _LiveScreenState extends State<LiveScreen> {
   /// 只作小角标叠在帧一角，不另占卡；节目卡两行小字紧排、中间
   /// 细分隔线；切源钮随行高做成 56 宽的小方钮，不再是一根独立
   /// 高柱。
-  /// 节目信息按用户口径接真数据：“正在播放”= 当前条目标题
-  /// （subtitle 是另一份真实信息且与标题不同才拼在后面）；“即将
-  /// 播放”= 频道列表里下一条的标题。App 里没有任何节目单（EPG）
-  /// 数据模型，电视源也只有频道名/台标/地址，所以“即将播放”对
-  /// 所有源都按下一条口径；列表到尾、没有下一条才写“暂无节目
-  /// 信息”。卡面与文字跟随应用主题（改版前口径）。
+  /// 节目信息按用户口径接真数据：当前源带节目单（epg 地址）
+  /// 且节目单对得上当前频道时，“正在播放 / 即将播放”用节目单
+  /// 里的真节目名；没有节目单、或对不上台时回落原口径——
+  /// “正在播放”= 当前条目标题（subtitle 是另一份真实信息且
+  /// 与标题不同才拼在后面），“即将播放”= 频道列表里下一条的
+  /// 标题，列表到尾、没有下一条才写“暂无节目信息”。绝不编
+  /// 节目名。卡面与文字跟随应用主题（改版前口径）。
   Widget _infoCards(BuildContext context) {
     final theme = Theme.of(context);
     final cardColor = theme.colorScheme.surfaceContainerHighest;
@@ -1411,14 +1898,26 @@ class _LiveScreenState extends State<LiveScreen> {
         : channel.number.isNotEmpty
         ? channel.number
         : '${_playback.index + 1}'.padLeft(3, '0');
-    final now = channel == null
+    final guide = _epgGuide;
+    final epgHit = guide != null && channel != null
+        ? guide.nowNext(channel, DateTime.now())
+        : null;
+    final epgMatched =
+        guide != null &&
+        channel != null &&
+        guide.programmesFor(channel).isNotEmpty;
+    final now = epgHit?.now != null
+        ? epgHit!.now!.title
+        : channel == null
         ? '暂无节目信息'
         : channel.subtitle.isNotEmpty && channel.subtitle != channel.name
         ? '${channel.name} · ${channel.subtitle}'
         : channel.name;
     final channels = _playback.channels;
     final nextIndex = _playback.index + 1;
-    final next = channel != null && nextIndex < channels.length
+    final next = epgMatched
+        ? epgHit?.next?.title ?? '暂无节目信息'
+        : channel != null && nextIndex < channels.length
         ? channels[nextIndex].name
         : '暂无节目信息';
     return Padding(
