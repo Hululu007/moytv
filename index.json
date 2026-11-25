@@ -738,6 +738,60 @@
       "adult": true,
       "description": "桃花资源（thzy1.me）。15 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
       "manifest": "taohuazy/taohuazy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.wsyzy",
+      "name": "无水印资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "无水印资源（api.wsyzy.net）。60 个分类（与原 py 完全一致：接口 class 实时返回、经原 py 旗标过滤游戏/棋牌/博彩/彩票/赌，兜底分类同 py 为空），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链（主清单在 play 内预解析到子清单）。由内置 py 蜘蛛改写。",
+      "manifest": "wsyzy/wsyzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.xingbazy",
+      "name": "杏吧资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "杏吧资源（xingba111.com）。41 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "xingbazy/xingbazy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.xingyezy",
+      "name": "星夜资源站",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "星夜资源站（xyezy.com）。27 个分类（与原 py 完全一致：接口 class 实时返回 28 类、经原 py 旗标过滤剔除 type_id=19 及名称含游戏/棋牌/博彩/彩票/赌的分类，无兜底分类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链、主清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "xingyezy/xingyezy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.yinghuazy",
+      "name": "樱花资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "樱花资源（m3u8.apiyhzy.com）。33 个分类（与原 py 完全一致：接口 class 实时返回、兜底同 py 的 30 个，旗标过滤照搬），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "yinghuazy/yinghuazy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.yutuzy",
+      "name": "玉兔资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "玉兔资源（apiyutu.com）。25 个分类（与原 py 完全一致：接口 class 实时返回 25 类、经原 py 旗标过滤——EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的剔除，兜底分类同 py），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的 m3u8 主清单、play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "yutuzy/yutuzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.zy360",
+      "name": "360资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "360资源（360zyzz.com）。分类与原 py 完全一致：接口 class 实时返回、经原 py 旗标过滤（名称含游戏/棋牌/博彩/彩票/赌剔除），兜底 51 类同 py，MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放为详情直给的直链、主清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "zy360/zy360.idjplugin"
     }
   ],
   "cms": []
