@@ -551,7 +551,7 @@ void main() {
   });
 
   group('PermissionDiff', () {
-    test('多了域名、开了 CF、adult 由否变是都要再确认', () {
+    test('多了域名、开了 CF、adult 由否变是都算权限扩大项', () {
       final oldManifest = IdjPluginManifest.fromJson(_miniManifestJson());
       final newManifest = IdjPluginManifest.fromJson(
         _miniManifestJson(
@@ -578,7 +578,7 @@ void main() {
       expect(diff.needsConfirmation, isFalse);
     });
 
-    test('权限扩大未确认时安装被拒，确认后装上', () async {
+    test('权限扩大（多申请域名）也直接装上，不再要求确认', () async {
       await store.installBundleText(_miniBundleText());
       final widened = jsonEncode({
         'manifest': _miniManifestJson(
@@ -587,21 +587,52 @@ void main() {
         ),
         'files': {'main.js': _miniScript},
       });
+      // 免确认口径（2026-11-25）：不带任何确认参数，直接装成。
+      final installed = await store.installBundleText(widened);
+      expect(installed.entry.version, '1.0.1');
+    });
+  });
+
+  group('只认包不认签名（2026-11-25 口径）', () {
+    String signedBundleText({String alg = 'ed25519', bool wrongHash = false}) {
+      final hash = wrongHash
+          ? 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+          : _hash(_miniScript);
+      final manifest = _miniManifestJson(integrity: 'none');
+      manifest['integrity'] = {
+        'files': {'main.js': 'sha256-$hash'},
+        'signature': {'alg': alg, 'value': 'ZmFrZS1zaWduYXR1cmUtdGVzdA=='},
+      };
+      return jsonEncode({
+        'manifest': manifest,
+        'files': {'main.js': _miniScript},
+      });
+    }
+
+    test('带 ed25519 签名块的包正常安装', () async {
+      final installed = await store.installBundleText(signedBundleText());
+      expect(installed.entry.pluginId, 'com.idj.ext.mini');
+      expect(installed.damaged, isFalse);
+    });
+
+    test('签名算法写别的也不拒（签名整个不看）', () async {
+      final installed = await store.installBundleText(
+        signedBundleText(alg: 'rsa'),
+      );
+      expect(installed.entry.pluginId, 'com.idj.ext.mini');
+    });
+
+    test('带签名但哈希对不上：仍按哈希拒装', () async {
       expect(
-        () => store.installBundleText(widened),
+        () => store.installBundleText(signedBundleText(wrongHash: true)),
         throwsA(
           isA<AppFailure>().having(
             (error) => error.message,
             'message',
-            contains('新版本申请了更多权限'),
+            contains('完整性校验失败'),
           ),
         ),
       );
-      final installed = await store.installBundleText(
-        widened,
-        permissionConfirmed: true,
-      );
-      expect(installed.entry.version, '1.0.1');
     });
   });
 

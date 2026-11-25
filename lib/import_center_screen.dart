@@ -114,8 +114,26 @@ class _ImportCenterScreenState extends State<ImportCenterScreen> {
   }
 
   Future<void> _importFromFile() async {
-    final file = await FilePicker.pickFile(type: FileType.any);
+    // 选择器调用原来在 try 外面：打不开/抛错直接炸到调用方、全程无
+    // 提示（与统一导入入口 9395cf3 修的是同款毛病）。现包进
+    // try/catch：取消（返回 null）静默返回，打不开立刻弹错；
+    // 选完之后的读取/分流整段也进 try，漏出的异常统一弹提示。
+    final PlatformFile? file;
+    try {
+      file = await FilePicker.pickFile(type: FileType.any);
+    } catch (error) {
+      if (mounted) _showMessage('打开文件选择器失败：$error');
+      return;
+    }
     if (file == null || !mounted) return;
+    try {
+      await _importPickedFile(file);
+    } catch (error) {
+      if (mounted) _showMessage('导入所选文件失败：$error');
+    }
+  }
+
+  Future<void> _importPickedFile(PlatformFile file) async {
     final filePath = file.path;
     if (filePath == null || filePath.isEmpty) {
       _showMessage('无法读取所选文件');

@@ -160,17 +160,6 @@ class IdjPluginManifest {
     return null;
   }
 
-  /// Ed25519 签名块（若有）：`integrity.signature`。
-  /// 4 个插件都没有；有签名时走验签路径（见 [IdjPluginStore]）。
-  Map<String, dynamic>? signatureBlock() {
-    final integrity = raw['integrity'];
-    if (integrity is Map) {
-      final signature = Map<String, dynamic>.from(integrity)['signature'];
-      if (signature is Map) return Map<String, dynamic>.from(signature);
-    }
-    return null;
-  }
-
   /// `x.y.z` 三段 semver 比对：a < b 回负数，相等回 0，a > b 回正数。
   /// 非三段写法的按 0 补齐再比（如 `1.5` 当 `1.5.0`）。
   static int compareVersions(String a, String b) {
@@ -239,11 +228,6 @@ class IdjPluginManifest {
       if (uri == null || uri.scheme != 'https') {
         found.add('update.url 必须是 https 地址');
       }
-    }
-    final signature = signatureBlock();
-    final alg = signature?['alg']?.toString() ?? '';
-    if (alg.isNotEmpty && alg != 'ed25519') {
-      found.add('签名算法只支持 ed25519');
     }
     if (minAppVersion.isNotEmpty &&
         compareVersions(minAppVersion, idjHostSpecVersion) > 0) {
@@ -368,7 +352,9 @@ class IdjInstalledPlugin {
   final String damageReason;
 }
 
-/// 更新时的权限差异（设计 §1.8）：有扩大项就要用户再确认。
+/// 更新时的权限差异：原设计 §1.8 拿它当更新确认门槛，用户
+/// 2026-11-25 令免确认后只作装完后的提示文案来源，不再拦安装。
+/// [needsConfirmation] 保留旧名，含义是「有扩大项」。
 class IdjPermissionDiff {
   IdjPermissionDiff({
     required this.addedDomains,
@@ -628,7 +614,6 @@ class IdjPluginStore {
     }
     final fileHash = IdjPluginBundle.hashScript(script);
     _verifyIntegrity(manifest, fileHash);
-    _checkSignature(manifest);
     return IdjPluginBundle(
       manifest: manifest,
       script: script,
@@ -651,15 +636,9 @@ class IdjPluginStore {
     }
   }
 
-  /// Ed25519 签名：4 个插件都没有。v1 只做哈希钉死；有签名时按 iOS
-  /// 行为验签——但本机没有可用的 Ed25519 验签实现（`crypto` 包不含
-  /// Ed25519），无法验签就**拒装**，不静默放过（Android 不验签是
-  /// 安全缺口，魔蚁不照抄这点）。以后补上验签实现再放行签名插件。
-  static void _checkSignature(IdjPluginManifest manifest) {
-    final signature = manifest.signatureBlock();
-    if (signature == null || signature.isEmpty) return;
-    throw AppFailure('签名验证失败：本机暂不支持 Ed25519 验签，已拒绝安装（插件 ${manifest.id}）');
-  }
+  // 签名口径（用户 2026-11-25 令）：只认包不认签名——`integrity.signature`
+  // 当它不存在，不验、不拒、不提示；带签名块的包照常安装。
+  // 安装校验只剩包本身：manifest 校验 + integrity 哈希 + 域名清单。
 
   // ---------- probe ----------
 
@@ -691,14 +670,14 @@ class IdjPluginStore {
 
   // ---------- 写盘与安装 ----------
 
-  /// 安装链：解析 → 校验 → integrity → 签名 → probe → 写盘 + 索引 + 注册。
-  /// 更新时 [permissionConfirmed] 为 false 且权限有扩大项时不装，
-  /// 抛错请用户先确认（差异项见 [permissionDiff]）。
+  /// 安装链：解析 → 校验 → integrity → probe → 写盘 + 索引 + 注册。
+  /// 免确认口径（用户 2026-11-25 令）：点安装直接装到底，更新时权限
+  /// 有扩大（多申请域名等）也不拦路要确认——差异只供界面在装完后
+  /// 顺带提示一句（见 [permissionDiff]），不作安装门槛。
   /// 安装失败不留半成品：staging 删除、索引不写、站点不注册。
   Future<IdjInstalledPlugin> installBundleText(
     String text, {
     String sourceLabel = '文件',
-    bool permissionConfirmed = false,
     IdjProbeFn? probe,
   }) async {
     final bundle = parseBundleText(text, sourceLabel: sourceLabel);
@@ -708,13 +687,6 @@ class IdjPluginStore {
     String siteKey;
     if (existing != null) {
       siteKey = existing.siteKey;
-      final oldManifest = await readInstalledManifest(manifest.id);
-      if (oldManifest != null) {
-        final diff = permissionDiff(oldManifest, manifest);
-        if (diff.needsConfirmation && !permissionConfirmed) {
-          throw AppFailure('新版本申请了更多权限，请确认后再更新：${diff.describe().join('；')}');
-        }
-      }
     } else {
       siteKey = IdjPluginRegistry.siteKeyForPluginId(manifest.id);
     }
@@ -752,7 +724,6 @@ class IdjPluginStore {
   Future<IdjInstalledPlugin> installBundleBytes(
     List<int> bytes, {
     String sourceLabel = '文件',
-    bool permissionConfirmed = false,
     IdjProbeFn? probe,
   }) async {
     String text;
@@ -764,7 +735,6 @@ class IdjPluginStore {
     return installBundleText(
       text,
       sourceLabel: sourceLabel,
-      permissionConfirmed: permissionConfirmed,
       probe: probe,
     );
   }
@@ -1482,7 +1452,6 @@ class IdjPluginStore {
   ///（包 JSON 直接装；裸 manifest 从同目录下载脚本拼包再装）。
   Future<IdjInstalledPlugin> installFromSubscriptionPlugin(
     IdjSubscriptionPlugin plugin, {
-    bool permissionConfirmed = false,
     IdjProbeFn? probe,
   }) async {
     if (plugin.manifest != null) {
@@ -1505,7 +1474,6 @@ class IdjPluginStore {
     return installBundleText(
       interpreted.bundleText!,
       sourceLabel: '订阅',
-      permissionConfirmed: permissionConfirmed,
       probe: probe,
     );
   }

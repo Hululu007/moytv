@@ -173,12 +173,30 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   }
 
   Future<void> _pickAndInstallFile() async {
-    final file = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['jar', 'zip', 'py'],
-    );
+    // 选择器调用与读字节原来都在 try 外面：选择器打不开/抛错、文件
+    // 读不出都会漏出，全程无提示（与统一导入入口 9395cf3 修的是
+    // 同款毛病）。现包进 try/catch：取消（返回 null）静默返回，
+    // 失败立刻弹明确提示。
+    final PlatformFile? file;
+    try {
+      file = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: ['jar', 'zip', 'py'],
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _toast('打开文件选择器失败：$error');
+      return;
+    }
     if (file == null || !mounted) return;
-    final bytes = await file.readAsBytes();
+    final List<int> bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (error) {
+      if (!mounted) return;
+      _toast('无法读取所选文件：$error');
+      return;
+    }
     final lower = file.name.toLowerCase();
     if (lower.endsWith('.zip')) {
       await _installZipFile(file.name, bytes);

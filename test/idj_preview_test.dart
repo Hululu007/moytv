@@ -7,12 +7,10 @@
 //   2. miniapp_plugin_tab.png —— 真实 IdjPluginTab（小程序内第 4 个
 //      tab「插件」；已安装 2 个 + 已停用 1 个置灰 + 已损坏 1 个、安装入口
 //      三按钮、订阅区 1 条订阅展开 2 个插件 + 1 个 cms 行、「检查更新」按钮）。
-//   3. install_confirm_sheet.png —— 真实安装确认 sheet（橙果形态：
-//      短剧站、adult true、域名 7 个；成人提示是短剧区文案，不写午夜组；
-//      另含一行 PermissionDiff 差异，更新场景）。
-//   4. local_import_flow.png —— 本地导入流程示意：横幅写明步骤与假数据 +
-//      真实确认 sheet 本体；测试环境没有真文件选择器，图里如实标注，
-//      不把假流程说成真跑通。
+//   3./4. 原 install_confirm_sheet.png 与 local_import_flow.png 两图
+//      已随 2026-11-25「安装免确认」口径取消：安装确认 sheet 组件已删，
+//      点安装直接装完只给结果提示；三列网格新图见
+//      test/idj_plugin_grid_preview_test.dart。
 //   5. library_with_idj.png —— 装好 4 个插件后片库里的站：真实
 //      SitePickerDialog，短剧类含橙果/爱果、午夜类含 🔞潮流AV/🔞2048AI，
 //      用假的已安装登记渲染，宿主顶栏注明是假登记示意。
@@ -519,109 +517,6 @@ void main() {
     expect(find.text('PornTube'), findsOneWidget);
     expect(find.text('HQPorner'), findsOneWidget);
     await _shotHere(tester, key, 'idj_builtin_repo.png');
-  });
-
-  testWidgets('preview idj install confirm sheet', (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final key = GlobalKey();
-    final newText = _chengguoBundle(version: '1.0.1');
-    final newBundle = IdjPluginStore.parseBundleText(newText);
-    final oldManifest = IdjPluginStore.parseBundleText(
-      _bundleText(
-        id: 'com.idj.ext.chengguo',
-        name: '橙果短剧',
-        version: '1.0.0',
-        adult: true,
-        http: const ['chengguodj.com'],
-      ),
-    ).manifest;
-    await tester.pumpWidget(
-      _wrap(
-        key,
-        Scaffold(
-          backgroundColor: const Color(0xFF8A8F96),
-          body: Center(
-            child: Builder(
-              builder: (context) => FilledButton(
-                onPressed: () => showIdjInstallConfirmSheet(
-                  context,
-                  bundle: newBundle,
-                  bundleBytes: utf8.encode(newText).length,
-                  oldManifest: oldManifest,
-                ),
-                child: const Text('安装插件'),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    await _settle(tester);
-    await tester.tap(find.text('安装插件'));
-    await _settle(tester);
-    await _shot(tester, key, 'install_confirm_sheet.png');
-  });
-
-  testWidgets('preview idj local import flow', (tester) async {
-    tester.view.physicalSize = const Size(390, 1200);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final key = GlobalKey();
-    final text = _chengguoBundle();
-    final bundle = IdjPluginStore.parseBundleText(text);
-    await tester.pumpWidget(
-      _wrap(
-        key,
-        Scaffold(
-          body: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.all(16),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF4E0),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFF0D9A8)),
-                  ),
-                  child: const Text(
-                    '本地导入流程示意（假数据）\n'
-                    '第 1 步：点「从文件安装」→ 系统文件选择器挑 .idjplugin\n'
-                    '第 2 步：已选 chengguo.idjplugin，解析成功\n'
-                    '第 3 步：弹出安装确认（如下，真实组件渲染）\n'
-                    '测试环境没有真文件选择器，未真实跑通选择器；'
-                    '文件名与解析结果均为假数据。',
-                    style: TextStyle(fontSize: 13, height: 1.5),
-                  ),
-                ),
-                Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(20),
-                    ),
-                  ),
-                  child: IdjInstallConfirmSheet(
-                    bundle: bundle,
-                    bundleBytes: utf8.encode(text).length,
-                    onConfirm: () {},
-                    onCancel: () {},
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    await _settle(tester);
-    await _shot(tester, key, 'local_import_flow.png');
   });
 
   testWidgets('preview idj library with plugins', (tester) async {
