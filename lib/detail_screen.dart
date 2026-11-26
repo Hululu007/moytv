@@ -127,9 +127,9 @@ class DetailScreen extends StatefulWidget {
   final Player Function()? playerFactory;
   final Widget Function(Widget controls)? videoBuilder;
 
-  /// 剧照补图用的 JavDB 接口客户端（详情自带剧照为空时按番号
-  /// 补预览图，见 _loadJavdbStills）。只供测试/预览注入，不传
-  /// 时用默认客户端走真接口。
+  /// JavDB 补充链用的接口客户端（剧照补图见 _loadJavdbStills；
+  /// 磁力/评论/信息卡系列与评分见 _loadJavdbExtras）。只供测试/
+  /// 预览注入，不传时用默认客户端走真接口。
   final JavdbApiClient? javdbStillsClient;
   @override
   State<DetailScreen> createState() => _DetailScreenState();
@@ -163,10 +163,20 @@ class _DetailScreenState extends State<DetailScreen> {
   /// null = 未匹配到或尚未查完，头区不画演员行。
   CodeMeta? _codeMeta;
 
-  /// 剧照补图用的 JavDB 客户端：构造方注入优先，否则本页自建
+  /// JavDB 补充链用的客户端：构造方注入优先，否则本页自建
   /// 一个（无请求时不产生流量）。
   late final JavdbApiClient _javdbStillsClient =
       widget.javdbStillsClient ?? JavdbApiClient();
+
+  /// JavDB 按番号补的磁力（_loadJavdbExtras 填）：空时磁力区
+  /// 不显示。走本页自己的区（点按复制），不并入 _detail.magnets
+  /// ——通用 _magnetSection 的点按口径是「暂不支持播放」提示，
+  /// 与本链的复制口径不合，改它会动通用详情页既有行为。
+  List<MagnetLink> _javdbMagnets = const [];
+
+  /// JavDB 按番号补的评论（_loadJavdbExtras 填）：空时评论区
+  /// 不显示，只读展示。
+  List<JavdbReview> _javdbReviews = const [];
 
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
@@ -295,6 +305,105 @@ class _DetailScreenState extends State<DetailScreen> {
     }
     setState(() {
       _detail = current.withStills(stills);
+    });
+  }
+
+  /// JavDB 补充第二路（2026-11-26）：磁力区 + 评论区 + 信息卡
+  /// 的系列/评分，与 _loadJavdbStills 同一处后台补充链。按番
+  /// 号精确命中 JavDB 作品后并行取三路（磁力、评论、详情），
+  /// 每路独立约 6 秒超时、独立失败回空：没数据整区不显示、
+  /// 不挡开页、不弹窗。JavDB 入口的作品 sourceId 就是 JavDB
+  /// 作品 id，直接用、不再搜索。系列/评分只在详情自带
+  /// extraInfo 没有同名行时才并入（本地库自带真值照旧优先），
+  /// 评分照接口原值、人数照接口原值，都没给就不显示、不编。
+  Future<void> _loadJavdbExtras(Drama drama, int generation) async {
+    final avId = extractAvId(
+      title: drama.title,
+      id: drama.id,
+      sourceId: drama.sourceId,
+    );
+    if (avId == null) return;
+    final client = _javdbStillsClient;
+    var movieId = '';
+    if (drama.source == 'javdb' && drama.sourceId.isNotEmpty) {
+      movieId = drama.sourceId;
+    } else {
+      try {
+        final hits = await client
+            .searchMovies(avId)
+            .timeout(const Duration(seconds: 6));
+        final wanted = actressCodeKey(avId);
+        for (final hit in hits) {
+          if (hit.id.isNotEmpty && actressCodeKey(hit.number) == wanted) {
+            movieId = hit.id;
+            break;
+          }
+        }
+      } catch (_) {
+        return;
+      }
+    }
+    if (movieId.isEmpty) return;
+    final magnetsFuture = () async {
+      try {
+        return await client
+            .movieMagnets(movieId)
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        return const <MagnetLink>[];
+      }
+    }();
+    final reviewsFuture = () async {
+      try {
+        return await client
+            .movieReviews(movieId)
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        return const <JavdbReview>[];
+      }
+    }();
+    final extraFuture = () async {
+      try {
+        return await client
+            .movieExtra(movieId)
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        return const JavdbMovieExtra();
+      }
+    }();
+    final magnets = await magnetsFuture;
+    final reviews = await reviewsFuture;
+    final extra = await extraFuture;
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      if (magnets.isNotEmpty) _javdbMagnets = magnets;
+      if (reviews.isNotEmpty) _javdbReviews = reviews;
+      final detail = _detail;
+      if (detail != null) {
+        var series = '';
+        for (final row in extra.extraInfo) {
+          if (row.$1 == '系列') series = row.$2;
+        }
+        final additions = <(String, String)>[
+          if (series.isNotEmpty &&
+              !detail.extraInfo.any((row) => row.$1 == '系列'))
+            ('系列', series),
+          if (extra.score.isNotEmpty &&
+              !detail.extraInfo.any((row) => row.$1 == '评分'))
+            (
+              '评分',
+              extra.scoreCount > 0
+                  ? '${extra.score}（共 ${extra.scoreCount} 人评分）'
+                  : extra.score,
+            ),
+        ];
+        if (additions.isNotEmpty) {
+          _detail = detail.withExtraInfo([
+            ...detail.extraInfo,
+            ...additions,
+          ]);
+        }
+      }
     });
   }
 
@@ -558,6 +667,7 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_loadSeriesApi(merged, generation));
       unawaited(_refreshCodeMeta(merged, generation));
       unawaited(_loadJavdbStills(merged, generation));
+      unawaited(_loadJavdbExtras(merged, generation));
       if (_isFolderDrama(merged)) {
         unawaited(_loadFolder(reset: true));
       }
@@ -614,6 +724,7 @@ class _DetailScreenState extends State<DetailScreen> {
         });
         unawaited(_refreshCodeMeta(widget.drama, generation));
         unawaited(_loadJavdbStills(widget.drama, generation));
+        unawaited(_loadJavdbExtras(widget.drama, generation));
         return;
       }
       setState(() {
@@ -1174,9 +1285,11 @@ class _DetailScreenState extends State<DetailScreen> {
                                   _magnetSection(),
                                   _crossSiteSection(drama),
                                   _actressOnlineLinesSection(drama),
+                                  _javdbMagnetSection(),
                                   _tmdbEpisodeSection(),
                                   _seriesSection(drama),
                                   _relatedSection(drama),
+                                  _javdbReviewsSection(),
                                 ],
                               ),
                             ),
@@ -1378,11 +1491,17 @@ class _DetailScreenState extends State<DetailScreen> {
                                   child: _actressOnlineLinesSection(drama),
                                 ),
                                   SliverToBoxAdapter(
+                                    child: _javdbMagnetSection(),
+                                  ),
+                                  SliverToBoxAdapter(
                                     child: _descriptionSection(drama),
                                   ),
                                   SliverToBoxAdapter(child: _magnetSection()),
                                   SliverToBoxAdapter(
                                     child: _relatedSection(drama),
+                                  ),
+                                  SliverToBoxAdapter(
+                                    child: _javdbReviewsSection(),
                                   ),
                                 ],
                               ] else ...[
@@ -1492,11 +1611,17 @@ class _DetailScreenState extends State<DetailScreen> {
                                 child: _actressOnlineLinesSection(drama),
                               ),
                                 SliverToBoxAdapter(
+                                  child: _javdbMagnetSection(),
+                                ),
+                                SliverToBoxAdapter(
                                   child: _descriptionSection(drama),
                                 ),
                                 SliverToBoxAdapter(child: _magnetSection()),
                                 SliverToBoxAdapter(
                                   child: _relatedSection(drama),
+                                ),
+                                SliverToBoxAdapter(
+                                  child: _javdbReviewsSection(),
                                 ),
                               ],
                             ],
@@ -1783,6 +1908,162 @@ class _DetailScreenState extends State<DetailScreen> {
               ).showSnackBar(const SnackBar(content: Text('磁力链接暂不支持播放'))),
             ),
         ],
+      ),
+    );
+  }
+
+  /// JavDB 磁力区（放在在线线路区下面）：名称 + 大小/日期
+  /// 副标照 _magnetSection 的样子，点按=复制磁力链接到剪贴
+  /// 板并给中文提示。只给链接：不做站内播放、不做下载器、
+  /// 不接第三方网盘。数据为空整区不显示（_loadJavdbExtras
+  /// 填 _javdbMagnets）。不并入通用 _magnetSection：它的点
+  /// 按口径是「暂不支持播放」提示，与本链复制口径不合，
+  /// 改它会动通用详情页既有行为。
+  Widget _javdbMagnetSection() {
+    if (_javdbMagnets.isEmpty) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      key: const ValueKey('javdb-magnets-section'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('磁力链接', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            '来源：JavDB · 点按复制磁力链接',
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          for (final magnet in _javdbMagnets)
+            ListTile(
+              key: ValueKey('javdb-magnet-${magnet.url}'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(magnet.name.isEmpty ? '磁力链接' : magnet.name),
+              subtitle: magnet.metaLabel.isEmpty
+                  ? null
+                  : Text(magnet.metaLabel),
+              trailing: const Icon(Icons.copy_outlined, size: 18),
+              onTap: () => unawaited(_copyMagnet(magnet.url)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copyMagnet(String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('磁力链接已复制')));
+  }
+
+  /// JavDB 评论区（作品详情页最下方，只读）：头像走
+  /// _detailStillImage（图床地址过 XOR 解密、其余直显），
+  /// 没头像用昵称首字占位。数据为空整区不显示；不做发表/
+  /// 点赞交互（点赞数只展示）。
+  Widget _javdbReviewsSection() {
+    if (_javdbReviews.isEmpty) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      key: const ValueKey('javdb-reviews-section'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('评论', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            '来源：JavDB',
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          for (final review in _javdbReviews) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _reviewAvatar(review),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              review.username.isEmpty ? '匿名' : review.username,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (review.createdAt.isNotEmpty)
+                            Text(
+                              review.createdAt.length > 10
+                                  ? review.createdAt.substring(0, 10)
+                                  : review.createdAt,
+                              style: TextStyle(
+                                color: colors.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(review.content, style: const TextStyle(fontSize: 13.5)),
+                      if (review.likes > 0) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.thumb_up_outlined,
+                              size: 13,
+                              color: colors.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${review.likes}',
+                              style: TextStyle(
+                                color: colors.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _reviewAvatar(JavdbReview review) {
+    if (review.avatarUrl.isNotEmpty) {
+      return ClipOval(
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: _detailStillImage(review.avatarUrl),
+        ),
+      );
+    }
+    return CircleAvatar(
+      radius: 18,
+      child: Text(
+        review.username.isEmpty
+            ? '?'
+            : String.fromCharCode(review.username.runes.first),
       ),
     );
   }
@@ -2398,10 +2679,12 @@ class _DetailScreenState extends State<DetailScreen> {
   /// 逐行列 番号 / 发行日期 / 长度 / 制作商——只放真有的字段：
   /// 番号来自番号元数据或番号形标签；日期优先详情自带的
   /// extraInfo、其次 Drama.onlineDate；其余行全走 extraInfo
-  /// （在线源详情页自带字段、本地库厂牌）。评分与评分人数没
-  /// 有真数据，不放、不编（用户令），截图里的金色缎带评分
-  /// 徽标同理不挂。番号可点复制。没有番号也没有附加信息时
-  /// 整卡不显示（普通剧集不受影响）。
+  /// （在线源详情页自带字段、本地库厂牌）。系列与评分：详情
+  /// 自带 extraInfo 有真值照显；没有时由 JavDB 补充链按番号
+  /// 补（_loadJavdbExtras，评分照接口原值、人数照原值），
+  /// 两路都拿不到就不显示、不编（用户令），截图里的金色
+  /// 缎带评分徽标同理不挂。番号可点复制。没有番号也没有附
+  /// 加信息时整卡不显示（普通剧集不受影响）。
   Widget _infoCard(Drama drama) {
     final extra = _detail?.extraInfo ?? const <(String, String)>[];
     String extraValue(String label) {

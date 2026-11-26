@@ -22,6 +22,7 @@ import 'package:crypto/crypto.dart';
 
 import '../content_http.dart';
 import '../core_bridge.dart';
+import '../models.dart';
 
 const javdbApiBase = 'https://jdforrepam.com';
 
@@ -169,6 +170,8 @@ class JavdbMovieExtra {
     this.actors = const [],
     this.stills = const [],
     this.extraInfo = const [],
+    this.score = '',
+    this.scoreCount = 0,
   });
 
   final List<JavdbActor> actors;
@@ -178,6 +181,131 @@ class JavdbMovieExtra {
 
   /// (标签, 值)：导演/制作商/发行商/系列，只带接口真返回的。
   final List<(String, String)> extraInfo;
+
+  /// 评分原值（接口 score 字段，字符串/数字照原样转文本）；
+  /// 接口没给就是空，详情页信息卡不显示、不编。
+  final String score;
+
+  /// 评分人数：接口 score_count 优先，其次 reviews_count
+  /// （AvPlay 详情模型只有 reviews_count 一个计数字段，配对
+  /// 关系属推定，见 REPORT_actress_javdb_extra.md）；0 = 没给。
+  final int scoreCount;
+}
+
+/// 评论一条（api/v1/movies/{id}/reviews，路径拼接推定）。
+/// 字段照 AvPlay 反编译模型 JavDbApiReview 实证：username /
+/// content / created_at / likes_count / score；头像模型里没有，
+/// 只从 user 子对象或 avatar 类键名宽容兜底，没有就空、界面
+/// 用昵称首字占位。
+class JavdbReview {
+  const JavdbReview({
+    this.username = '',
+    this.avatarUrl = '',
+    this.content = '',
+    this.createdAt = '',
+    this.likes = 0,
+    this.score = '',
+  });
+
+  final String username;
+  final String avatarUrl;
+  final String content;
+  final String createdAt;
+  final int likes;
+  final String score;
+
+  factory JavdbReview.fromJson(Map<String, dynamic> json) {
+    var username = _javdbStr(json['username']);
+    var avatar = _javdbStr(json['avatar_url']);
+    if (avatar.isEmpty) avatar = _javdbStr(json['avatar']);
+    final user = json['user'];
+    if (user is Map<String, dynamic>) {
+      if (username.isEmpty) username = _javdbStr(user['username']);
+      if (username.isEmpty) username = _javdbStr(user['nickname']);
+      if (username.isEmpty) username = _javdbStr(user['name']);
+      if (avatar.isEmpty) avatar = _javdbStr(user['avatar_url']);
+      if (avatar.isEmpty) avatar = _javdbStr(user['avatar']);
+    }
+    if (username.isEmpty) username = _javdbStr(json['nickname']);
+    if (username.isEmpty) username = _javdbStr(json['name']);
+    return JavdbReview(
+      username: username,
+      avatarUrl: avatar,
+      content: _javdbStr(json['content']),
+      createdAt: _javdbStr(json['created_at']),
+      likes: _javdbInt(json['likes_count'], fallback: _javdbInt(json['likes'])),
+      score: _javdbStr(json['score']),
+    );
+  }
+}
+
+/// 磁力一条 → 通用 MagnetLink（照 AvPlay JavDbApiMagnet 实证
+/// 字段拼：hash 必填、链接 = magnet:?xt=urn:btih:{hash}；
+/// size 是 JsonElement，数字按 MB 读（asMegabyteSizeText），
+/// 字符串照原样；created_at 归一成 YYYYMMDD 给 metaLabel
+/// 拼日期；hd → quality 'HD'，cnsub → 标签「字幕」）。
+/// hash 与现成磁力链接都拿不到时返回 null（不编链接）。
+MagnetLink? javdbMagnetLinkOf(Map<String, dynamic> json) {
+  var url = '';
+  for (final key in const ['magnet', 'magnet_url', 'url', 'link']) {
+    final value = _javdbStr(json[key]);
+    if (value.startsWith('magnet:')) {
+      url = value;
+      break;
+    }
+  }
+  final hash = _javdbStr(json['hash']);
+  if (url.isEmpty) {
+    if (hash.isEmpty) return null;
+    url = 'magnet:?xt=urn:btih:$hash';
+  }
+  var name = _javdbStr(json['name']);
+  if (name.isEmpty) name = _javdbStr(json['title']);
+  if (name.isEmpty) name = hash;
+  return MagnetLink(
+    name: name,
+    url: url,
+    sizeLabel: javdbSizeLabelOf(json['size']),
+    quality: _javdbBool(json['hd']) ? 'HD' : '',
+    date: javdbDateDigitsOf(
+      _javdbStr(json['created_at']).isNotEmpty
+          ? _javdbStr(json['created_at'])
+          : _javdbStr(json['date']),
+    ),
+    tags: [if (_javdbBool(json['cnsub'])) '字幕'],
+  );
+}
+
+/// size 字段转显示文本：数字按 MB（>=1024 换 GB，两位小数
+/// 去尾零）；字符串照原样；其余回空。
+String javdbSizeLabelOf(Object? size) {
+  if (size is num) {
+    final mb = size.toDouble();
+    if (mb <= 0) return '';
+    if (mb >= 1024) {
+      var text = (mb / 1024).toStringAsFixed(2);
+      if (text.contains('.')) {
+        text = text.replaceAll(RegExp(r'0+$'), '').replaceAll(
+          RegExp(r'\.$'),
+          '',
+        );
+      }
+      return '$text GB';
+    }
+    return mb == mb.roundToDouble() ? '${mb.toInt()} MB' : '$mb MB';
+  }
+  return _javdbStr(size);
+}
+
+/// 日期文本归一成 YYYYMMDD（MagnetLink.metaLabel 只认 8 位
+/// 数字日期再拼回 YYYY-MM-DD）：取开头的年月日数字，不像
+/// 日期（不以 19/20 开头或不足 8 位）回空，不硬凑。
+String javdbDateDigitsOf(String raw) {
+  final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+  if (digits.length < 8) return '';
+  final head = digits.substring(0, 8);
+  if (!head.startsWith('19') && !head.startsWith('20')) return '';
+  return head;
 }
 
 String _javdbStr(Object? value) {
@@ -313,7 +441,45 @@ class JavdbApiClient {
       if (_javdbStr(data['series_name']).isNotEmpty)
         ('系列', _javdbStr(data['series_name'])),
     ];
-    return JavdbMovieExtra(actors: actors, stills: stills, extraInfo: extra);
+    var scoreCount = _javdbInt(data['score_count']);
+    if (scoreCount <= 0) scoreCount = _javdbInt(data['score_users']);
+    if (scoreCount <= 0) scoreCount = _javdbInt(data['reviews_count']);
+    return JavdbMovieExtra(
+      actors: actors,
+      stills: stills,
+      extraInfo: extra,
+      score: _javdbStr(data['score']),
+      scoreCount: scoreCount,
+    );
+  }
+
+  /// 磁力列表（api/v1/movies/{id}/magnets，路径拼接推定，
+  /// API_MAP 只逐字证实到 …/magnets）。信封照 AvPlay 模型
+  /// JavDbApiMagnetsData 的 {magnets:[...]}，另宽容 list /
+  /// items / 列表本体。坏行跳过、拿不到回空表。
+  Future<List<MagnetLink>> movieMagnets(String movieId) async {
+    final data = await _getJson('api/v1/movies/$movieId/magnets');
+    final list = _listOf(data, const ['magnets', 'list', 'items']);
+    return [
+      for (final item in list)
+        if (item is Map<String, dynamic>) ?javdbMagnetLinkOf(item),
+    ];
+  }
+
+  /// 评论列表（api/v1/movies/{id}/reviews，路径拼接推定）。
+  /// 信封照 AvPlay 模型 JavDbApiReviewsData 的 {reviews:[...]}，
+  /// 另宽容 list / items / 列表本体。拿不到回空表。
+  Future<List<JavdbReview>> movieReviews(String movieId) async {
+    final data = await _getJson('api/v1/movies/$movieId/reviews');
+    final list = _listOf(data, const ['reviews', 'list', 'items']);
+    final reviews = <JavdbReview>[];
+    for (final item in list) {
+      if (item is Map<String, dynamic>) {
+        final review = JavdbReview.fromJson(item);
+        if (review.content.isNotEmpty) reviews.add(review);
+      }
+    }
+    return reviews;
   }
 
   List<JavdbMovie> _movieListOf(dynamic data) {
