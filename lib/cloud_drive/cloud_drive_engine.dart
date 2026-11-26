@@ -128,6 +128,15 @@ class CloudDriveEngine {
       provider.onCredentialsRefreshed = (providerId, credentials) {
         _credentialStore.save(providerId, credentials);
       };
+      provider.onSessionExpired = (providerId, expiredCookie) {
+        // 只清「存着的正是那份过期凭证」的情况：在途旧请求的过期
+        // 报错不许清掉刚重新登录的新凭证。
+        final stored = _credentialStore.load(providerId);
+        if (stored != null &&
+            (stored.fields['cookie'] ?? '') == expiredCookie) {
+          _credentialStore.clear(providerId);
+        }
+      };
     }
   }
 

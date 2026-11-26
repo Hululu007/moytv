@@ -14,11 +14,13 @@ library;
 
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import 'cloud_credential_store.dart';
 import 'cloud_drive_types.dart';
+import 'cloud_m115_crypto.dart';
 import 'cloud_provider_139.dart';
 
 /// 网盘侧的错误（面向用户的中文消息，由引擎转成 AppFailure）。
@@ -106,6 +108,10 @@ class CloudDirectLink {
     required this.url,
     this.headers = const {},
     this.isTranscoded = false,
+    this.downloadCookie,
+    this.expiresAtMs = 0,
+    this.linkF,
+    this.fetchUserAgent,
   });
 
   final String url;
@@ -113,6 +119,24 @@ class CloudDirectLink {
 
   /// 是否转码流（夸克 v2/play 兜底）；仍是直链数据，不嵌网页播放器。
   final bool isTranscoded;
+
+  /// 115：取链响应 Set-Cookie 里那对下载会话 Cookie（单对
+  /// `32 位 hex=32 位 hex`），直链 f=3 时取文件必须带它。
+  /// 不是账号 Cookie，账号 Cookie 绝不发给 CDN。
+  final String? downloadCookie;
+
+  /// 115：直链过期时间（URL 里 `t` 参数换算的毫秒时间戳）；0 = 未知。
+  final int expiresAtMs;
+
+  /// 115：直链 URL 里 `f` 参数（取文件时的请求头要求）：null = 没给，
+  /// 0 = 无要求，1 = UA 必须与取链时一致，3 = UA 一致 + 带
+  /// [downloadCookie]。[headers] 已按这个契约组装好，这里留作记录。
+  final int? linkF;
+
+  /// 取链时用的 UA；null = 不适用。115 取链 UA 置空，所以这里的
+  /// 空串是有效值：播放器侧必须同样发空 UA（发不出空 UA 的播放器核
+  /// 需要各自的字面量兜底，见 REPORT 的问题 6 清单）。
+  final String? fetchUserAgent;
 }
 
 /// 网盘客户端的统一接口。
@@ -164,6 +188,16 @@ abstract class CloudDriveProvider {
   get onCredentialsRefreshed;
   set onCredentialsRefreshed(
     void Function(String providerId, CloudCredentials credentials)? value,
+  );
+
+  /// 凭证被判定过期失效时的回调（115 用，引擎负责清掉存下的凭证）。
+  /// 带上失效时用的 cookie：引擎只在存着的 cookie 与它一致时才清，
+  /// 防止在途旧请求的过期报错清掉刚重新登录的新凭证（世代保护在
+  /// provider 内部另有一层，见 Pan115Provider._sessionGeneration）。
+  void Function(String providerId, String expiredCookie)?
+  get onSessionExpired;
+  set onSessionExpired(
+    void Function(String providerId, String expiredCookie)? value,
   );
 }
 
@@ -317,6 +351,57 @@ Future<http.Response> _postForm(
 // 115 网盘
 // ---------------------------------------------------------------------------
 
+/// 115 Cookie 验活结论。
+enum Pan115CookieVerdict {
+  /// 凭证有效。
+  valid,
+
+  /// 凭证失效（过期三码或服务端明确拒绝）。
+  expired,
+
+  /// 网络/限频/服务端问题，Cookie 可能没事。
+  networkError,
+}
+
+/// 解析 "a=1; b=2" 形式的 Cookie 文本（键名统一大写；浏览器复制时
+/// 常带整行 "Cookie: " 前缀，先去掉）。
+Map<String, String> parsePan115CookieString(String raw) {
+  final result = <String, String>{};
+  var text = raw.trim();
+  if (text.toLowerCase().startsWith('cookie:')) {
+    text = text.substring('cookie:'.length).trim();
+  }
+  for (final part in text.split(';')) {
+    final trimmed = part.trim();
+    final eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    final key = trimmed.substring(0, eq).trim().toUpperCase();
+    final value = trimmed.substring(eq + 1).trim();
+    if (key.isNotEmpty && value.isNotEmpty) result[key] = value;
+  }
+  return result;
+}
+
+/// 115 登录三件套里缺的键（UID/CID/SEID）；齐全时为空列表。
+List<String> missingPan115CookieKeys(String cookie) {
+  final parsed = parsePan115CookieString(cookie);
+  return [
+    for (final key in ['UID', 'CID', 'SEID'])
+      if ((parsed[key] ?? '').isEmpty) key,
+  ];
+}
+
+/// 规范化 115 Cookie：UID/CID/SEID 缺一返回 null；齐全时只保留
+/// UID/CID/SEID/KID 并按固定键序拼回。
+String? normalizePan115Cookie(String cookie) {
+  final parsed = parsePan115CookieString(cookie);
+  if (missingPan115CookieKeys(cookie).isNotEmpty) return null;
+  return [
+    for (final key in ['UID', 'CID', 'SEID', 'KID'])
+      if ((parsed[key] ?? '').isNotEmpty) '$key=${parsed[key]}',
+  ].join('; ');
+}
+
 class Pan115Provider implements CloudDriveProvider {
   @override
   String get id => 'pan115';
@@ -331,19 +416,39 @@ class Pan115Provider implements CloudDriveProvider {
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
 
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
+
   static const _ua =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 115Browser/26.0.7.2';
   static const _referer = 'https://cdnassets.115.com/';
+  // 扫码绑 qandroid（安卓端）：115 的视频接口按会话绑定的设备认人，
+  // 绑错设备会被接口拒绝（公开实现 p115client 的实测结论）；旧实现绑
+  // alipaymini 不在公开实现支持的绑定集合里。取凭证走 qrcodeapi 的
+  // qandroid 路径、UA 固定 Mozilla/5.0、凭证在响应体 data.cookie。
   static const _qrTokenUrl =
-      'https://qrcodeapi.115.com/api/1.0/alipaymini/1.0/token/';
+      'https://qrcodeapi.115.com/api/1.0/web/1.0/token/';
   static const _qrStatusUrl = 'https://qrcodeapi.115.com/get/status/';
   static const _qrLoginUrl =
-      'https://passportapi.115.com/app/1.0/alipaymini/1.0/login/qrcode/';
+      'https://qrcodeapi.115.com/app/1.0/qandroid/1.0/login/qrcode/';
+  static const _qrBindUa = 'Mozilla/5.0';
   static const _filesUrl = 'https://webapi.115.com/files';
   static const _categoryUrl = 'https://webapi.115.com/category/get';
   static const _downloadUrl = 'https://webapi.115.com/files/download';
+  static const _indexInfoUrl = 'https://webapi.115.com/files/index_info';
   static const _pageSize = 40;
+
+  /// 登录过期三码：凭证无效 / 已退出 / 会话已退出。命中才算凭证失效；
+  /// HTTP 405 是限频信号，不当凭证失效。
+  static const _expiredErrnos = {40101032, 40101035, 40101037};
+
+  /// 下载会话 Cookie 的形状：32 位 hex 名 = 32 位 hex 值。
+  static final _downloadCookiePattern = RegExp(r'[0-9a-f]{32}=[0-9a-f]{32}');
+
+  /// 登录世代：登录成功、判定过期各 +1。请求发出时记下世代，回来时
+  /// 若世代已变，说明登录已经换过，旧请求的过期报错不许清掉新登录。
+  int _sessionGeneration = 0;
 
   @override
   Future<QrLoginSession> startQrLogin(http.Client client) async {
@@ -360,13 +465,25 @@ class Pan115Provider implements CloudDriveProvider {
       throw CloudDriveException('115 二维码参数获取失败：返回格式不对');
     }
     final uid = _asString(data['uid']);
+    if (uid.isEmpty) {
+      throw CloudDriveException('115 二维码参数获取失败：缺少 uid');
+    }
+    // 二维码由 115 直接出图（web 通道的 qrcode 字段就是图片地址）；
+    // 字段是 /scan/ 内容时才当二维码内容本地绘制，没有字段时用
+    // qrcodeapi 的出图地址兜底。
     final qrcode = _asString(data['qrcode']);
-    if (uid.isEmpty || qrcode.isEmpty) {
-      throw CloudDriveException('115 二维码参数获取失败：缺少 uid 或二维码地址');
+    var qrContent = '';
+    var qrImageUrl = '';
+    if (qrcode.contains('/scan/')) {
+      qrContent = qrcode;
+    } else if (qrcode.isNotEmpty) {
+      qrImageUrl = qrcode;
+    } else {
+      qrImageUrl = 'https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid=$uid';
     }
     return QrLoginSession(
-      qrContent: qrcode,
-      qrImageUrl: '',
+      qrContent: qrContent,
+      qrImageUrl: qrImageUrl,
       message: '请用 115 App 扫码确认',
       state: {
         'uid': uid,
@@ -413,17 +530,25 @@ class Pan115Provider implements CloudDriveProvider {
         message: '等待 115 App 扫码确认',
       );
     }
-    // 已扫码确认的信号：data 里有 version 且没有 msg。
-    final hasVersion = data['version'] != null;
+    // 按 data.status 数值判读：0 等待、1 已扫、2 已确认、-1 过期、
+    // -2 取消。status 缺失时保留旧启发式（有 version 且没有 msg 视为
+    // 已确认）兜底，避免个别返回形状没有 status 时卡死在等待态。
     final msg = _asString(data['msg']);
-    if (hasVersion && msg.isEmpty) {
+    final statusValue = data['status'];
+    final status = statusValue == null ? null : _asInt(statusValue, 0);
+    if (status == 2 || (status == null && data['version'] != null && msg.isEmpty)) {
       return _finishLogin(client, uid);
     }
-    final status = _asInt(data['status'], 0);
-    if (status == -1 || _asInt(root['code'], 0) != 0) {
+    if (status == -1) {
       return const QrPollResult(
         status: QrPollStatus.expired,
         message: '二维码已过期，请重新获取',
+      );
+    }
+    if (status == -2) {
+      return const QrPollResult(
+        status: QrPollStatus.failed,
+        message: '扫码已取消，请重新获取二维码',
       );
     }
     return QrPollResult(
@@ -436,28 +561,155 @@ class Pan115Provider implements CloudDriveProvider {
     final response = await _postForm(
       client,
       Uri.parse(_qrLoginUrl),
-      {'account': uid, 'app': 'web'},
-      headers: {
-        'User-Agent': _ua,
-        'Referer': _referer,
-        'Origin': _referer,
-      },
+      {'account': uid},
+      headers: {'User-Agent': _qrBindUa},
     );
-    final cookie = mergeCookieHeader('', response.headers['set-cookie']);
+    // 凭证在响应体 data.cookie（字符串或键值对象两种形状都认）；
+    // 响应体没有时才退回 set-cookie 拼装兜底。
+    var cookie = '';
+    try {
+      final root = _jsonObject(response.body, '115 扫码登录');
+      final data = root['data'];
+      if (data is Map<String, dynamic>) {
+        final raw = data['cookie'];
+        if (raw is String) {
+          cookie = raw;
+        } else if (raw is Map) {
+          cookie = raw.entries
+              .map((e) => '${e.key}=${e.value}')
+              .join('; ');
+        }
+      }
+    } catch (_) {
+      // 响应体不是 JSON 时走 set-cookie 兜底。
+    }
+    if (cookie.isEmpty) {
+      cookie = mergeCookieHeader('', response.headers['set-cookie']);
+    }
     if (cookie.isEmpty) {
       return const QrPollResult(
         status: QrPollStatus.failed,
-        message: '115 登录失败：没有拿到登录凭证',
+        message: '115 登录失败：服务器没有返回凭证',
       );
     }
+    // 三件套校验：UID/CID/SEID 缺一不算登录成功（残缺 Cookie 存下来
+    // 只会让后续接口全挂且报不出原因）。通过后规范化成固定键序。
+    final normalized = normalizePan115Cookie(cookie);
+    if (normalized == null) {
+      final missing = missingPan115CookieKeys(cookie);
+      return QrPollResult(
+        status: QrPollStatus.failed,
+        message: '115 登录失败：凭证不完整（缺少 ${missing.join('、')}），请重新扫码',
+      );
+    }
+    // 落盘前验活：凭证被服务端判过期就不报成功；网络类失败（含限频
+    // 405）不拦登录——Cookie 可能没事，后续请求会再判。
+    final verdict = await _validateCookie(client, normalized);
+    if (verdict == Pan115CookieVerdict.expired) {
+      return const QrPollResult(
+        status: QrPollStatus.failed,
+        message: '115 登录失败：凭证已失效，请重新扫码',
+      );
+    }
+    // 新登录成立：世代 +1，在途旧请求的过期报错从此清不掉这份登录。
+    _sessionGeneration++;
     return QrPollResult(
       status: QrPollStatus.success,
       credentials: CloudCredentials(
-        fields: {'cookie': cookie},
+        fields: {'cookie': normalized},
         savedAtMs: DateTime.now().millisecondsSinceEpoch,
       ),
       message: '115网盘登录成功',
     );
+  }
+
+  /// Cookie 验活（调 files/index_info）：结构化分类，不靠文案匹配。
+  /// 传输层失败 / HTTP 405（限频）/ 408 / 429 / 5xx 归网络问题，
+  /// Cookie 可能没事；过期三码与服务端明确拒绝才归凭证失效。
+  /// 本方法只判读不清登录态（清不清由统一响应处理按世代决定）。
+  Future<Pan115CookieVerdict> validateCookies(
+    http.Client client,
+    CloudCredentials credentials,
+  ) => _validateCookie(client, credentials.fields['cookie'] ?? '');
+
+  Future<Pan115CookieVerdict> _validateCookie(
+    http.Client client,
+    String cookie,
+  ) async {
+    if (cookie.isEmpty) return Pan115CookieVerdict.expired;
+    http.Response response;
+    try {
+      response = await _get(
+        client,
+        Uri.parse(_indexInfoUrl),
+        headers: {
+          'User-Agent': _ua,
+          'Referer': _referer,
+          'Cookie': cookie,
+        },
+      );
+    } catch (_) {
+      return Pan115CookieVerdict.networkError;
+    }
+    final code = response.statusCode;
+    if (code == 405 || code == 408 || code == 429 || code >= 500) {
+      return Pan115CookieVerdict.networkError;
+    }
+    if (code != 200) return Pan115CookieVerdict.expired;
+    try {
+      final root = _jsonObject(response.body, '115 凭证校验');
+      if (_stateOk(root)) return Pan115CookieVerdict.valid;
+      return Pan115CookieVerdict.expired;
+    } catch (_) {
+      return Pan115CookieVerdict.networkError;
+    }
+  }
+
+  bool _stateOk(Map<String, dynamic> root) {
+    final state = root['state'];
+    return state == true || state == 1 || state == '1' || state == 'true';
+  }
+
+  int? _errnoOf(Map<String, dynamic> root) {
+    for (final key in ['errno', 'errNo', 'errcode']) {
+      final value = root[key];
+      if (value != null) return _asInt(value, -1);
+    }
+    return null;
+  }
+
+  /// 统一响应判读：state 为假时先分过期 / 限频 / 一般错误，再让调用方
+  /// 解析 data。命中过期三码时按世代清登录态（世代已变则不清）。
+  void _checkState(
+    Map<String, dynamic> root, {
+    required String cookieUsed,
+    required int generation,
+    required String what,
+  }) {
+    if (!root.containsKey('state') || _stateOk(root)) return;
+    final errno = _errnoOf(root);
+    if (errno != null && _expiredErrnos.contains(errno)) {
+      _expireSession(cookieUsed, generation);
+      throw CloudDriveException('115 登录已过期，请重新登录');
+    }
+    final message = _asString(
+      root['error_msg'] ?? root['error'] ?? root['message'],
+      errno == null ? '接口报错' : '接口报错（错误码 $errno）',
+    );
+    throw CloudDriveException('$what：$message');
+  }
+
+  void _expireSession(String cookieUsed, int generation) {
+    // 世代对不上：登录已经换过，旧请求的过期报错不许清新登录。
+    if (generation != _sessionGeneration) return;
+    _sessionGeneration++;
+    onSessionExpired?.call(id, cookieUsed);
+  }
+
+  void _throwIfRateLimited(http.Response response, String what) {
+    if (response.statusCode == 405) {
+      throw CloudDriveException('$what：请求太频繁，请稍后再试');
+    }
   }
 
   Map<String, String> _authHeaders(CloudCredentials credentials) => {
@@ -487,11 +739,20 @@ class Pan115Provider implements CloudDriveProvider {
         'natsort': '1',
       },
     );
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
     final response = await _get(client, uri, headers: _authHeaders(credentials));
+    _throwIfRateLimited(response, '115 文件列表获取失败');
     if (response.statusCode != 200) {
       throw CloudDriveException('115 文件列表获取失败（HTTP ${response.statusCode}）');
     }
     final root = _jsonObject(response.body, '115 文件列表');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 文件列表获取失败',
+    );
     final data = root['data'];
     if (data is! List) {
       throw CloudDriveException('115 文件列表获取失败：返回格式不对');
@@ -552,11 +813,21 @@ class Pan115Provider implements CloudDriveProvider {
         'format': 'json',
       },
     );
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
     final response = await _get(client, uri, headers: _authHeaders(credentials));
+    _throwIfRateLimited(response, '115 搜索失败');
     if (response.statusCode != 200) {
       throw CloudDriveException('115 搜索失败（HTTP ${response.statusCode}）');
     }
-    final data = _jsonObject(response.body, '115 搜索')['data'];
+    final root = _jsonObject(response.body, '115 搜索');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 搜索失败',
+    );
+    final data = root['data'];
     if (data is! List) return const [];
     return [
       for (final item in data)
@@ -577,20 +848,98 @@ class Pan115Provider implements CloudDriveProvider {
     if (pickcode.isEmpty) {
       throw CloudDriveException('115 取直链失败：没有拿到文件提取码');
     }
-    // 不走 proapi downurl 加密接口（混淆加密未抽出），走 files/download
-    // 的 302 跳转拿 CDN 直链；该路径未经真账号实测，列为手机待验。
-    final uri = Uri.parse(_downloadUrl).replace(
-      queryParameters: {'pickcode': pickcode},
+    // 现行取链路（p115client 的 download_url_web）：POST files/download，
+    // 请求体 {"pickcode": ...} 经 m115 加密作 data 字段（不传 dl——
+    // dl≠0 返回的是一次性 302 地址），取链 UA 置空。响应三层剥壳：
+    // 外层 AES-128-CBC + LZ4、data 字段 RSA 解密、取扁平结构 file_url
+    // （{fid:{url:{url}}} 嵌套结构是 App 接口的形状，只作兜底）。
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
+    final encrypted = m115RsaEncrypt(
+      utf8.encode(jsonEncode({'pickcode': pickcode})),
     );
-    final request = http.Request('GET', uri)..headers.addAll(_authHeaders(credentials));
-    final resolved = await resolveRedirects(client, request);
-    final cookie = mergeCookieHeader(
-      credentials.fields['cookie'] ?? '',
-      resolved.setCookie.isEmpty ? null : resolved.setCookie,
+    final response = await _postForm(
+      client,
+      Uri.parse(_downloadUrl),
+      {'data': encrypted},
+      headers: {'User-Agent': '', 'Cookie': cookieUsed},
     );
+    _throwIfRateLimited(response, '115 取直链失败');
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 取直链失败（HTTP ${response.statusCode}）');
+    }
+    // 下载会话 Cookie：Set-Cookie 里 32 位 hex=32 位 hex 的那一对，
+    // 有多个取最后一个；只取这一对，不带账号 Cookie。
+    String? downloadCookie;
+    final setCookie = response.headers['set-cookie'];
+    if (setCookie != null) {
+      for (final match in _downloadCookiePattern.allMatches(setCookie)) {
+        downloadCookie = match.group(0);
+      }
+    }
+    final Uint8List plainBytes;
+    try {
+      plainBytes = m115ContentMaybeDecrypt(response.bodyBytes);
+    } catch (_) {
+      throw CloudDriveException('115 取直链失败：响应解密失败');
+    }
+    final root = _jsonObject(utf8.decode(plainBytes), '115 取直链');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 取直链失败',
+    );
+    final rawData = root['data'];
+    Map<String, dynamic> dataObj;
+    if (rawData is String) {
+      try {
+        final decoded = jsonDecode(utf8.decode(m115RsaDecrypt(rawData)));
+        if (decoded is! Map<String, dynamic>) {
+          throw const FormatException('data 不是对象');
+        }
+        dataObj = decoded;
+      } catch (_) {
+        throw CloudDriveException('115 取直链失败：下载链接解析失败');
+      }
+    } else if (rawData is Map<String, dynamic>) {
+      dataObj = rawData;
+    } else {
+      throw CloudDriveException('115 取直链失败：返回格式不对');
+    }
+    // 扁平结构优先，嵌套结构（App 接口形状）兜底。
+    Map<String, dynamic>? entry;
+    for (final value in dataObj.values) {
+      if (value is Map<String, dynamic>) {
+        entry = value;
+        break;
+      }
+    }
+    var url = _asString(dataObj['file_url']);
+    if (url.isEmpty) {
+      final nested = entry?['url'];
+      if (nested is Map<String, dynamic>) url = _asString(nested['url']);
+    }
+    if (url.isEmpty) {
+      throw CloudDriveException('115 取直链失败：服务器没有返回下载链接');
+    }
+    // 直链请求头契约（按 URL 的 f 参数）：取链 UA 是空，播放器必须
+    // 同样发空 UA；f=3（或没给 f 时保守起见）才带下载会话 Cookie，
+    // 且只带那一对——账号 Cookie 绝不发给 CDN。
+    final query = Uri.tryParse(url)?.queryParameters ?? const {};
+    final linkF = int.tryParse(query['f'] ?? '');
+    final expiresAtMs = (int.tryParse(query['t'] ?? '') ?? 0) * 1000;
+    final headers = <String, String>{'User-Agent': ''};
+    if ((linkF == null || linkF == 3) && downloadCookie != null) {
+      headers['Cookie'] = downloadCookie;
+    }
     return CloudDirectLink(
-      url: resolved.url,
-      headers: {'User-Agent': _ua, 'Cookie': cookie},
+      url: url,
+      headers: headers,
+      downloadCookie: downloadCookie,
+      expiresAtMs: expiresAtMs,
+      linkF: linkF,
+      fetchUserAgent: '',
     );
   }
 
@@ -639,6 +988,9 @@ class QuarkProvider implements CloudDriveProvider {
   @override
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
+
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
 
   static const _ua =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -926,6 +1278,9 @@ class BaiduProvider implements CloudDriveProvider {
   @override
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
+
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
 
   static const _ua =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -1278,6 +1633,9 @@ class AliyunProvider implements CloudDriveProvider {
   @override
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
+
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
 
   static const _generateUrl =
       'https://passport.aliyundrive.com/newlogin/qrcode/generate.do';

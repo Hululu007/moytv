@@ -508,6 +508,9 @@ class Yun139Provider implements CloudDriveProvider {
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
 
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
+
   /// 短信通道记忆（登录按发短信时的通道提交，30 分钟过期）。
   String _smsPhone = '';
   Yun139SmsMode _smsMode = Yun139SmsMode.noSlider;

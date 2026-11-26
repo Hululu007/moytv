@@ -27,6 +27,9 @@ class FakeProvider implements CloudDriveProvider {
   @override
   void Function(String, CloudCredentials)? onCredentialsRefreshed;
 
+  @override
+  void Function(String, String)? onSessionExpired;
+
   final bool supportsSearch;
   final Map<String, List<CloudDriveFile>> folders = {};
   var listCalls = 0;

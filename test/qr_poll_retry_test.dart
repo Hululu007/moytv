@@ -92,6 +92,9 @@ class _ScriptedProvider implements CloudDriveProvider {
   @override
   void Function(String providerId, CloudCredentials credentials)?
   onCredentialsRefreshed;
+
+  @override
+  void Function(String providerId, String expiredCookie)? onSessionExpired;
 }
 
 /// 与用户截图同类的连接错：异常原文里带完整请求地址与参数。

@@ -120,18 +120,25 @@ void main() {
       expect(result.status, QrPollStatus.waiting);
     });
 
-    test('pollQrLogin 已确认后换取 cookie', () async {
+    test('pollQrLogin 已确认后走 qandroid 通道换取 cookie', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/get/status/') {
           return jsonResponse({
             'state': 1,
             'code': 0,
-            'data': {'version': '1.0'},
+            'data': {'status': 2},
           });
         }
-        expect(request.url.host, 'passportapi.115.com');
-        return http.Response('{}', 200, headers: {
-          'set-cookie': 'UID=uid1; Path=/, CID=cid1; Path=/',
+        if (request.url.path == '/files/index_info') {
+          return jsonResponse({'state': true});
+        }
+        // 取凭证走 qrcodeapi 的 qandroid 路径，凭证在响应体 data.cookie。
+        expect(request.url.host, 'qrcodeapi.115.com');
+        expect(request.url.path, '/app/1.0/qandroid/1.0/login/qrcode/');
+        expect(request.headers['user-agent'], 'Mozilla/5.0');
+        return jsonResponse({
+          'state': true,
+          'data': {'cookie': 'UID=uid1; CID=cid1; SEID=seid1'},
         });
       });
       final session = QrLoginSession(
@@ -143,8 +150,64 @@ void main() {
       );
       final result = await provider.pollQrLogin(client, session);
       expect(result.status, QrPollStatus.success);
-      expect(result.credentials!.fields['cookie'], contains('UID=uid1'));
-      expect(result.credentials!.fields['cookie'], contains('CID=cid1'));
+      expect(
+        result.credentials!.fields['cookie'],
+        'UID=uid1; CID=cid1; SEID=seid1',
+      );
+    });
+
+    test('pollQrLogin 凭证缺 SEID 不算登录成功', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/get/status/') {
+          return jsonResponse({
+            'state': 1,
+            'code': 0,
+            'data': {'status': 2},
+          });
+        }
+        return jsonResponse({
+          'state': true,
+          'data': {'cookie': 'UID=uid1; CID=cid1'},
+        });
+      });
+      final session = QrLoginSession(
+        qrContent: 'https://115.com/scan/dg-u',
+        qrImageUrl: '',
+        message: '',
+        state: {'uid': 'u', 'time': 't', 'sign': 's'},
+        expiresAt: DateTime.now().add(const Duration(minutes: 1)),
+      );
+      final result = await provider.pollQrLogin(client, session);
+      expect(result.status, QrPollStatus.failed);
+      expect(result.message, contains('SEID'));
+    });
+
+    test('pollQrLogin 二维码过期与取消', () async {
+      QrLoginSession session() => QrLoginSession(
+            qrContent: 'https://115.com/scan/dg-u',
+            qrImageUrl: '',
+            message: '',
+            state: {'uid': 'u', 'time': 't', 'sign': 's'},
+            expiresAt: DateTime.now().add(const Duration(minutes: 1)),
+          );
+      final expiredClient = MockClient((_) async => jsonResponse({
+            'state': 1,
+            'code': 0,
+            'data': {'status': -1},
+          }));
+      expect(
+        (await provider.pollQrLogin(expiredClient, session())).status,
+        QrPollStatus.expired,
+      );
+      final cancelledClient = MockClient((_) async => jsonResponse({
+            'state': 1,
+            'code': 0,
+            'data': {'status': -2},
+          }));
+      expect(
+        (await provider.pollQrLogin(cancelledClient, session())).status,
+        QrPollStatus.failed,
+      );
     });
 
     test('listFolder 映射文件夹与视频', () async {
@@ -179,27 +242,81 @@ void main() {
       expect(video.extra['pickcode'], 'pick-1');
     });
 
-    test('directLink 用已有 pickcode 跟 302 拿直链', () async {
-      final client = MockClient((request) async {
-        if (request.url.path == '/files/download') {
-          expect(request.url.queryParameters['pickcode'], 'pick-1');
-          return http.Response('', 302, headers: {
-            'location': 'https://cdn115.example.com/file.mp4',
-            'set-cookie': 'CDN=1; Path=/',
-          });
-        }
-        return http.Response('', 200);
-      });
-      const file = CloudDriveFile(
-        id: '200',
-        name: '正片.mp4',
-        isFolder: false,
-        kind: CloudFileKind.video,
-        extra: {'pickcode': 'pick-1'},
+    // 取链响应里 data 是明文 Map 的形状（真实响应里 data 是 RSA 密文
+    // 字符串，那条路的解密正确性由 cloud_m115_crypto_test 的向量覆盖；
+    // 服务端密文只能用服务器私钥生成，单测里造不出来）。
+    http.Response downloadResponse(
+      String fileUrl, {
+      String? setCookie,
+    }) {
+      return jsonResponse(
+        {
+          'state': true,
+          'data': {'file_url': fileUrl, 'file_name': '正片.mp4'},
+        },
+        headers: {'set-cookie': ?setCookie},
       );
-      final link = await provider.directLink(client, cookieCreds, file);
-      expect(link.url, 'https://cdn115.example.com/file.mp4');
-      expect(link.headers['Cookie'], contains('UID=test123'));
+    }
+
+    const videoFile = CloudDriveFile(
+      id: '200',
+      name: '正片.mp4',
+      isFolder: false,
+      kind: CloudFileKind.video,
+      extra: {'pickcode': 'pick-1'},
+    );
+    const sessionPair =
+        '0123456789abcdef0123456789abcdef=fedcba9876543210fedcba9876543210';
+
+    test('directLink POST m115 取链，f=3 只带下载会话 Cookie', () async {
+      final client = MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/files/download');
+        // 取链 UA 置空；请求体只有 data 字段（m115 密文）。
+        expect(request.headers['user-agent'], '');
+        expect(request.bodyFields.keys, ['data']);
+        expect(request.bodyFields['data'], isNotEmpty);
+        return downloadResponse(
+          'https://cdn115.example.com/file.mp4?f=3&t=1893456000&u=1',
+          setCookie: 'OTHER=x; Path=/, $sessionPair; Path=/',
+        );
+      });
+      final link = await provider.directLink(client, cookieCreds, videoFile);
+      expect(link.url, startsWith('https://cdn115.example.com/file.mp4'));
+      expect(link.linkF, 3);
+      expect(link.expiresAtMs, 1893456000000);
+      expect(link.downloadCookie, sessionPair);
+      expect(link.fetchUserAgent, '');
+      expect(link.headers['User-Agent'], '');
+      // 只带那一对会话 Cookie，绝不带账号 Cookie。
+      expect(link.headers['Cookie'], sessionPair);
+      expect(link.headers['Cookie'], isNot(contains('UID=test123')));
+    });
+
+    test('directLink f=1 不带 Cookie（UA 一致即可）', () async {
+      final client = MockClient((request) async {
+        return downloadResponse(
+          'https://cdn115.example.com/file.mp4?f=1&t=1893456000',
+          setCookie: '$sessionPair; Path=/',
+        );
+      });
+      final link = await provider.directLink(client, cookieCreds, videoFile);
+      expect(link.linkF, 1);
+      expect(link.downloadCookie, sessionPair);
+      expect(link.headers.containsKey('Cookie'), isFalse);
+      expect(link.headers['User-Agent'], '');
+    });
+
+    test('directLink 无 f 参数时保守带下载会话 Cookie', () async {
+      final client = MockClient((request) async {
+        return downloadResponse(
+          'https://cdn115.example.com/file.mp4?t=1893456000',
+          setCookie: '$sessionPair; Path=/',
+        );
+      });
+      final link = await provider.directLink(client, cookieCreds, videoFile);
+      expect(link.linkF, isNull);
+      expect(link.headers['Cookie'], sessionPair);
     });
 
     test('directLink 无 pickcode 时先取 category', () async {
@@ -207,12 +324,7 @@ void main() {
         if (request.url.path == '/category/get') {
           return jsonResponse({'pick_code': 'pick-9'});
         }
-        if (request.url.path == '/files/download') {
-          return http.Response('', 302, headers: {
-            'location': 'https://cdn115.example.com/f.mp4',
-          });
-        }
-        return http.Response('', 200);
+        return downloadResponse('https://cdn115.example.com/f.mp4?f=0');
       });
       const file = CloudDriveFile(
         id: '300',
@@ -221,7 +333,128 @@ void main() {
         kind: CloudFileKind.video,
       );
       final link = await provider.directLink(client, cookieCreds, file);
-      expect(link.url, 'https://cdn115.example.com/f.mp4');
+      expect(link.url, 'https://cdn115.example.com/f.mp4?f=0');
+    });
+
+    test('listFolder 命中过期三码：清登录态并给明确提示', () async {
+      final p = Pan115Provider();
+      String? clearedCookie;
+      p.onSessionExpired = (_, cookie) => clearedCookie = cookie;
+      final client = MockClient((_) async => jsonResponse({
+            'state': false,
+            'errno': 40101032,
+            'error_msg': '凭证无效',
+          }));
+      await expectLater(
+        p.listFolder(client, cookieCreds, '0', 1),
+        throwsA(
+          isA<CloudDriveException>().having(
+            (e) => e.message,
+            'message',
+            '115 登录已过期，请重新登录',
+          ),
+        ),
+      );
+      expect(clearedCookie, 'UID=test123');
+    });
+
+    test('listFolder HTTP 405 按限频处理，不清登录态', () async {
+      final p = Pan115Provider();
+      var cleared = false;
+      p.onSessionExpired = (_, cookie) => cleared = true;
+      final client = MockClient((_) async => http.Response('', 405));
+      await expectLater(
+        p.listFolder(client, cookieCreds, '0', 1),
+        throwsA(
+          isA<CloudDriveException>().having(
+            (e) => e.message,
+            'message',
+            contains('请求太频繁'),
+          ),
+        ),
+      );
+      expect(cleared, isFalse);
+    });
+
+    test('旧请求的过期报错不清新登录（世代保护）', () async {
+      final p = Pan115Provider();
+      var clearCount = 0;
+      p.onSessionExpired = (_, cookie) => clearCount++;
+      late MockClient client;
+      client = MockClient((request) async {
+        if (request.url.path == '/get/status/') {
+          return jsonResponse({
+            'state': 1,
+            'code': 0,
+            'data': {'status': 2},
+          });
+        }
+        if (request.url.path == '/app/1.0/qandroid/1.0/login/qrcode/') {
+          return jsonResponse({
+            'state': true,
+            'data': {'cookie': 'UID=u2; CID=c2; SEID=s2'},
+          });
+        }
+        if (request.url.path == '/files/index_info') {
+          return jsonResponse({'state': true});
+        }
+        // 列表请求（在途旧请求）：处理它的过程中先完成一次新登录
+        //（世代推进），再返回旧凭证的过期报错——不许清新登录。
+        final session = QrLoginSession(
+          qrContent: 'https://115.com/scan/dg-u',
+          qrImageUrl: '',
+          message: '',
+          state: {'uid': 'u', 'time': 't', 'sign': 's'},
+          expiresAt: DateTime.now().add(const Duration(minutes: 1)),
+        );
+        final login = await p.pollQrLogin(client, session);
+        expect(login.status, QrPollStatus.success);
+        return jsonResponse({
+          'state': false,
+          'errno': 40101037,
+          'error_msg': '会话已退出',
+        });
+      });
+      await expectLater(
+        p.listFolder(client, cookieCreds, '0', 1),
+        throwsA(isA<CloudDriveException>()),
+      );
+      expect(clearCount, 0);
+    });
+
+    test('validateCookies 三类结论', () async {
+      final okClient = MockClient((_) async => jsonResponse({'state': true}));
+      expect(
+        await provider.validateCookies(okClient, cookieCreds),
+        Pan115CookieVerdict.valid,
+      );
+      final expiredClient = MockClient((_) async => jsonResponse({
+            'state': false,
+            'errno': 40101035,
+          }));
+      expect(
+        await provider.validateCookies(expiredClient, cookieCreds),
+        Pan115CookieVerdict.expired,
+      );
+      final limitedClient = MockClient((_) async => http.Response('', 405));
+      expect(
+        await provider.validateCookies(limitedClient, cookieCreds),
+        Pan115CookieVerdict.networkError,
+      );
+      final downClient = MockClient((_) async => throw Exception('断网'));
+      expect(
+        await provider.validateCookies(downClient, cookieCreds),
+        Pan115CookieVerdict.networkError,
+      );
+    });
+
+    test('normalizePan115Cookie 三件套与键序', () {
+      expect(
+        normalizePan115Cookie('SEID=s; UID=u; CID=c; KID=k; OTHER=o'),
+        'UID=u; CID=c; SEID=s; KID=k',
+      );
+      expect(normalizePan115Cookie('UID=u; CID=c'), isNull);
+      expect(missingPan115CookieKeys('UID=u'), ['CID', 'SEID']);
     });
   });
 
