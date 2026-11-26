@@ -13,6 +13,8 @@ import 'live_repository.dart';
 import 'live_settings.dart';
 import 'live_sources.dart';
 import 'models.dart';
+import 'playback_parse.dart';
+import 'viewing_experience_settings.dart';
 import 'screen_awake.dart';
 import 'tvbox_video_pane.dart';
 import 'video_output_size.dart';
@@ -43,6 +45,13 @@ extension LiveDecoderModeX on LiveDecoderMode {
   };
 }
 
+/// 直播嗅探兜底钩子：宿主（直播页）注入，用壳级嗅探页打开网页
+/// 取链（候选过滤＋递送前轻验＋45 秒超时都在嗅探页侧完成），返回
+/// 验过的媒体地址；取不到返回 null。控制器本身不持界面，与
+/// createPlayer 同属宿主注入点，测试可注入假实现。
+typedef LiveSniffResolver =
+    Future<String?> Function(String pageUrl, Map<String, String> headers);
+
 /// 直播播放状态：顶部内嵌播放器与全屏播放共用同一实例，换台不重建引擎。
 class LivePlaybackController extends ChangeNotifier {
   LivePlaybackController({
@@ -63,6 +72,19 @@ class LivePlaybackController extends ChangeNotifier {
     }
     liveSettings.addListener(_onLiveSettingsChanged);
     unawaited(liveSettings.ensureLoaded());
+    unawaited(_loadDeepSniffer());
+  }
+
+  /// 壳级梯子的嗅探级开关：与点播同一份「深度嗅探」偏好（默认
+  /// 开），关了直播也不自动落嗅探。构造时异步读一次，读不到
+  /// 保持默认开，不阻塞起播。
+  bool _deepSniffer = true;
+
+  Future<void> _loadDeepSniffer() async {
+    try {
+      final settings = await ViewingExperienceSettings.load();
+      _deepSniffer = settings.deepSniffer;
+    } catch (_) {}
   }
 
   /// 已应用到睡眠计时器的设置页默认时长；null = 还没应用过。
@@ -99,6 +121,10 @@ class LivePlaybackController extends ChangeNotifier {
   static const _vodStallTimeout = Duration(seconds: 90);
 
   final LiveRepository repository;
+
+  /// 嗅探兜底钩子：直播页在构造后注入（见 LiveSniffResolver）。
+  /// 不注入时嗅探级整体停用，其余梯子行为一行不变。
+  LiveSniffResolver? sniffResolver;
 
   /// 测试注入：替换 mpv 播放器的构造（真机不传，走默认 Player()）。
   final Player Function()? createPlayer;
@@ -153,6 +179,16 @@ class LivePlaybackController extends ChangeNotifier {
   bool _buffering = false;
   bool _disposed = false;
   String? _error;
+
+  /// 嗅探级闩锁：同一频道一次起播会话内只落一次嗅探，防「嗅探
+  /// 递送的地址再失败→重连耗尽→再嗅探」循环。换台/换线/重播
+  /// （非重连的 play）时复位，与主播放器换集复位同口径。
+  bool _sniffRungConsumed = false;
+
+  /// 最近一次解析出的播放地址：播放器报错不带地址，梯子耗尽时
+  /// 靠它判断当前线路是不是网页。只在解析成功时更新，换台时
+  /// 先清空，不拿上一台的地址冒充。
+  String _lastLiveUrl = '';
 
   /// 播放中流的真实输出分辨率（videoParams 给出的显示尺寸）：
   /// 拿到之前为 null，界面不硬写分辨率；只随首帧/分辨率变化更新。
@@ -369,15 +405,40 @@ class LivePlaybackController extends ChangeNotifier {
     final source = _source;
     if (source == null) return;
     if (!reconnect) _retries = 0;
+    if (!reconnect) {
+      _sniffRungConsumed = false;
+      _lastLiveUrl = '';
+    }
     if (!reconnect && index != _index) _route = 0;
     final token = ++_generation;
     _index = index;
     _loading = true;
     if (!reconnect) _error = null;
     notifyListeners();
+    LivePlayback plan;
     try {
-      final plan = await _resolve(source, channel);
+      plan = await _resolve(source, channel);
+    } catch (error) {
       if (_disposed || token != _generation) return;
+      // 取流（线路解析）失败：频道地址是网页时落梯子最后一级
+      // 嗅探兜底取链，嗅到的地址按普通频道递给 mpv；嗅不到
+      // 如实报原来的取流错误，不假装有信号。DRM 频道不嗅探
+      // （EXO 路与 mpv 嗅探都解不了它的加密）。
+      final sniffed = channel.hasDrm
+          ? null
+          : await _sniffPageForChannel(channel, token);
+      if (sniffed == null) {
+        if (_disposed || token != _generation) return;
+        _loading = false;
+        _error = '$error';
+        notifyListeners();
+        return;
+      }
+      plan = LivePlayback(url: sniffed, headers: channel.headers);
+    }
+    if (_disposed || token != _generation) return;
+    _lastLiveUrl = plan.url;
+    try {
       // DRM 频道改走 EXO 核：mpv 没有 DRM 解密能力，硬播只会
       // 失败重连。归一化不出 drm 时给明确报错，不黑屏死等、
       // 也不回头试 mpv。普通频道 _exoPlan 恒为 null，走下面
@@ -410,38 +471,113 @@ class LivePlaybackController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      _exoPlan = null;
-      _ensurePlayer();
-      final player = _player;
-      if (player == null) throw AppFailure('直播播放器无法启动');
-      await _applyDecoderMode(player);
-      _frames = false;
-      // 换台先清掉上条流的分辨率与帧率，新流拿到 videoParams 后再
-      // 显示，不拿旧流的数字冒充新台。
-      _videoSize = null;
-      _videoFps = null;
-      _fpsRetry?.cancel();
-      _fpsRetry = null;
-      await player.open(
-        Media(
-          plan.url,
-          httpHeaders: plan.headers.isEmpty ? null : plan.headers,
-        ),
-      );
-      if (_sleepPaused) {
-        await player.pause();
-        return;
-      }
-      if (_disposed || token != _generation) return;
-      _loading = false;
-      _error = null;
-      _screenAwake.enable();
-      _armStallWatch();
-      notifyListeners();
+      await _openUrl(plan.url, plan.headers, token);
     } catch (error) {
       if (_disposed || token != _generation) return;
       _loading = false;
       _error = '$error';
+      notifyListeners();
+    }
+  }
+
+  /// 把已定的媒体地址递给 mpv 打开（普通频道路径）：play() 解析
+  /// 出的地址与嗅探兜底取到的地址共用这一处，保证递播放器的
+  /// 口径一致（清旧流分辨率/帧率、应用解码模式、布防断流判定）。
+  /// 播放器建不起来抛 AppFailure，打开抛错原样抛，调用方收口。
+  Future<void> _openUrl(
+    String url,
+    Map<String, String> headers,
+    int token,
+  ) async {
+    _exoPlan = null;
+    _ensurePlayer();
+    final player = _player;
+    if (player == null) throw AppFailure('直播播放器无法启动');
+    await _applyDecoderMode(player);
+    _frames = false;
+    // 换台先清掉上条流的分辨率与帧率，新流拿到 videoParams 后再
+    // 显示，不拿旧流的数字冒充新台。
+    _videoSize = null;
+    _videoFps = null;
+    _fpsRetry?.cancel();
+    _fpsRetry = null;
+    await player.open(
+      Media(url, httpHeaders: headers.isEmpty ? null : headers),
+    );
+    if (_sleepPaused) {
+      await player.pause();
+      return;
+    }
+    if (_disposed || token != _generation) return;
+    _loading = false;
+    _error = null;
+    _screenAwake.enable();
+    _armStallWatch();
+    notifyListeners();
+  }
+
+  /// 本台可供嗅探的网页地址：优先最近解析出的地址，其次频道
+  /// 线路里第一个网页地址；都没有返回 null（纯直链频道不嗅探）。
+  String? _pageCandidateFor(LiveChannel channel) {
+    if (_lastLiveUrl.isNotEmpty && looksLikeWebPage(_lastLiveUrl)) {
+      return _lastLiveUrl;
+    }
+    for (final url in channel.urls) {
+      if (looksLikeWebPage(url)) return url;
+    }
+    return null;
+  }
+
+  /// 梯子最后一级（嗅探）：经宿主钩子打开频道网页取链，返回验
+  /// 过的媒体地址。无钩子 / 深嗅探关 / 睡眠暂停 / DRM 频道 /
+  /// 本台已落过 / 没有网页地址 / 钩子取不到，一律返回 null，
+  /// 调用方按原失败口径收口。闩锁在真正发起嗅探时置上，取链
+  /// 期间切台（token 变）结果作废。
+  Future<String?> _sniffPageForChannel(
+    LiveChannel channel,
+    int token,
+  ) async {
+    final resolver = sniffResolver;
+    if (resolver == null ||
+        _disposed ||
+        _sleepPaused ||
+        channel.hasDrm ||
+        !_deepSniffer ||
+        _sniffRungConsumed) {
+      return null;
+    }
+    final page = _pageCandidateFor(channel);
+    if (page == null) return null;
+    _sniffRungConsumed = true;
+    String? found;
+    try {
+      found = await resolver(page, channel.headers);
+    } catch (_) {
+      return null;
+    }
+    if (_disposed || token != _generation) return null;
+    final url = found?.trim() ?? '';
+    return url.isEmpty ? null : url;
+  }
+
+  /// 重连梯子耗尽后的嗅探级：嗅到地址就递给 mpv 续播；嗅不到
+  /// 或打开失败，原来的失败提示原样保留，不假装有信号。
+  Future<void> _sniffAfterLadderExhausted(LiveChannel channel) async {
+    // 先掐掉已排定的重连：同一轮错误事件里先到的那条可能已经
+    // 排了下一次重连，它若在嗅探途中触发，会把原坏线路重播、
+    // 冲掉嗅探结果。本方法首段同步执行，取消赶得上。
+    _reconnect?.cancel();
+    final token = _generation;
+    final savedError = _error;
+    final sniffed = await _sniffPageForChannel(channel, token);
+    if (sniffed == null) return;
+    if (_disposed || token != _generation) return;
+    try {
+      await _openUrl(sniffed, channel.headers, token);
+    } catch (_) {
+      if (_disposed || token != _generation) return;
+      _loading = false;
+      _error = savedError;
       notifyListeners();
     }
   }
@@ -543,7 +679,15 @@ class LivePlaybackController extends ChangeNotifier {
     // 最后一条，只允许推进 3 次就永远够不到它，用户只能手动一路切过去。
     final routes = channel?.urls.length ?? 0;
     final limit = routes > 1 ? routes : maxRetries;
-    if (_retries >= limit) return;
+    if (_retries >= limit) {
+      // 重连梯子耗尽：最后落嗅探兜底（本台只落一次，闩锁在
+      // _sniffPageForChannel 里）。嗅不到就停在这里，原失败
+      // 提示保留，不再重试也不假装恢复。
+      if (channel != null) {
+        unawaited(_sniffAfterLadderExhausted(channel));
+      }
+      return;
+    }
     _retries++;
     // 实测列表型直播源的代理线路质量波动很大（同一批前缀会交替返回
     // 404/500 或掉到十几 KB/s），重连必须换线路，否则几次重试全部

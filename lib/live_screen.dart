@@ -7,6 +7,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import 'app_layout.dart';
 import 'app_notice.dart';
+import 'app_page_route.dart';
 import 'core_bridge.dart';
 import 'live_catchup.dart';
 import 'live_epg.dart';
@@ -21,6 +22,8 @@ import 'm3u_subscriptions.dart';
 import 'models.dart';
 import 'network_speed.dart';
 import 'playback_preferences.dart';
+import 'playback_sniffer.dart';
+import 'playback_sniff_verify.dart';
 import 'player_route.dart';
 import 'tvbox_video_pane.dart';
 import 'remote_widgets.dart';
@@ -188,6 +191,30 @@ class _LiveScreenState extends State<LiveScreen> {
     _playback =
         widget.playbackController ??
         LivePlaybackController(repository: widget.repository);
+    // 壳级梯子最后一级（嗅探）的宿主钩子：控制器不持界面，取链
+    // 由本页推嗅探页完成——候选过滤、递送前轻验、45 秒超时与
+    // 主播放器/西瓜同口径；嗅到的地址回控制器递给 mpv，绝不
+    // 在网页里播。只接线，不改直播页任何既有版式。
+    _playback.sniffResolver = (pageUrl, headers) async {
+      if (!mounted) return null;
+      final found = await Navigator.of(context).push<String>(
+        appPageRoute(
+          builder: (routeContext) => SniffWebViewPage(
+            pageUrl: pageUrl,
+            headers: headers,
+            autoPlay: true,
+            onMediaFound: (url) => Navigator.of(routeContext).pop(url),
+            validateCandidate: sniffCandidateValidator(headers: headers),
+            sniffTimeout: sniffFallbackTimeout,
+            onSniffTimeout: () {
+              final navigator = Navigator.of(routeContext);
+              if (navigator.canPop()) navigator.pop();
+            },
+          ),
+        ),
+      );
+      return (found == null || found.isEmpty) ? null : found;
+    };
     _playback.addListener(_playbackChanged);
     _speedTracker = NetworkSpeedTracker(
       sample: () async {
