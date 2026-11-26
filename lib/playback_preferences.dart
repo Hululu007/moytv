@@ -27,7 +27,7 @@ class PlaybackPreferences {
     this.autoAdvance = true,
     this.danmaku = true,
     this.preload = true,
-    this.seamless = false,
+    this.seamless = true,
     this.adBlock = true,
     this.holdSpeed = 2,
     this.swipeSeekSeconds = 60,
@@ -45,6 +45,7 @@ class PlaybackPreferences {
   final bool preload;
 
   /// 无缝播放：换集时用待命播放器已预热好的首帧直接衔接，不黑屏。
+  /// 默认开（没存过值时）；用户手动关过的按存量值走。
   /// 单向依赖 preload：无缝开着预加载必须开，关预加载连带关无缝
   /// （见 [withPreload] / [withSeamless] 与 fromJson 的归一化），
   /// 任何入口都不许存下 seamless=true 而 preload=false 的组合。
@@ -122,9 +123,10 @@ class PlaybackPreferences {
     final autoAdvance = value['autoAdvance'] as bool? ?? true;
     final danmaku = value['danmaku'] as bool? ?? true;
     final preload = value['preload'] as bool? ?? true;
+    // 没存过 seamless 时默认开；存量里用户手动存的值原样读。
     // 归一化单向依赖：存量数据里若出现无缝开着而预加载关着的
     // 组合，按「关预加载连带关无缝」读成无缝关，不让矛盾状态进门。
-    final seamless = (value['seamless'] as bool? ?? false) && preload;
+    final seamless = (value['seamless'] as bool? ?? true) && preload;
     final adBlock = value['adBlock'] as bool? ?? true;
     final holdSpeed = (value['holdSpeed'] as num? ?? 2).toDouble();
     final swipeSeekSeconds = value['swipeSeekSeconds'] as int? ?? 60;

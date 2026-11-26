@@ -43,7 +43,7 @@ void main() {
   testWidgets('播放设置里有无缝播放开关，打开时连带打开预加载', (tester) async {
     final saved = await pumpMenu(
       tester,
-      const PlaybackPreferences(preload: false),
+      const PlaybackPreferences(preload: false, seamless: false),
     );
     final tile = find.byKey(const ValueKey('player-seamless-enabled'));
     expect(tile, findsOneWidget);
@@ -72,11 +72,11 @@ void main() {
     expect(saved.single.seamless, isFalse, reason: '关预加载连带关无缝');
   });
 
-  testWidgets('无缝默认关时开关呈关态', (tester) async {
+  testWidgets('无缝默认开时开关呈开态', (tester) async {
     await pumpMenu(tester, const PlaybackPreferences());
     final widget = tester.widget<SwitchListTile>(
       find.byKey(const ValueKey('player-seamless-enabled')),
     );
-    expect(widget.value, isFalse);
+    expect(widget.value, isTrue);
   });
 }

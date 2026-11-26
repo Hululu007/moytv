@@ -3,21 +3,21 @@ import 'package:moyi/playback_preferences.dart';
 
 void main() {
   group('无缝播放偏好', () {
-    test('默认关，JSON 往返保持', () {
+    test('默认开，JSON 往返保持', () {
       const prefs = PlaybackPreferences();
-      expect(prefs.seamless, isFalse);
+      expect(prefs.seamless, isTrue);
       expect(prefs.preload, isTrue);
       final restored = PlaybackPreferences.fromJson(prefs.toJson());
-      expect(restored.seamless, isFalse);
-      final on = PlaybackPreferences.fromJson(
-        prefs.withSeamless(true).toJson(),
+      expect(restored.seamless, isTrue);
+      final off = PlaybackPreferences.fromJson(
+        prefs.withSeamless(false).toJson(),
       );
-      expect(on.seamless, isTrue);
-      expect(on.preload, isTrue);
+      expect(off.seamless, isFalse, reason: '用户手动关过的按存量值走');
+      expect(off.preload, isTrue);
     });
 
     test('开无缝自动开预加载', () {
-      const prefs = PlaybackPreferences(preload: false);
+      const prefs = PlaybackPreferences(preload: false, seamless: false);
       final next = prefs.withSeamless(true);
       expect(next.seamless, isTrue);
       expect(next.preload, isTrue);
@@ -38,7 +38,7 @@ void main() {
     });
 
     test('开预加载不动无缝', () {
-      const prefs = PlaybackPreferences(preload: false);
+      const prefs = PlaybackPreferences(preload: false, seamless: false);
       final next = prefs.withPreload(true);
       expect(next.preload, isTrue);
       expect(next.seamless, isFalse);
@@ -58,9 +58,11 @@ void main() {
       expect(consistent.seamless, isTrue);
     });
 
-    test('老数据没有 seamless 字段时默认关', () {
+    test('老数据没有 seamless 字段时默认开', () {
       final restored = PlaybackPreferences.fromJson({'preload': true});
-      expect(restored.seamless, isFalse);
+      expect(restored.seamless, isTrue);
+      final noPreload = PlaybackPreferences.fromJson({'preload': false});
+      expect(noPreload.seamless, isFalse, reason: '预加载关着仍归一化为无缝关');
     });
   });
 }
