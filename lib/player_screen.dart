@@ -50,6 +50,7 @@ import 'playback_preloader.dart';
 import 'playback_queue.dart';
 import 'seamless_switch.dart';
 import 'playback_sniffer.dart';
+import 'playback_sniff_verify.dart';
 import 'playback_recovery.dart';
 import 'playback_error.dart';
 import 'player_backend.dart';
@@ -438,6 +439,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   ParseInterface? _selectedParse;
   String _lastPageUrl = '';
   bool _sniffFallbackTried = false;
+
+  /// 嗅探这一级在当前集内是否已消耗：不随 _play 重入复位（复位
+  /// 会让「嗅探→递送→核播失败→再嗅探」死循环），只在换集时清。
+  bool _sniffRungConsumed = false;
   bool _deepSniffer = true;
   bool _sniffEmbedded = false;
   String? _sniffPreviousError;
@@ -1599,6 +1604,29 @@ class _PlayerScreenState extends State<PlayerScreen>
           }
         });
       } catch (_) {}
+      // 梯子最后一级（核播失败侧）：恢复链与核间回退都耗尽、手里
+      // 还有网页地址时，自动落嗅探兜底，与取流失败那条路同口径，
+      // 不再让用户自己去点错误屏上的嗅探按钮。本集内只落一次
+      // （_sniffRungConsumed），防嗅探递送的地址核播再失败时循环。
+      if (mounted &&
+          !_closed &&
+          ticket == _generation &&
+          !current.local &&
+          !_sniffRungConsumed &&
+          _deepSniffer) {
+        final sniffPage = _lastPageUrl.isNotEmpty
+            ? _lastPageUrl
+            : (looksLikeWebPage(current.url) ? current.url : '');
+        if (sniffPage.isNotEmpty) {
+          _sniffRungConsumed = true;
+          _sniffFallbackTried = true;
+          _lastPageUrl = sniffPage;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_closed) _openSniffer();
+          });
+          return;
+        }
+      }
       if (mounted && !_closed && ticket == _generation) {
         setState(() {
           _loading = false;
@@ -2251,6 +2279,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       _nonVideo = null;
       _sniffFallbackTried = false;
     });
+    if (previousIndex != index) {
+      _sniffRungConsumed = false;
+    }
     if (widget.embedded && previousIndex != index) {
       widget.onEmbeddedIndexChanged?.call(index);
     }
@@ -2553,6 +2584,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             });
             if (needsSniffFallback) {
               _sniffFallbackTried = true;
+              _sniffRungConsumed = true;
               _lastPageUrl = fallbackPage;
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted && !_closed && _deepSniffer) _openSniffer();
@@ -2970,6 +3002,28 @@ class _PlayerScreenState extends State<PlayerScreen>
       _error = onExhausted == null
           ? '网页加载失败（$message），请重试或换一集。'
           : '网页加载失败（$message）。';
+    });
+    if (onExhausted != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) onExhausted(context);
+      });
+    }
+  }
+
+  /// 嗅探超时仍没拿到验活的地址：关嗅探、留「无法获取播放链接」
+  /// 错误态，如实收口；有换线回调时与加载失败同路通知调用方。
+  void _onSniffTimeout() {
+    if (!_sniffEmbedded || _closed || !mounted) return;
+    final onExhausted = widget.onPlaybackExhausted;
+    setState(() {
+      _sniffEmbedded = false;
+      _sniffPreviousError = null;
+      _loading = false;
+      // 文案避开「超时/网络」等词：错误屏会按关键词归类，
+      // 带「取流失败」归到站源问题，不误导成网络故障。
+      _error = onExhausted == null
+          ? '无法获取播放链接：嗅探未找到可播放地址（取流失败），请重试或换一集。'
+          : '无法获取播放链接：嗅探未找到可播放地址（取流失败）。';
     });
     if (onExhausted != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -4396,6 +4450,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                   embedded: true,
                   onMediaFound: _onSniffedMedia,
                   onLoadFailed: _onSniffLoadFailed,
+                  validateCandidate: sniffCandidateValidator(
+                    headers: _plan?.headers ?? const {},
+                  ),
+                  sniffTimeout: sniffFallbackTimeout,
+                  onSniffTimeout: _onSniffTimeout,
                 ),
               if (_sniffEmbedded && !hideOverlayForPictureInPicture)
                 Positioned(

@@ -1,90 +1,117 @@
-# 直播页撤频道信息钮与分辨率显示（用户 2026-11-26 07:15 令）
+# 壳级取流四能力盘点 + 兜底梯子（miniapp-sniff 批）
 
-- 分支：live-info-remove，基线 efd0049（v67 最终 main）
-- 提交：**e78251e**（本地提交，未推仓、未构建）
-- 改动：7 个文件，+99 / −258
-- （注：此路径原有的 v66 .sql 导入修复报告是主树已提交内容，git 历史里在，本文件按本工作树惯例换成本次报告，不影响那份报告的存档。）
+- 分支：miniapp-sniff，基线 ed69442（v68 组装树顶端）
+- 提交：本地提交（见 git log），未推仓、未构建
+- 范围：原「小程序模块嗅探」批作废并入本批，按 2026-11-26 17:11 扩围令做
+  **壳级**四能力（爬虫/解析/解密/嗅探）盘点补缺，串成一条自动逐级落的
+  兜底梯子。用户已于 17:10 在主聊亲口同意继续处理本树。
+- （注：此路径原有的直播批报告是基线树已提交内容，git 历史里在，本文件
+  按本工作树惯例换成本次报告，不影响那份报告的存档。）
 
-## 改了什么（全在 lib/live_screen.dart）
+## 一、四能力盘点（以代码为准）
 
-1. **顶栏 `_videoHeader`**：删掉分辨率/帧率读数 Text（key `live-video-resolution`，形如 `[ 720 x 1280 · 15 帧/秒 ]`）和右上角 ⓘ 信息钮（key `live-video-info`，onPressed 原指向 `_showChannelInfo`）；顺删不再用的局部变量 `size`/`fps`。顶栏只剩左边频道名（key `live-video-title` 不变）。上方两处注释（播放区叠层说明、顶栏文档注释）已改成与新版式一致的说法。`live_playback.dart` 的 `videoSize`/`videoFps` 字段按令保留，只是不再显示。
-2. **整段删 `_showChannelInfo`**（含文档注释，原 908–1034 行）：它唯一调用方就是被删的信息钮（已 grep 亲验）。连带删掉信息单里全部 `live-info-*` 条目 key。
-3. **删 `_openSleepTimer`**：唯一调用方是信息单的「睡眠定时」格，删单后成死代码。`showSleepTimerSheet` 在本文件仍被频道条上的睡眠定时钮（key `live-sleep-timer`）使用，import 保留未动。
-4. **节目单/回看入口保住**：信息行节目卡（key `live-epg-card`，`_infoCards` 内）加 InkWell 层：当前频道有节目单数据（`epgMatched` 为真）时点卡打开 `_showProgrammeSheet(channel)`；无节目单数据时 onTap 为 null、点按无反应，不给假入口。卡的尺寸（信息行 80 高、flex 75）、圆角 12、两行文字与 key 全部不变。
-5. 顺手修正一处过时注释：DRM/EXO 频道手势层原注释写「全屏走信息单入口」，信息单已撤，改成「全屏走 pane 自带控制条」（EXO pane 本来就自带控制条，行为未变）。
+| 能力 | 有无 | 落点 | 程度与缺口 |
+|---|---|---|---|
+| 爬虫（直取） | 有，主力 | `lib/core_bridge.dart` 的 `_resolveImpl` 按源分发：jar 走 `_jarResolve`、py 走 `_pyResolvePlan`（含红果 Go 接管、who's 本地直链）、JS 走 `_jsCall`／iDuanJu 插件走 `IdjContract`、云盘走云盘引擎、其余走 Go 核 `resolve`；`lib/playback_loader.dart` 前置本地库直链短路 | 完整，本批未动 |
+| 解析 | 有，两条 | ①壳侧选中解析接口 `applySelectedParse`（`lib/playback_parse.dart`，jar 源需解析与网页地址分支）；②Go 核 `resolveParse` 管线（非 jar 源，解析接口的 JSON 型与网页型都收，JSON 型只走 Go 不拼给播放器）。触发条件：计划带 `needsParse` 或地址是网页 | 能用；原缺口：解析未配置/全失败只靠异常路径落嗅探（深嗅探开时成立），核播失败侧不落嗅探——后者本批已补 |
+| 解密 | 有，形态是「随源实现＋壳侧透传」 | 加密接口响应/加密地址由 Go 核与各蜘蛛在取流时各自解开，结果以 `PlaybackPlan.decryptionKey`（HLS 密钥→强制 MPV 并传 `decryption_key=`）与 `PlaybackDrm`（→强制 EXO）透传给播放器核 | 解密与各源协议绑定，抽不成独立的通用一级，Dart 壳侧没有也不需要通用解密器。注：`lib/content_crypto.dart` 是七猫小说正文解密、`cloud_aes/cloud_m115_crypto` 是网盘域，都与播放取流无关。边界：只做协议解密，不碰付费/VIP 墙 |
+| 嗅探 | 有，接法分散 | `lib/playback_sniffer.dart`：`MediaSniffer`（后缀识别＋文本提取）、`SnifferService`（候选打分）、`SniffWebViewPage`（隐藏 WebView 注入探针，XHR/fetch/WebSocket/DOM/资源条目多路截取，带字幕提取）。原接法：主播放器取流失败异常路径自动开（受设置「深度嗅探」控制，默认开）＋错误屏手动按钮；西瓜播放器同构一份；小程序宿主 `MiniAppBridge.resolvePlayTarget` 分流后走嗅探页回填内嵌播放器 | 原缺口四处：①无超时，可无限挂；②候选只按后缀打分，广告/试看可混入、死链直接递播放器；③核播失败、恢复链耗尽不落嗅探；④递送的死链无替补。本批全补（见下） |
 
-没动的东西：信息行 80 高、左槽预览帧、三列胶囊、左下角 + 导入、切源钮 `live-source-button`、刷新钮、全屏手势与频道条全屏钮、收藏钮，一律未动。
+## 二、本批补缺（梯子成型）
 
-## 测试改齐（5 个文件）
+改动文件：`lib/playback_sniffer.dart`、`lib/playback_sniff_verify.dart`（新增）、
+`lib/player_screen.dart`、`lib/xigua/xigua_player_screen.dart`、
+`lib/miniapp/mini_app_host_page.dart`。
 
-- `test/live_layout_test.dart`：顶栏用例改名「只有频道名、无信息钮…」，`live-video-info` 由 findsOneWidget 改 findsNothing（`live-video-resolution` 原本就是 findsNothing，保持）。
-- `test/live_tv_redesign_test.dart`：
-  - 「顶栏：分辨率与帧率拼一行」→ 改写为「有真实分辨率与帧率也不显示读数」：setVideoParams(1920x1080, 25fps) 后断言读数 key 与文本都不存在，无帧率时同样不存在；
-  - 「右上角：信息钮在…」→ 「信息钮与设置齿轮都没有，报错态也一样」：正常/报错两态 info 均 findsNothing；
-  - 「频道信息单：真实字段在、入口全在」→ 改写为「频道信息单已撤：钮与单子都不存在，节目卡无节目单数据时点了不弹单」：原单内字段/入口 key 全部 findsNothing，再点节目卡断言不弹节目单。本文件测试桩没有节目单数据，「点卡开真节目单」的路径改在 live_import_epg_test 里验（见下），没有无声删。
-- `test/live_fullscreen_exit_test.dart`：`_enterFullscreen` 原走信息钮→`live-info-fullscreen`，改走点视频区手势（tap `live-stage`，手势层 onTap 即 `_openFullscreen`），测试目的（进全屏再退出、画面不卸载）不变。
-- `test/source_picker_wiring_test.dart`：原经信息单点「切换直播源」，改点切源直达钮 `live-source-button`。另在用例末尾补泵 2 秒：切源后新源加载失败会排一次 1.5 秒后的自动补拉，旧路径经信息单时中间多泵的约 700 毫秒恰好替它走完，直达路径下收尾会挂着未触发的 Timer 被判失败（首跑实测如此，基线同文件是通过的，已按此修好并复跑通过）。
-- `test/live_import_epg_test.dart`：原点信息钮→`live-info-epg`→节目单，改成点 `live-epg-card` 直接开节目单；后续对 `live-epg-list`、点已播节目回看起播的断言保持不变。
+1. **候选过滤**（`MediaSniffer.isLikelyAdOrPreview`）：进候选前拦下——广告网络
+   主机（doubleclick/googlesyndication/adservice/popads/exoclick/juicyads/
+   adsterra/propellerads、`ads.` 主机）与路径 token（ad/ads/advert/preroll/
+   preview/trailer/sample/trial/teaser，整词命中，`adaptive`、`download`
+   这类含子串的正常地址不误伤）。`SnifferService.add` 统一执行。
+2. **递送前轻验**（新增 `lib/playback_sniff_verify.dart`）：自动递送前用页面
+   请求头探头（Range 0-2047 只读首块）：m3u8 须 2xx 且首段含 `#EXTM3U`；
+   直链须 206，或 200 且非 HTML 错误页。判定与 `feed_playability` 的验播
+   探针同口径。验死走 `SnifferService.reject` 剔除（剔除集防探针反复上报
+   重收），继续嗅下一个候选。三处自动递送全接：主播放器内嵌嗅探、西瓜
+   嗅探页、小程序宿主嗅探页。
+3. **统一超时 45 秒**（`sniffFallbackTimeout`）：`SniffWebViewPage` 新增
+   `sniffTimeout/onSniffTimeout`，只在自动递送模式（autoPlay/embedded）
+   计时，手动浏览候选不打扰；不支持 WebView 的平台同样计时收口。
+   - 主播放器：超时走 `_onSniffTimeout` 关嗅探，错误屏原文
+     「无法获取播放链接：嗅探未找到可播放地址（取流失败），请重试或换一集。」
+     （文案刻意避开「超时/网络」词，错误归类落到「站源问题」，不误导成
+     网络故障）；有换线回调时同路通知调用方。
+   - 小程序宿主：超时与用户手动返回区分（`_sniffTimedOut`），超时出
+     SnackBar「无法获取播放链接：嗅探超时，请稍后重试」。
+   - 西瓜播放器：超时关页、按未找到收口。
+4. **核播失败侧落嗅探**（`player_screen._recover`）：恢复链（同线重解析→
+   换线→换后端→核间回退）耗尽后，手里有网页地址（`_lastPageUrl` 优先，
+   否则失败计划本身是网页）且深嗅探开、本集未消耗过嗅探级时，自动开
+   嗅探，不再让用户自己去点错误屏按钮。新增 `_sniffRungConsumed` 闩锁
+   防「嗅探→递送→核播再失败→再嗅探」死循环，只在换集时复位；取流失败
+   异常路径自动开嗅探时同步置闩锁。
+5. **梯子顺序（成型后）**：本地直链/爬虫直取 → 解析（壳侧选中接口／Go
+   解析管线，含各源解密透传 decryptionKey/DRM）→ 播放核恢复链（重解析/
+   换线/换核）→ 嗅探兜底（过滤＋轻验＋45 秒超时）。全程自动逐级落，
+   用户不选模式。嗅探只取链：截到的地址连请求头递正式播放器
+   （EXO/MPV）起播，绝不在内置网页里播放——三处接法原本就都是回填
+   播放器，本批未改这一形态。
 
-## 测试结果（逐组对照，基线 = 另开 efd0049 工作树同批跑）
+## 三、覆盖范围
 
-| 文件 | 基线 efd0049 | 本分支 e78251e |
-|---|---|---|
-| live_layout_test.dart | 7 过 | 7 过 |
-| live_tv_redesign_test.dart | 8 过 | 8 过（3 条按新口径改名/改写，见上） |
-| live_fullscreen_exit_test.dart | 5 过 | 5 过 |
-| live_import_epg_test.dart | 21 过 | 21 过 |
-| live_api_sources_test.dart + live_drm_exo_test.dart + live_drm_test.dart + live_settings_test.dart | 37 过 | 37 过 |
-| live_http_stability_test.dart + live_m3u_builtin_test.dart + live_parser_stability_test.dart + live_resume_test.dart | 43 过 | 43 过 |
-| live_subscription_dual_entry_test.dart + live_subtitle_* ×5 + source_picker_sheet_test.dart | 49 过 | 49 过 |
-| source_picker_wiring_test.dart | 1 过 2 跳过 | 1 过 2 跳过 |
+- 片库站点：主播放器全源（py/jar/JS/Go/云盘）走同一条梯子。
+- 小程序：宿主嗅探页接过滤/轻验/超时；嗅探结果回填其内嵌播放器
+  （小程序自有播放器归属是既有形态，本批未改）。
+- 西瓜播放器：嗅探页接过滤/轻验/超时（见对账点，其恢复链侧未动）。
+- 演员库在线线路：经主播放器 `PlaybackPlan` 入口进，天然继承整条梯子，
+  本批不需为它单独接。
 
-合计两边同为 **171 过、2 跳过、0 败 → 0 新增失败**。
+## 四、与演员库批（moyi_actress_whos_ui_20261126）的重叠对账点
 
-- 基线老失败清单：**无**。本批 20 个文件基线全部通过；2 个跳过是 source_picker_wiring_test 里 `skip: !allSourcesEnabled` 的既有跳过（短剧区/影视区两条），两边一致、与本次改动无关。
-- 全部测试日志在 ~/workspace/tmp_live_info/（t_*.log 为本分支、b_*.log 为基线）。
+- `lib/player_screen.dart`：本批改动点为新增 import、`_sniffRungConsumed`
+  字段、`_play` 换集复位、取流失败 catch 置闩锁、`_recover` 止步分支
+  嗅探级、内嵌嗅探页新增三参数、`_onSniffTimeout` 新方法。若演员库批
+  同改此文件，组装时按上述点位对账合并。
+- `lib/playback_sniffer.dart`：共享文件，本批加 `isLikelyAdOrPreview`、
+  `SnifferService.reject`、页面新参数三件；演员库批若动过此文件需对账。
+- `lib/playback_sniff_verify.dart` 为新增文件，无冲突。
+- 小程序宿主页、西瓜页与演员库批不重叠。本批未碰对方工作树。
 
-## analyze
+## 五、测试与检查
 
-全工程 `flutter analyze --no-pub`（CI 钉版 Flutter 3.50.0）：**0 错 0 警告**；562 条 info 级提示均为既有（定制 SDK 对 material.dart 的弃用 info 等，几乎每个文件都有一条，非本次引入）。改动文件单独复查同样 0 错 0 警告。
+- 基线（改动前）：`sniffer_service_test` 6 ＋ `player_sniff_back_test` 3
+  ＝ 9/9 通过。
+- 改动后同集＋新增共 26/26 通过：sniffer_service 8（新增过滤/剔除 2）、
+  `playback_sniff_verify_test` 5（新增）、`player_sniff_timeout_test` 1
+  （新增：需解析仓→自动进嗅探→推进 46 秒→关嗅探、错误屏「暂时无法
+  播放 · 站源问题」、展开原始错误见「无法获取播放链接」）、
+  player_sniff_back 3、playback_loader、mini_app_host_inline_player。
+  **0 新增失败。**
+- analyze：改动 lib 5 文件＋测试 4 文件，**0 错 0 警**；仅有仓库通有的
+  material 弃用等既有 info（lib 10 条均在本批改动行之外），与本批无关。
+- 预览（`preview/`）：`sniff_ladder_sniffing.png`（嗅探中：播放区嗅探态、
+  左上只有 X、信息区保留；测试环境无 WebView，嗅探区为占位文本，真机
+  是网页加载画面）、`sniff_ladder_failed.png`（超时收口错误态）。失败态
+  图标题处字形方框是预览子集字体缺粗体字形的环境伪影，真文案已由
+  组件测试逐字断言。预览测试 `test/preview_sniff_ladder_test.dart` 按
+  仓库惯例单张单独跑、PNG 落地后超时收尾。
 
-## 预览图
+## 六、手机终验项
 
-`preview/live_no_info_normal.png`（已随提交入库）：照既有 preview_live_fix_normal 的路子单跑出图（临时复制测试指向本工作目录，出图后已删临时测试文件，未入库）。假播放器给的是 1920x1080、25 帧的流参数——图里顶栏只有左边的频道名，右上角没有 ⓘ、没有任何分辨率字样；信息行、三列胶囊、左下角 + 都在。已亲眼验图。
+1. 找只回网页地址、且未配置解析接口的站播一集：应自动进嗅探，嗅到后
+   切正式播放器出画，不在网页里播。
+2. 打开一个无媒体的网页走嗅探：约 45 秒自动收口到「暂时无法播放 ·
+   站源问题」，展开原始错误含「无法获取播放链接」。
+3. 小程序里播只能嗅探的节目：嗅到即播；无结果时约 45 秒出「无法获取
+   播放链接：嗅探超时」提示；手动返回嗅探页则静默取消、无提示。
+4. 演员库批组装后：在线线路（who's/123AV/PH）取流失败应同样落嗅探。
+5. 鸿蒙容器内 WebView 嗅探、EXO/MPV 出画各验一次；设置里关掉「深度
+   嗅探」后自动落嗅探应停用、只剩错误屏手动按钮（开关语义未动）。
 
-## 意外发现
+## 七、未做与边界
 
-1. DRM/EXO 频道在直播页的「全屏」此前注释口径是走信息单，现信息单撤掉后，EXO 频道全屏只剩 pane 自带控制条这一条路（普通频道仍有点击手势与频道条全屏钮）。本次只改了注释、没动行为；鸿蒙容器里 EXO pane 自带控制条的全屏是否好用，要等手机实测 DRM 频道时一并看。
-2. 睡眠定时在直播页仍有两个活入口（软件设置页「直播设置」节 + 频道条上的睡眠定时钮），删信息单不影响。
-
----
-
-# 第二批：撤顶栏频道名 + 直播页配色改深（用户 2026-11-26 07:41 令）
-
-- 在 e78251e 之上追加（分支 live-info-remove，未推仓、未构建）。前一名工人已落码未验，本批由收尾工核对 diff、补验、补图后提交。
-
-## 改了什么（全在 lib/live_screen.dart）
-
-1. **顶栏整个撤掉**：`_videoHeader` 方法与挂载点整段删除，key `live-video-title` 在 lib 内无任何引用（grep 亲验，只剩测试里一条 findsNothing 断言）。手机端视频区叠层只剩中间居中转圈/速率（且仅无错时显示），视频区顶部彻底干净。
-2. **直播页专属深色层 `_liveDarkTheme`**：`build` 用 `Theme(data: _liveDarkTheme) + Material(近黑底) + Builder` 包整页，页面内各方法 `Theme.of` 读到的都是这一层。从应用主题派生、只换取色：
-   - 页面底 `0xFF0D0E10`（近黑）；`surface 0xFF17181B`、`surfaceContainer 0xFF1D1E22`、`surfaceContainerHigh 0xFF26282D`、卡面 `surfaceContainerHighest 0xFF232529`；
-   - 主文字白、次文字 `0xFFB9BDC6`、分隔线 `0xFF2E3036`；
-   - 选中胶囊底 `primaryContainer 0xFF372A52`（深紫）衬既有黄字 `_liveSelectedText 0xFFFFDF00`——「选中变黄」口径不变；
-   - 左下角 + 钮仍用主题主色（饱和色，在黑底上是强调点、不是浅色块）。
-   - 取色点已逐个 grep 核对：信息卡、节目卡、当前频道卡、三列胶囊（分组/频道/线路）、频道列表格、台标占位、预览槽（黑底+半透明黑底白字角标）、切源小方钮、+ 钮——全部落进深色层，无残留浅色块。
-   - 不动的：全应用主题与其他页面；走根导航器的弹层（选源弹窗=共用件按口径不动、节目单、导入菜单）保持跟随应用主题。
-3. **收尾工补修一处**：前一名工人把 `build` 的 `@override` 误挂到 `_liveDarkTheme` 头上，analyze 报 1 条 warning（override_on_non_overriding_member）+ build 多 1 条 annotate_overrides info；已把注解挪回 `build`，analyze 回到基线。
-
-## 测试改动（逐条说明）
-
-- `test/live_layout_test.dart`：顶栏用例改名「视频区顶栏：整个撤掉、无频道名、…」，`live-video-title` 断言由 findsOneWidget 改 findsNothing；其余断言（信息钮/齿轮/分辨率/网速均不存在）不变。
-- `test/live_tv_redesign_test.dart`：只改文件头注释（「顶栏只有频道名」→「顶栏整个撤掉」），断言未动。
-
-## 测试结果
-
-- 受影响 20 个 live_* / source_picker_* 文件全跑：**171 过、2 跳过、0 败**，与基线 e78251e 逐组同数（2 跳过仍是 source_picker_wiring 既有 skip），**0 新增失败**。日志 harness/live_dark_tests.log。
-- analyze（Flutter 3.50.0，--no-pub）：**0 错 0 警告**，562 条 info 与上一批基线同数、均为既有。日志 harness/analyze_dark2.log。
-
-## 预览图
-
-`preview/live_dark_normal.png`（随本批提交入库）：照 preview_live_fix_normal 路子复制临时测试出图后删临时文件。特意选**浅色主题 lightClean** 渲染——正是用户嫌灰白的场景：图里视频区顶部无频道名，下半部近黑底、深灰卡面、白字可读，选中胶囊深紫底黄字，+ 钮为主题蓝圆钮，无残留浅色块。已亲眼验图。与上一批浅色图 preview/live_no_info_normal.png 对照即见差别。
+- 西瓜播放器恢复链耗尽落嗅探未补：其取流失败侧已有自动嗅探，核播
+  失败侧与主播放器同构缺口，建议后续单独一批对齐，避免本批双改
+  两套播放器状态机。
+- 直播链是独立链，不在本批范围。
+- 解密不设 Dart 通用级（理由见盘点表）；付费/VIP 墙不碰。

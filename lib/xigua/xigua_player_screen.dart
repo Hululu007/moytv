@@ -44,6 +44,7 @@ import 'package:moyi/playback_recovery.dart';
 import 'package:moyi/playback_preferences.dart';
 import 'package:moyi/nonvideo_content.dart';
 import 'package:moyi/playback_sniffer.dart';
+import 'package:moyi/playback_sniff_verify.dart';
 import 'package:moyi/xigua/player_controls.dart';
 import 'package:moyi/network_speed.dart';
 import 'package:moyi/xigua/player_interactions.dart';
@@ -1797,6 +1798,14 @@ class _PlayerScreenState extends State<XiguaPlayerScreen>
           headers: _plan?.headers ?? const {},
           autoPlay: auto,
           onMediaFound: (url) => Navigator.of(routeContext).pop(url),
+          validateCandidate: sniffCandidateValidator(
+            headers: _plan?.headers ?? const {},
+          ),
+          sniffTimeout: sniffFallbackTimeout,
+          onSniffTimeout: () {
+            final navigator = Navigator.of(routeContext);
+            if (navigator.canPop()) navigator.pop();
+          },
         ),
       ),
     );

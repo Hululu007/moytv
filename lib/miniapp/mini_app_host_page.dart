@@ -16,6 +16,7 @@ import 'mini_app_sdk.dart';
 import 'mini_app_settings.dart';
 import 'mini_app_sources.dart';
 import '../playback_sniffer.dart';
+import '../playback_sniff_verify.dart';
 import 'haikuo/haikuo_runner_page.dart';
 
 /// 一次内嵌播放的参数：播放器槽位据此建 [HaikuoPlayerView]。
@@ -74,6 +75,10 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
   // 详情页内嵌播放：非空时播放器顶在 WebView 上方，详情页保持
   // 可见可滑，不推新页面（与片库详情页的钉顶播放器同一布局）。
   _InlinePlay? _inline;
+
+  /// 上一次嗅探找流是否以超时收口：与用户手动返回（静默取消）
+  /// 区分，超时要在页面上如实提示「无法获取播放链接」。
+  bool _sniffTimedOut = false;
   // 内嵌播放器的递送控制器：已在播时新的 player.open 经它换源。
   HaikuoPlayerController? _playerController;
   bool _inlineFullscreen = false;
@@ -281,7 +286,14 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
     var url = target.url;
     if (target.isSniff) {
       final found = await _sniffPlayTarget(target);
-      if (found == null || found.isEmpty) return false;
+      if (found == null || found.isEmpty) {
+        if (_sniffTimedOut && mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(content: Text('无法获取播放链接：嗅探超时，请稍后重试')),
+          );
+        }
+        return false;
+      }
       url = found;
     }
     if (!mounted) return false;
@@ -354,9 +366,11 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
     unawaited(_bridge?.emit('player.close', {'url': inline.url}));
   }
 
-  /// 嗅探页找流：自动播放模式，第一个候选地址一出现就回填并关页；
-  /// 用户直接返回则回 null（不播、不报错）。
+  /// 嗅探页找流：自动播放模式，候选先过轻验、验活的第一个回填
+  /// 并关页；用户直接返回则回 null（不播、不报错）；嗅探超时
+  /// 同样回 null，但置 [_sniffTimedOut]，由调用方如实提示。
   Future<String?> _sniffPlayTarget(MiniAppPlayTarget target) async {
+    _sniffTimedOut = false;
     final completer = Completer<String?>();
     var active = true;
     await Navigator.push<void>(
@@ -368,6 +382,18 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
           autoPlay: true,
           onMediaFound: (found) {
             if (!completer.isCompleted) completer.complete(found);
+            if (active && mounted) {
+              active = false;
+              Navigator.pop(context);
+            }
+          },
+          validateCandidate: sniffCandidateValidator(
+            headers: target.headers,
+          ),
+          sniffTimeout: sniffFallbackTimeout,
+          onSniffTimeout: () {
+            _sniffTimedOut = true;
+            if (!completer.isCompleted) completer.complete(null);
             if (active && mounted) {
               active = false;
               Navigator.pop(context);

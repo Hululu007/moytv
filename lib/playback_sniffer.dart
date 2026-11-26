@@ -27,6 +27,48 @@ class MediaSniffer {
 
   static bool isAuxUrl(String url) => auxUrlPattern.hasMatch(url);
 
+  /// 广告/试看类候选过滤（保守口径）：只认明确的广告网络主机与
+  /// 路径 token（ad/ads/preroll/preview/trailer/sample/trial/teaser）。
+  /// 路径按 /、-、_、. 切成 token 后整词命中才算，避免误伤含 "ad"
+  /// 子串的正常地址（如 adaptive、download）。命中的多半是广告片、
+  /// 预告或试看片段，不是正片，进候选前就拦下。
+  static bool isLikelyAdOrPreview(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || uri.host.isEmpty) return false;
+    final host = uri.host.toLowerCase();
+    const adHostTokens = [
+      'doubleclick',
+      'googlesyndication',
+      'adservice',
+      'popads',
+      'exoclick',
+      'juicyads',
+      'adsterra',
+      'propellerads',
+    ];
+    for (final token in adHostTokens) {
+      if (host.contains(token)) return true;
+    }
+    if (host.startsWith('ads.') || host.contains('.ads.')) return true;
+    const badTokens = {
+      'ad',
+      'ads',
+      'advert',
+      'preroll',
+      'preview',
+      'trailer',
+      'sample',
+      'trial',
+      'teaser',
+    };
+    for (final segment in uri.path.split('/')) {
+      for (final token in segment.split(RegExp(r'[-_.]'))) {
+        if (badTokens.contains(token.toLowerCase())) return true;
+      }
+    }
+    return false;
+  }
+
   static List<String> extractAuxFromText(String text) {
     final found = <String>{};
     for (final match in auxUrlPattern.allMatches(text)) {
@@ -165,6 +207,7 @@ class SnifferService {
 
   final _candidates = <String>[];
   final _auxiliary = <String>[];
+  final _rejected = <String>{};
 
   List<String> get candidates => List.unmodifiable(_candidates);
 
@@ -172,11 +215,22 @@ class SnifferService {
 
   bool add(String url) {
     final trimmed = url.trim();
-    if (!MediaSniffer.isMediaUrl(trimmed) || _candidates.contains(trimmed)) {
+    if (!MediaSniffer.isMediaUrl(trimmed) ||
+        MediaSniffer.isLikelyAdOrPreview(trimmed) ||
+        _rejected.contains(trimmed) ||
+        _candidates.contains(trimmed)) {
       return false;
     }
     _candidates.add(trimmed);
     return true;
+  }
+
+  /// 剔除一个已验死/不可用的候选：从候选里摘掉并记入剔除集，
+  /// 之后再嗅到同一地址也不再收，[preferred] 自动落到下一个。
+  void reject(String url) {
+    final trimmed = url.trim();
+    _candidates.remove(trimmed);
+    _rejected.add(trimmed);
   }
 
   bool addAux(String url) {
@@ -243,6 +297,9 @@ class SniffWebViewPage extends StatefulWidget {
     this.autoPlay = false,
     this.embedded = false,
     this.onLoadFailed,
+    this.validateCandidate,
+    this.sniffTimeout,
+    this.onSniffTimeout,
   });
 
   final String pageUrl;
@@ -257,6 +314,19 @@ class SniffWebViewPage extends StatefulWidget {
   /// 子资源失败不报；整个页面生命周期内只报一次。不传则不报。
   final void Function(String message)? onLoadFailed;
 
+  /// 自动递送前的候选轻验：要递给播放器的首选候选先过这一关，
+  /// 返回 false 的候选会被剔除、继续嗅探下一个，绝不把死链递给
+  /// 播放器。不传则不验。只作用于自动递送（autoPlay/embedded），
+  /// 手动挑选模式下用户点哪个播哪个，不受影响。
+  final Future<bool> Function(String url)? validateCandidate;
+
+  /// 自动嗅探时限（从页面挂载算起）：超时仍未递送成功则回调
+  /// [onSniffTimeout] 一次，由调用方关嗅探、报「无法获取播放
+  /// 链接」。不传则不限时。只在自动递送模式下计时，手动浏览
+  /// 候选时不打扰。
+  final Duration? sniffTimeout;
+  final VoidCallback? onSniffTimeout;
+
   @override
   State<SniffWebViewPage> createState() => _SniffWebViewPageState();
 }
@@ -265,8 +335,11 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
   late final SnifferService _service;
   WebViewController? _controller;
   Timer? _timer;
+  Timer? _timeoutTimer;
   bool _polling = false;
   bool _autoPlayed = false;
+  bool _validating = false;
+  bool _delivered = false;
   bool _loadFailedReported = false;
 
   bool get _supported => Platform.isAndroid || Platform.isIOS;
@@ -294,6 +367,12 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
   void initState() {
     super.initState();
     _service = SnifferService(initialCandidates: widget.initialCandidates);
+    // 时限在平台支持判断之前就挂上：不支持嗅探的平台同样要能
+    // 按时收口到失败态，不能无限挂着。
+    final timeout = widget.sniffTimeout;
+    if (timeout != null && (widget.autoPlay || widget.embedded)) {
+      _timeoutTimer = Timer(timeout, _handleSniffTimeout);
+    }
     if (!_supported) return;
     final controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -324,7 +403,7 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
             if (MediaSniffer.isMediaUrl(request.url)) {
               final added = _service.add(request.url);
               if (added && mounted) setState(() {});
-              _maybeAutoPlay();
+              unawaited(_maybeAutoPlay());
               return NavigationDecision.prevent;
             }
             return NavigationDecision.navigate;
@@ -347,7 +426,13 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _timeoutTimer?.cancel();
     super.dispose();
+  }
+
+  void _handleSniffTimeout() {
+    if (_delivered || _autoPlayed || !mounted) return;
+    widget.onSniffTimeout?.call();
   }
 
   Future<void> _injectAndPoll() async {
@@ -381,19 +466,49 @@ class _SniffWebViewPageState extends State<SniffWebViewPage> {
         }
       } catch (_) {}
       if (changed && mounted) setState(() {});
-      _maybeAutoPlay();
+      unawaited(_maybeAutoPlay());
     } catch (_) {
     } finally {
       _polling = false;
     }
   }
 
-  void _maybeAutoPlay() {
-    if ((!widget.autoPlay && !widget.embedded) || _autoPlayed) return;
+  /// 自动递送：首选候选先过轻验（[SniffWebViewPage.validateCandidate]），
+  /// 验活才递给播放器；验死就剔除该候选、继续嗅探下一个，
+  /// 不把死链递出去让播放器白白报错。
+  Future<void> _maybeAutoPlay() async {
+    if ((!widget.autoPlay && !widget.embedded) || _autoPlayed || _validating) {
+      return;
+    }
     final preferred = _service.preferred;
     if (preferred == null) return;
+    final validate = widget.validateCandidate;
+    if (validate == null) {
+      _deliver(preferred);
+      return;
+    }
+    _validating = true;
+    var ok = false;
+    try {
+      ok = await validate(preferred);
+    } catch (_) {
+      ok = false;
+    }
+    _validating = false;
+    if (!mounted || _autoPlayed) return;
+    if (ok) {
+      _deliver(preferred);
+    } else {
+      _service.reject(preferred);
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _deliver(String url) {
     _autoPlayed = true;
-    widget.onMediaFound(preferred);
+    _delivered = true;
+    _timeoutTimer?.cancel();
+    widget.onMediaFound(url);
   }
 
   @override

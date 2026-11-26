@@ -66,6 +66,54 @@ void main() {
     expect(service.preferred, isNull);
   });
 
+  test('ad and preview candidates are filtered at intake', () {
+    final service = SnifferService();
+    // 广告网络主机与路径 token 命中：一律不收。
+    expect(
+      service.add('https://ads.example.test/banner.m3u8'),
+      isFalse,
+    );
+    expect(
+      service.add('https://cdn.example.test/preview/movie.m3u8'),
+      isFalse,
+    );
+    expect(
+      service.add('https://cdn.example.test/movie-trailer.mp4'),
+      isFalse,
+    );
+    expect(
+      service.add('https://cdn.example.test/trial/index.m3u8'),
+      isFalse,
+    );
+    expect(
+      service.add('https://doubleclick.example.test/ad.m3u8'),
+      isFalse,
+    );
+    // 含 "ad" 子串但不是 token 的正常地址不能误伤。
+    expect(
+      service.add('https://cdn.example.test/adaptive/movie.m3u8'),
+      isTrue,
+    );
+    expect(
+      service.add('https://cdn.example.test/download/movie.mp4'),
+      isTrue,
+    );
+    expect(service.candidates.length, 2);
+  });
+
+  test('rejected candidate is removed and never re-added', () {
+    final service = SnifferService();
+    service.add('https://cdn.example.test/a.m3u8');
+    service.add('https://cdn.example.test/b.m3u8');
+    expect(service.preferred, 'https://cdn.example.test/a.m3u8');
+    service.reject('https://cdn.example.test/a.m3u8');
+    expect(service.candidates, ['https://cdn.example.test/b.m3u8']);
+    expect(service.preferred, 'https://cdn.example.test/b.m3u8');
+    // 探针会反复上报同一地址：剔除后不能再被收回。
+    expect(service.add('https://cdn.example.test/a.m3u8'), isFalse);
+    expect(service.candidates, ['https://cdn.example.test/b.m3u8']);
+  });
+
   test('sniffed result parses list and json string forms', () {
     expect(
       SnifferService.parseSniffedResult([
