@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'core_bridge.dart';
+import 'actress/javdb_api.dart';
+import 'actress/javdb_image.dart';
 import 'app_layout.dart';
 import 'liquid_glass.dart';
 import 'models.dart';
@@ -132,12 +134,22 @@ class DramaCover extends StatelessWidget {
       children: [
         placeholder,
         if (!imagesDisabled && drama.id.isNotEmpty)
-          CachedCoverImage(
-            key: ValueKey('${drama.id}\u0000${drama.cover}'),
-            drama: drama,
-            repository: repository,
-            placeholder: placeholder,
-          ),
+          // JavDB 图床的封面字节带 XOR 加密，通用封面链（下载落盘
+          // 再解码）解不出、只会回占位：照详情页剧照区的先例分流
+          // 到 JavdbImage 解密路径。其余地址维持原链一字不动。
+          if (javdbIsImageUrl(drama.cover))
+            JavdbImage(
+              key: ValueKey('javdb:${drama.id}\u0000${drama.cover}'),
+              url: drama.cover,
+              fit: BoxFit.cover,
+            )
+          else
+            CachedCoverImage(
+              key: ValueKey('${drama.id}\u0000${drama.cover}'),
+              drama: drama,
+              repository: repository,
+              placeholder: placeholder,
+            ),
         Positioned.fill(
           child: IgnorePointer(
             child: DecoratedBox(

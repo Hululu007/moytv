@@ -8,6 +8,9 @@
 /// 卡片刮削复用 TMDB 刮削链（[TmdbService]，无 key 也能用）：
 /// 文件名解析出标题后后台补海报/标题/简介，刮不到的显示原文件
 /// 名 + 原封面/占位，绝不编假数据；刮削失败/无网不阻塞列表。
+/// 番号封面另走一条（[PanCoverScrapeService]）：网盘目录接口不
+/// 回封面，文件名/文件夹名带番号的条目（含文件夹）按番号先查
+/// 本地女优库、再 JavDB 兜底补真封面，查不到保持占位。
 library;
 
 import 'dart:async';
@@ -15,6 +18,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'adult_scrape_service.dart';
+import 'cloud_drive/cloud_cover_scrape.dart';
 import 'cloud_drive/cloud_filename.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
@@ -32,6 +36,10 @@ typedef MultimediaMetadataFetcher =
       String? typeHint,
     });
 
+/// 番号封面取数函数（测试注入假取数；为空时用
+/// [PanCoverScrapeService] 真链：本地女优库 → JavDB）。
+typedef PanCoverFetcher = Future<String> Function(String code);
+
 class MultimediaScreen extends StatefulWidget {
   const MultimediaScreen({
     super.key,
@@ -41,6 +49,7 @@ class MultimediaScreen extends StatefulWidget {
     required this.onOpenDrama,
     this.onOpenCloudLogin,
     this.metadataFetcher,
+    this.coverFetcher,
   });
 
   final AppRepository repository;
@@ -53,6 +62,7 @@ class MultimediaScreen extends StatefulWidget {
   /// 未登录提示里的“去网盘登录”跳转；为空时不显示跳转按钮。
   final VoidCallback? onOpenCloudLogin;
   final MultimediaMetadataFetcher? metadataFetcher;
+  final PanCoverFetcher? coverFetcher;
 
   @override
   State<MultimediaScreen> createState() => _MultimediaScreenState();
@@ -85,7 +95,20 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
   /// 会话内刮削缓存（搜索标题 + 年份 → 结果，含 null），同一标题
   /// 在本会话里只刮一次。
   final _enrichCache = <String, TmdbMetadata?>{};
+
+  /// 会话内番号封面缓存（番号 → 封面地址，空串 = 查不到），同一
+  /// 番号在本会话里只查一次，滚动重挂/翻页回来不重复请求。
+  final _coverCache = <String, String>{};
+
+  /// 文件夹列表内存缓存（视图键 → 目录页）：进过的文件夹返回
+  /// 再进直接出画、不重拉网络；数据新鲜度照现行口径——只有
+  /// 手动刷新才绕过缓存现拉并回写。上限 FIFO 淘汰防长逛攒满。
+  final _pageCache = <String, CatalogPage>{};
+  static const _pageCacheCap = 32;
   var _generation = 0;
+
+  PanCoverFetcher get _coverFetch =>
+      widget.coverFetcher ?? PanCoverScrapeService.instance.coverForCode;
   var _tmdbConfig = const TmdbConfig();
 
   MultimediaMetadataFetcher get _fetcher {
@@ -137,6 +160,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
       _selectedSource = '';
       _enriched.clear();
       _enrichedMeta.clear();
+      _pageCache.clear();
       if (widget.driveSites.isNotEmpty) {
         unawaited(_load());
       } else {
@@ -157,22 +181,67 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  /// 当前视图的缓存键：下钻位置/选中网盘/搜索词任一不同就是
+  /// 另一页，互不串用。
+  String _pageKey(String query) {
+    if (_drillStack.isNotEmpty) {
+      final top = _drillStack.last;
+      return 'drill|${top.source}|${top.category}|$query';
+    }
+    return 'root|$_selectedSource|$query';
+  }
+
+  void _cachePage(String key, CatalogPage page) {
+    _pageCache.remove(key);
+    _pageCache[key] = page;
+    while (_pageCache.length > _pageCacheCap) {
+      _pageCache.remove(_pageCache.keys.first);
+    }
+  }
+
+  /// 取当前视图一页。[clearFirst] 是导航类加载（点文件夹/返回/
+  /// 切网盘）：先清旧页，列表立刻换成加载态，不再对着上一层的
+  /// 内容干等网络（点文件夹像打不开的主因）；命中 [_pageCache]
+  /// 时整页直接换上，连加载态都不用出。[forceRefresh] 是手动
+  /// 刷新：绕过缓存现拉并回写。
+  Future<void> _load({
+    bool forceRefresh = false,
+    bool clearFirst = false,
+  }) async {
+    final query = _searchController.text.trim();
+    final key = _pageKey(query);
+    if (!forceRefresh) {
+      final cached = _pageCache[key];
+      if (cached != null) {
+        final generation = ++_generation;
+        setState(() {
+          _items = cached.items;
+          _warning = cached.warning;
+          _loading = false;
+          _error = '';
+        });
+        unawaited(_enrich(cached.items, generation));
+        unawaited(_enrichCovers(cached.items, generation));
+        return;
+      }
+    }
     final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = '';
+      if (clearFirst) _items = const [];
     });
-    final query = _searchController.text.trim();
     try {
       final page = await _fetchPage(query);
       if (!mounted || generation != _generation) return;
+      _cachePage(key, page);
       setState(() {
         _items = page.items;
         _warning = page.warning;
         _loading = false;
       });
       unawaited(_enrich(page.items, generation));
+      unawaited(_enrichCovers(page.items, generation));
     } catch (error) {
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -247,6 +316,9 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
         if (!mounted || generation != _generation) return;
         if (meta == null) continue;
         final poster = meta.posterUrl(_tmdbConfig);
+        // 以当前已补条目为底合并：番号封面那条可能已先补上封面，
+        // 这里没刮到海报时不许把它的封面冲掉。
+        final base = _enriched[drama.id] ?? drama;
         final enriched = Drama(
           id: drama.id,
           source: drama.source,
@@ -255,7 +327,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
           description: meta.overview.isNotEmpty
               ? meta.overview
               : drama.description,
-          cover: poster.isNotEmpty ? poster : drama.cover,
+          cover: poster.isNotEmpty ? poster : base.cover,
           episodes: drama.episodes,
           category: drama.category,
           vip: drama.vipStatus,
@@ -278,6 +350,77 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
     await Future.wait([for (var i = 0; i < _enrichConcurrency; i++) worker()]);
   }
 
+  /// 只换封面的条目副本（身份字段一字不动，点卡/下钻行为不变）。
+  Drama _withCover(Drama drama, String cover) => Drama(
+    id: drama.id,
+    source: drama.source,
+    sourceId: drama.sourceId,
+    title: drama.title,
+    description: drama.description,
+    cover: cover,
+    episodes: drama.episodes,
+    category: drama.category,
+    vip: drama.vipStatus,
+    heat: drama.heat,
+    views: drama.views,
+    onlineDate: drama.onlineDate,
+    tags: drama.tags,
+    releaseStatus: drama.releaseStatus,
+    kind: drama.kind,
+    folderId: drama.folderId,
+    peers: drama.peers,
+  );
+
+  /// 番号封面补刮：文件名/文件夹名带番号且自身没封面的条目（文件
+  /// 与文件夹都含——网盘里文件夹常以番号命名），后台按番号查真
+  /// 封面补上；提不出番号的不发查询、查不到的保持占位。与 TMDB
+  /// 那条并行跑，写入都以当前已补条目为底合并，不互相冲掉。
+  Future<void> _enrichCovers(List<Drama> items, int generation) async {
+    // 先按番号分组：同番号多条（HJMO-652 与 HJMO-652-C）只查
+    // 一次，结果分发给同组每条；不分组的话并发 worker 会在
+    // 缓存写入前对同番号重复发请求。
+    final groups = <String, List<Drama>>{};
+    for (final drama in items) {
+      if (drama.cover.isNotEmpty) continue;
+      final code = panCoverExtractCode(drama.title);
+      if (code == null || code.isEmpty) continue;
+      groups.putIfAbsent(code, () => []).add(drama);
+      if (groups.length >= _enrichCap) break;
+    }
+    if (groups.isEmpty) return;
+    final codes = groups.keys.toList();
+    var next = 0;
+    Future<void> worker() async {
+      while (mounted && generation == _generation) {
+        if (next >= codes.length) return;
+        final code = codes[next++];
+        String cover;
+        final cached = _coverCache[code];
+        if (cached != null) {
+          cover = cached;
+        } else {
+          try {
+            cover = await _coverFetch(code).timeout(_enrichTimeout);
+          } catch (_) {
+            cover = '';
+          }
+          _coverCache[code] = cover;
+        }
+        if (!mounted || generation != _generation) return;
+        if (cover.isEmpty) continue;
+        setState(() {
+          for (final drama in groups[code]!) {
+            final base = _enriched[drama.id] ?? drama;
+            if (base.cover.isNotEmpty) continue;
+            _enriched[drama.id] = _withCover(base, cover);
+          }
+        });
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < _enrichConcurrency; i++) worker()]);
+  }
+
   void _onTapDrama(Drama drama) {
     if (drama.isFolder) {
       setState(() {
@@ -288,7 +431,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
         ));
         _searchController.clear();
       });
-      unawaited(_load());
+      unawaited(_load(clearFirst: true));
       return;
     }
     widget.onOpenDrama(_enriched[drama.id] ?? drama);
@@ -300,7 +443,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
       _drillStack.removeLast();
       _searchController.clear();
     });
-    unawaited(_load());
+    unawaited(_load(clearFirst: true));
   }
 
   void _onSelectDrive(String sourceId) {
@@ -310,7 +453,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
       _drillStack.clear();
       _searchController.clear();
     });
-    unawaited(_load());
+    unawaited(_load(clearFirst: true));
   }
 
   String? _subtitleFor(Drama drama) {
@@ -335,6 +478,20 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
         _driveRow(),
         _searchRow(),
         if (_drillStack.isNotEmpty) _breadcrumbRow(),
+        // 列表还在时（如刷新失败）也要把失败说清楚，不假死无声。
+        if (_error.isNotEmpty && _items.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+            child: Text(
+              _error,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ),
         if (_warning.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -434,7 +591,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
             key: const ValueKey('multimedia-refresh'),
             icon: const Icon(Icons.refresh),
             tooltip: '刷新',
-            onPressed: _load,
+            onPressed: () => unawaited(_load(forceRefresh: true)),
           ),
         ],
       ),
