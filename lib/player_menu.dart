@@ -420,7 +420,24 @@ class _PlayerMenuState extends State<PlayerMenu> {
                 ? null
                 : (value) => _run(
                     () => widget.onPreferences(
-                      preferences.copyWith(preload: value),
+                      preferences.withPreload(value),
+                    ),
+                  ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            key: const ValueKey('player-seamless-enabled'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('无缝播放'),
+            subtitle: const Text(
+              '开启后换集时下一集首帧已在待命播放器备好，画面直接衔接不黑屏；开启时自动打开预加载，关闭预加载会连带关闭。IJK 内核暂不支持，自动按普通换集播',
+            ),
+            value: preferences.seamless,
+            onChanged: _busy
+                ? null
+                : (value) => _run(
+                    () => widget.onPreferences(
+                      preferences.withSeamless(value),
                     ),
                   ),
           ),

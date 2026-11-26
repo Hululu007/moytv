@@ -47,6 +47,7 @@ import 'playback_redirect.dart';
 import 'playback_foreground.dart';
 import 'playback_preloader.dart';
 import 'playback_queue.dart';
+import 'seamless_switch.dart';
 import 'playback_sniffer.dart';
 import 'playback_recovery.dart';
 import 'playback_error.dart';
@@ -146,10 +147,38 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
+/// 一套 MPV 播放器装置（Player + 画面控制器）。无缝换集时有
+/// 两套：一套在播、一套待命预热，对调时整套换角色，Player
+/// 对象本身不换绑到别的装置上。
+class _MpvRig {
+  const _MpvRig(this.id, this.player, this.video);
+
+  final int id;
+  final Player player;
+  final VideoController? video;
+}
+
+/// 一套 EXO 面板装置（句柄 + 当前 plan + 待命 plan）。与 MPV
+/// 装置同理：两套轮换，面板按装置 key 钉在原地，角色靠属性区分。
+class _TvboxRig {
+  final TvboxPlaybackHandle handle = TvboxPlaybackHandle();
+  PlaybackPlan? plan;
+  double startPosition = 0;
+  bool autoplay = true;
+
+  /// 本装置处于待命角色时要预热的 plan；null 表示没在待命。
+  PlaybackPlan? standbyPlan;
+}
+
 class _PlayerScreenState extends State<PlayerScreen>
     with WidgetsBindingObserver {
-  late final Player _player;
-  late final VideoController? _video;
+  late _MpvRig _activeMpvRig;
+  _MpvRig? _standbyMpvRig;
+
+  /// 当前在播的 MPV 装置的播放器 / 画面控制器。全页所有控制
+  /// 逻辑都只认这两件；无缝对调时换的是装置，读取点不用改。
+  Player get _player => _activeMpvRig.player;
+  VideoController? get _video => _activeMpvRig.video;
 
   /// media_kit Video 的 state，控制层显隐变化时用它抬/落字幕
   /// （setSubtitleViewPadding）。非 media_kit 核（Exo/IJK/TVBox）与
@@ -163,27 +192,31 @@ class _PlayerScreenState extends State<PlayerScreen>
   final List<StreamSubscription<dynamic>> _liveSubscriptions = [];
   String _livePartial = '';
   List<String> _liveLines = const [];
-  late final VideoEnhancementController _enhancement;
-  late final PictureQualityApplier _pictureQuality;
+  late VideoEnhancementController _enhancement;
+  late PictureQualityApplier _pictureQuality;
   late final PlaybackLoader _loader;
   late final PlaybackPreloader _preloader;
   bool _preloadEnabled = true;
+  bool _seamlessEnabled = false;
+  final _seamless = SeamlessStandbyManager();
+  final List<StreamSubscription<dynamic>> _engineSubscriptions = [];
+  Completer<bool>? _standbyExoFrame;
   late final DanmakuController _danmaku;
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
-  late final PlayerInteractions _interactions;
+  late PlayerInteractions _interactions;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
   final _videoPaneKey = GlobalKey();
-  final _tvboxPaneKey = GlobalKey();
-  final _tvboxHandle = TvboxPlaybackHandle();
+  final _tvboxRigs = <_TvboxRig>[_TvboxRig(), _TvboxRig()];
+  int _activeTvboxRigIndex = 0;
+  _TvboxRig get _activeTvboxRig => _tvboxRigs[_activeTvboxRigIndex];
+  _TvboxRig get _standbyTvboxRig => _tvboxRigs[1 - _activeTvboxRigIndex];
+  TvboxPlaybackHandle get _tvboxHandle => _activeTvboxRig.handle;
   PlaybackBackendManager? _backendManager;
   CoreFallbackController? _coreFallback;
   CoreFallbackMode _fallbackMode = CoreFallbackMode.all;
   PlayerCore? _fallbackCoreOverride;
   String _lastCoreErrorMessage = '';
-  PlaybackPlan? _tvboxPlan;
-  double _tvboxStartPosition = 0;
-  bool _tvboxAutoplay = true;
   final _ijkHandle = IjkPlaybackHandle();
   PlaybackPlan? _ijkPlan;
   double _ijkStartPosition = 0;
@@ -461,6 +494,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     autoAdvance: _autoAdvance,
     danmaku: _danmakuEnabled,
     preload: _preloadEnabled,
+    seamless: _seamlessEnabled,
     adBlock: _adBlock,
     enhancement: _enhancement.preferences,
     televisionDecoder: _televisionDecoder,
@@ -513,6 +547,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     unawaited(_loadDeepSniffer());
     unawaited(_loadLiveSubtitleSettings());
     _preloadEnabled = true;
+    _seamlessEnabled = preferences.seamless;
     _televisionDecoder = preferences.televisionDecoder;
     _orientationMode = preferences.orientationMode;
     _loader = PlaybackLoader(widget.repository);
@@ -523,171 +558,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
-    _player =
-        widget.playerFactory?.call() ??
-        Player(
-          // Windows 曾经开 verbose 日志（为了从日志里嗅探 GL 渲染器名），
-          // 但 mpv 每行日志都要跨 FFI 生成一个 PlayerLog 事件回到 Dart，
-          // 播放时每秒上千行，本身就是抖动的来源。渲染环境改由
-          // VideoEnhancementController 按 vo/vo-passes 判定后，这里只留 error。
-          configuration: const PlayerConfiguration(
-            bufferSize: 32 * 1024 * 1024,
-            logLevel: MPVLogLevel.error,
-          ),
-        );
-    _video = widget.videoBuilder == null
-        ? VideoController(
-            _player,
-            configuration: const VideoControllerConfiguration(
-              enableHardwareAcceleration: true,
-            ),
-          )
-        : null;
-    _enhancement = VideoEnhancementController(
-      player: _player,
-      video: _video,
-      preferences: preferences.enhancement,
-      category: widget.detail.drama.category,
-      tags: widget.detail.drama.tags,
-    );
-    _pictureQuality = PictureQualityApplier(_player)
-      ..apply(preferences.pictureQuality);
+    _activeMpvRig = _createMpvRig(0);
+    _bindPlayerHelpers(preferences);
     _speedTracker = NetworkSpeedTracker(
       sample: () => fetchMpvNetworkSpeedSample(_player),
-    );
-    _interactions = PlayerInteractions(
-      player: _player,
-      available: () =>
-          !_closed &&
-          widget.store.profileEpoch == _profileEpoch &&
-          !_loading &&
-          _error == null &&
-          _foreground &&
-          !_panelOpen,
-      baseSpeed: () => _speed,
-      swipeSeek: () => widget.store.playbackPreferences.swipeSeekSeconds,
-      onTogglePlayback: _togglePlayback,
-      onSeek: _seekTo,
-      onFullscreen: widget.embedded ? _notifyEmbeddedFullscreen : _rotate,
-      onEpisode: (direction) {
-        if (widget.detail.episodes.length > 1) {
-          final next = _index + direction;
-          if (next < 0) return '已经是第一集';
-          if (next >= widget.detail.episodes.length) return '已经是最后一集';
-          unawaited(_play(next, showControlsOnReady: false));
-          return '第 ${widget.detail.episodes[next].number} 集';
-        }
-        return _queueSwipe(direction);
-      },
-      onBrightness: _androidBrightness ? _setScreenBrightness : null,
-      currentBrightness: _androidBrightness ? _currentBrightness : null,
     );
     _playerFocus.addListener(() {
       if (!_playerFocus.hasPrimaryFocus && !_closed) _interactions.cancel();
     });
     _configurePictureInPicture();
     unawaited(_readSystemBrightness());
-    _subscriptions.add(
-      _player.stream.error.listen((error) {
-        if (_enhancement.handlePlaybackError(error)) return;
-        if (!_closed && _acceptErrors && mounted && error.trim().isNotEmpty) {
-          _lastCoreErrorMessage = error;
-          _queueRecovery();
-        }
-      }),
-    );
-    _subscriptions.add(
-      _player.stream.completed.listen((completed) {
-        if (completed &&
-            !_loading &&
-            !_closed &&
-            _acceptErrors &&
-            _error == null) {
-          final duration = _player.state.duration;
-          if (duration <= Duration.zero ||
-              _player.state.position < duration - const Duration(seconds: 2)) {
-            _queueRecovery();
-          } else if (_autoAdvance &&
-              _foreground &&
-              !_panelOpen &&
-              _index + 1 < widget.detail.episodes.length) {
-            _audioMode
-                ? _playAudio(_index + 1)
-                : _play(_index + 1, showControlsOnReady: false);
-          } else {
-            _playIntent = false;
-            _interactions.cancel();
-            unawaited(_player.pause());
-            unawaited(_saveProgress());
-          }
-        }
-      }),
-    );
-    _subscriptions.add(
-      _player.stream.position.listen((position) {
-        _maybeNotifyPlaybackStarted();
-        if (!_closed && _openedIndex == _index && position > Duration.zero) {
-          _resumePosition = position.inMilliseconds / 1000;
-        }
-        _syncDanmaku();
-        _syncPreload();
-        _maybeSkipOutro();
-        _maybeCaptureEpisodeFrame(position);
-        _claimOrReportExternalAudio();
-        if (_updateLiveSubtitleLines(position)) setState(() {});
-      }),
-    );
-    for (final stream in [
-      _player.stream.duration,
-      _player.stream.buffer,
-      _player.stream.playing,
-      _player.stream.buffering,
-      _player.stream.rate,
-      _player.stream.completed,
-    ]) {
-      _subscriptions.add(
-        stream.listen((_) {
-          _syncDanmaku();
-          _syncPreload();
-        }),
-      );
-    }
-    _subscriptions.add(
-      _player.stream.playing.listen((playing) {
-        _maybeNotifyPlaybackStarted();
-        _claimOrReportExternalAudio();
-        final plan = _plan;
-        if (!playing || plan == null || plan.routeIndex == _routeIndex) {
-          return;
-        }
-        if (mounted && !_closed) {
-          setState(() => _routeIndex = plan.routeIndex);
-        }
-      }),
-    );
-    _subscriptions.add(
-      _player.stream.videoParams.listen((parameters) {
-        final size = videoDisplaySize(parameters);
-        if (size != null && mounted && !_closed) {
-          final previousRatio = _aspectRatio;
-          setState(() {
-            _aspectRatio = size.width / size.height;
-          });
-          _scheduleSystemUi();
-          if ((previousRatio >= 1) != (_aspectRatio >= 1)) {
-            if (widget.embedded) {
-              // 内嵌时 _applyOrientation 提前返回：已在全屏里才跟宽高比重锁，
-              // 没全屏时详情页的方向不受播放器干预。
-              if (widget.embeddedFullscreen) {
-                unawaited(_syncEmbeddedOrientation());
-              }
-            } else {
-              unawaited(_applyOrientation());
-            }
-          }
-        }
-      }),
-    );
+    _bindEngineStreams();
     _saveTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _saveProgress(),
@@ -696,6 +577,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _maybeNotifyPlaybackStarted();
       _maybeSkipOutro();
       unawaited(_speedTracker.tick());
+      _syncSeamlessWarm();
       if (!_closed &&
           _acceptErrors &&
           !_loading &&
@@ -726,10 +608,185 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
   }
 
+  /// 建一套 MPV 装置。主装置在 initState 建，待命装置在第一次
+  /// 无缝预热时才建（不开无缝就永远只有一套，行为与原来一致）。
+  _MpvRig _createMpvRig(int id) {
+    final player =
+        widget.playerFactory?.call() ??
+        Player(
+          // Windows 曾经开 verbose 日志（为了从日志里嗅探 GL 渲染器名），
+          // 但 mpv 每行日志都要跨 FFI 生成一个 PlayerLog 事件回到 Dart，
+          // 播放时每秒上千行，本身就是抖动的来源。渲染环境改由
+          // VideoEnhancementController 按 vo/vo-passes 判定后，这里只留 error。
+          configuration: const PlayerConfiguration(
+            bufferSize: 32 * 1024 * 1024,
+            logLevel: MPVLogLevel.error,
+          ),
+        );
+    final video = widget.videoBuilder == null
+        ? VideoController(
+            player,
+            configuration: const VideoControllerConfiguration(
+              enableHardwareAcceleration: true,
+            ),
+          )
+        : null;
+    return _MpvRig(id, player, video);
+  }
+
+  /// 把绑死在单个 Player 上的三个辅助对象（画质增强 / 画质档 /
+  /// 手势交互）绑到当前在播装置上。initState 调一次；无缝对调
+  /// 后旧的先释放、再按当前偏好重建，指向新装置。
+  void _bindPlayerHelpers(PlaybackPreferences preferences) {
+    _enhancement = VideoEnhancementController(
+      player: _player,
+      video: _video,
+      preferences: preferences.enhancement,
+      category: widget.detail.drama.category,
+      tags: widget.detail.drama.tags,
+    );
+    _pictureQuality = PictureQualityApplier(_player)
+      ..apply(preferences.pictureQuality);
+    _interactions = PlayerInteractions(
+      player: _player,
+      available: () =>
+          !_closed &&
+          widget.store.profileEpoch == _profileEpoch &&
+          !_loading &&
+          _error == null &&
+          _foreground &&
+          !_panelOpen,
+      baseSpeed: () => _speed,
+      swipeSeek: () => widget.store.playbackPreferences.swipeSeekSeconds,
+      onTogglePlayback: _togglePlayback,
+      onSeek: _seekTo,
+      onFullscreen: widget.embedded ? _notifyEmbeddedFullscreen : _rotate,
+      onEpisode: (direction) {
+        if (widget.detail.episodes.length > 1) {
+          final next = _index + direction;
+          if (next < 0) return '已经是第一集';
+          if (next >= widget.detail.episodes.length) return '已经是最后一集';
+          unawaited(_play(next, showControlsOnReady: false));
+          return '第 ${widget.detail.episodes[next].number} 集';
+        }
+        return _queueSwipe(direction);
+      },
+      onBrightness: _androidBrightness ? _setScreenBrightness : null,
+      currentBrightness: _androidBrightness ? _currentBrightness : null,
+    );
+  }
+
+  /// 订阅在播装置的引擎流。对调后先退订旧装置、再订新装置，
+  /// 监听体都读 _player（当前装置），不用改。
+  void _bindEngineStreams() {
+    _engineSubscriptions.add(
+      _player.stream.error.listen((error) {
+        if (_enhancement.handlePlaybackError(error)) return;
+        if (!_closed && _acceptErrors && mounted && error.trim().isNotEmpty) {
+          _lastCoreErrorMessage = error;
+          _queueRecovery();
+        }
+      }),
+    );
+    _engineSubscriptions.add(
+      _player.stream.completed.listen((completed) {
+        if (completed &&
+            !_loading &&
+            !_closed &&
+            _acceptErrors &&
+            _error == null) {
+          final duration = _player.state.duration;
+          if (duration <= Duration.zero ||
+              _player.state.position < duration - const Duration(seconds: 2)) {
+            _queueRecovery();
+          } else if (_autoAdvance &&
+              _foreground &&
+              !_panelOpen &&
+              _index + 1 < widget.detail.episodes.length) {
+            _audioMode
+                ? _playAudio(_index + 1)
+                : _play(_index + 1, showControlsOnReady: false);
+          } else {
+            _playIntent = false;
+            _interactions.cancel();
+            unawaited(_player.pause());
+            unawaited(_saveProgress());
+          }
+        }
+      }),
+    );
+    _engineSubscriptions.add(
+      _player.stream.position.listen((position) {
+        _maybeNotifyPlaybackStarted();
+        if (!_closed && _openedIndex == _index && position > Duration.zero) {
+          _resumePosition = position.inMilliseconds / 1000;
+        }
+        _syncDanmaku();
+        _syncPreload();
+        _maybeSkipOutro();
+        _maybeCaptureEpisodeFrame(position);
+        _claimOrReportExternalAudio();
+        if (_updateLiveSubtitleLines(position)) setState(() {});
+      }),
+    );
+    for (final stream in [
+      _player.stream.duration,
+      _player.stream.buffer,
+      _player.stream.playing,
+      _player.stream.buffering,
+      _player.stream.rate,
+      _player.stream.completed,
+    ]) {
+      _engineSubscriptions.add(
+        stream.listen((_) {
+          _syncDanmaku();
+          _syncPreload();
+        }),
+      );
+    }
+    _engineSubscriptions.add(
+      _player.stream.playing.listen((playing) {
+        _maybeNotifyPlaybackStarted();
+        _claimOrReportExternalAudio();
+        final plan = _plan;
+        if (!playing || plan == null || plan.routeIndex == _routeIndex) {
+          return;
+        }
+        if (mounted && !_closed) {
+          setState(() => _routeIndex = plan.routeIndex);
+        }
+      }),
+    );
+    _engineSubscriptions.add(
+      _player.stream.videoParams.listen((parameters) {
+        final size = videoDisplaySize(parameters);
+        if (size != null && mounted && !_closed) {
+          final previousRatio = _aspectRatio;
+          setState(() {
+            _aspectRatio = size.width / size.height;
+          });
+          _scheduleSystemUi();
+          if ((previousRatio >= 1) != (_aspectRatio >= 1)) {
+            if (widget.embedded) {
+              // 内嵌时 _applyOrientation 提前返回：已在全屏里才跟宽高比重锁，
+              // 没全屏时详情页的方向不受播放器干预。
+              if (widget.embeddedFullscreen) {
+                unawaited(_syncEmbeddedOrientation());
+              }
+            } else {
+              unawaited(_applyOrientation());
+            }
+          }
+        }
+      }),
+    );
+  }
+
   void _accessChanged() {
     if (!_closed &&
         (widget.store.profileEpoch != _profileEpoch || widget.store.locked)) {
       _preloader.clear();
+      _discardSeamlessStandby();
       _enhancement.suspend();
       _playIntent = false;
       unawaited(_player.pause());
@@ -957,6 +1014,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         widget.store.locked ||
         _index + 1 >= widget.detail.episodes.length) {
       _preloader.clear();
+      _discardSeamlessStandby();
       return;
     }
     final state = _player.state;
@@ -981,6 +1039,406 @@ class _PlayerScreenState extends State<PlayerScreen>
       route: _routeIndex,
       adBlock: _adBlock,
     );
+  }
+
+  // ===== 无缝换集：待命预热与对调 =====
+  //
+  // 机制：预加载备好下一集 plan 后（peekReady 只看不取），按本集
+  // 的内核路由把 plan 喂给待命装置预热首帧——EXO 是第二个面板
+  // 暂停在起点备好首帧，MPV 是第二个 Player 静音打开待命；
+  // SeamlessStandbyManager 只记账（目标集 / 内核 / 首帧是否就绪）。
+  // 换集走 _play 时若待命已就绪且目标对得上，在 _trySeamlessSwap
+  // 里对调装置、跳过停播重开；任何一环对不上就当无事发生，
+  // _play 原路走完——这就是失败回落，不需要额外错误处理。
+  // IJK 插件 prepare 完自动开播、没有暂停预热与首帧事件，
+  // 双 mediacodec 实例又不可靠，恒不预热、切集走现行路（降级）。
+
+  /// 播放进度驱动的预热同步：与 _syncPreload 同门槛（播到后段
+  /// 才备下一集），但进度取通用引擎读数，原生核也驱动得动
+  /// （原生核的进度不走 MPV 流，原 _syncPreload 实际只覆盖 MPV）。
+  /// 由引擎流（MPV）与 1 秒健康定时器（全核）共同调用。
+  void _syncSeamlessWarm() {
+    if (_closed || !_seamlessEnabled || _audioMode) return;
+    if (!_foreground ||
+        widget.localOnly ||
+        _plan?.local == true ||
+        _loading ||
+        _error != null ||
+        _openedIndex != _index ||
+        widget.store.profileEpoch != _profileEpoch ||
+        widget.store.locked ||
+        _index + 1 >= widget.detail.episodes.length) {
+      return;
+    }
+    if (!_enginePlaying || !_playIntent) return;
+    final duration = _engineDuration.inMilliseconds;
+    final position = _enginePosition.inMilliseconds;
+    if (duration <= 0 || position < 2000) return;
+    if (position < duration ~/ 2 && duration - position > 45000) return;
+    final nextEpisode = widget.detail.episodes[_index + 1];
+    _preloader.prepare(
+      widget.detail.drama,
+      nextEpisode,
+      quality: _requestedQuality,
+      route: _routeIndex,
+      adBlock: _adBlock,
+    );
+    final plan = _preloader.peekReady(
+      widget.detail.drama,
+      nextEpisode,
+      quality: _requestedQuality,
+      route: _routeIndex,
+      adBlock: _adBlock,
+    );
+    if (plan == null || !seamlessPlanWarmable(plan)) return;
+    final useNative =
+        ((_useTvbox || _useExoCore) || plan.hasDrm) &&
+        plan.decryptionKey.isEmpty &&
+        !plan.forceMpv;
+    final useIjk =
+        _useIjkCore && plan.decryptionKey.isEmpty && !plan.forceMpv;
+    if (useIjk) return;
+    final kernel = useNative ? SeamlessKernel.exo : SeamlessKernel.mpv;
+    // 测试桩 / 无画面控制器环境没有可预热的画面，跳过 MPV 预热。
+    if (kernel == SeamlessKernel.mpv && _video == null) return;
+    final key = seamlessStandbyKey(index: _index + 1, plan: plan);
+    if (_seamless.key == key && _seamless.hasStandby) return;
+    // 与 _play 落地时同样的自定义头变换，待命与正式播同一份头。
+    final warmedPlan = plan.withHeaders(
+      applyCustomHeaders(
+        plan.url,
+        plan.headers,
+        enabled: widget.store.customHeadersEnabled,
+        rules: widget.store.customHeaderRules,
+      ),
+    );
+    final firstFrame = kernel == SeamlessKernel.exo
+        ? _warmExoStandby(warmedPlan)
+        : _warmMpvStandby(warmedPlan);
+    unawaited(
+      _seamless
+          .warm(
+            key: key,
+            targetIndex: _index + 1,
+            kernel: kernel,
+            plan: warmedPlan,
+            firstFrame: firstFrame,
+          )
+          .then((_) {
+            // 预热落定为失败：拆掉内核侧待命，免得白占一个播放器；
+            // 账已被更新的预热顶掉（key 不同）时不动新待命。
+            if (!_closed &&
+                _seamless.key == key &&
+                _seamless.phase == SeamlessPhase.failed) {
+              _teardownSeamlessKernel();
+            }
+          }),
+    );
+  }
+
+  /// MPV 待命预热：待命装置静音、暂停打开下一集，等首帧参数
+  /// 到达即算备好。平台属性先按正式播的同一套打上，对调后
+  /// 解码行为与普通开播一致。
+  Future<bool> _warmMpvStandby(PlaybackPlan plan) async {
+    final rig = _standbyMpvRig ??= _createMpvRig(1);
+    if (mounted && !_closed) setState(() {});
+    final player = rig.player;
+    try {
+      await _applyMpvPlatformProperties(player, plan);
+      await player.setVolume(0);
+      await player.open(
+        Media(plan.url, httpHeaders: plan.headers),
+        play: false,
+      );
+    } catch (_) {
+      return false;
+    }
+    final completer = Completer<bool>();
+    late StreamSubscription<VideoParams> paramsSub;
+    late StreamSubscription<String> errorSub;
+    paramsSub = player.stream.videoParams.listen((params) {
+      if (videoDisplaySize(params) != null && !completer.isCompleted) {
+        completer.complete(true);
+      }
+    });
+    errorSub = player.stream.error.listen((_) {
+      if (!completer.isCompleted) completer.complete(false);
+    });
+    final result = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => false,
+    );
+    await paramsSub.cancel();
+    await errorSub.cancel();
+    return result;
+  }
+
+  /// EXO 待命预热：把 plan 挂到待命面板（面板以待命模式打开、
+  /// 暂停在起点），等面板报首帧。面板早已挂着同一条 plan 且
+  /// 首帧已备好时直接算完成。
+  Future<bool> _warmExoStandby(PlaybackPlan plan) {
+    final rig = _standbyTvboxRig;
+    final alreadyWarming =
+        rig.standbyPlan != null &&
+        rig.standbyPlan!.session == plan.session &&
+        rig.standbyPlan!.url == plan.url;
+    rig.standbyPlan = plan;
+    rig.handle.speed = _speed;
+    final completer = Completer<bool>();
+    _standbyExoFrame = completer;
+    if (mounted && !_closed) setState(() {});
+    if (alreadyWarming && rig.handle.firstFrameReady) {
+      scheduleMicrotask(() {
+        if (!completer.isCompleted) completer.complete(true);
+      });
+    }
+    return completer.future;
+  }
+
+  void _onStandbyExoFirstFrame() {
+    final completer = _standbyExoFrame;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(true);
+    }
+  }
+
+  void _onStandbyExoError(String _) {
+    final completer = _standbyExoFrame;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(false);
+    }
+  }
+
+  /// 拆内核侧待命（账面复位在 _discardSeamlessStandby 里做）：
+  /// EXO 待命面板摘 plan 并停播，MPV 待命装置停播（装置留着
+  /// 复用，不销毁）。没有待命时是空操作，不触发无谓重建。
+  void _teardownSeamlessKernel() {
+    final completer = _standbyExoFrame;
+    _standbyExoFrame = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(false);
+    }
+    var changed = false;
+    final rig = _standbyTvboxRig;
+    if (rig.standbyPlan != null) {
+      rig.standbyPlan = null;
+      unawaited(rig.handle.stop());
+      changed = true;
+    }
+    final mpvStandby = _standbyMpvRig;
+    if (mpvStandby != null) {
+      unawaited(mpvStandby.player.stop());
+    }
+    if (changed && mounted && !_closed) setState(() {});
+  }
+
+  void _discardSeamlessStandby() {
+    if (_seamless.phase == SeamlessPhase.idle &&
+        _standbyTvboxRig.standbyPlan == null) {
+      return;
+    }
+    _seamless.discard();
+    _teardownSeamlessKernel();
+  }
+
+  /// MPV 装置对调：待命装置升为在播，引擎流与三个辅助对象
+  /// 全部改绑新装置，旧装置停播转待命（等下一次预热复用）。
+  /// 控制层靠装置 id 的 key 强制重建，订阅自动跟上新装置。
+  Future<void> _swapMpvRigs({required double volume}) async {
+    final oldRig = _activeMpvRig;
+    final newRig = _standbyMpvRig!;
+    _activeMpvRig = newRig;
+    _standbyMpvRig = oldRig;
+    for (final subscription in _engineSubscriptions) {
+      await subscription.cancel();
+    }
+    _engineSubscriptions.clear();
+    _bindEngineStreams();
+    final oldEnhancement = _enhancement;
+    unawaited(oldEnhancement.close());
+    unawaited(_pictureQuality.dispose());
+    _interactions.dispose();
+    _bindPlayerHelpers(widget.store.playbackPreferences);
+    unawaited(oldRig.player.stop());
+    await _player.setVolume(volume);
+  }
+
+  /// MPV 平台属性（解码/缓冲/画质管线）：正式开播前在 _play 里
+  /// 打在在播装置上；无缝预热时打在待命装置上，保证对调前后
+  /// 解码行为一致。从 _play 的安装段原样抽出，逻辑一字未改。
+  Future<void> _applyMpvPlatformProperties(
+    Player player,
+    PlaybackPlan plan,
+  ) async {
+    final platform = player.platform;
+    if (platform is NativePlayer) {
+      if (Platform.isAndroid) {
+        if (_televisionDecoderApplies) {
+          final optimized =
+              _televisionDecoder == TelevisionDecoder.optimized;
+          await platform.setProperty(
+            'hwdec',
+            _televisionDecoder == TelevisionDecoder.software
+                ? 'no'
+                : 'mediacodec-copy',
+          );
+          await platform.setProperty('hwdec-codecs', 'all');
+          await platform.setProperty(
+            'opengl-pbo',
+            optimized ? 'yes' : 'no',
+          );
+          await platform.setProperty(
+            'video-latency-hacks',
+            optimized ? 'yes' : 'no',
+          );
+          await platform.setProperty('scale', 'bilinear');
+          await platform.setProperty('cscale', 'bilinear');
+          await platform.setProperty('dscale', 'bilinear');
+          await platform.setProperty('correct-downscaling', 'no');
+          await platform.setProperty(
+            'vd-lavc-skiploopfilter',
+            optimized ? 'all' : 'default',
+          );
+          await platform.setProperty(
+            'vd-lavc-skipidct',
+            optimized ? 'all' : 'default',
+          );
+          await platform.setProperty('vd-lavc-threads', '2');
+          await platform.setProperty(
+            'demuxer-max-bytes',
+            '${4 * 1024 * 1024}',
+          );
+          await platform.setProperty(
+            'demuxer-max-back-bytes',
+            '${1 * 1024 * 1024}',
+          );
+          await platform.setProperty('demuxer-readahead-secs', '5');
+        } else {
+          await platform.setProperty('hwdec', 'auto-safe');
+          await platform.setProperty('hwdec-codecs', 'all');
+          await platform.setProperty('vd-lavc-skiploopfilter', 'nonkey');
+          await platform.setProperty('vd-lavc-threads', '4');
+        }
+        await platform.setProperty('vd-lavc-fast', 'yes');
+        await platform.setProperty('video-sync', 'audio');
+        await platform.setProperty('framedrop', 'vo');
+      } else if (Platform.isWindows) {
+        await WindowsPlaybackTuning.apply(platform, local: plan.local);
+      }
+      if (plan.local || plan.decryptionKey.isNotEmpty) {
+        await platform.setProperty(
+          'demuxer-lavf-o',
+          [
+            'seg_max_retry=3',
+            'strict=experimental',
+            'allowed_extensions=ALL',
+            plan.local
+                ? 'protocol_whitelist=[file,crypto,data]'
+                : 'protocol_whitelist=[http,https,tcp,tls,crypto,data,file]',
+            if (plan.decryptionKey.isNotEmpty)
+              'decryption_key=${plan.decryptionKey}',
+          ].join(','),
+        );
+        await platform.setProperty('network-timeout', '20');
+      }
+    }
+  }
+
+  /// 换集落地时尝试无缝对调。命中条件：无缝开着、不是恢复/换线/
+  /// 外部预备 plan、从头播、待命已就绪且目标集与内核都对得上。
+  /// 命中则完成与正式开播等价的全部状态落地并返回 true，
+  /// _play 不再走停播重开；任何不命中返回 false，原路照走。
+  Future<bool> _trySeamlessSwap({
+    required int index,
+    required PlaybackPlan plan,
+    required int ticket,
+    required double position,
+    required bool playWhenReady,
+    required PlaybackRecoveryAction? recoveryAction,
+    required int? routeSelection,
+    required PlaybackPlan? preparedPlan,
+  }) async {
+    if (!_seamlessEnabled || _audioMode || _closed) return false;
+    if (recoveryAction != null ||
+        routeSelection != null ||
+        preparedPlan != null) {
+      return false;
+    }
+    if (position != 0 || !playWhenReady) return false;
+    if (_seamless.phase != SeamlessPhase.ready ||
+        _seamless.targetIndex != index) {
+      return false;
+    }
+    final useNative =
+        ((_useTvbox || _useExoCore) || plan.hasDrm) &&
+        plan.decryptionKey.isEmpty &&
+        !plan.forceMpv;
+    final useIjk =
+        _useIjkCore && plan.decryptionKey.isEmpty && !plan.forceMpv;
+    if (useIjk) return false;
+    final kernel = useNative ? SeamlessKernel.exo : SeamlessKernel.mpv;
+    if (_seamless.kernel != kernel) {
+      _discardSeamlessStandby();
+      return false;
+    }
+    final key = seamlessStandbyKey(index: index, plan: plan);
+    if (_seamless.take(key) == null) return false;
+    var swapped = false;
+    await _serialize(() async {
+      if (_closed || ticket != _generation) return;
+      _plan = plan;
+      _backendManager = PlaybackBackendManager(
+        initial: useNative ? PlaybackBackend.tvbox : PlaybackBackend.main,
+      );
+      _acceptErrors = true;
+      if (useNative) {
+        final demoted = _activeTvboxRig;
+        _activeTvboxRigIndex = 1 - _activeTvboxRigIndex;
+        final promoted = _activeTvboxRig;
+        promoted.plan = plan;
+        promoted.startPosition = 0;
+        promoted.autoplay = _foreground && _playIntent;
+        promoted.standbyPlan = null;
+        demoted.plan = null;
+        demoted.standbyPlan = null;
+        unawaited(demoted.handle.stop());
+        unawaited(promoted.handle.setSpeed(_speed));
+        if (promoted.autoplay) {
+          unawaited(promoted.handle.play());
+        } else {
+          unawaited(promoted.handle.pause());
+        }
+      } else {
+        final volume = _player.state.volume;
+        await _swapMpvRigs(volume: volume);
+        await _interactions.applySpeed();
+        _enhancement.mediaReady();
+        if (_foreground && _playIntent) {
+          await _player.play();
+        } else {
+          await _player.pause();
+        }
+        unawaited(_startLiveSubtitle(plan, 0));
+      }
+      _openedIndex = index;
+      _health.reset();
+      swapped = true;
+      if (mounted && !_closed && ticket == _generation) {
+        setState(() {
+          _loading = false;
+        });
+        _danmaku.setPlan(plan);
+        _syncDanmaku();
+        _menuRevision.value++;
+        _applyLifecycleVisibility();
+      }
+    });
+    if (!swapped) {
+      // 待命已被 take 消费但对调没落地（多为代次已过期、新 _play
+      // 接管）：内核侧待命一并拆掉，免得残留一个备好首帧的播放器。
+      _teardownSeamlessKernel();
+    }
+    return swapped;
   }
 
   void _syncDanmaku({bool discontinuity = false}) {
@@ -1265,7 +1723,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (next == PlaybackBackend.main) {
       final position = _tvboxHandle.positionSeconds > 0
           ? _tvboxHandle.positionSeconds
-          : _tvboxStartPosition;
+          : _activeTvboxRig.startPosition;
       unawaited(_play(_index, position: position, continueChain: true));
       return;
     }
@@ -1739,6 +2197,20 @@ class _PlayerScreenState extends State<PlayerScreen>
               )
             : null);
     _preloader.clear();
+    // 无缝候选：待命已备好这一集首帧时，本次切集全程不黑——
+    // 不停当前播、不置加载态、不做 302 预解析（待命播放器自己
+    // 跟跳转，落地按会话命中对调）。最后是否命中由
+    // _trySeamlessSwap 按最终 plan 复核，未命中原路照走。
+    final seamlessCandidate =
+        _seamlessEnabled &&
+        !_audioMode &&
+        recoveryAction == null &&
+        routeSelection == null &&
+        preparedPlan == null &&
+        position == 0 &&
+        playWhenReady &&
+        _seamless.phase == SeamlessPhase.ready &&
+        _seamless.targetIndex == index;
     final ticket = ++_generation;
     _enhancement.suspend();
     _seekSequence++;
@@ -1771,7 +2243,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final previousIndex = _index;
     setState(() {
       _index = index;
-      _loading = true;
+      _loading = !seamlessCandidate;
       _error = null;
       _localFailure = false;
       _loadingMessage = loadingMessage;
@@ -1793,7 +2265,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         await _enhancement.beforeMedia();
         if (_closed || ticket != _generation) return;
         _openedIndex = -1;
-        await _player.stop();
+        // 无缝候选时不停播：旧集继续出画直到对调瞬间才停，
+        // 停播提前了就是黑屏（EXO/IJK 时 MPV 本就闲置，跳过无碍）。
+        if (!seamlessCandidate) {
+          await _player.stop();
+        }
         final previous = _plan;
         _plan = null;
         if (recoveryAction == PlaybackRecoveryAction.alternative ||
@@ -1925,9 +2401,24 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 302 预解析（非视频分流之后）：会跳转的地址先跟到最终地址，
       // 三条播放路径共用解析后的 plan，跳转行为一致；解析失败时
       // 返回原地址，行为与原来一致（见 playback_redirect）。
-      if (shouldPreResolveRedirects(plan)) {
+      if (!seamlessCandidate && shouldPreResolveRedirects(plan)) {
         final resolved = await resolvePlaybackRedirects(plan.url, plan.headers);
         plan = plan.withUrl(resolved.url).withHeaders(resolved.headers);
+      }
+      // 无缝对调：待命装置已备好这一集首帧时直接换装置落地，
+      // 不停播重开。命中才走，未命中与原来一字不差。
+      if (await _trySeamlessSwap(
+        index: index,
+        plan: plan,
+        ticket: ticket,
+        position: position,
+        playWhenReady: playWhenReady,
+        recoveryAction: recoveryAction,
+        routeSelection: routeSelection,
+        preparedPlan: preparedPlan,
+      )) {
+        installed = true;
+        return;
       }
       // 换集/换核/重试：先停掉上一集的实时字幕服务，免得旧行的
       // 识别结果跑到新集的画面上；新服务在 MPV 分支打开后起。
@@ -1940,7 +2431,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (plan.url.isEmpty) {
           throw AppFailure('站源未返回播放地址，请重试');
         }
-        final platform = _player.platform;
         if (!continueChain) {
           _backendManager = null;
         }
@@ -1958,76 +2448,8 @@ class _PlayerScreenState extends State<PlayerScreen>
               ? PlaybackBackend.tvbox
               : PlaybackBackend.main,
         );
-        if (!useNativeForPlan && !useIjkForPlan && platform is NativePlayer) {
-          if (Platform.isAndroid) {
-            if (_televisionDecoderApplies) {
-              final optimized =
-                  _televisionDecoder == TelevisionDecoder.optimized;
-              await platform.setProperty(
-                'hwdec',
-                _televisionDecoder == TelevisionDecoder.software
-                    ? 'no'
-                    : 'mediacodec-copy',
-              );
-              await platform.setProperty('hwdec-codecs', 'all');
-              await platform.setProperty(
-                'opengl-pbo',
-                optimized ? 'yes' : 'no',
-              );
-              await platform.setProperty(
-                'video-latency-hacks',
-                optimized ? 'yes' : 'no',
-              );
-              await platform.setProperty('scale', 'bilinear');
-              await platform.setProperty('cscale', 'bilinear');
-              await platform.setProperty('dscale', 'bilinear');
-              await platform.setProperty('correct-downscaling', 'no');
-              await platform.setProperty(
-                'vd-lavc-skiploopfilter',
-                optimized ? 'all' : 'default',
-              );
-              await platform.setProperty(
-                'vd-lavc-skipidct',
-                optimized ? 'all' : 'default',
-              );
-              await platform.setProperty('vd-lavc-threads', '2');
-              await platform.setProperty(
-                'demuxer-max-bytes',
-                '${4 * 1024 * 1024}',
-              );
-              await platform.setProperty(
-                'demuxer-max-back-bytes',
-                '${1 * 1024 * 1024}',
-              );
-              await platform.setProperty('demuxer-readahead-secs', '5');
-            } else {
-              await platform.setProperty('hwdec', 'auto-safe');
-              await platform.setProperty('hwdec-codecs', 'all');
-              await platform.setProperty('vd-lavc-skiploopfilter', 'nonkey');
-              await platform.setProperty('vd-lavc-threads', '4');
-            }
-            await platform.setProperty('vd-lavc-fast', 'yes');
-            await platform.setProperty('video-sync', 'audio');
-            await platform.setProperty('framedrop', 'vo');
-          } else if (Platform.isWindows) {
-            await WindowsPlaybackTuning.apply(platform, local: plan.local);
-          }
-          if (plan.local || plan.decryptionKey.isNotEmpty) {
-            await platform.setProperty(
-              'demuxer-lavf-o',
-              [
-                'seg_max_retry=3',
-                'strict=experimental',
-                'allowed_extensions=ALL',
-                plan.local
-                    ? 'protocol_whitelist=[file,crypto,data]'
-                    : 'protocol_whitelist=[http,https,tcp,tls,crypto,data,file]',
-                if (plan.decryptionKey.isNotEmpty)
-                  'decryption_key=${plan.decryptionKey}',
-              ].join(','),
-            );
-            await platform.setProperty('network-timeout', '20');
-          }
+        if (!useNativeForPlan && !useIjkForPlan) {
+          await _applyMpvPlatformProperties(_player, plan);
         }
         _plan = plan;
         installed = true;
@@ -2036,9 +2458,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           return;
         }
         if (useNativeForPlan) {
-          _tvboxPlan = plan;
-          _tvboxStartPosition = position;
-          _tvboxAutoplay = _foreground && _playIntent;
+          _activeTvboxRig.plan = plan;
+          _activeTvboxRig.startPosition = position;
+          _activeTvboxRig.autoplay = _foreground && _playIntent;
         } else if (useIjkForPlan) {
           _ijkPlan = plan;
           _ijkStartPosition = position;
@@ -2175,6 +2597,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _switchCore(PlayerCore next) async {
     if (_closed) return;
+    _discardSeamlessStandby();
     final previous = _core;
     final position = _currentPosition;
     final playing = _playIntent && _enginePlaying;
@@ -2668,13 +3091,20 @@ class _PlayerScreenState extends State<PlayerScreen>
       _danmakuEnabled = nextPreferences.danmaku;
       _adBlock = nextPreferences.adBlock;
       _preloadEnabled = true;
+      _seamlessEnabled = nextPreferences.seamless;
       _televisionDecoder = nextPreferences.televisionDecoder;
       _orientationMode = nextPreferences.orientationMode;
     });
     if (orientationChanged) unawaited(_applyOrientation());
     _danmaku.setEnabled(_danmakuEnabled);
     _syncDanmaku();
-    if (qualityChanged || adBlockChanged) _preloader.clear();
+    if (qualityChanged || adBlockChanged) {
+      _preloader.clear();
+      _discardSeamlessStandby();
+    }
+    if (!nextPreferences.seamless) {
+      _discardSeamlessStandby();
+    }
     _syncPreload();
     _menuRevision.value++;
     await _interactions.applySpeed();
@@ -3036,6 +3466,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
               preload: _preloadEnabled,
               preloadStatus: _preloader.status,
+              seamless: _seamlessEnabled,
               enhancement: _enhancementForUi,
               onCompareEnhancement: () {
                 unawaited(_enhancement.toggleCompare());
@@ -3069,6 +3500,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           autoAdvance: true,
           danmaku: selection.danmaku,
           preload: true,
+          seamless: selection.seamless,
           enhancement: selection.enhancement,
           televisionDecoder: selection.decoder,
         ),
@@ -3203,6 +3635,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
+    for (final subscription in _engineSubscriptions) {
+      subscription.cancel();
+    }
+    _engineSubscriptions.clear();
     unawaited(widget.repository.release(_session));
     unawaited(_loader.close().catchError((Object _) {}));
     unawaited(
@@ -3214,6 +3650,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             await enhancementClosed.catchError((Object _) {});
             await _pictureQuality.dispose().catchError((Object _) {});
             await _player.dispose();
+            final standby = _standbyMpvRig;
+            if (standby != null) {
+              await standby.player.dispose().catchError((Object _) {});
+            }
           }),
     );
     if (Platform.isWindows) {
@@ -3799,6 +4239,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? const SizedBox.shrink()
         : _television
         ? TelevisionControls(
+            key: ValueKey('television-controls-rig-${_activeMpvRig.id}'),
             player: _player,
             title: title,
             enabled: !_loading && _error == null,
@@ -3821,6 +4262,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             onBack: _backToList,
           )
         : PlayerControls(
+            key: ValueKey('player-controls-rig-${_activeMpvRig.id}'),
             player: _player,
             interactions: _interactions,
             enabled: !_loading && _error == null,
@@ -3957,15 +4399,48 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
+              // EXO 待命面：盖在正式面下层，只出画面（待命模式），
+              // 首帧备好后等对调。key 按装置编号钉死，对调时元素
+              // 不重建、平台视图不重挂，首帧不丢。
+              if (!_sniffEmbedded &&
+                  _useNativeHandle &&
+                  _standbyTvboxRig.standbyPlan != null)
+                TvboxVideoPane(
+                  key: ValueKey('tvbox-rig-${1 - _activeTvboxRigIndex}'),
+                  viewType: TvboxPlayerController.viewType,
+                  plan: _standbyTvboxRig.standbyPlan,
+                  startPosition: 0,
+                  autoplay: false,
+                  decoderMode: _televisionDecoder,
+                  handle: _standbyTvboxRig.handle,
+                  onCompleted: () {},
+                  onError: _onStandbyExoError,
+                  headless: true,
+                  onFirstFrame: _onStandbyExoFirstFrame,
+                ),
+              // MPV 待命画面：同理盖在正式画面下层，不带控制层。
+              if (!_sniffEmbedded &&
+                  !_useNativeHandle &&
+                  !_useIjkCore &&
+                  _standbyMpvRig?.video != null)
+                Video(
+                  key: ValueKey('mpv-rig-${_standbyMpvRig!.id}'),
+                  controller: _standbyMpvRig!.video!,
+                  fit: BoxFit.contain,
+                  subtitleViewConfiguration: const SubtitleViewConfiguration(
+                    visible: false,
+                  ),
+                  controls: (_) => const SizedBox.shrink(),
+                ),
               if (!_sniffEmbedded && widget.videoBuilder != null)
                 widget.videoBuilder!(layeredControls)
               else if (!_sniffEmbedded && _useNativeHandle)
                 TvboxVideoPane(
-                  key: _tvboxPaneKey,
+                  key: ValueKey('tvbox-rig-$_activeTvboxRigIndex'),
                   viewType: TvboxPlayerController.viewType,
-                  plan: _tvboxPlan,
-                  startPosition: _tvboxStartPosition,
-                  autoplay: _tvboxAutoplay,
+                  plan: _activeTvboxRig.plan,
+                  startPosition: _activeTvboxRig.startPosition,
+                  autoplay: _activeTvboxRig.autoplay,
                   decoderMode: _televisionDecoder,
                   handle: _tvboxHandle,
                   onCompleted: _onTvboxCompleted,
@@ -3998,6 +4473,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                 )
               else if (!_sniffEmbedded)
                 Video(
+                  key: ValueKey('mpv-rig-${_activeMpvRig.id}'),
                   controller: _video!,
                   fit: BoxFit.contain,
                   // 实时字幕行在播时，media_kit 自带的内嵌字幕层先藏

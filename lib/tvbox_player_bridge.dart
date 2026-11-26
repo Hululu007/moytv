@@ -20,6 +20,7 @@ class TvboxPlayerController {
   final _completedController = StreamController<void>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _cueGroupController = StreamController<ExoSubtitleGroup>.broadcast();
+  final _firstFrameController = StreamController<void>.broadcast();
   bool _released = false;
 
   Stream<Duration> get positionStream => _positionController.stream;
@@ -29,6 +30,10 @@ class TvboxPlayerController {
   Stream<void> get completedStream => _completedController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<ExoSubtitleGroup> get cueGroupStream => _cueGroupController.stream;
+
+  /// 首帧已渲染到画面（原生侧 onRenderedFirstFrame 转发）。
+  /// 无缝预热的待命播放器靠它判定「预热完成，可以对调」。
+  Stream<void> get firstFrameStream => _firstFrameController.stream;
 
   static TvboxPlayerController attach(
     int viewId, {
@@ -61,6 +66,8 @@ class TvboxPlayerController {
       case 'onCues':
         final group = ExoSubtitleGroup.fromChannelMap(call.arguments);
         if (group != null) _cueGroupController.add(group);
+      case 'onFirstFrame':
+        _firstFrameController.add(null);
     }
   }
 
@@ -128,5 +135,6 @@ class TvboxPlayerController {
     await _completedController.close();
     await _errorController.close();
     await _cueGroupController.close();
+    await _firstFrameController.close();
   }
 }

@@ -51,6 +51,20 @@ class _ViewingExperienceScreenState extends State<ViewingExperienceScreen> {
     if (mounted) setState(() {});
   }
 
+  /// 预加载 / 无缝走偏好上的联动方法：开无缝自动开预加载，
+  /// 关预加载连带关无缝，两个开关在本页与播放器菜单里状态一致。
+  Future<void> _updatePreload(bool value) async {
+    final prefs = widget.store.playbackPreferences;
+    await widget.store.setPlaybackPreferences(prefs.withPreload(value));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _updateSeamless(bool value) async {
+    final prefs = widget.store.playbackPreferences;
+    await widget.store.setPlaybackPreferences(prefs.withSeamless(value));
+    if (mounted) setState(() {});
+  }
+
   Future<void> _openTmdb() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => const TmdbSettingsPage()),
@@ -131,6 +145,20 @@ class _ViewingExperienceScreenState extends State<ViewingExperienceScreen> {
                           subtitle: const Text('播放时过滤广告请求'),
                           value: current.adBlock,
                           onChanged: (value) => _updatePlayback(adBlock: value),
+                        ),
+                        SwitchListTile(
+                          key: const ValueKey('viewing-preload-switch'),
+                          title: const Text('下一集预加载'),
+                          subtitle: const Text('播放后段提前准备下一集地址；关闭会连带关闭无缝播放'),
+                          value: current.preload,
+                          onChanged: _updatePreload,
+                        ),
+                        SwitchListTile(
+                          key: const ValueKey('viewing-seamless-switch'),
+                          title: const Text('无缝播放'),
+                          subtitle: const Text('换集时首帧直接衔接不黑屏；开启时自动打开预加载。IJK 内核暂不支持，自动按普通换集播'),
+                          value: current.seamless,
+                          onChanged: _updateSeamless,
                         ),
                         SwitchListTile(
                           key: const ValueKey('viewing-sniffer-switch'),

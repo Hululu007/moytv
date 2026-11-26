@@ -511,6 +511,7 @@ class TelevisionPlaybackSetting {
     this.autoAdvance,
     this.danmaku,
     this.preload,
+    this.seamless,
     this.enhancement,
     this.route,
     this.decoder,
@@ -521,6 +522,7 @@ class TelevisionPlaybackSetting {
   final bool? autoAdvance;
   final bool? danmaku;
   final bool? preload;
+  final bool? seamless;
   final VideoEnhancementPreferences? enhancement;
   final int? route;
   final TelevisionDecoder? decoder;
@@ -542,6 +544,7 @@ class TelevisionSettingsDialog extends StatelessWidget {
     this.onRetryDanmaku,
     this.preload = true,
     this.preloadStatus = '',
+    this.seamless = false,
     this.enhancement,
     this.onCompareEnhancement,
     this.route = 0,
@@ -561,6 +564,7 @@ class TelevisionSettingsDialog extends StatelessWidget {
   final VoidCallback? onRetryDanmaku;
   final bool preload;
   final String preloadStatus;
+  final bool seamless;
   final VideoEnhancementController? enhancement;
   final VoidCallback? onCompareEnhancement;
   final int route;
@@ -735,6 +739,20 @@ class TelevisionSettingsDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(preloadStatus, style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 16),
+            RemoteButton(
+              key: const ValueKey('tv-seamless-enabled'),
+              label: seamless ? '无缝播放：开' : '无缝播放：关',
+              onPressed: () => Navigator.pop(
+                context,
+                TelevisionPlaybackSetting(seamless: !seamless),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '换集时首帧直接衔接不黑屏；开启时自动打开预加载',
+              style: TextStyle(fontSize: 12),
+            ),
             const SizedBox(height: 20),
             RemoteButton(
               label: favorite ? '取消追剧' : '加入追剧',

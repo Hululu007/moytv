@@ -137,6 +137,25 @@ class PlaybackPreloader extends ChangeNotifier {
     return result;
   }
 
+  /// 只看不取：身份对得上且未过期时返回已备好的 plan，不消费、
+  /// 不清状态。无缝预热靠它先拿到 plan 喂待命播放器；真正换集
+  /// 时仍走 [take]（同一 plan 被 take 走后预加载器照常复位，
+  /// 待命播放器播的正是这条 plan 的地址，不重复取流）。
+  PlaybackPlan? peekReady(
+    Drama drama,
+    Episode episode, {
+    int quality = 0,
+    bool online = false,
+    int route = 0,
+    bool adBlock = true,
+  }) {
+    if (_identity != _key(drama, episode, quality, route, online, adBlock)) {
+      return null;
+    }
+    if (!_now().isBefore(_expires)) return null;
+    return _ready;
+  }
+
   void pause() {
     final changed = loading || _delay != null;
     _generation++;

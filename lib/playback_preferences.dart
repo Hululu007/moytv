@@ -27,6 +27,7 @@ class PlaybackPreferences {
     this.autoAdvance = true,
     this.danmaku = true,
     this.preload = true,
+    this.seamless = false,
     this.adBlock = true,
     this.holdSpeed = 2,
     this.swipeSeekSeconds = 60,
@@ -42,6 +43,12 @@ class PlaybackPreferences {
   final bool autoAdvance;
   final bool danmaku;
   final bool preload;
+
+  /// 无缝播放：换集时用待命播放器已预热好的首帧直接衔接，不黑屏。
+  /// 单向依赖 preload：无缝开着预加载必须开，关预加载连带关无缝
+  /// （见 [withPreload] / [withSeamless] 与 fromJson 的归一化），
+  /// 任何入口都不许存下 seamless=true 而 preload=false 的组合。
+  final bool seamless;
   final bool adBlock;
   final double holdSpeed;
   final int swipeSeekSeconds;
@@ -57,6 +64,7 @@ class PlaybackPreferences {
     bool? autoAdvance,
     bool? danmaku,
     bool? preload,
+    bool? seamless,
     bool? adBlock,
     double? holdSpeed,
     int? swipeSeekSeconds,
@@ -71,6 +79,7 @@ class PlaybackPreferences {
     autoAdvance: autoAdvance ?? this.autoAdvance,
     danmaku: danmaku ?? this.danmaku,
     preload: preload ?? this.preload,
+    seamless: seamless ?? this.seamless,
     adBlock: adBlock ?? this.adBlock,
     holdSpeed: holdSpeed ?? this.holdSpeed,
     swipeSeekSeconds: swipeSeekSeconds ?? this.swipeSeekSeconds,
@@ -81,12 +90,22 @@ class PlaybackPreferences {
     orientationMode: orientationMode ?? this.orientationMode,
   );
 
+  /// 改预加载开关：关预加载连带关无缝（无缝靠预加载备好的
+  /// 下一集 plan 预热，预加载关了无缝无从谈起）；开预加载不动无缝。
+  PlaybackPreferences withPreload(bool value) =>
+      copyWith(preload: value, seamless: value ? seamless : false);
+
+  /// 改无缝开关：开无缝自动同时打开预加载；关无缝不动预加载。
+  PlaybackPreferences withSeamless(bool value) =>
+      copyWith(seamless: value, preload: value ? true : preload);
+
   Map<String, dynamic> toJson() => {
     'speed': speed,
     'quality': quality,
     'autoAdvance': autoAdvance,
     'danmaku': danmaku,
     'preload': preload,
+    'seamless': seamless,
     'adBlock': adBlock,
     'holdSpeed': holdSpeed,
     'swipeSeekSeconds': swipeSeekSeconds,
@@ -103,6 +122,9 @@ class PlaybackPreferences {
     final autoAdvance = value['autoAdvance'] as bool? ?? true;
     final danmaku = value['danmaku'] as bool? ?? true;
     final preload = value['preload'] as bool? ?? true;
+    // 归一化单向依赖：存量数据里若出现无缝开着而预加载关着的
+    // 组合，按「关预加载连带关无缝」读成无缝关，不让矛盾状态进门。
+    final seamless = (value['seamless'] as bool? ?? false) && preload;
     final adBlock = value['adBlock'] as bool? ?? true;
     final holdSpeed = (value['holdSpeed'] as num? ?? 2).toDouble();
     final swipeSeekSeconds = value['swipeSeekSeconds'] as int? ?? 60;
@@ -120,6 +142,7 @@ class PlaybackPreferences {
       autoAdvance: autoAdvance,
       danmaku: danmaku,
       preload: preload,
+      seamless: seamless,
       adBlock: adBlock,
       holdSpeed: holdSpeed,
       swipeSeekSeconds: swipeSeekSeconds,

@@ -19,6 +19,10 @@ class TvboxPlaybackHandle {
   bool playing = false;
   bool completed = false;
 
+  /// 首帧已渲染到画面（待命预热完成判据）。每次打开新 plan 前
+  /// 由面板复位，首帧事件到达时置真。
+  bool firstFrameReady = false;
+
   void attach(TvboxPlayerController controller) {
     _controller = controller;
   }
@@ -30,6 +34,8 @@ class TvboxPlaybackHandle {
   Future<void> play() => _controller?.play() ?? Future.value();
 
   Future<void> pause() => _controller?.pause() ?? Future.value();
+
+  Future<void> stop() => _controller?.stop() ?? Future.value();
 
   Future<void> seek(Duration target) =>
       _controller?.seekTo(target) ?? Future.value();
@@ -58,6 +64,8 @@ class TvboxVideoPane extends StatefulWidget {
     this.onBack,
     this.onFullscreen,
     this.isFullscreen = false,
+    this.headless = false,
+    this.onFirstFrame,
   });
 
   final PlaybackPlan? plan;
@@ -71,6 +79,14 @@ class TvboxVideoPane extends StatefulWidget {
   final VoidCallback? onBack;
   final VoidCallback? onFullscreen;
   final bool isFullscreen;
+
+  /// 待命模式（无缝预热用）：只渲染画面本身，不画控制条/字幕/
+  /// 缓冲圈，不起实时字幕服务。对调晋升为正式面时由父级把
+  /// 本标志改回 false，面板补起实时字幕（见 didUpdateWidget）。
+  final bool headless;
+
+  /// 首帧渲染回调（待命面报预热完成用；正式面可不传）。
+  final VoidCallback? onFirstFrame;
 
   @override
   State<TvboxVideoPane> createState() => _TvboxVideoPaneState();
@@ -123,6 +139,16 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
       _openedUrl = plan.url;
       _openedAutoplay = widget.autoplay;
       unawaited(_open(plan, widget.startPosition));
+    }
+    // 待命面晋升为正式面：开播时是待命模式、没起实时字幕，
+    // 晋升后按当前进度补起，与正式面打开时的行为对齐。
+    if (oldWidget.headless &&
+        !widget.headless &&
+        plan != null &&
+        _controller != null) {
+      unawaited(
+        _startLiveSubtitle(plan, widget.handle.positionSeconds),
+      );
     }
   }
 
@@ -182,6 +208,11 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
         _subtitleBuffer.push(group);
         if (_updateSubtitleLines()) setState(() {});
       }),
+      controller.firstFrameStream.listen((_) {
+        if (!mounted) return;
+        widget.handle.firstFrameReady = true;
+        widget.onFirstFrame?.call();
+      }),
     ]);
     final plan = widget.plan;
     if (plan != null) {
@@ -201,6 +232,7 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     final controller = _controller;
     if (controller == null) return;
     widget.handle.completed = false;
+    widget.handle.firstFrameReady = false;
     _subtitleBuffer.clear();
     _subtitleLines = const [];
     await _stopLiveSubtitle();
@@ -215,7 +247,11 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
     if (!_openedAutoplay) {
       await controller.pause();
     }
-    await _startLiveSubtitle(plan, startPosition);
+    // 待命面不起实时字幕服务：同一集只能有一份识别在跑，
+    // 晋升为正式面时在 didUpdateWidget 里补起。
+    if (!widget.headless) {
+      await _startLiveSubtitle(plan, startPosition);
+    }
   }
 
   /// 实时字幕：只在总开关开着、平台支持、源不是播放器侧内存
@@ -312,6 +348,14 @@ class _TvboxVideoPaneState extends State<TvboxVideoPane> {
   Widget build(BuildContext context) {
     if (!Platform.isAndroid) {
       return const ColoredBox(color: Colors.black);
+    }
+    if (widget.headless) {
+      // 待命面只出画面：控制条、字幕、缓冲圈一概不画，
+      // 它被正式面盖在下层，用户看不见。
+      return AndroidView(
+        viewType: widget.viewType,
+        onPlatformViewCreated: _onViewCreated,
+      );
     }
     final position = widget.handle.position;
     final duration = widget.handle.duration;

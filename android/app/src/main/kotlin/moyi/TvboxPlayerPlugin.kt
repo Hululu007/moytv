@@ -88,6 +88,12 @@ internal class TvboxPlayerView(
             channel.invokeMethod("onBuffering", isLoading)
         }
 
+        // 首帧已渲染：Dart 侧无缝预热的待命播放器靠它判定预热
+        // 完成（暂停在起点把首帧备好，切换时直接 play）。构建时验。
+        override fun onRenderedFirstFrame() {
+            channel.invokeMethod("onFirstFrame", null)
+        }
+
         override fun onPlayerError(error: PlaybackException) {
             channel.invokeMethod("onError", error.message ?: "播放失败")
         }
