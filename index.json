@@ -1638,6 +1638,33 @@
       "adult": true,
       "description": "黄果短剧视频（内置 jar 站 ZakaHgdjV 改写）。接口域名走 crks.json 分发加 /api/sys/live 探活（回退线路域名随机子域），游客登录走 jar 同款 AES-ECB 加密契约，接口 encData 用令牌片段 AES-CBC 解密（插件内自带 AES 实现）；分类照 /api/video/classifyList 全量 11 个（短剧精选/魔改短剧/小编推荐/伦理之爱/国产精选/动漫/网黄精选/新番AV/原创传媒/欧美精选/禁区），不删减不合并；列表 /api/video/getVideoList、搜索 /api/search/keyWord、详情 /api/video/getVideoById（serialVideos 为分集）；播放走 jar 的签名网关 /api/v2/m3u8/play（HMAC-SHA256 签名加 authKey），主清单在 play 内预解析到子清单。封面照 jar 走 hgimg.ystv.top 图片代理（图床原图为加密块、代理还原，图床域名轮换）。",
       "manifest": "hgdjv/hgdjv.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.utube",
+      "name": "Utube",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Utube（bak.vkxrpigoi.cc PWA 接口站）。分类与原蜘蛛 classes 1:1 共 10 类（推荐/发现/YouTube精选/伦理道德/品牌传媒/官方原创/黑料吃瓜/直播/短视频/热门）。接口为 AES-128-CBC 加密表单加 MD5/SHA256 签名（同内置 jar 蜘蛛 ZakaUtubeAmns），付费条目按原蜘蛛规则过滤、标题旗标词过滤照搬，play 内主清单预解析到子清单。由内置 jar 蜘蛛 ZakaUtubeAmns 改写。",
+      "manifest": "utube/utube.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.md",
+      "name": "麻豆",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "麻豆（麻豆传媒系接口站 spi.d5c4a712.com，非 LissAV）。60 个分类与内置蜘蛛硬编码导航表 1:1（最新/麻豆传媒映画/乐播传媒/91制作/SWAG/糖心/天美传媒/蜜桃传媒等），接口为 AES-256-CBC 加密请求体加 MD5 签名协议（照原蜘蛛 1:1 复刻），列表只留免费条目（全页皆付费时才收付费条目并标「付费」），封面直出原图（原蜘蛛图片工场 mdimg.ystv.top 现回 429 额度错误、原图直拉已验 200），播放为 https m3u8、play 内主清单预解析。由内置 jar 蜘蛛 ZakaMdAmns 改写。",
+      "manifest": "md/md.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.xj",
+      "name": "香蕉视频",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "香蕉视频（App 接口站，JSON API）。17 个分类与原内置蜘蛛导航 1:1（首页 8 区/榜单 3/专题/短视频榜 5），发现域名探活后走接口取列表，详情按原蜘蛛缓存+榜单扫描还原，播放走 /vod/reqplay 现取 https HLS 并在 play 内预解析主清单；付费与旗标标题过滤照原蜘蛛。登记表 ZakaXj 与 zakaxj 同为蜘蛛类 ZakaXjAmns、同站同协议，本插件一并覆盖。由内置 jar 蜘蛛 ZakaXjAmns 改写。",
+      "manifest": "xj/xj.idjplugin"
     }
   ],
   "cms": []
