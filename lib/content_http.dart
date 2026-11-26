@@ -88,12 +88,40 @@ class ContentHttp {
     _clientSignature = null;
   }
 
+  /// 把调用方请求头写到请求上。默认行为（既有调用方不变）：UA 没传
+  /// 时补 [contentUserAgent]，空值头跳过不发。
+  /// [preserveEmptyHeaders] 为 true 时空值头也照原样发——只给云盘直链
+  /// 这条链用：115 直链契约要求取流 UA 与取链时一样是空串，空值头被
+  /// 吞掉换成默认 UA 会被 CDN 拒（403）。别在其它内容源上打开。
+  void _applyHeaders(
+    HttpClientRequest request,
+    Map<String, String> headers, {
+    bool preserveEmptyHeaders = false,
+  }) {
+    request.headers.set(
+      HttpHeaders.userAgentHeader,
+      headers['User-Agent'] ?? contentUserAgent,
+    );
+    headers.forEach((key, value) {
+      if (key.toLowerCase() == 'user-agent') return;
+      if (value.isEmpty && !preserveEmptyHeaders) return;
+      request.headers.set(key, value);
+    });
+  }
+
   Future<String> get(
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
-  }) async =>
-      _send(_currentClient, url, method: 'GET', headers: headers, timeout: timeout);
+    bool preserveEmptyHeaders = false,
+  }) async => _send(
+    _currentClient,
+    url,
+    method: 'GET',
+    headers: headers,
+    timeout: timeout,
+    preserveEmptyHeaders: preserveEmptyHeaders,
+  );
 
   /// GET 并返回原始响应（状态码/响应头/字节），非 200 不抛错。
   /// 与 [get] 同一条超时/大小上限链路，仅错误语义不同。
@@ -101,6 +129,7 @@ class ContentHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
+    bool preserveEmptyHeaders = false,
   }) async {
     final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
@@ -110,14 +139,11 @@ class ContentHttp {
     try {
       final request = await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        headers['User-Agent'] ?? contentUserAgent,
+      _applyHeaders(
+        request,
+        headers,
+        preserveEmptyHeaders: preserveEmptyHeaders,
       );
-      headers.forEach((key, value) {
-        if (key.toLowerCase() == 'user-agent' || value.isEmpty) return;
-        request.headers.set(key, value);
-      });
       final response = await request.close().timeout(timeout);
       final builder = BytesBuilder(copy: false);
       // 正文空闲超时：数据流动中每次来块重置计时，超过 timeout 无新数据才抛超时。
@@ -152,6 +178,7 @@ class ContentHttp {
     Map<String, String> form, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
+    bool preserveEmptyHeaders = false,
   }) async => _send(
     _currentClient,
     url,
@@ -164,6 +191,7 @@ class ContentHttp {
         .join('&'),
     headers: headers,
     timeout: timeout,
+    preserveEmptyHeaders: preserveEmptyHeaders,
   );
 
   Future<String> postJson(
@@ -171,6 +199,7 @@ class ContentHttp {
     Map<String, dynamic> json, {
     Map<String, String> headers = const {},
     Duration timeout = contentTimeout,
+    bool preserveEmptyHeaders = false,
   }) async {
     final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
@@ -180,14 +209,11 @@ class ContentHttp {
     try {
       final request = await client.postUrl(uri).timeout(timeout);
       request.followRedirects = true;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        headers['User-Agent'] ?? contentUserAgent,
+      _applyHeaders(
+        request,
+        headers,
+        preserveEmptyHeaders: preserveEmptyHeaders,
       );
-      headers.forEach((key, value) {
-        if (key.toLowerCase() == 'user-agent' || value.isEmpty) return;
-        request.headers.set(key, value);
-      });
       request.headers.contentType = ContentType.parse(
         'application/json; charset=UTF-8',
       );
@@ -224,6 +250,7 @@ class ContentHttp {
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 90),
+    bool preserveEmptyHeaders = false,
   }) async {
     final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
@@ -233,10 +260,14 @@ class ContentHttp {
     try {
       final request = await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
-      request.headers.set(HttpHeaders.userAgentHeader, contentUserAgent);
-      headers.forEach((key, value) {
-        if (value.isNotEmpty) request.headers.set(key, value);
-      });
+      if (preserveEmptyHeaders) {
+        _applyHeaders(request, headers, preserveEmptyHeaders: true);
+      } else {
+        request.headers.set(HttpHeaders.userAgentHeader, contentUserAgent);
+        headers.forEach((key, value) {
+          if (value.isNotEmpty) request.headers.set(key, value);
+        });
+      }
       final response = await request.close().timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
         await response.drain<void>().timeout(timeout);
@@ -268,6 +299,7 @@ class ContentHttp {
     Map<String, String> headers = const {},
     String charset = 'utf-8',
     Duration timeout = contentTimeout,
+    bool preserveEmptyHeaders = false,
   }) async {
     final client = _currentClient;
     final uri = Uri.tryParse(url.trim());
@@ -279,14 +311,11 @@ class ContentHttp {
           ? await client.postUrl(uri).timeout(timeout)
           : await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        headers['User-Agent'] ?? contentUserAgent,
+      _applyHeaders(
+        request,
+        headers,
+        preserveEmptyHeaders: preserveEmptyHeaders,
       );
-      headers.forEach((key, value) {
-        if (key.toLowerCase() == 'user-agent' || value.isEmpty) return;
-        request.headers.set(key, value);
-      });
       if (method == 'POST') {
         request.headers.contentType = ContentType.parse(
           contentType ?? 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -325,6 +354,7 @@ class ContentHttp {
     String body = '',
     Map<String, String> headers = const {},
     required Duration timeout,
+    bool preserveEmptyHeaders = false,
   }) async {
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
@@ -335,14 +365,11 @@ class ContentHttp {
           ? await client.postUrl(uri).timeout(timeout)
           : await client.getUrl(uri).timeout(timeout);
       request.followRedirects = true;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        headers['User-Agent'] ?? contentUserAgent,
+      _applyHeaders(
+        request,
+        headers,
+        preserveEmptyHeaders: preserveEmptyHeaders,
       );
-      headers.forEach((key, value) {
-        if (key.toLowerCase() == 'user-agent' || value.isEmpty) return;
-        request.headers.set(key, value);
-      });
       if (method == 'POST') {
         request.headers.contentType = ContentType.parse(
           'application/x-www-form-urlencoded; charset=UTF-8',

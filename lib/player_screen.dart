@@ -43,6 +43,7 @@ import 'models.dart';
 import 'nonvideo_content.dart';
 import 'playback_loader.dart';
 import 'playback_parse.dart';
+import 'playback_headers.dart';
 import 'playback_redirect.dart';
 import 'playback_foreground.dart';
 import 'playback_preloader.dart';
@@ -2466,10 +2467,28 @@ class _PlayerScreenState extends State<PlayerScreen>
           _ijkStartPosition = position;
           _ijkAutoplay = _foreground && _playIntent;
         } else {
+          // 空 UA 的计划（115 直链契约：播放 UA 必须与取链的空 UA
+          // 一致）：media_kit 拼不出 mpv 的空值头字面量 `User-Agent;`，
+          // 改走 mpv 属性 http-header-fields 设整张字段表，Media 本身
+          // 不带头（带了会在 on_load 钩子里覆盖掉属性）。没有空 UA 时
+          // 清掉属性防上一份计划的字段表串过来，其余头照旧走 Media。
+          Map<String, String>? mediaHeaders = plan.headers;
+          if (platform is NativePlayer) {
+            final fields = mpvHttpHeaderFields(plan.headers);
+            if (fields != null) {
+              await platform.setProperty(
+                'http-header-fields',
+                mpvHeaderFieldsPropertyValue(fields),
+              );
+              mediaHeaders = null;
+            } else {
+              await platform.setProperty('http-header-fields', '');
+            }
+          }
           await _player.open(
             Media(
               plan.url,
-              httpHeaders: plan.headers,
+              httpHeaders: mediaHeaders,
               start: position > 0
                   ? Duration(milliseconds: (position * 1000).round())
                   : null,

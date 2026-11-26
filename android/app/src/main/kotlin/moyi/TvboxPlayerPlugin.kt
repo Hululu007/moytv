@@ -295,6 +295,15 @@ internal class TvboxPlayerView(
             .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
         if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
+        // 115 直链契约：取链 UA 是空串，播放也必须发空 UA（f=1 校验）。
+        // 计划头里带了空 UA 时显式 setUserAgent("")，把意图钉死在代码里，
+        // 不依赖 DefaultHttpDataSource 对默认请求属性的处理顺序；空串
+        // 到底在线上发成空值还是被连接层换成平台默认 UA，真机才能裁决。
+        val planUserAgent = headers.entries
+            .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+        if (planUserAgent != null && planUserAgent.isEmpty()) {
+            httpFactory.setUserAgent("")
+        }
         // 文本轨默认只选带语言的：MKV 内嵌 ASS 常无语言标记，须显式
         // 允许未定语言轨，否则字幕轨根本不被选中。构建时验。
         val trackSelector = DefaultTrackSelector(appContext).apply {
