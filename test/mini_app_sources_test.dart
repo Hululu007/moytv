@@ -249,6 +249,7 @@ void main() {
     late ZakatvBuiltinSite jarBuiltin;
     late ZakatvBuiltinSite jarUnregistered;
     late String jarSiteId;
+    const standaloneJarSiteId = 'jar:standalone_test:demo';
 
     setUp(() {
       final video = zakatvBuiltinSites
@@ -292,32 +293,96 @@ void main() {
         importType: 'py',
       );
       SourceSite.importedPyFiles['test_py_import'] = 'test_py_import.py';
+      // ZakaTV jar 内置站经 JarImport 还会在注册表里留一条同 id 的
+      // import/jar 登记（运行时真实形态），清单里必须去重。
+      SourceSite.importedSites[jarSiteId] = SourceSite(
+        jarSiteId,
+        jarBuiltin.name,
+        'ZakaTV jar 内置 · test',
+        origin: SourceSite.originImport,
+        importType: 'jar',
+      );
+      SourceSite.importedSites['test_jsonlist_import'] = const SourceSite(
+        'test_jsonlist_import',
+        '导入 jsonlist 站',
+        'JSON 列表导入站',
+        origin: SourceSite.originImport,
+        importType: 'jsonlist',
+      );
+      SourceSite.importedPyFiles['test_jsonlist_import'] =
+          'test_jsonlist_import.py';
+      // 独立导入 jar 站：spec 进 jar 桥 + 注册表一条 import/jar。
+      JarBridge.register(
+        const JarSiteSpec(
+          siteId: standaloneJarSiteId,
+          configId: 'standalone_test',
+          name: '独立导入 jar 站',
+          className: 'csp_Demo',
+          jarUrl: '',
+          jarMd5: '',
+          ext: '',
+        ),
+      );
+      SourceSite.importedSites[standaloneJarSiteId] = const SourceSite(
+        standaloneJarSiteId,
+        '独立导入 jar 站',
+        'jar 导入 · csp_Demo',
+        origin: SourceSite.originImport,
+        importType: 'jar',
+      );
+      // JS 蜘蛛与 idj 插件站：取数链不在本提供者，不进汇合集。
+      SourceSite.importedSites['test_js_import'] = const SourceSite(
+        'test_js_import',
+        '导入 JS 站',
+        'JS 蜘蛛导入站',
+        origin: SourceSite.originImport,
+        importType: 'js',
+      );
+      SourceSite.importedSites['idj_testplug'] = const SourceSite(
+        'idj_testplug',
+        '测试插件站',
+        'idj 插件 · test',
+        origin: SourceSite.originImport,
+        importType: 'js',
+        importExt: 'com.idj.ext.testplug',
+      );
     });
 
     tearDown(() {
       JarBridge.unregister(jarSiteId);
+      JarBridge.unregister(standaloneJarSiteId);
       SourceSite.importedSites.remove('test_py_builtin');
       SourceSite.importedSites.remove('test_py_config');
       SourceSite.importedSites.remove('test_py_import');
+      SourceSite.importedSites.remove(jarSiteId);
+      SourceSite.importedSites.remove('test_jsonlist_import');
+      SourceSite.importedSites.remove(standaloneJarSiteId);
+      SourceSite.importedSites.remove('test_js_import');
+      SourceSite.importedSites.remove('idj_testplug');
       SourceSite.importedPyFiles.remove('test_py_builtin');
       SourceSite.importedPyFiles.remove('test_py_config');
       SourceSite.importedPyFiles.remove('test_py_import');
+      SourceSite.importedPyFiles.remove('test_jsonlist_import');
     });
 
-    test('list reads the same builtin registries as the zone', () async {
+    test('list keeps the builtin segment intact and appends merged sites',
+        () async {
       final provider = HostMiniAppSourceProvider();
       final sites = await provider.listSites();
       final jarCount =
           zakatvBuiltinSites.where((site) => !site.audioOnly).length +
           missav30BuiltinSites.where((site) => !site.audioOnly).length;
+      bool isBuiltinJarKey(Object? key) =>
+          (key as String).startsWith('jar:zakatv:') ||
+          key.startsWith('jar:missav30:');
       final jarEntries = sites.where((e) => e['type'] == 'jar').toList();
-      expect(jarEntries.length, jarCount);
+      // 内置 jar 段条数不变，其后只多汇合进来的独立导入 jar 一条。
+      expect(
+        jarEntries.where((e) => isBuiltinJarKey(e['key'])).length,
+        jarCount,
+      );
+      expect(jarEntries.length, jarCount + 1);
       for (final entry in jarEntries) {
-        expect(
-          (entry['key'] as String).startsWith('jar:zakatv:') ||
-              (entry['key'] as String).startsWith('jar:missav30:'),
-          isTrue,
-        );
         expect(entry['searchable'], isTrue);
         expect(entry['name'], isA<String>());
       }
@@ -327,16 +392,46 @@ void main() {
       expect(registered['available'], isTrue);
       expect(
         jarEntries
-            .where((e) => e['key'] != jarSiteId)
+            .where((e) => isBuiltinJarKey(e['key']) && e['key'] != jarSiteId)
             .every((e) => e['available'] == false),
         isTrue,
       );
+      // JarImport 的同 id 重复登记被去重：全表 key 不重复，
+      // jarSiteId 只出现一次且留在内置段位置（在汇合 jar 之前）。
+      final keys = [for (final e in sites) e['key']];
+      expect(keys.toSet().length, keys.length);
+      expect(keys.where((k) => k == jarSiteId).length, 1);
+      expect(
+        keys.indexOf(jarSiteId) < keys.indexOf(standaloneJarSiteId),
+        isTrue,
+      );
+      final mergedJar = jarEntries.firstWhere(
+        (e) => e['key'] == standaloneJarSiteId,
+      );
+      expect(mergedJar['name'], '独立导入 jar 站');
+      expect(mergedJar['available'], isTrue);
+
+      // py 段：内置在前，汇合段按注册表顺序跟上（配置/导入/jsonlist）。
       final pyEntries = sites.where((e) => e['type'] == 'py').toList();
-      expect(pyEntries.length, 1);
-      expect(pyEntries.first['key'], 'test_py_builtin');
+      expect(
+        [for (final e in pyEntries) e['key']],
+        [
+          'test_py_builtin',
+          'test_py_config',
+          'test_py_import',
+          'test_jsonlist_import',
+        ],
+      );
       expect(pyEntries.first['name'], '测试 py 站');
       expect(pyEntries.first['searchable'], isTrue);
       expect(pyEntries.first['available'], isTrue);
+      expect(
+        pyEntries.every((e) => e['available'] == true),
+        isTrue,
+      );
+      // JS 蜘蛛与 idj 插件站不进清单。
+      expect(keys.contains('test_js_import'), isFalse);
+      expect(keys.contains('idj_testplug'), isFalse);
     });
 
     test('unknown keys and missing params fail with contract codes',
@@ -396,16 +491,75 @@ void main() {
           ),
         ),
       );
-      await expectLater(
-        provider.home('test_py_config'),
-        throwsA(
-          isA<MiniAppSourceFailure>().having(
-            (e) => e.code,
-            'code',
-            'SITE_NOT_FOUND',
+      // JS 蜘蛛与 idj 插件站不在本提供者的取数链上，仍报未找到。
+      for (final key in ['test_js_import', 'idj_testplug']) {
+        await expectLater(
+          provider.home(key),
+          throwsA(
+            isA<MiniAppSourceFailure>().having(
+              (e) => e.code,
+              'code',
+              'SITE_NOT_FOUND',
+            ),
           ),
-        ),
+        );
+      }
+    });
+
+    test('merged import and config sites resolve via the existing chains',
+        () async {
+      final pySeen = <String>[];
+      final jarSeen = <String>[];
+      final provider = HostMiniAppSourceProvider(
+        pyCall: (source, request) async {
+          pySeen.add('$source:${request['action']}');
+          switch (request['action']) {
+            case 'home':
+              return {
+                'list': [
+                  {'vod_id': 'm1', 'vod_name': '汇合片'},
+                ],
+              };
+            case 'resolve':
+              return {'playUrl': 'https://cdn.example.com/m.m3u8'};
+          }
+          return {};
+        },
+        jarCall: (spec, method, args) async {
+          jarSeen.add('${spec.siteId}:$method');
+          return {
+            'list': [
+              {'vod_id': 'j1', 'vod_name': '导入 jar 片'},
+            ],
+          };
+        },
       );
+
+      // 导入 py、配置 py、jsonlist 导入站都走 py 桥现成动作。
+      for (final key in [
+        'test_py_import',
+        'test_py_config',
+        'test_jsonlist_import',
+      ]) {
+        final home = await provider.home(key);
+        expect((home['list'] as List).length, 1, reason: key);
+      }
+      expect(pySeen, [
+        'test_py_import:home',
+        'test_py_config:home',
+        'test_jsonlist_import:home',
+      ]);
+      final play = await provider.play(
+        siteKey: 'test_py_import',
+        flag: '默认',
+        id: 'q1',
+      );
+      expect(play['url'], 'https://cdn.example.com/m.m3u8');
+
+      // 独立导入 jar 站按完整 siteId 走 jar 桥，spec 就是注册那条。
+      final jarHome = await provider.home(standaloneJarSiteId);
+      expect((jarHome['list'] as List).length, 1);
+      expect(jarSeen, ['$standaloneJarSiteId:homeContent']);
     });
 
     test('jar data calls use the host jar bridge methods', () async {
@@ -906,7 +1060,7 @@ void main() {
       );
     });
 
-    test('proxyFetch calls the proxy action for builtin py sites only',
+    test('proxyFetch calls the proxy action for py sites of any origin',
         () async {
       final seen = <Map<String, dynamic>>[];
       final provider = HostMiniAppSourceProvider(
@@ -929,27 +1083,34 @@ void main() {
       expect(seen[0]['action'], 'proxy');
       expect(seen[0]['param'], {'u': 'https://cdn.example.com/cover.jpg'});
 
-      await expectLater(
-        provider.proxyFetch('test_py_config', {'u': 'https://x/a.jpg'}),
-        throwsA(
-          isA<MiniAppSourceFailure>().having(
-            (e) => e.code,
-            'code',
-            'SITE_NOT_FOUND',
+      // 汇合口径：导入/配置/jsonlist 的 py 站同样放行。
+      for (final key in [
+        'test_py_import',
+        'test_py_config',
+        'test_jsonlist_import',
+      ]) {
+        final merged = await provider.proxyFetch(key, {
+          'u': 'https://x/a.jpg',
+        });
+        expect(merged['status'], 200, reason: key);
+      }
+      expect(seen.length, 4);
+      expect(seen[3]['source'], 'test_jsonlist_import');
+
+      // 非 py 站与未知站仍报未找到，且不触发蜘蛛调用。
+      for (final key in ['test_js_import', 'no_such_site']) {
+        await expectLater(
+          provider.proxyFetch(key, {'u': 'https://x/a.jpg'}),
+          throwsA(
+            isA<MiniAppSourceFailure>().having(
+              (e) => e.code,
+              'code',
+              'SITE_NOT_FOUND',
+            ),
           ),
-        ),
-      );
-      await expectLater(
-        provider.proxyFetch('no_such_site', {'u': 'https://x/a.jpg'}),
-        throwsA(
-          isA<MiniAppSourceFailure>().having(
-            (e) => e.code,
-            'code',
-            'SITE_NOT_FOUND',
-          ),
-        ),
-      );
-      expect(seen.length, 1);
+        );
+      }
+      expect(seen.length, 4);
     });
   });
 

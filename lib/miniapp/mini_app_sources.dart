@@ -71,14 +71,25 @@ class _ResolvedSite {
   final JarSiteSpec? spec;
 }
 
-/// 默认实现：只读复用站点区同一套内置注册表，不另起一份。
+/// 默认实现：只读复用站点区同一套注册表，不另起一份。
 ///
-/// jar 站读静态表 zakatvBuiltinSites + missav30BuiltinSites（跳过纯
-/// 音频站，与站点区注册口径一致；一点播 oneBuiltinSites 不在此列，
-/// 与搬 MissAV 之前一致）；py 站读运行时注册表 SourceSite.importedSites，按
-/// importType == 'py' 且 origin == 'builtin' 过滤，只含内置的 44 个。
+/// 清单分两段，顺序固定：先是内置段（构成与顺序与汇合前一字不变），
+/// 其后是汇合段，按站 id 去重（已在内置段出现的不重复列）。
+/// 内置段：jar 站读静态表 zakatvBuiltinSites + missav30BuiltinSites
+/// （跳过纯音频站，与站点区注册口径一致；一点播 oneBuiltinSites 不
+/// 在此列，与搬 MissAV 之前一致）；py 站读运行时注册表
+/// SourceSite.importedSites 里 origin == 'builtin' 的 py 条目。
+/// 汇合段：注册表里其余能走现有取数链的站——jar 桥已注册 spec 的站
+/// （配置 jar 站、独立导入 jar、插件市场装回的 jar 包，含 ZakaTV jar
+/// 经 JarImport 的重复登记，去重后只留内置段那条）与 importType 为
+/// 'py'/'jsonlist' 的站（用户导入、配置带来、插件市场装回的 py 包；
+/// jsonlist 登记执行时走生成的 py 蜘蛛，与宿主 _pyCall 同口径）。
 /// 取数走宿主现有链路：jar 经 JarBridge.callJson，py 经 PyBridge.call，
-/// 不另写爬虫。Go 核站（红果等）不是 TVBox 蜘蛛形态，不在此列。
+/// 不另写爬虫。Go 核站（红果等）不是 TVBox 蜘蛛形态，不在此列；
+/// JS 蜘蛛与 idj 插件站的取数链在 NativeRepository（Go 核实例，
+/// 带用户权限与插件看门狗），本提供者两条链都够不着，不列入清单、
+/// 解析时报 SITE_NOT_FOUND，不冒充可达；HTML 导入站不是蜘蛛形态，
+/// 同样不在列。
 class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   HostMiniAppSourceProvider({
     Future<Map<String, dynamic>> Function(
@@ -124,13 +135,19 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   @override
   Future<List<Map<String, dynamic>>> listSites() async {
     final sites = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void addSite(Map<String, dynamic> entry) {
+      if (seen.add(entry['key'] as String)) sites.add(entry);
+    }
+
+    // 内置段：构成与顺序保持汇合前的口径，一字不动。
     for (final (jarId, builtin) in [
       for (final b in zakatvBuiltinSites) (zakatvJarId, b),
       for (final b in missav30BuiltinSites) (missav30JarId, b),
     ]) {
       if (builtin.audioOnly) continue;
       final siteId = JarSiteSpec.siteIdFor(jarId, builtin.key);
-      sites.add(<String, dynamic>{
+      addSite(<String, dynamic>{
         'key': siteId,
         'name': builtin.name,
         'type': 'jar',
@@ -140,10 +157,11 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     }
     for (final entry in SourceSite.importedSites.entries) {
       final site = entry.value;
-      if (site.importType != 'py' || site.origin != SourceSite.originBuiltin) {
+      if (!_isPySpiderSite(site) ||
+          site.origin != SourceSite.originBuiltin) {
         continue;
       }
-      sites.add(<String, dynamic>{
+      addSite(<String, dynamic>{
         'key': site.id,
         'name': site.name,
         'type': 'py',
@@ -151,8 +169,35 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         'available': SourceSite.importedPyFiles.containsKey(site.id),
       });
     }
+    // 汇合段：注册表里其余可取数站（导入/配置/插件装回），按 id 去重。
+    for (final entry in SourceSite.importedSites.entries) {
+      final site = entry.value;
+      if (_isPySpiderSite(site)) {
+        addSite(<String, dynamic>{
+          'key': site.id,
+          'name': site.name,
+          'type': 'py',
+          'searchable': true,
+          'available': SourceSite.importedPyFiles.containsKey(site.id),
+        });
+      } else if (JarBridge.isJarSource(site.id)) {
+        addSite(<String, dynamic>{
+          'key': site.id,
+          'name': site.name,
+          'type': 'jar',
+          'searchable': true,
+          'available': true,
+        });
+      }
+    }
     return sites;
   }
+
+  /// 能走 py 桥取数的注册表条目：py 蜘蛛本体，以及登记类型为
+  /// jsonlist、执行时走生成的 py 蜘蛛的导入站（与宿主
+  /// NativeRepository.isPySource 同口径）。
+  static bool _isPySpiderSite(SourceSite site) =>
+      site.importType == 'py' || site.importType == 'jsonlist';
 
   @override
   Future<Map<String, dynamic>> home(String siteKey) async {
@@ -301,10 +346,13 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     });
   }
 
-  /// 只认内置站：jar 看静态表，py 看运行时注册表里的 builtin 条目。
-  /// 用户导入/配置的站不在开放范围，一律报 SITE_NOT_FOUND。
-  /// jar 既认站点区完整 id（`jar:zakatv:<key>` / `jar:missav30:<key>`），
-  /// 也认短 key。
+  /// 认汇合后的全集：内置 jar 看静态表（既认站点区完整 id
+  /// `jar:zakatv:<key>` / `jar:missav30:<key>`，也认短 key）；
+  /// 其余 jar 站认 jar 桥已注册的 spec（配置 jar 站、独立导入 jar、
+  /// 插件市场装回的 jar 包）；py 站认运行时注册表里 importType 为
+  /// 'py'/'jsonlist' 的任意来源条目（内置/导入/配置/插件装回）。
+  /// JS 蜘蛛、idj 插件站与 HTML 站不在本提供者的取数链上，
+  /// 一律报 SITE_NOT_FOUND（见类注释）。
   _ResolvedSite _resolveSite(String siteKey) {
     final key = siteKey.trim();
     if (key.isEmpty) {
@@ -337,13 +385,16 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
       }
       return _ResolvedSite(_SiteKind.jar, siteId, spec);
     }
+    // 汇合段 jar：jar 桥已注册的任意 spec 按完整 siteId 认。
+    final spec = JarBridge.specFor(key);
+    if (spec != null) {
+      return _ResolvedSite(_SiteKind.jar, key, spec);
+    }
     final site = SourceSite.importedSites[key];
-    if (site != null &&
-        site.importType == 'py' &&
-        site.origin == SourceSite.originBuiltin) {
+    if (site != null && _isPySpiderSite(site)) {
       return _ResolvedSite(_SiteKind.py, site.id, null);
     }
-    throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到内置站点：$key');
+    throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到站点：$key');
   }
 
   Future<T> _guarded<T>(Future<T> Function() run) async {
@@ -440,15 +491,14 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     return text.split(r'$$$');
   }
 
-  /// 图片代理取数：本地服务 /pyproxy 路由的回调。只认内置 py 站
-  /// （与 _resolveSite 同一口径），走蜘蛛 localProxy 的现成路径
+  /// 图片代理取数：本地服务 /pyproxy 路由的回调。认汇合后全集里的
+  /// py 站（与 _resolveSite 同一口径：importType 为 'py'/'jsonlist'
+  /// 的任意来源条目），走蜘蛛 localProxy 的现成路径
   /// （Referer + 解密都在蜘蛛里），不另写取图逻辑。
   Future<Map<String, dynamic>> proxyFetch(String source, Object? param) async {
     final site = SourceSite.importedSites[source];
-    if (site == null ||
-        site.importType != 'py' ||
-        site.origin != SourceSite.originBuiltin) {
-      throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到内置站点：$source');
+    if (site == null || !_isPySpiderSite(site)) {
+      throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到站点：$source');
     }
     return _callPy(source, {'action': 'proxy', 'param': param});
   }
