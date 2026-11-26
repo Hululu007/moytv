@@ -1314,6 +1314,42 @@
       "adult": true,
       "description": "黄瓜资源（wap.huangguazy7.cc，镜像 gua.huangguazy8.cc）。7 个分类与站导航 1:1（黄瓜/番号/不卡/玉兔/裤子/森林/163 资源），网页解析取 player_aaaa 的 m3u8 播放，master 清单在 play 内预解析。由内置 py 蜘蛛改写。",
       "manifest": "huangguazy/huangguazy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.huangguomanju",
+      "name": "黄果漫剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黄果漫剧（接口站，设备令牌鉴权）。2 个分类：成人漫剧、黑网红料；漫剧多集连载，免费集可播、VIP 集在集名标 ·VIP。播放为 AES-128 加密 HLS（密钥由播放器按清单地址自取）。由内置 py 蜘蛛改写。",
+      "manifest": "huangguomanju/huangguomanju.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.iqqr2",
+      "name": "iQQTV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "iQQTV（iqqr2.org，用户自有站）。3 个分类与原 py 完全一致（日本/國產/免費），详情与搜索按原 py 移植；播放为播放页现取的免费访客流（免费账号只有预告，未绕 VIP）。由内置 py 蜘蛛改写。",
+      "manifest": "iqqr2/iqqr2.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jav188",
+      "name": "AV18.Live",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "AV18.Live（jav188.net）。17 个分类与原 py 蜘蛛 CATS 1:1 对应，列表走站内 HTML 卡片解析，黑料区走站内 JSON 接口，详情页现取分段令牌经 getMv 接口换 HLS/mp4 直链播放（master 列表在 play 内预解析到子列表）。由内置 py 蜘蛛改写。",
+      "manifest": "jav188/jav188.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javfun",
+      "name": "JJavFun",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JJavFun（en.javfun.me）。10 个分类与站导航一致（全部 + 8 个厂牌 + Jav Uncensored），播放走 get_sources 接口现取 MD5 签名地址、master 清单预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "javfun/javfun.idjplugin"
     }
   ],
   "cms": []
