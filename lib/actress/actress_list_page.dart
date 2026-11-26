@@ -140,6 +140,19 @@ class _ActressListPageState extends State<ActressListPage> {
   var _loadingMore = false;
   var _hasMore = true;
 
+  /// 名单加载失败态（2026-11-26 加载优化）：非空且名单为空时
+  /// _buildList 显示「加载失败 + 原因 + 重试钮」。此前 _loadPage
+  /// 全程无 try/catch、无超时：名单查询只要抛一次错（最现成的
+  /// 触发源是开库后台重建汇总表的写锁），清标志的 setState 永远
+  /// 执行不到，名单永久转圈且无声。现在两分支统一包守卫 +
+  /// 超时，标志在失败路径必清。
+  String? _loadError;
+
+  /// 名单查询超时（照 nvku 文件夹路口径）：首屏 20 秒、翻页 15 秒。
+  static const _firstPageTimeout = Duration(seconds: 20);
+  static const _loadMoreTimeout = Duration(seconds: 15);
+
+
   /// 刷新中（筛选切换时）：旧列表留着当底，只在列表顶露一条细进度条，
   /// 不清列表、不转大圈，滚动位置天然保住。首屏第一次加载仍走
   /// _loading 大转圈（2026-11-24 切换不重载）。
@@ -328,9 +341,17 @@ class _ActressListPageState extends State<ActressListPage> {
     }
     // 兜底后台读、不堵首屏：列表站点过滤要用它，但不能在首屏等它。
     unawaited(_fallback.load());
-    final overview = await _db.overview();
+    // 2026-11-26 加载优化：总览与名单并行——原来串行等三条 COUNT
+    // （含 COUNT(DISTINCT cate_id) 扫 60.9 万行）跑完才查名单，
+    // 首屏白等一轮。总览只管头顶人数，带守卫自己读（见
+    // _loadOverviewGuarded），读不到不堵名单。
+    unawaited(_loadOverviewGuarded());
+    // 名单进程级缓存（2026-11-26 加载优化）：State 被宿主切区
+    // 销毁后重建时，先查缓存 key（库实例 + 换库/数据代次 +
+    // 筛选，见 _personsCacheStamp），命中直接上屏、免查库。此前名单第一页只活
+    // 在 State 里，切区回来全量重查、还要再等一轮总览。
     if (!mounted || generation != _generation) return;
-    setState(() => _overview = overview);
+    if (_restorePersonsFromEntryCache()) return;
     // 2026-11-22 用户令最终口径：库缺失/空库不再自动生成（不灌
     // 内置 json 种子、不走互联网同步），空态如实提示导入 .sql
     // 数据库。
@@ -342,6 +363,79 @@ class _ActressListPageState extends State<ActressListPage> {
     // 不自动爬取（2026-11-20 用户令）：打开只读本地，不自动起爬、
     // 不后台自动续爬、不自动生成；只等用户手动点刷新/重试/同步。
   }
+  /// 总览（头顶人数）带守卫地读（2026-11-26 加载优化）：包
+  /// try/catch + 首屏超时。原来 _bootstrap 里裸 await：总览抛错
+  /// 会把整个 bootstrap 打断（名单跟着不加载），慢查会把名单
+  /// 串行堵在后面。现在总览只管头顶计数，读不到就留空，名单
+  /// 照常；名单自己失败有自己的失败态（_loadError）。
+  Future<void> _loadOverviewGuarded() async {
+    try {
+      final overview = await _db.overview().timeout(_firstPageTimeout);
+      if (!mounted) return;
+      setState(() => _overview = overview);
+    } catch (_) {
+      // 总览读不到：头顶人数留空，不堵名单、不弹错。
+    }
+  }
+
+  /// 名单进程级缓存的 key 前缀：库实例身份 + 换库/数据代次。
+  /// 代次任一变了 key 就不同，旧名单串不到新库——应用内一切换库/
+  /// 改数据路径（.sql 导入换库、表格更新、管理页恢复/删除）都经
+  /// 任务控制器抬代次，没有绕过控制器的改库路径；实例身份让测试
+  /// 注入的内存库彼此隔离（生产是单例，身份恒定）。
+  /// 不把库文件指纹放进 key：解析文件路径要走平台通道，不许它
+  /// 堵名单首屏；带 -wal 分量的文件指纹在连接侧
+  /// （SqfliteActressDatabase.reloadIfChanged）守着，管的是连接
+  /// 新旧，与这里的名单缓存是两回事。
+  String get _personsCacheStamp =>
+      '${identityHashCode(_db)}'
+      '|${_taskController.swapGeneration}'
+      '|${_taskController.dataGeneration}';
+
+  String _entryPersonsKey() => '$_personsCacheStamp|${_pageCacheKey()}';
+
+  /// 切区回来/State 重建时先查进程级名单缓存：命中直接上屏
+  /// （人物 + hasMore + 翻页偏移 + 滚动偏移），返回 true 表示已
+  /// 恢复、不用再查库。只用于主模式（站源模式不走名单缓存）。
+  bool _restorePersonsFromEntryCache() {
+    if (_siteWorksMode) return false;
+    final entry = NvkuEntryCache.personsFirstPage(_entryPersonsKey());
+    if (entry == null) return false;
+    final generation = ++_generation;
+    setState(() {
+      _persons = entry.persons;
+      _hasMore = entry.hasMore;
+      _rawOffset = entry.rawOffset;
+      _loading = false;
+      _refreshing = false;
+      _loadingMore = false;
+      _loadError = null;
+    });
+    // 实例级第一页缓存也补一份：页内切筛选再切回来走快路。
+    _pageCache[_pageCacheKey()] = _CachedListPage(
+      entry.persons,
+      entry.hasMore,
+      entry.rawOffset,
+    )..scrollOffset = entry.scrollOffset;
+    // 恢复滚动偏移：等网格布局完再跳（post-frame），偏移越界时钳制。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _generation) return;
+      if (!_scrollController.hasClients) return;
+      final max = _scrollController.position.maxScrollExtent;
+      final target = entry.scrollOffset.clamp(0.0, max).toDouble();
+      if (target > 0) _scrollController.jumpTo(target);
+    });
+    return true;
+  }
+
+  /// 加载失败原因的短文案（失败态与 SnackBar 用）：超时说清是
+  /// 超时，其余取错误第一行截断，不把整段堆栈糊到界面上。
+  static String _shortLoadError(Object error) {
+    if (error is TimeoutException) return '加载超时，请重试';
+    final first = error.toString().split('\n').first.trim();
+    return first.length > 80 ? '${first.substring(0, 80)}…' : first;
+  }
+
   /// 手动重读内部工作库（2026-11-25 只留 .sql 导入）：只给
   /// _startSqlImport 内部调用，导完刷新列表；不再对外提供“热换库”
   /// 入口（设置里的重新加载按钮与绑定行已删）。重读失败留旧库并
@@ -522,9 +616,10 @@ class _ActressListPageState extends State<ActressListPage> {
   /// 的统一重读：旧缓存作废，先清再重读总览与列表。
   Future<void> _refreshAfterSync() async {
     _clearListCaches();
-    final overview = await _db.overview();
-    if (!mounted) return;
-    setState(() => _overview = overview);
+    // 名单缓存 key 前缀含换库/数据代次（见 _personsCacheStamp），
+    // 代次刚被任务控制器抬过，新名单自然挂新 key，不用重算。
+    // 总览走带守卫的读法（抛错/超时不打断重读）。
+    await _loadOverviewGuarded();
     await _loadPage(reset: true);
     if (!mounted) return;
   }
@@ -637,39 +732,69 @@ class _ActressListPageState extends State<ActressListPage> {
         }
         _loadingMore = false;
         _hasMore = true;
+        _loadError = null;
       });
-      final page = await widget.repository.catalog(
-        nvkuSourceId,
-        page: 1,
-        query: _query,
-        category: _siteWorksCategory,
-      );
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _siteWorks = page.items;
-        _siteWorksPage = 2;
-        _hasMore = page.hasMore;
-        _loading = false;
-        _refreshing = false;
-      });
+      // 2026-11-26 加载优化：与主名单同一套守卫（try/catch + 超时
+      // + 失败必清标志），不再裸 await 站点目录——站点抛错时原来
+      // 同样会把 _loading 卡死成永久转圈。
+      try {
+        final page = await widget.repository
+            .catalog(
+              nvkuSourceId,
+              page: 1,
+              query: _query,
+              category: _siteWorksCategory,
+            )
+            .timeout(_firstPageTimeout);
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _siteWorks = page.items;
+          _siteWorksPage = 2;
+          _hasMore = page.hasMore;
+          _loading = false;
+          _refreshing = false;
+        });
+      } catch (e) {
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          if (_siteWorks.isEmpty) _loadError = _shortLoadError(e);
+        });
+        if (_siteWorks.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('作品刷新失败：${_shortLoadError(e)}')),
+          );
+        }
+      }
       return;
     }
     if (_loadingMore || !_hasMore) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    final page = await widget.repository.catalog(
-      nvkuSourceId,
-      page: _siteWorksPage,
-      query: _query,
-      category: _siteWorksCategory,
-    );
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _siteWorks = [..._siteWorks, ...page.items];
-      _siteWorksPage += 1;
-      _hasMore = page.hasMore;
-      _loadingMore = false;
-    });
+    try {
+      final page = await widget.repository
+          .catalog(
+            nvkuSourceId,
+            page: _siteWorksPage,
+            query: _query,
+            category: _siteWorksCategory,
+          )
+          .timeout(_loadMoreTimeout);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _siteWorks = [..._siteWorks, ...page.items];
+        _siteWorksPage += 1;
+        _hasMore = page.hasMore;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _loadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载更多失败：${_shortLoadError(e)}')),
+      );
+    }
   }
 
   void _setSiteWorksCategory(String id) {
@@ -774,49 +899,81 @@ class _ActressListPageState extends State<ActressListPage> {
         }
         _loadingMore = false;
         _hasMore = true;
+        _loadError = null;
       });
       _rawOffset = 0;
-      final raw = await _db.listPersons(
-        sex: _sex,
-        sort: _sort,
-        query: _query,
-        tag: _tagFilter.tagValue,
-        videoTag: _videoTag,
-        offset: 0,
-        limit: _pageSize,
-      );
-      _rawOffset = raw.length;
-      final persons = await _applySiteFilter(raw);
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _persons = persons;
-        _hasMore = raw.length >= _pageSize;
-        _loading = false;
-        _refreshing = false;
-      });
-      _storePageCache(persons, raw.length >= _pageSize, _rawOffset);
+      // 2026-11-26 加载优化：名单查询包 try/catch + 首屏超时。
+      // 此前裸 await：抛一次错，清标志的 setState 永远执行不到，
+      // 名单永久转圈且无声（修仙版已实报同构故障）。现在失败必
+      // 清标志：名单为空进整页失败态（原因 + 重试钮），有旧名单
+      // 时旧数据留着、只弹一句。
+      try {
+        final raw = await _db
+            .listPersons(
+              sex: _sex,
+              sort: _sort,
+              query: _query,
+              tag: _tagFilter.tagValue,
+              videoTag: _videoTag,
+              offset: 0,
+              limit: _pageSize,
+            )
+            .timeout(_firstPageTimeout);
+        _rawOffset = raw.length;
+        final persons = await _applySiteFilter(raw);
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _persons = persons;
+          _hasMore = raw.length >= _pageSize;
+          _loading = false;
+          _refreshing = false;
+        });
+        _storePageCache(persons, raw.length >= _pageSize, _rawOffset);
+      } catch (e) {
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          if (_persons.isEmpty) _loadError = _shortLoadError(e);
+        });
+        if (_persons.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('名单刷新失败：${_shortLoadError(e)}')),
+          );
+        }
+      }
       return;
     }
     if (_loadingMore || !_hasMore) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    final raw = await _db.listPersons(
-      sex: _sex,
-      sort: _sort,
-      query: _query,
-      tag: _tagFilter.tagValue,
-      videoTag: _videoTag,
-      offset: _rawOffset,
-      limit: _pageSize,
-    );
-    _rawOffset += raw.length;
-    final persons = await _applySiteFilter(raw);
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _persons = [..._persons, ...persons];
-      _hasMore = raw.length >= _pageSize;
-      _loadingMore = false;
-    });
+    try {
+      final raw = await _db
+          .listPersons(
+            sex: _sex,
+            sort: _sort,
+            query: _query,
+            tag: _tagFilter.tagValue,
+            videoTag: _videoTag,
+            offset: _rawOffset,
+            limit: _pageSize,
+          )
+          .timeout(_loadMoreTimeout);
+      _rawOffset += raw.length;
+      final persons = await _applySiteFilter(raw);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _persons = [..._persons, ...persons];
+        _hasMore = raw.length >= _pageSize;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _loadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载更多失败：${_shortLoadError(e)}')),
+      );
+    }
   }
 
   /// 第一页缓存的 key：筛选条件的全部维度。任一维度变了就是另一个
@@ -849,6 +1006,16 @@ class _ActressListPageState extends State<ActressListPage> {
     while (_pageCache.length > _pageCacheMaxKeys) {
       _pageCache.remove(_pageCache.keys.first);
     }
+    // 进程级缓存同步写一份（2026-11-26 加载优化）：State 被宿主
+    // 切区销毁后，新 State 靠它免查库（key 含库实例/指纹/代次，
+    // 见 _entryPersonsKey）。滚动偏移由 _saveScrollOffsetForCache
+    // 切走前回写进这份缓存项。
+    NvkuEntryCache.putPersonsFirstPage(
+      _entryPersonsKey(),
+      persons: persons,
+      hasMore: hasMore,
+      rawOffset: rawOffset,
+    );
   }
 
   /// 切换前把当前滚动偏移存进当前 key 的缓存项（有缓存项才存）。
@@ -859,6 +1026,12 @@ class _ActressListPageState extends State<ActressListPage> {
     final cached = _pageCache[_pageCacheKey()];
     if (cached != null) {
       cached.scrollOffset = _scrollController.offset;
+    }
+    // 进程级缓存项同步回写：切区回来恢复的是这份（见
+    // _restorePersonsFromEntryCache）。
+    final entry = NvkuEntryCache.personsFirstPage(_entryPersonsKey());
+    if (entry != null) {
+      entry.scrollOffset = _scrollController.offset;
     }
   }
 
@@ -884,6 +1057,7 @@ class _ActressListPageState extends State<ActressListPage> {
       _loading = false;
       _refreshing = false;
       _loadingMore = false;
+      _loadError = null;
     });
     // 恢复滚动偏移：等网格布局完再跳（post-frame），偏移越界时钳制。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1386,11 +1560,37 @@ class _ActressListPageState extends State<ActressListPage> {
     childAspectRatio: 0.78,
   );
 
+  /// 加载失败态（2026-11-26 加载优化）：原因 + 重试钮，替代原来
+  /// 抛错后无声的永久转圈。主名单与站源作品网格共用。
+  Widget _buildLoadError(ColorScheme colors) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '加载失败：$_loadError',
+            key: const ValueKey('actress-list-load-error'),
+            style: TextStyle(color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            key: const ValueKey('actress-list-retry'),
+            onPressed: () => unawaited(_loadPage(reset: true)),
+            child: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildList(ColorScheme colors) {
     // 只出作品的站源（nvku）：作品网格，点卡直发播放器。
     if (_siteWorksMode) return _buildSiteWorkList(colors);
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
+    }
+    if (_loadError != null && _persons.isEmpty) {
+      return _buildLoadError(colors);
     }
     if (_persons.isEmpty) {
       // 空态分流：没有导入库就是没有库（导入 .sql 数据库）；搜不到
@@ -1448,6 +1648,9 @@ class _ActressListPageState extends State<ActressListPage> {
   Widget _buildSiteWorkList(ColorScheme colors) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
+    }
+    if (_loadError != null && _siteWorks.isEmpty) {
+      return _buildLoadError(colors);
     }
     if (_siteWorks.isEmpty) {
       final emptyText = _query.isNotEmpty ? '没有找到“$_query”' : '这个站暂时取不到作品';

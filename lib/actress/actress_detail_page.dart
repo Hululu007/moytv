@@ -85,6 +85,15 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   var _works = <ActressWork>[];
   var _loading = true;
   var _loadingMore = false;
+
+  /// 作品加载失败态（2026-11-26 加载优化）：非空且作品为空时，
+  /// build 显示「加载失败 + 原因 + 重试」。此前 _loadPage 裸
+  /// await，抛一次错 _loading 永远清不掉，详情页作品区永久转圈。
+  String? _worksError;
+
+  /// 作品查询超时（与列表页同一口径）：首屏 20 秒、翻页 15 秒。
+  static const _firstPageTimeout = Duration(seconds: 20);
+  static const _loadMoreTimeout = Duration(seconds: 15);
   var _hasMore = true;
   var _generation = 0;
   var _playGeneration = 0;
@@ -218,9 +227,18 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final person = _person;
     if (person == null) return;
     final generation = _generation;
-    final categories = await widget.database.workCategories(person.localId);
-    if (!mounted || generation != _generation) return;
-    setState(() => _categories = categories);
+    // 2026-11-26 加载优化：分类查询包 try/catch + 超时静默吞掉。
+    // 它与 _loadPage 并发跑（Future.wait），裸 await 抛错会把
+    // bootstrap 的等待一起打断；分类胶囊读不到不致命，作品照常。
+    try {
+      final categories = await widget.database
+          .workCategories(person.localId)
+          .timeout(_loadMoreTimeout);
+      if (!mounted || generation != _generation) return;
+      setState(() => _categories = categories);
+    } catch (_) {
+      // 分类读不到：胶囊区留空，作品不受影响。
+    }
   }
 
   /// 批量按番号取库里条目（2026-11-22 女优库加载优化）：
@@ -404,57 +422,29 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       if (entry.vodPic.isEmpty) continue;
       picByCode.putIfAbsent(entry.codeKey, () => entry.vodPic);
     }
-    var attached = false;
-    for (final work in uncovered) {
-      final pic = picByCode[normalizeAvCode(work.codeKey)];
-      if (pic == null) continue;
-      await widget.database.attachCover(
-        personId: person.localId,
-        codeKey: work.codeKey,
-        titleKey: work.titleKey,
-        coverSource: 'db',
-        coverDramaId: '',
-        coverUrl: pic,
-        insertIfMissing: false,
-        site: 'db',
-      );
-      attached = true;
+    // 2026-11-26 加载优化：补图只在内存里做（copyWith 换封面后
+    // setState），不再 attachCover 写回 works 行——名单主连接已
+    // 改只读，详情页不该再有任何写库动作（库只读使用、内容变更
+    // 只经换库文件）。代价是每次进详情页重查一次封面，可接受。
+    var changed = false;
+    final updated = <ActressWork>[
+      for (final work in _works)
+        if (!work.hasCover &&
+            (picByCode[normalizeAvCode(work.codeKey)]?.isNotEmpty ??
+                false))
+          () {
+            changed = true;
+            return work.copyWith(
+              coverSource: 'db',
+              coverUrl: picByCode[normalizeAvCode(work.codeKey)]!,
+            );
+          }()
+        else
+          work,
+    ];
+    if (changed && mounted) {
+      setState(() => _works = updated);
     }
-    if (attached && mounted) await _reloadWorks();
-  }
-
-  /// 原地刷新已加载的作品（封面补上后网格实时更新，不动滚动位置）。
-  Future<void> _reloadWorks() async {
-    final person = _person;
-    if (person == null) return;
-    final generation = _generation;
-    final count = _dbWorksCount;
-    if (count == 0 && _works.isEmpty) return;
-    final works = await widget.database.worksForPerson(
-      person.localId,
-      offset: 0,
-      limit: count,
-      category: _selectedCategory,
-      videoTag: _worksVideoTag,
-    );
-    final filteredTotal = await widget.database.countWorks(
-      person.localId,
-      category: _selectedCategory,
-      videoTag: _worksVideoTag,
-    );
-    final freshPerson = await widget.database.personById(person.localId);
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _works = works;
-      _dbWorksCount = works.length;
-      _jsonWorksCount = 0;
-      _filteredTotal = filteredTotal;
-      _hasMore = works.length < filteredTotal;
-      if (freshPerson != null) _person = freshPerson;
-    });
-    await _loadCategories();
-    // json 补的作品重新补（封面刷新不丢 json 行）。
-    unawaited(_supplementJsonWorks());
   }
 
   void _onScroll() {
@@ -478,55 +468,96 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           _loading = true;
           _works = [];
           _hasMore = true;
+          _worksError = null;
         });
       }
-      final works = await widget.database.worksForPerson(
-        person.localId,
-        offset: 0,
-        limit: _pageSize,
-        category: _selectedCategory,
-        videoTag: _worksVideoTag,
-      );
-      final filteredTotal = await widget.database.countWorks(
-        person.localId,
-        category: _selectedCategory,
-        videoTag: _worksVideoTag,
-      );
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _works = works;
-        _dbWorksCount = works.length;
-        _jsonWorksCount = 0;
-        _filteredTotal = filteredTotal;
-        // 无筛选时头顶总数就是数据库总数（json 补上后在 _supplementJsonWorks
-        // 里再加）；选了分类/标签不改头顶总数。
-        if (_selectedCategory == null && _selectedTag.isEmpty) {
-          _headerTotal = filteredTotal;
+      // 2026-11-26 加载优化：作品查询包 try/catch + 首屏超时。
+      // 此前裸 await：抛一次错 _loading 永远清不掉，作品区永久
+      // 转圈且无声。现在失败必清标志：作品为空进失败态（原因 +
+      // 重试钮），有旧作品时旧网格留着、只弹一句。
+      try {
+        final works = await widget.database
+            .worksForPerson(
+              person.localId,
+              offset: 0,
+              limit: _pageSize,
+              category: _selectedCategory,
+              videoTag: _worksVideoTag,
+            )
+            .timeout(_firstPageTimeout);
+        final filteredTotal = await widget.database
+            .countWorks(
+              person.localId,
+              category: _selectedCategory,
+              videoTag: _worksVideoTag,
+            )
+            .timeout(_firstPageTimeout);
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _works = works;
+          _dbWorksCount = works.length;
+          _jsonWorksCount = 0;
+          _filteredTotal = filteredTotal;
+          // 无筛选时头顶总数就是数据库总数（json 补上后在 _supplementJsonWorks
+          // 里再加）；选了分类/标签不改头顶总数。
+          if (_selectedCategory == null && _selectedTag.isEmpty) {
+            _headerTotal = filteredTotal;
+          }
+          _hasMore = works.length < filteredTotal;
+          _loading = false;
+          _worksError = null;
+        });
+        // 首屏先出数据库作品，json 补的作品后台接上（不 await，不堵首屏）。
+        unawaited(_supplementJsonWorks());
+      } catch (e) {
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _loading = false;
+          if (_works.isEmpty) _worksError = _shortLoadError(e);
+        });
+        if (_works.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('作品刷新失败：${_shortLoadError(e)}')),
+          );
         }
-        _hasMore = works.length < filteredTotal;
-        _loading = false;
-      });
-      // 首屏先出数据库作品，json 补的作品后台接上（不 await，不堵首屏）。
-      unawaited(_supplementJsonWorks());
+      }
       return;
     }
     if (_loadingMore || !_hasMore) return;
     final generation = _generation;
     setState(() => _loadingMore = true);
-    final works = await widget.database.worksForPerson(
-      person.localId,
-      offset: _dbWorksCount,
-      limit: _pageSize,
-      category: _selectedCategory,
-      videoTag: _worksVideoTag,
-    );
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _works = [..._works, ...works];
-      _dbWorksCount += works.length;
-      _hasMore = _works.length < _filteredTotal;
-      _loadingMore = false;
-    });
+    try {
+      final works = await widget.database
+          .worksForPerson(
+            person.localId,
+            offset: _dbWorksCount,
+            limit: _pageSize,
+            category: _selectedCategory,
+            videoTag: _worksVideoTag,
+          )
+          .timeout(_loadMoreTimeout);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _works = [..._works, ...works];
+        _dbWorksCount += works.length;
+        _hasMore = _works.length < _filteredTotal;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _loadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载更多失败：${_shortLoadError(e)}')),
+      );
+    }
+  }
+
+  /// 加载失败原因的短文案（与列表页同一口径）：超时说清是超时，
+  /// 其余取错误第一行截断。
+  static String _shortLoadError(Object error) {
+    if (error is TimeoutException) return '加载超时，请重试';
+    final first = error.toString().split('\n').first.trim();
+    return first.length > 80 ? '${first.substring(0, 80)}…' : first;
   }
 
   /// who's.json 内置索引补作品（用户 2026-11-23 21:50 令：女优用 json+db）：
@@ -1096,9 +1127,40 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                     // 女优库.db，见 _playWork）。本地零作品时只显示
                     // “暂无作品”，不再为地址池留位置。
                     if (_works.isEmpty)
-                      const SliverFillRemaining(
-                        child: Center(child: Text('暂无作品')),
-                      )
+                      _worksError != null
+                          ? SliverFillRemaining(
+                              // 2026-11-26 加载优化：作品加载失败态
+                              // （原因 + 重试），替代抛错后永久转圈/
+                              // 误报「暂无作品」。
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '加载失败：$_worksError',
+                                      key: const ValueKey(
+                                        'actress-detail-load-error',
+                                      ),
+                                      style: TextStyle(
+                                        color: colors.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    FilledButton(
+                                      key: const ValueKey(
+                                        'actress-detail-retry',
+                                      ),
+                                      onPressed: () =>
+                                          unawaited(_loadPage(reset: true)),
+                                      child: const Text('重试'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : const SliverFillRemaining(
+                              child: Center(child: Text('暂无作品')),
+                            )
                     else
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),

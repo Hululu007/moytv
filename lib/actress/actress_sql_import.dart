@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 
 import 'actress_generic_db.dart';
+import 'actress_models.dart' show preferLoadableAvatar;
 
 /// 女优库 .sql 导入（2026-11-25 用户令）：把女优库.db 改成 .sql 后，
 /// 从演员库设置里选 .sql / .sql.gz 文件导回手机，导完直接当主库用。
@@ -38,6 +39,29 @@ import 'actress_generic_db.dart';
 /// App 打开时仍是默认档），临时库失败整单丢弃，降档不丢真数据
 /// ——2026-11-25 全量剖析后加（执行占总时长约 97%）。
 /// 导入失败绝不把半成品库留在主库路径上。
+
+/// 视频库索引集（2026-11-26 加载优化：由开库时自建改为导入时
+/// 落库，清单与旧开库自建的完全一致）：只 CREATE INDEX，不改数据。
+/// - video_actress(cate_id)：点开一个人时按人名取自己的作品；
+/// - video_actress(vod_id)：按番号查/播时反查；
+/// - actresses(name)：按名归并/查找；
+/// - videos(vod_play_from)：影视库站点去重（DISTINCT）无索引时
+///   全表扫 34 万行、实测 1.8~8.3 秒，建后 0.05 秒；
+/// - videos(vod_pubdate)：点开一个人 ORDER BY vod_pubdate 排序；
+/// - video_category(vod_id)：worksForPerson / listFilms 的 LEFT JOIN；
+/// - video_category(main_category)：categories() 的 GROUP BY；
+/// - videos(type_name, vod_id) 覆盖索引：类型文件夹聚合与封面
+///   MIN(vod_id)，真库实测聚合 604→59ms、封面 470→81ms。
+const actressVideoIndexSqls = [
+  'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_act_name ON actresses(name)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_v_play_from ON videos(vod_play_from)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_v_pubdate ON videos(vod_pubdate)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_vc_vod ON video_category(vod_id)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_vc_cat ON video_category(main_category)',
+  'CREATE INDEX IF NOT EXISTS idx_moyi_v_type_vod ON videos(type_name, vod_id)',
+];
 
 /// 导入进度：阶段 + 已执行语句数 + 已读字节 + 文件总字节。
 class ActressSqlImportProgress {
@@ -545,6 +569,12 @@ class ActressSqlImporter {
             .join('、');
         warnings.add('跳过 $skippedStatements 条出错语句（$byTable）');
       }
+      // 收尾落库（2026-11-26 加载优化）：索引与汇总表在临时库阶段
+      // 就建好，顶替后开库零自写、名单首进直接走汇总表（旧流程是
+      // 开库同步建索引 + 3 秒后后台全量重建汇总表，与名单首查抢
+      // 锁）。全程尽力而为：落库失败不拦导入（开库侧没有汇总表会
+      // 走现算回退，功能不丢）、不计数、不加警告、不报进度。
+      await _finalizeImportedDb(executor);
       await executor.close();
       executor = null;
 
@@ -613,6 +643,175 @@ class ActressSqlImporter {
         if (await tempFile.exists()) await tempFile.delete();
       } catch (_) {}
     }
+  }
+
+  /// 收尾落库：给临时库建视频库索引集 + 名册汇总表。只在导入的
+  /// 临时库上跑（顶替前），失败整段吞掉——导入本体已经校验通过，
+  /// 落库只是加速，缺了它开库侧走现算回退。索引逐条建，单条失败
+  /// 不影响其余。
+  Future<void> _finalizeImportedDb(SqlImportExecutor executor) async {
+    try {
+      for (final sql in actressVideoIndexSqls) {
+        try {
+          await executor.execute(sql);
+        } catch (_) {
+          // 单个索引建不了不影响另一个，也不影响导入。
+        }
+      }
+      await _buildImportedRollup(executor);
+    } catch (_) {
+      // 落库失败不拦导入：原库校验已过，顶替照常。
+    }
+  }
+
+  /// 名册汇总表落库：算法与旧开库后台重建（已删的 _ensureVideoRollup）
+  /// 一字不差——按名字归并同一个人（被拆成两行的作品数相加、头像
+  /// 取第一条能加载的、最新作品日期取最大、有一行男优就算男优），
+  /// 签名 `v2:actresses 行数/video_actress 行数` 与读侧口径一致；
+  /// 转储自带汇总表且签名对得上时跳过重建（自家导出再导回的往返
+  /// 不白跑一遍全量聚合）。先写临时表再换名，读侧要么见旧表要么
+  /// 见新表；这里跑在导入临时库上，中途失败整单导入按失败收尾、
+  /// 临时文件会被清掉，不留半成品。
+  Future<void> _buildImportedRollup(SqlImportExecutor executor) async {
+    final sourceCounts = await executor.query(
+      'SELECT (SELECT COUNT(*) FROM actresses) AS a, '
+      '(SELECT COUNT(*) FROM video_actress) AS v',
+    );
+    final aCount = (sourceCounts.first['a'] as num?)?.toInt() ?? 0;
+    final vCount = (sourceCounts.first['v'] as num?)?.toInt() ?? 0;
+    // 汇总表版本 v2：2026-11-24 头像归并改只接受能加载的地址后，
+    // 旧版汇总表里已存的裸域名头像必须重建一次才掉；版本号写进
+    // 签名，读侧/再导入时认得出（与旧重建同一口径）。
+    final signature = 'v2:$aCount/$vCount';
+
+    await executor.execute(
+      'CREATE TABLE IF NOT EXISTS actress_rollup ('
+      'name TEXT PRIMARY KEY, '
+      'first_rowid INTEGER NOT NULL, '
+      'avatar TEXT NOT NULL DEFAULT \'\', '
+      'works INTEGER NOT NULL DEFAULT 0, '
+      'sex TEXT NOT NULL DEFAULT \'\', '
+      'last_date TEXT NOT NULL DEFAULT \'\')',
+    );
+    await executor.execute(
+      'CREATE TABLE IF NOT EXISTS actress_rollup_meta ('
+      'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    );
+    final meta = await executor.query(
+      "SELECT value FROM actress_rollup_meta WHERE key = 'signature' "
+      'LIMIT 1',
+    );
+    final current = meta.isEmpty
+        ? ''
+        : (meta.first['value']?.toString() ?? '');
+    final rollupRows = await executor.query(
+      'SELECT COUNT(*) AS c FROM actress_rollup',
+    );
+    final rollupCount = rollupRows.isEmpty
+        ? 0
+        : ((rollupRows.first['c'] as num?)?.toInt() ?? 0);
+    if (current == signature && rollupCount > 0) return;
+
+    // 按名字归并：每类作品数 + 最新日期先算出来，再按人名累加。
+    final perCate = await executor.query(
+      'SELECT va.cate_id AS cate_id, COUNT(*) AS n, '
+      'MAX(v.vod_pubdate) AS d '
+      'FROM video_actress va '
+      'LEFT JOIN videos v ON v.vod_id = va.vod_id '
+      'GROUP BY va.cate_id',
+    );
+    final works = <String, int>{};
+    final dates = <String, String>{};
+    for (final row in perCate) {
+      final cateId = row['cate_id']?.toString() ?? '';
+      if (cateId.isEmpty) continue;
+      works[cateId] = (row['n'] as num?)?.toInt() ?? 0;
+      final d = row['d']?.toString() ?? '';
+      if (d.isNotEmpty) dates[cateId] = d;
+    }
+    final hasSex = (await executor.query(
+      'PRAGMA table_info(actresses)',
+    )).any((r) => (r['name']?.toString() ?? '') == 'sex');
+    final people = await executor.query(
+      'SELECT rowid AS rid, name AS name, cate_id AS cate_id, '
+      "COALESCE(NULLIF(avatar,''),'') AS avatar, "
+      "${hasSex ? "COALESCE(NULLIF(sex,''),'')" : "''"} AS sex "
+      'FROM actresses',
+    );
+    final byName = <String, _ImportRollupAcc>{};
+    for (final row in people) {
+      final name = row['name']?.toString() ?? '';
+      final cateId = row['cate_id']?.toString() ?? '';
+      if (name.isEmpty || cateId.isEmpty) continue;
+      final acc = byName.putIfAbsent(
+        name,
+        () => _ImportRollupAcc((row['rid'] as num).toInt()),
+      );
+      final avatar = row['avatar']?.toString() ?? '';
+      // 第一批有效头像才占坑：裸域名行在前也不赢，后面的完整
+      // 头像照样能补进来；同名全是坏地址时留空（列表画圆圈）。
+      acc.avatar = preferLoadableAvatar(acc.avatar, avatar);
+      if ((row['sex']?.toString() ?? '') == 'male') acc.sex = 'male';
+      acc.works += works[cateId] ?? 0;
+      final d = dates[cateId];
+      if (d != null && d.compareTo(acc.lastDate) > 0) acc.lastDate = d;
+    }
+
+    await executor.execute('DROP TABLE IF EXISTS actress_rollup_new');
+    await executor.execute(
+      'CREATE TABLE actress_rollup_new ('
+      'name TEXT PRIMARY KEY, '
+      'first_rowid INTEGER NOT NULL, '
+      'avatar TEXT NOT NULL DEFAULT \'\', '
+      'works INTEGER NOT NULL DEFAULT 0, '
+      'sex TEXT NOT NULL DEFAULT \'\', '
+      'last_date TEXT NOT NULL DEFAULT \'\')',
+    );
+    // 分批生成 INSERT（每条 200 行、每 2000 行提交一次）：临时库
+    // 还没顶替，慢一点没关系，别把语句攒成一整坨撑爆内存。
+    final names = byName.keys.toList();
+    var pending = <String>[];
+    Future<void> flushPending() async {
+      if (pending.isEmpty) return;
+      final batch = pending;
+      pending = <String>[];
+      await executor.executeBatch(batch);
+    }
+
+    final rowSql = StringBuffer();
+    var rowsInStatement = 0;
+    void appendRow(String name, _ImportRollupAcc acc) {
+      if (rowsInStatement > 0) rowSql.write(',');
+      rowSql.write(
+        '(${_q(name)},${acc.firstRowid},${_q(acc.avatar)},${acc.works},'
+        '${_q(acc.sex)},${_q(acc.lastDate)})',
+      );
+      rowsInStatement++;
+      if (rowsInStatement >= 200) {
+        pending.add(
+          'INSERT INTO actress_rollup_new VALUES $rowSql',
+        );
+        rowSql.clear();
+        rowsInStatement = 0;
+      }
+    }
+
+    for (var i = 0; i < names.length; i++) {
+      appendRow(names[i], byName[names[i]]!);
+      if (pending.length >= 10) await flushPending();
+    }
+    if (rowsInStatement > 0) {
+      pending.add('INSERT INTO actress_rollup_new VALUES $rowSql');
+    }
+    await flushPending();
+    await executor.execute('DROP TABLE IF EXISTS actress_rollup');
+    await executor.execute(
+      'ALTER TABLE actress_rollup_new RENAME TO actress_rollup',
+    );
+    await executor.execute(
+      'INSERT OR REPLACE INTO actress_rollup_meta (key, value) '
+      "VALUES ('signature', ${_q(signature)})",
+    );
   }
 
   /// 语句头一个词（INSERT / CREATE / PRAGMA / BEGIN / COMMIT …）。
@@ -1104,4 +1303,20 @@ class ActressSqlImporter {
     }
     return names;
   }
+}
+
+/// 名册汇总累加器（导入时落库用，与旧开库重建的归并口径一致）：
+/// 同一个人被拆成多行时，作品数相加、头像取第一条能加载的
+/// （裸域名跳过）、最新作品日期取最大。
+class _ImportRollupAcc {
+  _ImportRollupAcc(this.firstRowid);
+
+  final int firstRowid;
+  String avatar = '';
+  int works = 0;
+  String lastDate = '';
+
+  /// 性别按人归并（同一名字下有一行是男优就算男优）；默认未知
+  /// （''），没有男优行只说明没确认过性别，不等于女。
+  String sex = '';
 }

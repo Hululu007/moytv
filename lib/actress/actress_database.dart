@@ -551,22 +551,6 @@ ActressPerson videoLibraryPersonFromRow(Map<String, Object?> row) {
   );
 }
 
-/// 名册汇总累加器（见 [_ensureVideoRollup]）：同一个人被拆成多行时，
-/// 作品数相加、头像取第一条能加载的（裸域名跳过）、最新作品日期取最大。
-class _RollupAcc {
-  _RollupAcc(this.firstRowid);
-
-  final int firstRowid;
-  String avatar = '';
-  int works = 0;
-  String lastDate = '';
-
-  /// 2026-11-22：性别按人归并（同一名字下有一行是男优就算男优）。
-  /// 2026-11-23：默认改未知（''），不再默认女——没有男优行只说明
-  /// 没确认过性别，不等于女。
-  String sex = '';
-}
-
 /// 视频库（女优库.db）行 → 作品：id 用 videos.rowid；vod_id 作
 /// codeKey/titleKey/codeDisplay/coverDramaId（播放链路按番号经
 /// filmDb 兜底查女优库.db 取直链，不直接用这里的地址）；
@@ -663,7 +647,8 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 样安全（红线：同步关断与日志模式改写那两条绝不加，女优库是
   /// 读写库，断电丢数据、坏库的风险扛不起；参考文件敢这么写是
   /// 因为它们的库是只读媒体包）。
-  /// - `cache_size = -8000`：约 8MB 页缓存；
+  /// - `cache_size = -16384`：约 16MB 页缓存（2026-11-26 加载优化
+  ///   由 8MB 提到 16MB：大库聚合/排序的页缓存翻倍，冷查略快）；
   /// - `mmap_size = 268435456`：256MB 内存映射；
   /// - `temp_store = MEMORY`：临时表/排序进内存。
   /// 真库实测（449,068 部）：文件夹聚合 2952→604ms、标签聚合
@@ -671,7 +656,7 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 写连接都可设；单条设不上只影响加速，不影响读。
   static Future<void> applyReadSpeedPragmas(Database db) async {
     for (final pragma in const [
-      'PRAGMA cache_size = -8000',
+      'PRAGMA cache_size = -16384',
       'PRAGMA mmap_size = 268435456',
       'PRAGMA temp_store = MEMORY',
     ]) {
@@ -686,7 +671,14 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// 只开内部工作库（.sql 导入落成的标准视频库结构）：不存在/
   /// 空文件直接抛“还没有导入数据库”；不是视频库结构（actresses
   /// + videos + video_actress）直接抛错，不开外来库、不跑通用
-  /// 映射。读写打开——网站上新出的、库里没有的视频要补进这个库。
+  /// 映射。只读打开（2026-11-26 加载优化）：同步/现爬/播片自动
+  /// 记录都已删除，读链没有任何写库需求，旧的「读写打开好补新
+  /// 视频」理由随之失效。索引与汇总表改在 .sql 导入时落库（见
+  /// ActressSqlImporter 的收尾落库），开库不再自写——首开零写入、
+  /// 不与名单首查抢锁、开库前后文件戳不变。老库（本改动前导入、
+  /// 没落索引/汇总表）读侧走现算回退，功能不丢、只是慢；重新
+  /// 导入一次即落齐。actresses 没有 sex 列时按无列读（性别未知），
+  /// 不再开库补列。
   Future<Database> _openDbAt(String filePath) async {
     final file = File(filePath);
     if (!file.existsSync() || file.lengthSync() == 0) {
@@ -699,20 +691,11 @@ class SqfliteActressDatabase implements ActressDatabase {
       _videoLibraryMode = false;
       throw StateError('不是女优库数据库：请导入 .sql 数据库');
     }
-    final db = await openDatabase(filePath);
+    final db = await openDatabase(filePath, readOnly: true);
     await applyReadSpeedPragmas(db);
     _videoLibraryMode = true;
     try {
       await db.rawQuery('SELECT COUNT(*) FROM sqlite_master');
-      // 2026-11-21 用户令「点头像要能看到作品、能播放」：这个库是
-      // 32 万视频 / 47 万条人物关联，那两条关联查询没索引时手机上
-      // 会扫全表排序，点开一个人要等半天像卡死。这里能写就补两个
-      // 索引（只加索引，不动任何一行数据）；库被系统设成只读、
-      // 或磁盘满时建不了就跳过，查询照样能跑。
-      await _ensureVideoIndexes(db, filePath);
-      // 2026-11-23：actresses 补 sex 列（见 _ensureActressSexColumn），
-      // 名册同步把性别写进来才有列可写；建不了就跳过（性别未知）。
-      await _ensureActressSexColumn(db);
     } catch (_) {
       _videoLibraryMode = false;
       await db.close();
@@ -741,40 +724,87 @@ class SqfliteActressDatabase implements ActressDatabase {
     ];
   }
 
+  /// 结构探针缓存（2026-11-26 加载优化）：四个 _has* 探针原来在
+  /// 每次 listPersons / countPersons / worksForPerson 里都重查一遍
+  /// sqlite_master / PRAGMA，翻页每页重付。改为按连接缓存：某条
+  /// 连接第一次探时算出存下，之后同连接直接回；换库换的是新连接
+  /// 对象，identical 对不上自动重探；close() 时整表清掉。会话内
+  /// 结构不会变（建索引/汇总表已挪到导入时、开库只读），缓存值
+  /// 不会过期。
+  Database? _probeDb;
+  bool? _probeHasRollup;
+  bool? _probeHasVideoTag;
+  bool? _probeHasSex;
+  bool? _probeHasActresses;
+
+  void _resetProbes() {
+    _probeDb = null;
+    _probeHasRollup = null;
+    _probeHasVideoTag = null;
+    _probeHasSex = null;
+    _probeHasActresses = null;
+  }
+
+  /// 取探针缓存：连接对得上且该项已算过回缓存值，否则回 null
+  /// （调用方去真查）。连接换了先把整组旧值作废再说。
+  bool? _probeHit(Database db, bool? value) {
+    if (!identical(_probeDb, db)) {
+      _resetProbes();
+      _probeDb = db;
+      return null;
+    }
+    return value;
+  }
+
   /// 汇总表是否可用（建过且行数正常）。
   Future<bool> _hasVideoRollup(Database db) async {
+    final cached = _probeHit(db, _probeHasRollup);
+    if (cached != null) return cached;
+    var result = false;
     try {
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS c FROM actress_rollup',
       );
-      return ((rows.first['c'] as num?)?.toInt() ?? 0) > 0;
+      result = ((rows.first['c'] as num?)?.toInt() ?? 0) > 0;
     } catch (_) {
-      return false;
+      result = false;
     }
+    if (identical(_probeDb, db)) _probeHasRollup = result;
+    return result;
   }
 
   /// 库里有没有 video_tag 表（2026-11-24 标签筛选）：没有的库
   /// 选了标签筛不出人，调用方直接回空，不抛错。
   Future<bool> _hasVideoTagTable(Database db) async {
+    final cached = _probeHit(db, _probeHasVideoTag);
+    if (cached != null) return cached;
+    var result = false;
     try {
       final rows = await db.rawQuery(
         "SELECT 1 AS x FROM sqlite_master "
         "WHERE type = 'table' AND name = 'video_tag' LIMIT 1",
       );
-      return rows.isNotEmpty;
+      result = rows.isNotEmpty;
     } catch (_) {
-      return false;
+      result = false;
     }
+    if (identical(_probeDb, db)) _probeHasVideoTag = result;
+    return result;
   }
 
   /// 库里 actresses 是否有 sex 列（2026-11-22 合并版库才有；老库没有）。
   Future<bool> _hasActressSexColumn(Database db) async {
+    final cached = _probeHit(db, _probeHasSex);
+    if (cached != null) return cached;
+    var result = false;
     try {
       final rows = await db.rawQuery('PRAGMA table_info(actresses)');
-      return rows.any((r) => (r['name']?.toString() ?? '') == 'sex');
+      result = rows.any((r) => (r['name']?.toString() ?? '') == 'sex');
     } catch (_) {
-      return false;
+      result = false;
     }
+    if (identical(_probeDb, db)) _probeHasSex = result;
+    return result;
   }
 
   /// 库里有没有 actresses 表（2026-11-24 用户报“切换其他数据库
@@ -782,12 +812,17 @@ class SqfliteActressDatabase implements ActressDatabase {
   /// video_category，没有这张表；没它时人物查询走 video_actress
   /// 分组回退（见 listPersons / countPersons），不抛错。
   Future<bool> _hasActressesTable(Database db) async {
+    final cached = _probeHit(db, _probeHasActresses);
+    if (cached != null) return cached;
+    var result = false;
     try {
       final rows = await db.rawQuery('PRAGMA table_info(actresses)');
-      return rows.isNotEmpty;
+      result = rows.isNotEmpty;
     } catch (_) {
-      return false;
+      result = false;
     }
+    if (identical(_probeDb, db)) _probeHasActresses = result;
+    return result;
   }
 
   /// 没有 actresses 表时按 video_actress 的 rowid 反查 cate_id
@@ -827,67 +862,6 @@ class SqfliteActressDatabase implements ActressDatabase {
   static String _placeholders(int n) =>
       List.filled(n, '?').join(', ');
 
-  /// 视频库索引（best-effort）：只 CREATE INDEX，不改数据。
-  /// - video_actress(cate_id)：点开一个人时按人名取自己的作品；
-  /// - video_actress(vod_id)：按番号查/播时反查。
-  /// 建不出来（只读库/空间不足）就当没有，查询仍能跑，只是慢。
-  /// 汇总表重建不再这里同步等（2026-11-22 修复：重建 2.5~24 秒
-  /// 堵住首次开屏）：只排期后台跑，列表先用旧汇总表、没有就现算
-  /// 顶着，不堵首屏。
-  Future<void> _ensureVideoIndexes(Database db, String filePath) async {
-    for (final sql in const [
-      'CREATE INDEX IF NOT EXISTS idx_moyi_va_cate ON video_actress(cate_id)',
-      'CREATE INDEX IF NOT EXISTS idx_moyi_va_vod ON video_actress(vod_id)',
-      'CREATE INDEX IF NOT EXISTS idx_moyi_act_name ON actresses(name)',
-      // 2026-11-22 加载优化：影视库站点去重（SELECT DISTINCT
-      // vod_play_from）原来无索引、全表扫 34 万行，实测 1.8~8.3 秒，
-      // 全球丽影库首屏被它堵住；建索引后 0.05 秒。只加索引，
-      // 不动任何一行数据；已存在时不建。
-      'CREATE INDEX IF NOT EXISTS idx_moyi_v_play_from ON videos(vod_play_from)',
-      // 2026-11-23 v58 验机：全球丽影库读 videos 太慢——合并库的
-      // videos 表除主键外一个索引都没有，34 万行全表扫。补三条：
-      // vod_pubdate（点开一个人 ORDER BY vod_pubdate DESC 排序）、
-      // video_category(vod_id)（worksForPerson / listFilms 里
-      // LEFT JOIN video_category 的探针）、
-      // video_category(main_category)（categories() 的 GROUP BY）。
-      // 仍是只加索引、不动任何一行数据；已存在时不建。
-      'CREATE INDEX IF NOT EXISTS idx_moyi_v_pubdate ON videos(vod_pubdate)',
-      'CREATE INDEX IF NOT EXISTS idx_moyi_vc_vod ON video_category(vod_id)',
-      'CREATE INDEX IF NOT EXISTS idx_moyi_vc_cat ON video_category(main_category)',
-      // 2026-11-25 读库提速第二阶段：videos(type_name, vod_id)
-      // 覆盖索引——类型文件夹聚合（GROUP BY type_name）与封面
-      // （MIN(vod_id)）原来无索引全表扫。真库实测（安全 PRAGMA
-      // 已开）：文件夹聚合 604→59ms、封面 GROUP BY 470→81ms、
-      // 单条取封面 497→0ms、带类型筛选的总数 938→59ms；建索引
-      // 一次性约 1 秒（449,068 行），库文件约 +12MB。只加索引，
-      // 不动任何一行数据；已存在时不建。
-      'CREATE INDEX IF NOT EXISTS idx_moyi_v_type_vod ON videos(type_name, vod_id)',
-    ]) {
-      try {
-        await db.execute(sql);
-      } catch (_) {
-        // 单个索引建不了不影响另一个，也不影响读。
-      }
-    }
-    _scheduleVideoRollup(db, filePath);
-  }
-
-  /// actresses 补 sex 列（2026-11-23 v58 验机：合并版库与老库的
-  /// actresses 都没有 sex 列，读人时只能默认女，貞松大輔这样的男优
-  /// 全被标成女；名册同步要把性别写进来，先得有列可写）。
-  /// ALTER TABLE ADD COLUMN 是元数据操作，不重写表、不动任何一行
-  /// 数据；列已存在、库只读、磁盘满时跳过，读侧按无列走（性别未知）。
-  Future<void> _ensureActressSexColumn(Database db) async {
-    try {
-      if (await _hasActressSexColumn(db)) return;
-      await db.execute(
-        "ALTER TABLE actresses ADD COLUMN sex TEXT NOT NULL DEFAULT ''",
-      );
-    } catch (_) {
-      // 建不了就当没有，查询与同步照样跑（性别未知）。
-    }
-  }
-
   /// 名册性别归一化（潮流实拉名册 s 字段就是 male/female；其它源
   /// 可能给 m/f/男/女）：只认男/女两种确认值，其余一律未知（''），
   /// 绝不猜。
@@ -897,9 +871,6 @@ class SqfliteActressDatabase implements ActressDatabase {
     if (s == 'female' || s == 'f' || s == '女') return 'female';
     return '';
   }
-
-  /// 汇总表重建是否已排期（防重复排期）。
-  var _videoRollupScheduled = false;
 
   /// 排行榜会话缓存（2026-11-25 读库提速第二阶段）：视频库模式
   /// 回退现算 500 人要扫 video_actress 全表 GROUP BY，冷查约
@@ -912,198 +883,36 @@ class SqfliteActressDatabase implements ActressDatabase {
     DateTime savedAt,
   })>{};
 
-  /// 汇总表重建挪到后台：首次开库只建索引就放行，3 秒后再跑；
-  /// 库已关/已换时不再是当前连接，不跑。失败不影响读（读取侧
-  /// 回退现算）。
-  void _scheduleVideoRollup(Database db, String filePath) {
-    if (_videoRollupScheduled) return;
-    _videoRollupScheduled = true;
-    Future.delayed(const Duration(seconds: 3), () async {
-      // 2026-11-23 详情页转圈 12~54 秒的根因之一：汇总表重建（per_cate
-      // 全表 GROUP BY + 分批写回，实测冷盘 36 秒）在共享连接上跑，
-      // sqflite 单连接串行排队，列表/详情的读全被堵在重建后面。改在
-      // 独立连接上重建：读连接照常读，只剩磁盘 IO 竞争；写锁只在每批
-      // 提交与换表的一瞬间，读等一小下就过去。重建失败不影响读。
-      Database? rebuildDb;
-      try {
-        if (!identical(_db, db)) return;
-        rebuildDb = await openDatabase(filePath, singleInstance: false);
-        await applyReadSpeedPragmas(rebuildDb);
-        await _ensureVideoRollup(rebuildDb);
-      } catch (_) {
-        // 后台重建失败不影响读。
-      } finally {
-        try {
-          await rebuildDb?.close();
-        } catch (_) {}
-        _videoRollupScheduled = false;
-      }
-    });
-  }
-
-  /// 名册汇总表（2026-11-21 用户令「名册要与 who's 女优数据库合并」）。
-  ///
-  /// 这个库里同一个人常被拆成两行：`木下ひまり（花沢ひまり）` 和
-  /// `木下ひまり`，作品也劈成两份（217 + 739）。列表如果按行显示，
-  /// 用户看到的是两个人、每个人作品都不全。这里按**名字**归并成一人，
-  /// 作品数相加，头像取一条，并记下最新作品日期供「最近更新」排序。
-  ///
-  /// 现算一次要 0.8 秒（47 万条关联 join 排序），手机上点一下就是
-  /// 转圈半天；所以落一张 `actress_rollup` 汇总表，源表行数变了才
-  /// 重建，之后每次查询几毫秒。库设成只读、写不进去时就不落表，
-  /// 读取侧回退到现算 SQL，功能不丢。
-  ///
-  /// 重建只在后台跑（见 [_scheduleVideoRollup]）：先分批写进临时表
-  /// `actress_rollup_new`（每 2000 行让出一次事件循环，不卡界面），
-  /// 再一次短事务换表——读侧要么见旧汇总表、要么见新汇总表，绝不
-  /// 见半成品；中途被杀只剩临时表，下次重建先清掉它。
-  Future<void> _ensureVideoRollup(Database db) async {
-    try {
-      final sourceCounts = await db.rawQuery(
-        'SELECT (SELECT COUNT(*) FROM actresses) AS a, '
-        '(SELECT COUNT(*) FROM video_actress) AS v',
-      );
-      final aCount = (sourceCounts.first['a'] as num?)?.toInt() ?? 0;
-      final vCount = (sourceCounts.first['v'] as num?)?.toInt() ?? 0;
-      // 汇总表版本 v2：2026-11-24 头像归并改只接受能加载的地址后，
-      // 旧版汇总表里已存的裸域名头像必须重建一次才掉；只比行数
-      // 的旧签名认不出代码改了，版本号写进签名强制重建一次。
-      final signature = 'v2:$aCount/$vCount';
-
-      await db.execute(
-        'CREATE TABLE IF NOT EXISTS actress_rollup ('
-        'name TEXT PRIMARY KEY, '
-        'first_rowid INTEGER NOT NULL, '
-        'avatar TEXT NOT NULL DEFAULT \'\', '
-        'works INTEGER NOT NULL DEFAULT 0, '
-        'sex TEXT NOT NULL DEFAULT \'\', '
-        'last_date TEXT NOT NULL DEFAULT \'\')',
-      );
-      await db.execute(
-        'CREATE TABLE IF NOT EXISTS actress_rollup_meta ('
-        'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
-      );
-      final meta = await db.query(
-        'actress_rollup_meta',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['signature'],
-        limit: 1,
-      );
-      final current = meta.isEmpty ? '' : meta.first['value'].toString();
-      final rollupRows = await db.rawQuery(
-        'SELECT COUNT(*) AS c FROM actress_rollup',
-      );
-      final rollupCount = (rollupRows.first['c'] as num?)?.toInt() ?? 0;
-      if (current == signature && rollupCount > 0) return;
-
-      // 按名字归并：每类作品数 + 最新日期先算出来，再按人名累加。
-      final perCate = await db.rawQuery(
-        'SELECT va.cate_id AS cate_id, COUNT(*) AS n, '
-        'MAX(v.vod_pubdate) AS d '
-        'FROM video_actress va '
-        'LEFT JOIN videos v ON v.vod_id = va.vod_id '
-        'GROUP BY va.cate_id',
-      );
-      final works = <String, int>{};
-      final dates = <String, String>{};
-      for (final row in perCate) {
-        final cateId = row['cate_id'].toString();
-        works[cateId] = (row['n'] as num?)?.toInt() ?? 0;
-        final d = row['d']?.toString() ?? '';
-        if (d.isNotEmpty) dates[cateId] = d;
-      }
-      final hasSex = await _hasActressSexColumn(db);
-      final people = await db.rawQuery(
-        'SELECT rowid AS rid, name AS name, cate_id AS cate_id, '
-        "COALESCE(NULLIF(avatar,''),'') AS avatar, "
-        "${hasSex ? "COALESCE(NULLIF(sex,''),'')" : "''"} AS sex "
-        'FROM actresses',
-      );
-      final byName = <String, _RollupAcc>{};
-      for (final row in people) {
-        final name = row['name']?.toString() ?? '';
-        final cateId = row['cate_id']?.toString() ?? '';
-        if (name.isEmpty || cateId.isEmpty) continue;
-        final acc = byName.putIfAbsent(
-          name,
-          () => _RollupAcc((row['rid'] as num).toInt()),
-        );
-        final avatar = row['avatar']?.toString() ?? '';
-        // 第一批有效头像才占坑：裸域名行在前也不赢，后面的完整
-        // 头像照样能补进来；同名全是坏地址时留空（列表画圆圈）。
-        acc.avatar = preferLoadableAvatar(acc.avatar, avatar);
-        if ((row['sex']?.toString() ?? '') == 'male') acc.sex = 'male';
-        acc.works += works[cateId] ?? 0;
-        final d = dates[cateId];
-        if (d != null && d.compareTo(acc.lastDate) > 0) acc.lastDate = d;
-      }
-
-      // 重建：分批写进临时表，再一次短事务换表（见本函数头注释）。
-      await db.execute('DROP TABLE IF EXISTS actress_rollup_new');
-      await db.execute(
-        'CREATE TABLE actress_rollup_new ('
-        'name TEXT PRIMARY KEY, '
-        'first_rowid INTEGER NOT NULL, '
-        'avatar TEXT NOT NULL DEFAULT \'\', '
-        'works INTEGER NOT NULL DEFAULT 0, '
-        'sex TEXT NOT NULL DEFAULT \'\', '
-        'last_date TEXT NOT NULL DEFAULT \'\')',
-      );
-      const batchSize = 2000;
-      final names = byName.keys.toList();
-      for (var i = 0; i < names.length; i += batchSize) {
-        final end = (i + batchSize).clamp(0, names.length);
-        final batch = db.batch();
-        for (var j = i; j < end; j++) {
-          final name = names[j];
-          final acc = byName[name]!;
-          batch.insert('actress_rollup_new', {
-            'name': name,
-            'first_rowid': acc.firstRowid,
-            'avatar': acc.avatar,
-            'works': acc.works,
-            'sex': acc.sex,
-            'last_date': acc.lastDate,
-          });
-        }
-        await batch.commit(noResult: true);
-        // 每批让出一次事件循环：几万行一次写完会把界面卡住。
-        await Future<void>.delayed(Duration.zero);
-      }
-      await db.transaction((txn) async {
-        await txn.execute('DROP TABLE IF EXISTS actress_rollup');
-        await txn.execute(
-          'ALTER TABLE actress_rollup_new RENAME TO actress_rollup',
-        );
-        await txn.insert('actress_rollup_meta', {
-          'key': 'signature',
-          'value': signature,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-      });
-    } catch (_) {
-      // 只读库 / 空间不足：不落表，读取侧回退现算。
-    }
-  }
-
   /// 女优库建库/迁移路径：version 4 + onCreate 建五张表 +
   /// onUpgrade v1→v2、v2→v3、v3→v4。只对女优库结构的文件跑。
 
-  /// 当前打开库的文件指纹（大小 + 修改时间毫秒）：开库时记一次，
-  /// 热换库比对它，变了才重开。
+  /// 当前打开库的文件指纹（大小 + 修改时间毫秒 + -wal 大小）：
+  /// 开库时记一次，热换库比对它，变了才重开。
   String? _openedPath;
-  ({int length, int modifiedMs})? _openedSignature;
+  ({int length, int modifiedMs, int walLength})? _openedSignature;
 
   /// 开库提示（见 openFallbackNote）：2026-11-22 起不再回退任何
   /// 内置库，恒为 null（接口保留，列表页的显示分支不动）。
   String? _openFallbackNote;
 
-  static ({int length, int modifiedMs})? _signatureOf(File file) {
+  static ({int length, int modifiedMs, int walLength})? _signatureOf(
+    File file,
+  ) {
     try {
       final stat = file.statSync();
+      // 2026-11-26 加载优化（清单第 11 条）：指纹带上同名 -wal 文件
+      // 大小。当前工作库稳态无 -wal（恒 0），防将来导入形态改 WAL
+      // 时只变 -wal、主文件戳不变的漏判。
+      var walLength = 0;
+      try {
+        walLength = File('${file.path}-wal').lengthSync();
+      } catch (_) {
+        // 没有 -wal 文件就是 0。
+      }
       return (
         length: stat.size,
         modifiedMs: stat.modified.millisecondsSinceEpoch,
+        walLength: walLength,
       );
     } catch (_) {
       return null;
@@ -1164,9 +973,16 @@ class SqfliteActressDatabase implements ActressDatabase {
     if (stat == null || stat.type == FileSystemEntityType.notFound) {
       return (reloaded: false, error: '还没有导入数据库：请在设置里导入 .sql 数据库');
     }
+    var walLength = 0;
+    try {
+      walLength = await File('$currentPath-wal').length();
+    } catch (_) {
+      // 没有 -wal 文件就是 0（与 _signatureOf 同口径）。
+    }
     final signature = (
       length: stat.size,
       modifiedMs: stat.modified.millisecondsSinceEpoch,
+      walLength: walLength,
     );
     // 在途的开库先等它落定（不然它完成后会把 _db 指回旧文件，
     // 盖掉这次换库）。
@@ -1186,13 +1002,12 @@ class SqfliteActressDatabase implements ActressDatabase {
         _openedSignature == signature) {
       return (reloaded: false, error: null);
     }
-    // 同一文件、只是内容变了（指纹变了）：不重开。同步正是
-    // 通过当前连接在写这个文件，当前连接本来就能读到已提交的新
-    // 数据；重开反而要等镜像的写锁（PRAGMA journal_mode 报
-    // SQLITE_BUSY，2026-11-21 用户截图里详情页一点作品就弹这个
-    // 错），还把正在用的连接关了。只有换了路径（重新绑定到另一
-    // 个文件）或用户手动点“重新加载数据库”（force）时才重开；
-    // 外部直接替换同路径文件时也用手动重载。
+    // 同一文件、只是内容变了（指纹变了）：不重开。（旧注释说
+    // 「同步通过当前连接写」——同步已删、主连接已只读，那个理由
+    // 不再成立；保留不重开是因为 App 内改库的路径都自带收尾：
+    // .sql 导入换库前先关主连接、表格更新与管理页恢复/删除都走
+    // force 重读，轮不到这条分支兜底。工作库在应用私有目录，
+    // 外部程序换不了这个文件。）只有换了路径或 force 时才重开。
     if (!force &&
         opened != null &&
         opened.isOpen &&
@@ -1254,7 +1069,7 @@ class SqfliteActressDatabase implements ActressDatabase {
       // （潮流实拉名册 roster_live.json：s 字段 male/female，
       // 貞松大輔 male）——已有的人也按名册补性别（只在名册给了确认
       // 性别、且库里还是空时写，名册没给的不动），新人建行时一起
-      // 写性别；sex 列由开库时 _ensureActressSexColumn 补上，
+      // 写性别；sex 列在 .sql 里自带（导入原样落库、开库不再补列），
       // 没有列就跳过不写。作品由作品阶段
       // （personsPendingFilms → upsertWorks）或现爬补。
       final name = variants.first;
@@ -3289,6 +3104,8 @@ class SqfliteActressDatabase implements ActressDatabase {
     // 2026-11-21 视频库：标志也清掉，下次开库由 _openDbAt 重算，
     // 不让旧标志挂在新库上。
     _videoLibraryMode = false;
+    // 结构探针缓存也清掉：下次开库是新连接，重探。
+    _resetProbes();
     await db?.close();
   }
 }
