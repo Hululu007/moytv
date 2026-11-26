@@ -607,6 +607,220 @@ String av123EmbedOf(String raw) {
   return (apiUrl: api, origin: origin);
 }
 
+/// 页面是不是人机校验/盾页（CF 挑战页特征词）：是盾页时按
+/// 「查询失败」如实回状态，不按「未找到」糊弄（AvPlay 对
+/// MissAV/Jable 撞盾也是转挑战页处理，我们纯 HTTP 拿不到
+/// 就如实标失败，播放层另有壳级嗅探兜底）。
+bool actressPageLooksChallenged(String html) {
+  if (html.isEmpty) return false;
+  final lower = html.toLowerCase();
+  return lower.contains('just a moment') ||
+      lower.contains('challenges.cloudflare.com') ||
+      lower.contains('cf-challenge') ||
+      lower.contains('attention required') ||
+      lower.contains('checking your browser');
+}
+
+// AV01（www.av01.media）：以下函数照 AvPlay 反编译的
+// Av01Parser / Av01UrlUtils 逐条移植（API_MAP 第 4 节）。
+
+const av01Site = 'https://www.av01.media';
+
+/// AV01 语言路径段：AvPlay 按界面语言取 cn/tw/en，我们固定
+/// cn（简体）。
+const av01LangSegment = 'cn';
+
+/// slug 规整（toAv01Slug）：去首尾空 → 小写 → 空白/下划线
+/// 串换 '-' → 连 '-' 合并 → 去首尾 '-'。
+String av01SlugForm(String value) {
+  var out = value.trim().toLowerCase();
+  out = out.replaceAll(RegExp(r'[\s_]+'), '-');
+  out = out.replaceAll(RegExp(r'-+'), '-');
+  out = out.replaceAll(RegExp(r'^-+|-+$'), '');
+  return out;
+}
+
+/// 番号归一（normalizeAv01Code）：小写后只留字母数字。
+String av01NormalizeCode(String value) => value
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+/// 从 AV01 地址里取视频 id：路径段里 'video' 段的下一段是
+/// 数字才认（extractAv01VideoId）。
+int? av01VideoIdOf(String url) {
+  final clean = url.split('?').first.split('#').first;
+  final segments = clean.split('/');
+  for (var i = 0; i + 1 < segments.length; i++) {
+    if (segments[i].toLowerCase() == 'video') {
+      return int.tryParse(segments[i + 1]);
+    }
+  }
+  return null;
+}
+
+/// 从 AV01 地址里取 slug：最后一个路径段（extractAv01Slug）。
+String av01SlugOf(String url) {
+  var clean = url.split('?').first.split('#').first;
+  while (clean.endsWith('/')) {
+    clean = clean.substring(0, clean.length - 1);
+  }
+  final idx = clean.lastIndexOf('/');
+  return idx >= 0 ? clean.substring(idx + 1) : clean;
+}
+
+/// 候选是否命中番号（isAv01CandidateMatch）：slug 规整后相
+/// 等，或候选 slug 以「番号 slug + '-'」开头（带后缀的版本
+/// 也算同一部）。
+bool av01CandidateMatches(String code, String slug) {
+  final target = av01SlugForm(code);
+  final candidate = av01SlugForm(slug);
+  if (target.isEmpty || candidate.isEmpty) return false;
+  return candidate == target || candidate.startsWith('$target-');
+}
+
+/// AV01 搜索页地址（av01SearchPageUrl）。
+String av01SearchUrl(String code) =>
+    '$av01Site/$av01LangSegment/search?q=${Uri.encodeQueryComponent(code.trim())}';
+
+/// AV01 地理接口地址（av01GeoApiUrl）：GET 回
+/// {token_v2, expires, ip, ttl, country}，凭证流的第一步。
+String av01GeoUrl() => '$av01Site/edge/geo.js?json';
+
+/// AV01 搜索页解析（parseSearchVersionsFromHtml）：扫
+/// a[href*=/video/]，地址补绝对、取得到视频 id、slug 命中
+/// 番号才留；按详情页地址去重，最多 8 条。
+List<OnlineVideoCard> parseAv01SearchCards(String html, String code) {
+  if (html.isEmpty) return const [];
+  final doc = html_parser.parse(html);
+  final seen = <String>{};
+  final cards = <OnlineVideoCard>[];
+  for (final a in doc.querySelectorAll('a[href*="/video/"]')) {
+    final href = (a.attributes['href'] ?? '').trim();
+    if (href.isEmpty) continue;
+    final absolute = _absolutize(av01Site, href);
+    if (av01VideoIdOf(absolute) == null) continue;
+    final slug = av01SlugOf(absolute);
+    if (!av01CandidateMatches(code, slug)) continue;
+    if (!seen.add(absolute)) continue;
+    cards.add(OnlineVideoCard(pageUrl: absolute, title: slug));
+    if (cards.length >= 8) break;
+  }
+  return cards;
+}
+
+/// 是不是这部片的主清单（isAv01MasterManifestFor）：地址
+/// （去 # 后）以 {站根}/api/v1/videos/{id}/manifest/
+/// master.m3u8 开头、且去查询串后路径与之全等。
+bool av01IsMasterManifest(String url, int videoId) {
+  final expected = '$av01Site/api/v1/videos/$videoId/manifest/master.m3u8';
+  final noFragment = url.split('#').first;
+  if (!noFragment.toLowerCase().startsWith(expected.toLowerCase())) {
+    return false;
+  }
+  return noFragment.split('?').first.toLowerCase() ==
+      expected.toLowerCase();
+}
+
+/// AV01 详情页校验 + 取主清单（validateDetailPage）：期望
+/// id/slug 从详情页地址取；页里 canonical 的 id/slug 必须
+/// 一致、h1 归一后必须以 slug 归一开头，三关全过后取第一
+/// 条命中主清单规则的 source[src]（补绝对）。任一关不过
+/// 回 null（AvPlay 回 Pending，我们按未找到处理）。
+({String title, String manifest})? parseAv01DetailManifest(
+  String html,
+  String pageUrl,
+) {
+  final videoId = av01VideoIdOf(pageUrl);
+  if (videoId == null) return null;
+  final slug = av01SlugOf(pageUrl);
+  if (html.trim().isEmpty) return null;
+  final doc = html_parser.parse(html);
+  final canonical =
+      doc.querySelector('link[rel="canonical"]')?.attributes['href'] ?? '';
+  if (canonical.trim().isEmpty) return null;
+  if (av01VideoIdOf(canonical) != videoId) return null;
+  if (av01SlugOf(canonical).toLowerCase() != slug.toLowerCase()) {
+    return null;
+  }
+  final h1 = doc.querySelector('h1')?.text.trim() ?? '';
+  if (h1.isEmpty ||
+      !av01NormalizeCode(h1).startsWith(av01NormalizeCode(slug))) {
+    return null;
+  }
+  for (final source in doc.querySelectorAll('source[src]')) {
+    final src = (source.attributes['src'] ?? '').trim();
+    if (src.isEmpty) continue;
+    final absolute = _absolutize(av01Site, src);
+    if (av01IsMasterManifest(absolute, videoId)) {
+      return (title: h1, manifest: absolute);
+    }
+  }
+  return null;
+}
+
+// Jable（jable.tv）：照 AvPlay 反编译的 JableParser 移植。
+
+const jableSite = 'https://jable.tv';
+
+/// Jable 番号规整：去空、'_' 换 '-'、大写（discover 用它
+/// 拼搜索页地址，search 用它比 slug）。
+String jableCodeForm(String code) =>
+    code.trim().replaceAll('_', '-').toUpperCase();
+
+/// Jable 搜索页地址：https://jable.tv/search/{番号}/。
+String jableSearchUrl(String code) =>
+    '$jableSite/search/${jableCodeForm(code)}/';
+
+/// 从 Jable 地址里取 /videos/{slug} 的 slug。
+String jableSlugOf(String url) {
+  final m = RegExp(
+    r'/videos/([a-z0-9-]+)',
+    caseSensitive: false,
+  ).firstMatch(url);
+  return m?.group(1) ?? '';
+}
+
+/// Jable 搜索页解析（JableParser.search）：扫
+/// a[href*=/videos/]，slug 与番号规整后**相等**才认（不认
+/// 前缀近似），详情页地址统一拼
+/// https://jable.tv/videos/{slug小写}/；按地址去重。
+List<OnlineVideoCard> parseJableSearchCards(String html, String code) {
+  if (html.isEmpty) return const [];
+  final target = jableCodeForm(code);
+  if (target.isEmpty) return const [];
+  final doc = html_parser.parse(html);
+  final seen = <String>{};
+  final cards = <OnlineVideoCard>[];
+  for (final a in doc.querySelectorAll('a[href*="/videos/"]')) {
+    final href = (a.attributes['href'] ?? '').trim();
+    if (href.isEmpty) continue;
+    final slug = jableSlugOf(href);
+    if (slug.isEmpty || slug.toUpperCase() != target) continue;
+    final pageUrl = '$jableSite/videos/${slug.toLowerCase()}/';
+    if (!seen.add(pageUrl)) continue;
+    cards.add(OnlineVideoCard(pageUrl: pageUrl, title: slug.toUpperCase()));
+  }
+  return cards;
+}
+
+/// Jable 详情页取流（JableParser.extractHlsUrl）：先把
+/// `\/` 还原成 `/`，再正则取 hlsUrl = 'https://….m3u8'；
+/// 只认 https 且路径以 .m3u8 结尾。
+String extractJableHls(String html) {
+  if (html.isEmpty) return '';
+  final unescaped = html.replaceAll(r'\/', '/');
+  final m = RegExp(
+    r"""hlsUrl\s*=\s*['"](https://[^'"\s<>]+\.m3u8(?:\?[^'"\s<>]*)?)['"]""",
+    caseSensitive: false,
+  ).firstMatch(unescaped);
+  if (m == null) return '';
+  final url = m.group(1)!;
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.scheme != 'https') return '';
+  if (!uri.path.toLowerCase().endsWith('.m3u8')) return '';
+  return url;
+}
+
 /// 取流接口回包里取播放地址：真回包是 JSON
 /// {"status":"ok","media":{"stream":"…m3u8","vtt":"…"}}，
 /// 先按 JSON 取 media.stream（其次顶层 stream/file）；解不

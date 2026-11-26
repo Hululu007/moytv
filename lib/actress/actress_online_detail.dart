@@ -82,6 +82,15 @@ bool actressOnlineCardMatches({
   if (source.id == 'av123') {
     return actressCodeKey(av123CodeOf(card.pageUrl)) == target;
   }
+  if (source.id == 'av01') {
+    // AV01：slug 命中番号（相等或带 '-' 后缀，Av01Parser
+    // 的 isAv01CandidateMatch 口径）。
+    return av01CandidateMatches(code, av01SlugOf(card.pageUrl));
+  }
+  if (source.id == 'jable') {
+    // Jable：slug 与番号归一后相等才认（JableParser 口径）。
+    return actressCodeKey(jableSlugOf(card.pageUrl)) == target;
+  }
   return actressCodeKey(card.title).contains(target);
 }
 

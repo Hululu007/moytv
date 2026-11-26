@@ -11,6 +11,7 @@ import 'actress_models.dart';
 import 'actress_online_detail.dart';
 import 'actress_online_parse.dart';
 import 'actress_online_sources.dart';
+import 'actress_py_lines.dart';
 import 'actress_tag_sheet.dart';
 import 'actress_widgets.dart';
 import 'whos_json_index.dart';
@@ -1001,7 +1002,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     void Function()? onSettled,
   }) async {
     final winner = Completer<DramaDetail?>();
-    var pending = 3 + kActressOnlineSources.length;
+    // 路数：库 + who's(MissAV) + 115 共 3，Dart 直连源
+    // （123AV/PH/AV01/Jable）按 kActressLineSources，py 复
+    // 用源另加 AVDB/JavMenu/MemoJav 三路（MissAV 已在
+    // who's 路里，不重复计）。
+    var pending =
+        3 +
+        kActressLineSources.length +
+        kActressPyRaceSourceIds.length;
     DramaDetail? held;
     var windowOpen = true;
     final windowTimer = Timer(const Duration(seconds: 2), () {
@@ -1052,7 +1060,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         playGeneration: playGeneration,
       ).then((d) => offer(d, isPan115: true), onError: (_) => offer(null)),
     );
-    for (final source in kActressOnlineSources) {
+    for (final source in kActressLineSources) {
       unawaited(
         _raceOnlineSource(
           source: source,
@@ -1062,7 +1070,57 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         ).then(offer, onError: (_) => offer(null)),
       );
     }
+    for (final sourceId in kActressPyRaceSourceIds) {
+      unawaited(
+        _racePySource(
+          sourceId: sourceId,
+          code: code,
+          cancel: cancel,
+          playGeneration: playGeneration,
+        ).then(offer, onError: (_) => offer(null)),
+      );
+    }
     return winner.future;
+  }
+
+  /// py 复用路（2026-11-26 六源扩线）：AVDB / JavMenu /
+  /// MemoJav 复用既有 py 蜘蛛链按番号查线路（search →
+  /// detail → playerContent 取直链），与 A/B 路同一把轻验
+  /// 活尺子验过才算线路；查不到/解析型/验不活回 null。
+  Future<DramaDetail?> _racePySource({
+    required String sourceId,
+    required String code,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    if (code.trim().isEmpty) return null;
+    try {
+      final hit = await actressPyLineHit(
+        repository: widget.repository,
+        sourceId: sourceId,
+        code: code,
+      ).timeout(const Duration(seconds: 30));
+      if (hit == null ||
+          cancel.isCompleted ||
+          playGeneration != _playGeneration) {
+        return null;
+      }
+      final uri = Uri.tryParse(hit.plan.url.trim());
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return null;
+      }
+      final response = await _verifyFetch(
+        hit.plan.url,
+        hit.plan.headers,
+        const Duration(seconds: 5),
+      );
+      if (!feedProbePlayable(uri, response)) return null;
+      return hit.detail;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// C/D 路：123AV / PH 按番号直连搜索 → 命中校验（123AV 比

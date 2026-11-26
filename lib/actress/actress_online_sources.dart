@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../content_http.dart';
 import '../core_bridge.dart';
 import 'actress_online_parse.dart';
@@ -71,6 +73,10 @@ abstract class ActressOnlineSource {
 
   String get defaultPrimaryId;
   String get defaultSecondaryId;
+
+  /// 懒查询：true 的源在线路区里默认不自动查、点「点击查
+  /// 询」才查（重源/有盾源用，AvPlay 同口径）。
+  bool get lazySearch => false;
 
   /// 页面请求头（列表/详情共用）。
   Map<String, String> get pageHeaders => {
@@ -256,11 +262,205 @@ class Av123ActressSource extends ActressOnlineSource {
   }
 }
 
+/// AV01（www.av01.media）：2026-11-26 六源扩线新写 Dart
+/// 源，照 AvPlay 反编译的 Av01Parser/Av01UrlUtils 落——
+/// 搜索页扫 /video/{id}/{slug} 候选（slug 命中番号才认）、
+/// 详情页三关校验（canonical 的 id/slug 一致、h1 归一以
+/// slug 开头）后取 <source src> 里的主清单
+/// （/api/v1/videos/{id}/manifest/master.m3u8）。
+/// 凭证流：取流前先走一遍地理接口 getGeoData（带 ttl 缓
+/// 存，失败不挡取流）——AvPlay 的第二步 requestCdnAccess
+/// 向服务端换 access_token、播放时只给 customers.iw01.xyz
+/// 域名的请求加 access_token 查询参；详情页渲染出的主清
+/// 单在 www.av01.media 域名上、不吃这个 token。换凭证的
+/// 接口地址在反编译里没还原出来（jadx 对 Av01Service 该
+/// 方法解码失败），不编造端点，卡点记在
+/// REPORT_actress_online6.md。
+class Av01ActressSource extends ActressOnlineSource {
+  const Av01ActressSource();
+
+  @override
+  String get id => 'av01';
+
+  @override
+  String get label => 'AV01';
+
+  @override
+  String get site => av01Site;
+
+  @override
+  List<OnlineTabOption> get primaryTabs =>
+      const [OnlineTabOption(id: 'search', name: '搜索', value: '')];
+
+  @override
+  List<OnlineTabOption> get secondaryTabs => const [];
+
+  @override
+  String get defaultPrimaryId => 'search';
+
+  @override
+  String get defaultSecondaryId => '';
+
+  /// 地理缓存（getGeoData，照 Av01Service 的 cachedGeo +
+  /// ttl 口径）：（拉取时刻、ttl 秒）。
+  static (DateTime, int)? _geoCache;
+
+  Future<void> _warmGeo(ActressOnlineFetch fetch) async {
+    final cached = _geoCache;
+    if (cached != null &&
+        DateTime.now().difference(cached.$1).inSeconds < cached.$2) {
+      return;
+    }
+    try {
+      final text = await fetch(av01GeoUrl(), pageHeaders);
+      final decoded = jsonDecode(text);
+      var ttl = 300;
+      if (decoded is Map && decoded['ttl'] is num) {
+        ttl = (decoded['ttl'] as num).toInt();
+      }
+      _geoCache = (DateTime.now(), ttl);
+    } catch (_) {
+      // 地理只是凭证流的前置，拉不到不挡页面路径取流。
+    }
+  }
+
+  @override
+  Future<List<OnlineVideoCard>> fetchCards({
+    required String primaryId,
+    required String secondaryId,
+    required String query,
+    required int page,
+    required ActressOnlineFetch fetch,
+  }) async {
+    final code = query.trim();
+    if (code.isEmpty) return const [];
+    final html = await fetch(av01SearchUrl(code), pageHeaders);
+    if (actressPageLooksChallenged(html)) {
+      throw AppFailure('AV01 被站点人机校验拦住，请稍后重试');
+    }
+    return parseAv01SearchCards(html, code);
+  }
+
+  @override
+  Future<ActressOnlinePlay> resolvePlay(
+    OnlineVideoCard card, {
+    required ActressOnlineFetch fetch,
+  }) async {
+    await _warmGeo(fetch);
+    final html = await fetch(card.pageUrl, pageHeaders);
+    if (actressPageLooksChallenged(html)) {
+      throw AppFailure('AV01 被站点人机校验拦住，请稍后重试');
+    }
+    final parsed = parseAv01DetailManifest(html, card.pageUrl);
+    if (parsed == null) {
+      throw AppFailure('这个视频暂时取不到播放地址');
+    }
+    return ActressOnlinePlay(
+      streamUrl: parsed.manifest,
+      headers: {
+        'User-Agent': actressOnlineUserAgent,
+        'Referer': '$site/',
+      },
+      detail: OnlineDetailInfo(
+        title: parsed.title.isNotEmpty ? parsed.title : card.title,
+      ),
+    );
+  }
+}
+
+/// Jable（jable.tv）：2026-11-26 六源扩线新写 Dart 源，
+/// 照 AvPlay 反编译的 JableParser 落——搜索页
+/// /search/{番号大写}/ 扫 /videos/{slug}、slug 与番号相
+/// 等才认；详情页正则取 hlsUrl 的 m3u8。站有盾：纯 HTTP
+/// 撞挑战页时如实标查询失败（AvPlay 走 WebView 挑战，我
+/// 们不网页内播，播放层另有壳级嗅探兜底）；默认懒查询。
+class JableActressSource extends ActressOnlineSource {
+  const JableActressSource();
+
+  @override
+  String get id => 'jable';
+
+  @override
+  String get label => 'Jable';
+
+  @override
+  String get site => jableSite;
+
+  @override
+  bool get lazySearch => true;
+
+  @override
+  List<OnlineTabOption> get primaryTabs =>
+      const [OnlineTabOption(id: 'search', name: '搜索', value: '')];
+
+  @override
+  List<OnlineTabOption> get secondaryTabs => const [];
+
+  @override
+  String get defaultPrimaryId => 'search';
+
+  @override
+  String get defaultSecondaryId => '';
+
+  @override
+  Future<List<OnlineVideoCard>> fetchCards({
+    required String primaryId,
+    required String secondaryId,
+    required String query,
+    required int page,
+    required ActressOnlineFetch fetch,
+  }) async {
+    final code = query.trim();
+    if (code.isEmpty) return const [];
+    final html = await fetch(jableSearchUrl(code), pageHeaders);
+    if (actressPageLooksChallenged(html)) {
+      throw AppFailure('Jable 被站点人机校验拦住，请稍后重试');
+    }
+    return parseJableSearchCards(html, code);
+  }
+
+  @override
+  Future<ActressOnlinePlay> resolvePlay(
+    OnlineVideoCard card, {
+    required ActressOnlineFetch fetch,
+  }) async {
+    final html = await fetch(card.pageUrl, pageHeaders);
+    if (actressPageLooksChallenged(html)) {
+      throw AppFailure('Jable 被站点人机校验拦住，请稍后重试');
+    }
+    final stream = extractJableHls(html);
+    if (stream.isEmpty) {
+      throw AppFailure('这个视频暂时取不到播放地址');
+    }
+    return ActressOnlinePlay(
+      streamUrl: stream,
+      headers: {
+        'User-Agent': actressOnlineUserAgent,
+        'Referer': '$site/',
+      },
+      detail: OnlineDetailInfo(title: card.title),
+    );
+  }
+}
+
 /// 全部在线源（源切换条顺序：123AV 在前、PH 在后，与用户令
-/// 「把123和ph加进去」的提及顺序一致）。
+/// 「把123和ph加进去」的提及顺序一致）。这两个是可浏览的
+/// 源（nvku 源切换条用）；线路/竞速用的全集见
+/// [kActressLineSources]。
 const kActressOnlineSources = <ActressOnlineSource>[
   Av123ActressSource(),
   PhActressSource(),
+];
+
+/// 线路/竞速全集（2026-11-26 六源扩线）：可浏览两源 +
+/// AV01 + Jable（新写 Dart）；另外四个 py 复用源
+/// （AVDB/JavMenu/MemoJav/MissAV）不在这张表里，走
+/// actress_py_lines.dart 的 py 链线路表。
+const kActressLineSources = <ActressOnlineSource>[
+  Av123ActressSource(),
+  PhActressSource(),
+  Av01ActressSource(),
+  JableActressSource(),
 ];
 
 /// 按 id 取在线源；取不到回 null（'' 是女优库本体，不是在线源）。

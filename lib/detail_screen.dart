@@ -42,6 +42,7 @@ import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
 import 'actress/actress_online_detail.dart';
 import 'actress/actress_online_lines.dart';
+import 'actress/actress_online_sources.dart';
 import 'actress/code_meta_section.dart';
 import 'actress/jav_code_meta.dart';
 import 'actress/javdb_api.dart';
@@ -1252,6 +1253,8 @@ class _DetailScreenState extends State<DetailScreen> {
       key: ValueKey('actress-lines-$avId-${drama.source}-${drama.id}'),
       code: avId,
       onPlay: (detail) => unawaited(_playActressOnlineLine(detail)),
+      sources: kActressLineSources,
+      repository: widget.repository,
     );
   }
 
