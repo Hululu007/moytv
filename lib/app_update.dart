@@ -26,8 +26,10 @@ class AppVersion implements Comparable<AppVersion> {
 
   // pubspec 里受 pub 语义版本约束只能写点分日期（2026.11.26+39）：
   // 解析时归一成裸日期版本号，其 +构建号是安装序号、不进版本比较。
+  // 同日后续版写预发布段（2026.11.26-1+40）：-N 是同日序号、进版本比较，
+  // 这样装上 +1 的机器能认出自己就是 20261126+1、不会自弹更新。
   static final RegExp _dottedDatePattern = RegExp(
-    r'(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[+-](\d+))?',
+    r'(\d{4})\.(\d{1,2})\.(\d{1,2})(?:([+-])(\d+))?',
   );
 
   static AppVersion? tryParse(String text) {
@@ -37,7 +39,10 @@ class AppVersion implements Comparable<AppVersion> {
       final month = int.parse(dottedDate.group(2)!);
       final day = int.parse(dottedDate.group(3)!);
       if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-        return AppVersion(year * 10000 + month * 100 + day, 0, 0, 0);
+        final suffix = dottedDate.group(4) == '-'
+            ? int.tryParse(dottedDate.group(5) ?? '') ?? 0
+            : 0;
+        return AppVersion(year * 10000 + month * 100 + day, 0, 0, suffix);
       }
     }
     final match = _pattern.firstMatch(text);

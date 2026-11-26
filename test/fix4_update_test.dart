@@ -51,6 +51,36 @@ void main() {
         AppVersion.tryParse('20261127')! > AppVersion.tryParse('20261126+9')!,
         isTrue,
       );
+      // 同日第二版（20261126+1）：pubspec 写预发布段 2026.11.26-1+40，
+      // -1 是同日序号进比较、+40 是安装序号不进比较。
+      expect(
+        AppVersion.tryParse('2026.11.26-1'),
+        const AppVersion(20261126, 0, 0, 1),
+      );
+      expect(AppVersion.tryParse('2026.11.26-1').toString(), '20261126+1');
+      // 装的 20261126（pubspec 2026.11.26+39）看 20261126+1 是新版。
+      expect(
+        AppVersion.tryParse('20261126+1')! >
+            AppVersion.tryParse('2026.11.26+39')!,
+        isTrue,
+      );
+      // 装上 +1 后认出自己：最新版与本机相等，不再自弹更新。
+      expect(
+        AppVersion.tryParse('20261126+1')! <=
+            AppVersion.tryParse('2026.11.26-1')!,
+        isTrue,
+      );
+      // 同日再出 +2、次日新日期，+1 的机器都还能认出是新版。
+      expect(
+        AppVersion.tryParse('20261126+2')! >
+            AppVersion.tryParse('2026.11.26-1')!,
+        isTrue,
+      );
+      expect(
+        AppVersion.tryParse('20261127')! >
+            AppVersion.tryParse('2026.11.26-1')!,
+        isTrue,
+      );
     });
 
     test('compares version before build', () {
