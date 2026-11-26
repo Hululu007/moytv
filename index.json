@@ -1737,6 +1737,15 @@
       "adult": true,
       "description": "高清仓库（MacCMS/stui 静态站直取）。12 个分类与内置蜘蛛硬编码表 1:1（日韩AV/国产系列/欧美/动漫/无码中文字幕/有码中文字幕/日本无码/日本有码/国产视频/吃瓜爆料/欧美高清/动漫剧情，实拉站点导航 id 逐项核对），域名池探活（gqck.net 随机子域 9 个依次探 /vodtype/8/、入口域名跟随跳转兜底、活域名存 storage 复用 30 分钟），列表卡片正则直取、详情即播放页内联 player_aaaa 明文 m3u8 直取、play 内主清单预解析；详情选集按本作 id 收窄（原蜘蛛全页扫 /vodplay/ 会把推荐卡误作选集，属蜘蛛本意修正，见 verdict）。由内置 jar 蜘蛛 ZakaGqckAmns 改写。",
       "manifest": "gqck/gqck.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.qmdj",
+      "name": "七猫短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "七猫短剧（JSON 接口站，公开接口无需登录）。12 个分类与原内置蜘蛛导航 1:1（热门榜/最新上线/全部短剧/魔改愿望榜 + /categories 动态线路 8 条），列表走 /browse 分页、详情走 /dramas。VIP 处置：原蜘蛛靠媒体 key 拼造付费集地址绕过金币/VIP 付费墙，本插件不复刻拼造——只提供接口本身下发 seoContentUrl 的免费集，付费集不给址、列表与详情如实标注免费集数。由内置 jar 蜘蛛 ZakaQmdjAmns 改写。",
+      "manifest": "qmdj/qmdj.idjplugin"
     }
   ],
   "cms": []
