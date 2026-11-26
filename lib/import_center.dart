@@ -213,6 +213,9 @@ class ImportEngine {
         reason: '运行时校验未通过：${hostValidation.error}',
       );
     }
+    final hostNote = (hostValidation?.degraded ?? false)
+        ? '；文件较大，运行时校验超时，已按静态校验结果放行'
+        : '';
     final id = _uniqueId('py', candidate.baseName, records, hash);
     final fileName = await ImportFileStore.save(id, 'py', saveBytes);
     records.add(
@@ -254,10 +257,10 @@ class ImportEngine {
       fileName: candidate.name,
       status: ImportOutcomeStatus.success,
       reason: validation.playOnly
-          ? '已注册为仅播放 Python 蜘蛛站（经 CPython 桥执行；首页只有一集正片，解析走 playerContent，缺失依赖已打桩）；$filledNote$nameNote'
+          ? '已注册为仅播放模式 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote$nameNote'
           : filledNote.isEmpty
-          ? '已注册为 Python 蜘蛛站（经 CPython 桥执行）$nameNote'
-          : '已注册为 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$nameNote',
+          ? '已注册为 Python 蜘蛛站（经 CPython 桥执行）$hostNote$nameNote'
+          : '已注册为 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote$nameNote',
       siteName: displayName,
       siteId: id,
     );

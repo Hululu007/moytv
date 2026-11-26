@@ -620,6 +620,57 @@ def _ensure_base_spider_stub():
         def request(self, method, url, headers=None, cookies=None, data=None, timeout=None, **kw):
             return _do_http(method, url, headers, cookies, data, timeout=timeout)
 
+        # 合同方法兜底（与 _DEFAULT_IMPLS 同口径）：老壳方言蜘蛛常以
+        # super().init(extend) 起手、或 super().homeContent() 取基类结果
+        # 再加工；桩基类缺这些方法时这类调用直接 AttributeError，
+        # handle 的 init 阶段就炸、整站打不开（2026-11-26 巨型聚合蜘蛛
+        # 实报：init 第一行 super().init(extend) 无处可落）。默认实现
+        # 只求不炸、回空结果，真实现由子类覆写。
+        def init(self, extend=""):
+            return None
+
+        def getName(self):
+            return ""
+
+        def homeContent(self, filter=None):
+            return {"class": [], "list": []}
+
+        def homeVideoContent(self):
+            return {"list": []}
+
+        def categoryContent(self, tid=None, pg=1, filter=None, extend=None):
+            return {"list": [], "page": pg, "pagecount": 1}
+
+        def detailContent(self, ids=None):
+            return {"list": []}
+
+        def searchContent(self, key=None, quick=False, pg="1"):
+            return {"list": [], "page": 1}
+
+        def playerContent(self, flag=None, id=None, vipFlags=None):
+            return {}
+
+        def getDependence(self):
+            return []
+
+        def destroy(self):
+            return None
+
+        def localProxy(self, param=None):
+            return [404, "text/plain", "localProxy not implemented", {}]
+
+        def isVideoFormat(self, url=None):
+            path = str(url or "").split("?")[0].lower()
+            return path.endswith(
+                (".m3u8", ".mp4", ".mp3", ".flv", ".mkv", ".mov", ".ts", ".aac")
+            )
+
+        def manualVideoCheck(self):
+            return False
+
+        def action(self, action=None):
+            return ""
+
     for alias in (
         "BaseSpider",
         "Spider",

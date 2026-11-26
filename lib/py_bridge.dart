@@ -30,12 +30,24 @@ class PyValidation {
     required this.hasSpider,
     required this.missing,
     required this.error,
+    this.degraded = false,
   });
+
+  /// 宿主校验超时降级放行：调用方已先行通过静态校验，超时多半是
+  /// 文件大、容器慢，不据此判死。ok 视为真，但 degraded 置真，
+  /// 导入结果里必须把这条备注写给用户看。
+  const PyValidation.degraded()
+    : ok = true,
+      hasSpider = true,
+      missing = const [],
+      error = '',
+      degraded = true;
 
   final bool ok;
   final bool hasSpider;
   final List<String> missing;
   final String error;
+  final bool degraded;
 
   factory PyValidation.fromJson(Map<String, dynamic> json) => PyValidation(
     ok: json['ok'] == true,
@@ -73,8 +85,16 @@ class PyBridge {
   static DateTime Function()? _testClock;
 
   static Duration get _effectiveProbeTimeout => _testTimeout ?? probeTimeout;
-  static Duration get _effectiveValidateTimeout =>
-      _testTimeout ?? validateTimeout;
+
+  /// 校验超时按源码规模放宽：基础 30 秒，每多 512K 字符加 15 秒，
+  /// 120 秒封顶。2MB 级巨型蜘蛛光是把源码送进运行时做 ast.parse，
+  /// 在慢容器里就要十几秒，固定 30 秒会把正经文件误判超时判死。
+  static Duration validateTimeoutFor(int sourceLength) {
+    final steps = sourceLength ~/ (512 * 1024);
+    final seconds = validateTimeout.inSeconds + steps * 15;
+    return Duration(seconds: seconds > 120 ? 120 : seconds);
+  }
+
   static DateTime _now() => _testClock?.call() ?? DateTime.now();
 
   /// 测试缝：覆盖状态探测实现（传 null 恢复真实探测）。
@@ -177,12 +197,15 @@ class PyBridge {
     try {
       final raw = await _channel
           .invokeMethod<String>('validate', {'source': source})
-          .timeout(_effectiveValidateTimeout);
+          .timeout(_testTimeout ?? validateTimeoutFor(source.length));
       return PyValidation.fromJson(
         Map<String, dynamic>.from(jsonDecode(raw ?? '{}') as Map),
       );
     } on TimeoutException {
-      throw AppFailure('蜘蛛校验超时，请重试');
+      // 降级放行：静态校验已在调用方先行通过，宿主校验超时不整单
+      // 判死（与运行时不可用回 null 放行同口径），degraded 标记
+      // 让导入结果把备注写明。
+      return const PyValidation.degraded();
     } on PlatformException catch (error) {
       throw AppFailure('蜘蛛校验失败：${error.message ?? error.code}');
     }

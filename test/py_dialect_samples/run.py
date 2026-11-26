@@ -29,6 +29,7 @@ EXPECTED = {
     "missing_core.py": "validate_fail",
     "base_forms.py": "pass",
     "assign_method.py": "pass",
+    "super_base.py": "pass",
     "gbk.py": "special",
 }
 

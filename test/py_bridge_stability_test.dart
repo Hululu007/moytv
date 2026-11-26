@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moyi/core_bridge.dart';
 import 'package:moyi/py_bridge.dart';
 
 void main() {
@@ -105,7 +104,7 @@ void main() {
       expect(channelCalls, 0);
     });
 
-    test('校验超时报 AppFailure', () async {
+    test('校验超时降级放行，不整单判死', () async {
       PyBridge.setTestTimeout(const Duration(milliseconds: 100));
       PyBridge.setTestProbe(
         () async => const PyRuntimeStatus(available: true, python: '3.13'),
@@ -114,9 +113,23 @@ void main() {
         await Future<void>.delayed(const Duration(seconds: 30));
         return jsonEncode({'ok': true, 'hasSpider': true});
       });
-      await expectLater(
-        PyBridge.validate('class Spider: pass'),
-        throwsA(isA<AppFailure>()),
+      final result = await PyBridge.validate('class Spider: pass');
+      expect(result, isNotNull);
+      expect(result!.ok, isTrue);
+      expect(result.degraded, isTrue);
+    });
+
+    test('校验超时按源码规模放宽，120 秒封顶', () {
+      expect(PyBridge.validateTimeoutFor(0), const Duration(seconds: 30));
+      expect(
+        PyBridge.validateTimeoutFor(512 * 1024),
+        const Duration(seconds: 45),
+      );
+      // 2MB 级巨型蜘蛛（约 180 万字符）放到 75 秒。
+      expect(PyBridge.validateTimeoutFor(1819013), const Duration(seconds: 75));
+      expect(
+        PyBridge.validateTimeoutFor(64 * 1024 * 1024),
+        const Duration(seconds: 120),
       );
     });
 

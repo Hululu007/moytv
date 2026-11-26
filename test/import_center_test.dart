@@ -161,6 +161,20 @@ void main() {
       expect(result.filled, isNot(contains('playerContent')));
     });
 
+    test('只缺 homeVideoContent 时备注写明缺什么与影响', () {
+      final relaxed = _fullSpider.replaceAll(
+        '    def homeVideoContent(self): return {}\n',
+        '',
+      );
+      final result = validatePySource(relaxed);
+      expect(result.ok, isTrue, reason: result.message);
+      expect(result.playOnly, isTrue);
+      expect(result.missingCore, ['homeVideoContent']);
+      expect(result.filledNote, contains('缺少核心方法 homeVideoContent'));
+      expect(result.filledNote, contains('首页没有视频列表'));
+      expect(result.filledNote, contains('照常可用'));
+    });
+
     test('缺核心方法 playerContent 仍拒绝', () {
       final broken = _fullSpider.replaceAll(
         'def playerContent(self, flag=None, id=None, vipFlags=None): return {}',

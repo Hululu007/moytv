@@ -29,6 +29,7 @@ class PySourceValidation {
     required this.missing,
     this.filled = const [],
     this.mode = 'full',
+    this.missingCore = const [],
   });
 
   final bool ok;
@@ -36,6 +37,10 @@ class PySourceValidation {
   final List<String> missing;
   final List<String> filled;
   final String mode;
+
+  /// 仅播放模式下缺失的核心方法名单。missing 在该模式下按既有
+  /// 口径清空，这份单独留给导入备注写明到底缺了什么。
+  final List<String> missingCore;
 
   bool get playOnly => mode == 'playOnly';
 
@@ -45,10 +50,39 @@ class PySourceValidation {
     return '缺少核心方法：${missing.join('、')}';
   }
 
+  /// 核心方法缺失对用户可见功能的影响（仅播放备注用）。
+  static const _coreImpact = {
+    'getName': '站点名只能用文件名',
+    'init': '初始化按默认处理',
+    'homeContent': '首页没有分类',
+    'homeVideoContent': '首页没有视频列表',
+    'categoryContent': '分类列表不可用',
+    'detailContent': '详情不可用',
+    'searchContent': '搜索不可用',
+  };
+
   String get filledNote {
     if (filled.isEmpty) return '';
     if (playOnly) {
-      return '仅播放模式，已补齐 ${filled.length} 个方法：${filled.join('、')}';
+      final parts = <String>[];
+      if (missingCore.isNotEmpty) {
+        final impacts = [
+          for (final method in missingCore)
+            if (_coreImpact[method] != null) _coreImpact[method]!,
+        ];
+        final impactText = impacts.isEmpty ? '' : '（${impacts.join('；')}）';
+        parts.add(
+          '缺少核心方法 ${missingCore.join('、')}$impactText，'
+          '未缺的分类、搜索、详情、播放功能照常可用',
+        );
+      }
+      final defaulted = filled
+          .where(PySpiderContract.defaultedMethods.contains)
+          .toList();
+      if (defaulted.isNotEmpty) {
+        parts.add('已自动补齐缺省方法 ${defaulted.length} 个：${defaulted.join('、')}');
+      }
+      return parts.join('；');
     }
     return '已自动补齐缺省方法 ${filled.length}/${PySpiderContract.defaultedMethods.length}：${filled.join('、')}';
   }
@@ -81,6 +115,7 @@ PySourceValidation validatePySource(String source) {
       missing: const [],
       filled: [...missing, ...filled],
       mode: 'playOnly',
+      missingCore: missing,
     );
   }
   return PySourceValidation(
