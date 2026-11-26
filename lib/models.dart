@@ -785,6 +785,35 @@ class SourceSite {
   /// 与导入配置的注册表分开，删配置不影响网盘站。
   static final Map<String, SourceSite> cloudDriveSites = {};
 
+  /// 演员库内部源登记表（2026-11-26 发版实报修复）：演员库在线
+  /// 源（JavDB / 123AV / PH / AV01 / Jable）与 115 竞速线造的
+  /// Drama 用这批 id 作 source。它们是演员库模块内部源、不是
+  /// 片库可切换站点：不进 values / knownValues / allValues，
+  /// LocalStore.sources 也不读本表，所以不会出现在选站列表
+  /// 里；登记只为让 isAvailable / isKnown / byId 认它们——否则
+  /// 详情页源门禁（allowsSource）对这批 id 恒为假，从演员库
+  /// 点开任何作品都误落「当前用户无权访问」面板。
+  /// 注意 pan115 是演员库 115 线的内部 id，与网盘站的
+  /// cloud:pan115 是两个 id，不要混。
+  static const Map<String, SourceSite> actressOnlySites = {
+    'javdb': SourceSite(
+      'javdb',
+      'JavDB',
+      '演员库在线源 · 番号信息与剧照',
+      section: sectionVideo,
+    ),
+    'av123': SourceSite('av123', '123AV', '演员库在线源', section: sectionVideo),
+    'ph': SourceSite('ph', 'PH', '演员库在线源', section: sectionVideo),
+    'av01': SourceSite('av01', 'AV01', '演员库在线源', section: sectionVideo),
+    'jable': SourceSite('jable', 'Jable', '演员库在线源', section: sectionVideo),
+    'pan115': SourceSite(
+      'pan115',
+      '115',
+      '演员库 115 已存 / 离线线路',
+      section: sectionVideo,
+    ),
+  };
+
   /// py 导入站的蜘蛛文件名（应用文档目录 imported_spiders/ 下），key 为站点 id。
   static final Map<String, String> importedPyFiles = {};
   static final Map<String, String> importedJsFiles = {};
@@ -798,17 +827,21 @@ class SourceSite {
       values.any((site) => site.id == id) ||
       customIds.contains(id) ||
       importedSites.containsKey(id) ||
-      cloudDriveSites.containsKey(id);
+      cloudDriveSites.containsKey(id) ||
+      actressOnlySites.containsKey(id);
   static bool isKnown(String id) =>
       allValues.any((site) => site.id == id) ||
       customIds.contains(id) ||
       importedSites.containsKey(id) ||
-      cloudDriveSites.containsKey(id);
+      cloudDriveSites.containsKey(id) ||
+      actressOnlySites.containsKey(id);
   static SourceSite byId(String id) {
     final cloud = cloudDriveSites[id];
     if (cloud != null) return cloud;
     final imported = importedSites[id];
     if (imported != null) return imported;
+    final actressOnly = actressOnlySites[id];
+    if (actressOnly != null) return actressOnly;
     if (customIds.contains(id)) {
       return SourceSite(
         id,

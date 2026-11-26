@@ -666,31 +666,15 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     unawaited(_loadWorks(reset: true));
   }
 
-  /// 影片库入口（2026-11-22：主树此前没有通往 FilmLibraryPage 的
-  /// 入口——列表页右上角的按钮 2026-11-21 按用户令删掉了；活树是靠
-  /// 底部五页签胶囊栏进，本页保留四页签不接五页签，入口改放在
-  /// 顶栏搜索框旁的霓虹药丸钮上，独立/内嵌两种模式都看得见。
-  /// 排行榜入口不动：女优页签内嵌工具栏里的奖杯钮（列表页
-  /// _toolbarActions 的 open-actress-ranking）。
-  void _openFilmLibrary() {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FilmLibraryPage(
-          database: widget.database ?? SqfliteActressDatabase.instance,
-          repository: widget.repository,
-          store: widget.store,
-        ),
-      ),
-    );
-  }
-
   /// 管理弹层（2026-11-26 16:55 用户令「设置不能少」）：顶栏
-  /// 管理钮打开，挂齐数据库管理整套入口——数据库管理页（导
+  /// 设置齿轮打开，挂齐数据库管理整套入口——数据库管理页（导
   /// 入 .sql / 表格更新 / 导出 / 备份恢复 / 删除数据库都在
-  /// 里面）、影片库、重新加载数据库。女优列表页齿轮里的设
-  /// 置弹窗照旧保留，两处入口并行不冲突。管理页回来后 bump
-  /// 库代次重建女优列表页，导入/换库结果立刻可见。
+  /// 里面）、重新加载数据库。女优列表页齿轮里的设置弹窗照旧
+  /// 保留，两处入口并行不冲突。管理页回来后 bump 库代次重建
+  /// 女优列表页，导入/换库结果立刻可见。
+  /// 影片库入口已按 2026-11-26 23:00 用户令删除（原在搜索框
+  /// 旁的药丸钮与本弹层里各一份，一并撤下；FilmLibraryPage
+  /// 本身与影视库数据加载 _loadFilmLibrary 不动）。
   Future<void> _openManageSheet() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -721,15 +705,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 unawaited(_openDbManagePage());
-              },
-            ),
-            _manageRow(
-              icon: Icons.video_library_rounded,
-              title: '影片库',
-              subtitle: '浏览绑定的库文件、把作品追加进女优库',
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _openFilmLibrary();
               },
             ),
             _manageRow(
@@ -992,17 +967,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                   }
                 },
               ),
-              IconButton(
-                key: const ValueKey('nvku-manage-open'),
-                tooltip: '管理',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(
-                  Icons.settings_outlined,
-                  color: AvStyle.dim,
-                  size: 20,
-                ),
-                onPressed: () => unawaited(_openManageSheet()),
-              ),
             ],
           ),
             const SizedBox(height: 8),
@@ -1086,12 +1050,22 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                 ),
               ),
               const SizedBox(width: 8),
-              AvPill(
-                key: const ValueKey('nvku-open-film-library'),
-                label: '影片库',
-                selected: false,
-                compact: true,
-                onTap: _openFilmLibrary,
+              // 设置齿轮（2026-11-26 23:00 用户令：右上角只留
+              // 设置，照 AvPlay 顶栏右上角齿轮）：原搜索框旁的
+              // 「影片库」药丸钮删除，设置齿轮挪到这里——独立 /
+              // 内嵌两种模式都看得见（标题行只在独立模式出现，
+              // 齿轮放标题行时内嵌模式会没设置入口）。点开仍是
+              // 管理弹层（数据库管理整页 + 重新加载数据库）。
+              IconButton(
+                key: const ValueKey('nvku-manage-open'),
+                tooltip: '设置',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(
+                  Icons.settings_outlined,
+                  color: AvStyle.dim,
+                  size: 22,
+                ),
+                onPressed: () => unawaited(_openManageSheet()),
               ),
             ],
           ),

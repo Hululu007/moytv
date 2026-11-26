@@ -3,8 +3,8 @@
 // - 合并页资源 actress_library.html 已从包里撤登记，rootBundle
 //   再也读不到它（防合并页被重新接回包里）；
 // - 原生页顶部有源切换条（女优库 / 123AV / PH），底部导航只剩
-//   首页 / 女优 / 收藏三项、没有「分类」，影片库入口照旧在
-//   搜索框旁；
+//   首页 / 女优 / 收藏三项、没有「分类」；右上角「影片库」入口
+//   已按 2026-11-26 23:00 用户令删除，设置齿轮在搜索框旁；
 // - 切到 PH：在线视图出现；测试环境没真网络，取数失败必须落
 //   到人话错误态 + 重试钮，不许假装有数据；
 // - 切回女优库：底部导航与作品都还在。
@@ -21,7 +21,6 @@ import 'package:moyi/actress/actress_nvku_cache.dart';
 import 'package:moyi/actress/actress_nvku_page.dart';
 import 'package:moyi/app_theme_config.dart';
 import 'package:moyi/local_store.dart';
-import 'package:moyi/models.dart';
 import 'package:moyi/whos_local_library.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -151,7 +150,9 @@ void main() {
       );
       await _settleReal(tester);
 
-      // 源切换条三段 + 影片库入口（原 UI 位置）都在。
+      // 源切换条三段都在；右上角「影片库」入口已按 2026-11-26
+      // 23:00 用户令删除，设置齿轮在搜索框旁（原标题行管理钮
+      // 已并到这里，独立/内嵌两种模式都只有一个齿轮）。
       expect(
         find.byKey(const ValueKey('actress-source-nvku')),
         findsOneWidget,
@@ -163,6 +164,11 @@ void main() {
       expect(find.byKey(const ValueKey('actress-source-ph')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('nvku-open-film-library')),
+        findsNothing,
+      );
+      expect(find.text('影片库'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('nvku-manage-open')),
         findsOneWidget,
       );
       // 底部导航只剩三项，「分类」已删、其余顺移补齐。
