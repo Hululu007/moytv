@@ -1665,6 +1665,51 @@
       "adult": true,
       "description": "香蕉视频（App 接口站，JSON API）。17 个分类与原内置蜘蛛导航 1:1（首页 8 区/榜单 3/专题/短视频榜 5），发现域名探活后走接口取列表，详情按原蜘蛛缓存+榜单扫描还原，播放走 /vod/reqplay 现取 https HLS 并在 play 内预解析主清单；付费与旗标标题过滤照原蜘蛛。登记表 ZakaXj 与 zakaxj 同为蜘蛛类 ZakaXjAmns、同站同协议，本插件一并覆盖。由内置 jar 蜘蛛 ZakaXjAmns 改写。",
       "manifest": "xj/xj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.dayday",
+      "name": "天天A片",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "天天A片（CF 盾站，按原内置蜘蛛的绕行链直连上游 vjav.tube 的 KVS JSON 接口）。8 个分类与原蜘蛛硬编码导航 1:1（最新更新/最热门 + Asian/Japanese/HD/Big Tits/Cuckold/Toys），列表走 /api/json/videos2 接口，详情走 /api/json/video 接口，播放走 /api/videofile.php 取混淆地址（西里尔同形字 base64）解码后跟随 /get_file/ 跳转到 ahcdn 签名 mp4 直链。由内置 jar 蜘蛛 ZakaDaydayAmns 改写。",
+      "manifest": "dayday/dayday.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.kuaihuo",
+      "name": "快活影院",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "快活影院（静态站直取）。18 个分类与内置蜘蛛硬编码视频导航表 1:1（视频·最新/电影·最新/亚洲AV/自拍偷拍/欧美AV/3D动画/熟女人妻/丝袜制服/主播直播/SM另类等），列表页卡片正则直取、详情页 var playUrl 直取、搜索走站方 ES 接口（照原蜘蛛 1:1 复刻）；蜘蛛旧主机 tbryy.opsizte.com 已 301 跳现行域名 tbryy.eiwqty.com（插件以现行域名为主、旧域名兜底），播放占位符 +@movivecom@+ 的媒体域名照站方 replace.js 现读（现 stream11.shdtjx.cn，蜘蛛写死的 stream1.pkckgcg.com 已 404），播放为 https m3u8、play 内主清单预解析。由内置 jar 蜘蛛 ZakaKuaihuoAmns 改写。",
+      "manifest": "kuaihuo/kuaihuo.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.zaketxfans",
+      "name": "糖心Fans",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "糖心Fans（糖心系创作者订阅平台接口站 txfansmm.com）。8 个分类与内置蜘蛛硬编码导航表 1:1（热门推荐/最新发布/随机推荐/视频专区/免费内容/付费内容/订阅内容/创作者榜），设备登录为纯接口调用（随机 deviceId + /api/login/device 游客令牌，无短信/无真实指纹/无账号），请求与响应均为 Base64 文本形态的 AES-256-CBC+gzip 信封（密钥由 requestId 经 HMAC-SHA256 派生），照原蜘蛛 1:1 复刻；列表照蜘蛛保留付费行并标糖豆/订阅，详情无播放链时走缓存与同名搜索兜底，播放为 https m3u8、play 内主清单预解析。封面为站方 .bnc 加密图文件、照蜘蛛原样直出。由内置 jar 蜘蛛 ZakaTxfansAmns 改写。",
+      "manifest": "zaketxfans/zaketxfans.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.99jj",
+      "name": "久久热┃KVS直取384P",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "久久热（KVS 网页站 www.99jj25.com）。分类 21 个：蜘蛛的「最新」加站点 /categories/ 页现行导航全部 20 个（欧美/肛交/李宗瑞全集/久久热会员认证作品/日本有码/韩国女主播系列/小格式综合/高清/成人动漫/东京热/SM性虐/日本无码/国产自拍/韩国综合/制服丝袜/三级片/潮吹/口爆颜射/VR专区/中文字幕），蜘蛛硬编码 11 个是其子集、未删减；卡片/详情/播放照原蜘蛛 1:1（video_url 直取、/get_file/ 一跳重定向到签名 mp4），搜索照蜘蛛扫页过滤标题。由内置 jar 蜘蛛 Zaka99jjAmns 改写。",
+      "manifest": "99jj/99jj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.juyin",
+      "name": "巨婴云播",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "巨婴云播（静态站整页包壳站，蜘蛛实证为可解析静态 HTML 站）。页面整页以 base64+百分号编码包在 var 变量里下发，插件按原蜘蛛 unwrap 解包后解析卡片与详情页 dplayers 的 vurl；分类为站内现行导航 1:1（首页/精品/影视 3 顶页 + 视频筛选条 49 条动态解析，蜘蛛硬编码 9 条二级为其子集、解析失败时兜底）；详情多段 vurl 按段拆集、全段可播；搜索照蜘蛛扫描 3 顶页+9 二级页按标题匹配。由内置 jar 蜘蛛 ZakaJuyinAmns 改写。",
+      "manifest": "juyin/juyin.idjplugin"
     }
   ],
   "cms": []
