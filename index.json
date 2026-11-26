@@ -1413,6 +1413,33 @@
       "adult": true,
       "description": "JPTT禁片天堂（jptt.tv）。17 个分类与原 py 完全一致（tid 标签类 + fid 厂牌类），详情页现取 m3u8 直链播放，play 内预解析 master 清单到子清单。由内置 py 蜘蛛改写。",
       "manifest": "jptt/jptt.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.muzi",
+      "name": "母子视频",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "母子视频（web.mzsp1.cc）。7 个分类与站导航 1:1（黄瓜短剧/55资源/不卡资源/兔儿资源/森林资源/母子资源/库库资源，动态抓取+同表兜底），详情页现取播放页 player_aaaa 的 m3u8，play 内预解析 master 清单。由内置 py 蜘蛛改写。",
+      "manifest": "muzi/muzi.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.mythav",
+      "name": "MythAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "MythAV（sdyoof.asia）。15 个分类（最新上传 + 12 个站内分类 + 国产传媒 + 标签），与原 py 蜘蛛分类 1:1；封面缓存地址解码回原图地址，详情页现取 m3u8 并在播放内预解析主清单到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "mythav/mythav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.mose365",
+      "name": "魔色365",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "魔色365（exwxfmd4.work）。4 个分类与站内导航一致（MissAV、XVideos、XNXX、Eporner，接口实时返回），播放为详情接口自定义 scheme 经站方 API 代理现取（XVideos 为 HLS 主清单预解析子清单，其余为 MP4 代理直链）。由内置 py 蜘蛛改写。",
+      "manifest": "mose365/mose365.idjplugin"
     }
   ],
   "cms": []
