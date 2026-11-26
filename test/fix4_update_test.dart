@@ -31,6 +31,12 @@ void main() {
         const AppVersion(20261126, 0, 0, 0),
       );
       expect(AppVersion.tryParse('20261326'), isNull);
+      // pubspec 的点分日期写法归一成裸日期，构建号不进比较。
+      expect(
+        AppVersion.tryParse('2026.11.26+39'),
+        const AppVersion(20261126, 0, 0, 0),
+      );
+      expect(AppVersion.tryParse('2026.11.26+39').toString(), '20261126');
       expect(AppVersion.tryParse('20261126').toString(), '20261126');
       expect(AppVersion.tryParse('20261126+1').toString(), '20261126+1');
       expect(
