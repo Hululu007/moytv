@@ -1419,6 +1419,19 @@ class DramaDetail {
     extraInfo: extraInfo,
   );
 
+  DramaDetail withStills(List<String> value) => DramaDetail(
+    drama,
+    episodes,
+    warning: warning,
+    backdrop: backdrop,
+    stills: value,
+    related: related,
+    tags: tags,
+    magnets: magnets,
+    extraInfo: extraInfo,
+  );
+
+
   factory DramaDetail.fromJson(Map<String, dynamic> json) {
     final rows = json['chapters'] as List? ?? const [];
     final dramaJson = Map<String, dynamic>.from(json['drama'] as Map);

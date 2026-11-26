@@ -1,6 +1,7 @@
 import '../models.dart';
 import 'actress_online_parse.dart';
 import 'actress_online_sources.dart';
+import 'javdb_api.dart';
 
 /// 在线源一张卡 + 已取流结果 → 可直接进详情页/播放器的详情。
 /// 在线视图点卡、详情页在线线路区、女优详情页竞速三处共用同
@@ -72,4 +73,42 @@ bool actressOnlineCardMatches({
     return actressCodeKey(av123CodeOf(card.pageUrl)) == target;
   }
   return actressCodeKey(card.title).contains(target);
+}
+
+/// 剧照补图（2026-11-26）：详情自带剧照为空时，按番号去
+/// JavDB 接口补预览图——本地库没有剧照数据、在线解析也拿
+/// 不到剧照时剧照区只能靠这一路。口径：
+/// - 已有剧照原样返回、不发请求（页面自带剧照优先，JavDB
+///   只补空缺不覆盖）；
+/// - 先按番号搜索，搜索结果里番号归一化后**精确相等**才认
+///   （近似番号不算，不拿别片的图冒充），再取那部的详情补
+///   充（movieExtra）里的预览图；
+/// - 搜索与详情各一份超时（与 JavDB 入口开页的补充拉取同
+///   口径，默认 6 秒）；搜不到、对不上、拉不到、超时，一律
+///   原样返回（保持空），不抛错——补图永远不挡开页。
+Future<List<String>> actressJavdbStillsSupplement({
+  required List<String> current,
+  required String code,
+  required JavdbApiClient client,
+  Duration timeout = const Duration(seconds: 6),
+}) async {
+  if (current.isNotEmpty) return current;
+  final target = actressCodeKey(code);
+  if (target.isEmpty) return current;
+  try {
+    final results = await client.searchMovies(code).timeout(timeout);
+    JavdbMovie? hit;
+    for (final movie in results) {
+      if (movie.id.isNotEmpty && actressCodeKey(movie.number) == target) {
+        hit = movie;
+        break;
+      }
+    }
+    if (hit == null) return current;
+    final extra = await client.movieExtra(hit.id).timeout(timeout);
+    if (extra.stills.isEmpty) return current;
+    return extra.stills;
+  } catch (_) {
+    return current;
+  }
 }

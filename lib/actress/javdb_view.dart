@@ -7,97 +7,19 @@
 // 令牌）——页头常挂「未验」标；加载失败给人话提示 + 重试，
 // 不拿假数据冒充。
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../app_page_route.dart';
-import '../content_http.dart';
 import '../core_bridge.dart';
 import '../detail_screen.dart';
 import '../local_store.dart';
 import '../models.dart';
 import 'actress_av_style.dart';
 import 'javdb_api.dart';
+import 'javdb_image.dart';
 
-/// JavDB 图片：取字节 → XOR 解密判定 → 内存图（进程内缓存）。
-class JavdbImage extends StatefulWidget {
-  const JavdbImage({
-    super.key,
-    required this.url,
-    this.fit = BoxFit.cover,
-    this.http,
-  });
-
-  final String url;
-  final BoxFit fit;
-  final ContentHttp? http;
-
-  static final _cache = <String, Uint8List>{};
-
-  @override
-  State<JavdbImage> createState() => _JavdbImageState();
-}
-
-class _JavdbImageState extends State<JavdbImage> {
-  Uint8List? _bytes;
-  bool _failed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(JavdbImage old) {
-    super.didUpdateWidget(old);
-    if (old.url != widget.url) {
-      _bytes = null;
-      _failed = false;
-      _load();
-    }
-  }
-
-  Future<void> _load() async {
-    final url = widget.url;
-    if (url.isEmpty) {
-      setState(() => _failed = true);
-      return;
-    }
-    final cached = JavdbImage._cache[url];
-    if (cached != null) {
-      setState(() => _bytes = cached);
-      return;
-    }
-    try {
-      final raw = await (widget.http ?? ContentHttp()).getBytes(
-        url,
-        timeout: const Duration(seconds: 20),
-      );
-      final decoded = javdbDecryptImageBytes(raw);
-      JavdbImage._cache[url] = decoded;
-      if (mounted && widget.url == url) setState(() => _bytes = decoded);
-    } catch (_) {
-      if (mounted && widget.url == url) setState(() => _failed = true);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bytes = _bytes;
-    if (bytes != null) return Image.memory(bytes, fit: widget.fit);
-    return Container(
-      color: const Color(0xFFF0EDE9),
-      alignment: Alignment.center,
-      child: Icon(
-        _failed ? Icons.broken_image_outlined : Icons.image_outlined,
-        color: AvStyle.dim,
-        size: 22,
-      ),
-    );
-  }
-}
+export 'javdb_image.dart';
 
 /// 打开一部 JavDB 作品：信息先进 DetailScreen（番号在，跨站
 /// 探活 + 在线线路区自动按番号搜线路；本地库线路经详情页既

@@ -51,6 +51,15 @@ Uint8List javdbDecryptImageBytes(Uint8List bytes) {
   return out;
 }
 
+/// 是不是 JavDB 图床的图（API_MAP 实证图床域名
+/// c0.jdbstatic.com）：封面/头像/剧照都走它，字节带 XOR
+/// 加密，显示必须走 JavdbImage 的解密路径（见
+/// javdb_image.dart），普通网络图组件解不出。
+bool javdbIsImageUrl(String url) {
+  final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+  return host == 'jdbstatic.com' || host.endsWith('.jdbstatic.com');
+}
+
 bool _hasImageMagic(Uint8List b) {
   if (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) {
     return true; // JPEG

@@ -38,9 +38,12 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
+import 'actress/actress_online_detail.dart';
 import 'actress/actress_online_lines.dart';
 import 'actress/code_meta_section.dart';
 import 'actress/jav_code_meta.dart';
+import 'actress/javdb_api.dart';
+import 'actress/javdb_image.dart';
 
 typedef DetailTagTap =
     void Function(String sourceId, String tagId, String tagName);
@@ -84,6 +87,7 @@ class DetailScreen extends StatefulWidget {
     this.queue,
     this.playerFactory,
     this.videoBuilder,
+    this.javdbStillsClient,
   });
   final Drama drama;
   final AppRepository repository;
@@ -122,6 +126,11 @@ class DetailScreen extends StatefulWidget {
   final PlaybackQueue? queue;
   final Player Function()? playerFactory;
   final Widget Function(Widget controls)? videoBuilder;
+
+  /// 剧照补图用的 JavDB 接口客户端（详情自带剧照为空时按番号
+  /// 补预览图，见 _loadJavdbStills）。只供测试/预览注入，不传
+  /// 时用默认客户端走真接口。
+  final JavdbApiClient? javdbStillsClient;
   @override
   State<DetailScreen> createState() => _DetailScreenState();
 }
@@ -153,6 +162,11 @@ class _DetailScreenState extends State<DetailScreen> {
   /// 三站元数据 + who's 索引（与 CodeMetaSection 同一份匹配）。
   /// null = 未匹配到或尚未查完，头区不画演员行。
   CodeMeta? _codeMeta;
+
+  /// 剧照补图用的 JavDB 客户端：构造方注入优先，否则本页自建
+  /// 一个（无请求时不产生流量）。
+  late final JavdbApiClient _javdbStillsClient =
+      widget.javdbStillsClient ?? JavdbApiClient();
 
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
@@ -249,6 +263,39 @@ class _DetailScreenState extends State<DetailScreen> {
     );
     if (!mounted || generation != _generation) return;
     setState(() => _codeMeta = meta);
+  }
+
+  /// 剧照补图（2026-11-26）：本地库 / who's 等入口打开的作品
+  /// 详情自带剧照为空时，按番号去 JavDB 接口补预览图（番号精
+  /// 确相等才认，见 actressJavdbStillsSupplement）。与
+  /// _refreshCodeMeta 同一处后台补充链：不挡开页、不报错、
+  /// 拉不到保持空、已有剧照不覆盖。JavDB 入口的作品开页时
+  /// 已按作品 id 拉过详情补充（openJavdbWork），这里不重复
+  /// 拉。代次守卫：换片后旧结果不再写回；写回前再查一次剧
+  /// 照仍为空（期间页面自带剧照若已补上就不覆盖）。
+  Future<void> _loadJavdbStills(Drama drama, int generation) async {
+    if (drama.source == 'javdb') return;
+    final detail = _detail;
+    if (detail == null || detail.stills.isNotEmpty) return;
+    final avId = extractAvId(
+      title: drama.title,
+      id: drama.id,
+      sourceId: drama.sourceId,
+    );
+    if (avId == null) return;
+    final stills = await actressJavdbStillsSupplement(
+      current: detail.stills,
+      code: avId,
+      client: _javdbStillsClient,
+    );
+    if (!mounted || generation != _generation) return;
+    final current = _detail;
+    if (current == null || current.stills.isNotEmpty || stills.isEmpty) {
+      return;
+    }
+    setState(() {
+      _detail = current.withStills(stills);
+    });
   }
 
   Future<void> _loadTmdb(Drama drama) async {
@@ -510,6 +557,7 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_loadRecommended(merged, generation));
       unawaited(_loadSeriesApi(merged, generation));
       unawaited(_refreshCodeMeta(merged, generation));
+      unawaited(_loadJavdbStills(merged, generation));
       if (_isFolderDrama(merged)) {
         unawaited(_loadFolder(reset: true));
       }
@@ -565,6 +613,7 @@ class _DetailScreenState extends State<DetailScreen> {
               episodePageSize;
         });
         unawaited(_refreshCodeMeta(widget.drama, generation));
+        unawaited(_loadJavdbStills(widget.drama, generation));
         return;
       }
       setState(() {
@@ -2448,11 +2497,12 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   /// 剧照区（2026-11-26 照 AvPlay 详情页截图）：标题「剧照」+
-  /// 右侧「全部 N >」+ 横排横构图剧照可滑。数据只认详情自带
-  /// 的 stills（在线源取页内剧照区、py 源取页内剧照）；本地
-  /// 库没有剧照数据时 stills 为空、整区不显示，不拿封面冒
-  /// 充、不编数量（用户令）。头区那条 stills 缩略条是换背景
-  /// 图用的，与本区并存、职能不同。
+  /// 右侧「全部 N >」+ 横排横构图剧照可滑。数据认详情自带
+  /// 的 stills（在线源取页内剧照区、py 源取页内剧照）与
+  /// JavDB 按番号补的预览图（自带为空才补，见
+  /// _loadJavdbStills）；两路都拿不到时 stills 为空、整区
+  /// 不显示，不拿封面冒充、不编数量（用户令）。头区那条
+  /// stills 缩略条是换背景图用的，与本区并存、职能不同。
   Widget _stillsSection(Drama drama) {
     final seen = <String>{};
     final stills = <String>[
@@ -2501,12 +2551,7 @@ class _DetailScreenState extends State<DetailScreen> {
                   borderRadius: BorderRadius.circular(8),
                   child: AspectRatio(
                     aspectRatio: 16 / 10,
-                    child: Image.network(
-                      stills[index],
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) =>
-                          const ColoredBox(color: Colors.black26),
-                    ),
+                    child: _detailStillImage(stills[index]),
                   ),
                 ),
               ),
@@ -2730,6 +2775,21 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 }
 
+/// 一张剧照的显示组件：JavDB 图床的图字节带 XOR 加密，走
+/// JavdbImage 的解密路径（与 JavDB 封面/头像同一条，见
+/// javdb_image.dart）；其余来源的剧照维持普通网络图（失败
+/// 给深色占位，与此前一致）。
+Widget _detailStillImage(String url) {
+  if (javdbIsImageUrl(url)) {
+    return JavdbImage(url: url, fit: BoxFit.cover);
+  }
+  return Image.network(
+    url,
+    fit: BoxFit.cover,
+    errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26),
+  );
+}
+
 /// 全部剧照页（详情页剧照区「全部 N >」的落点）：两列网格
 /// 列全这部作品的剧照。
 class _StillsAllPage extends StatelessWidget {
@@ -2752,12 +2812,7 @@ class _StillsAllPage extends StatelessWidget {
         itemCount: stills.length,
         itemBuilder: (context, index) => ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.network(
-            stills[index],
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) =>
-                const ColoredBox(color: Colors.black26),
-          ),
+          child: _detailStillImage(stills[index]),
         ),
       ),
     );
