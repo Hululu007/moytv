@@ -1710,6 +1710,33 @@
       "adult": true,
       "description": "巨婴云播（静态站整页包壳站，蜘蛛实证为可解析静态 HTML 站）。页面整页以 base64+百分号编码包在 var 变量里下发，插件按原蜘蛛 unwrap 解包后解析卡片与详情页 dplayers 的 vurl；分类为站内现行导航 1:1（首页/精品/影视 3 顶页 + 视频筛选条 49 条动态解析，蜘蛛硬编码 9 条二级为其子集、解析失败时兜底）；详情多段 vurl 按段拆集、全段可播；搜索照蜘蛛扫描 3 顶页+9 二级页按标题匹配。由内置 jar 蜘蛛 ZakaJuyinAmns 改写。",
       "manifest": "juyin/juyin.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jack20",
+      "name": "後宮電影院",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "後宮電影院（xvideos 聚合）。10 个分类与内置蜘蛛硬编码表 1:1，且与站点现行导航（标签云/菜单）逐项核对一致：最新影片加日本無碼/歐美短片/國語長片/日本有碼/卡通短片/其它短片/其他長片/卡通長片/歐美長片；列表页 <article data-post-id> 卡片正则直取、详情页 player-x.php 的 base64 令牌解出 xvideos 嵌入地址、播放时现抓嵌入页取 setVideoHLS/setVideoUrlHigh/setVideoUrlLow 直链（HLS 线与 MP4 线双线路），照原蜘蛛 1:1 复刻。由内置 jar 蜘蛛 ZakaJack20Amns 改写。",
+      "manifest": "jack20/jack20.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.coolinet",
+      "name": "酷愛成人網",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "酷愛成人網（WP 全站直取）。分类 8 个与内置蜘蛛硬编码表 1:1（最新發表 + 中文字幕/亞洲AV/歐美AV/直播/亞洲自拍偷拍/歐美自拍偷拍/性感美圖），与现行站点导航逐项一致（站上另有非视频的「公告」分类，蜘蛛未收、插件同样不收）；列表页 videoPost 卡片正则直取、详情走 WP REST 接口（posts?_embed=1）加 /?p= 网页兜底、播放 iframe 三条 player=1/2/3 线路、play 现取播放页 m3u8 并预解析主清单，全部照原蜘蛛 1:1 复刻；蜘蛛第一主机 230304.xyz 现 301 跳往无关站 52papa.tv，插件以实测活站 coolinet.net 为主、旧主机兜底且靠正文特征词校验不误收跳转页。由内置 jar 蜘蛛 ZakaCoolAmns 改写。",
+      "manifest": "coolinet/coolinet.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.gqck",
+      "name": "高清仓库",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "高清仓库（MacCMS/stui 静态站直取）。12 个分类与内置蜘蛛硬编码表 1:1（日韩AV/国产系列/欧美/动漫/无码中文字幕/有码中文字幕/日本无码/日本有码/国产视频/吃瓜爆料/欧美高清/动漫剧情，实拉站点导航 id 逐项核对），域名池探活（gqck.net 随机子域 9 个依次探 /vodtype/8/、入口域名跟随跳转兜底、活域名存 storage 复用 30 分钟），列表卡片正则直取、详情即播放页内联 player_aaaa 明文 m3u8 直取、play 内主清单预解析；详情选集按本作 id 收窄（原蜘蛛全页扫 /vodplay/ 会把推荐卡误作选集，属蜘蛛本意修正，见 verdict）。由内置 jar 蜘蛛 ZakaGqckAmns 改写。",
+      "manifest": "gqck/gqck.idjplugin"
     }
   ],
   "cms": []
