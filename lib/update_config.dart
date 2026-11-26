@@ -1,4 +1,4 @@
-const String kReleaseRepoSlug = 'hoyittvggfh45/huoyi-releases';
+const String kReleaseRepoSlug = 'hoyittvggfh45/moytv';
 
 const String kCoreReleaseTagPrefix = 'core-';
 
