@@ -14,6 +14,7 @@ import '../local_store.dart';
 import '../models.dart';
 import '../settings_screen.dart';
 import 'html_gateway.dart';
+import 'html_nvku.dart';
 import 'html_play.dart';
 
 /// 桥方法失败：code 发回页面作 reject 原因，message 仅记日志。
@@ -292,6 +293,9 @@ class HtmlBridge {
         return _lastPlayState;
       case 'fm.search':
         return _search(params);
+      case 'fm.nvku':
+        // 女优库本地兜底查询（合并演员库页专用，只读查工作库）。
+        return HtmlNvkuService.shared.handle(params);
       case 'fm.history':
         return _history();
       case 'fm.cache':

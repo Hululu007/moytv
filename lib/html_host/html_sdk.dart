@@ -230,6 +230,7 @@ const String kMoyiHtmlSdkShim = r'''
   fm.openLive = function (payload) { return post('fm.openLive', payload || {}); };
   fm.openKeep = function (payload) { return post('fm.openKeep', payload || {}); };
   fm.openSetting = function () { return post('fm.openSetting', {}); };
+  fm.nvku = function (payload) { return post('fm.nvku', payload || {}); };
   fm.back = function () { return post('fm.back', {}); };
   fm.reload = function () { return post('fm.reload', {}); };
   // 双约定：fm.preloadArtwork(pic, wallPic) 与 fm.preloadArtwork([urls])。

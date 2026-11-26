@@ -71,6 +71,7 @@ flutter:
     - assets/jar_site_configs.json
     - assets/haikuo_samples.json
     - assets/haikuo_builtin_rules.json
+    - assets/actress_library.html
     - assets/haikuo_modules/
     - assets/haikuo_modules_manifest.json
     - assets/miniapps/builtin/
