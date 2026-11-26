@@ -407,7 +407,10 @@ void main() {
     });
 
     test('执行中途出错：临时文件清掉，原库不动', () async {
-      final executor = _RecordingExecutor()..failOnTable = 'video_tag';
+      // 致命错误注入改走查询失败（校验/归一化阶段）：单条语句
+      // 执行失败自 2026-11-26 起只跳过计数、不再整单失败（见
+      // 下面的整批全灭用例），能把整单打停的只剩这类真致命错误。
+      final executor = _RecordingExecutor()..failQuery = true;
       final livePath = '${tempDir.path}/女优库.db';
       await File(livePath).writeAsString('OLDDB');
       final importer = ActressSqlImporter(
@@ -498,10 +501,10 @@ void main() {
         onProgress: (_) {},
       );
       expect(firstResult.ok, isTrue, reason: firstResult.error);
-      // 中途往 video_tag 插就抛错。
+      // 中途查询就抛错（致命错误，见上一个用例的注释）。
       final failing = ActressSqlImporter(
         executorFactory: factoryFor(
-          _RecordingExecutor()..failOnTable = 'video_tag',
+          _RecordingExecutor()..failQuery = true,
         ),
       );
       final failResult = await failing.importFile(
@@ -551,7 +554,9 @@ void main() {
     });
 
     // 2026-11-25 用户令：单条坏语句不许再炸掉整个导入——跳过
-    // 计数、导完汇总写明；只有整批全灭（系统性）才整单失败。
+    // 计数、导完汇总写明。2026-11-26 续：整批全灭也不许中途
+    // 炸单（.dump 尾部统计语句在部分机型上整批必失败、旧口径
+    // 把整单拖死），全跳过后由校验按结构问题整单拦下。
     test('单条坏语句跳过计数、不炸整单', () async {
       final sql = File('${tempDir.path}/one_bad.sql');
       await sql.writeAsString(
@@ -626,7 +631,7 @@ void main() {
       );
     });
 
-    test('整批全灭是系统性失败：整单失败、原库不动', () async {
+    test('整单数据全坏：逐条跳过后由校验拦下、原库不动', () async {
       final sql = File('${tempDir.path}/all_bad.sql');
       await sql.writeAsString(
         'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
@@ -636,7 +641,11 @@ void main() {
         "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
         "INSERT INTO video_play_urls VALUES('v1','u');\n",
       );
-      // 所有 INSERT 都执行失败（模拟库锁死/磁盘满那类系统性失败）。
+      // 所有 INSERT 都执行失败。旧口径在批处理兜底里抛「整批
+      // 全部执行失败」中途炸单；新口径逐条跳过、导完后由校验
+      // 以「没有作品」整单拦下——失败点后移，结论一样是整单
+      // 失败、原库不动，但部分机型上整批必死的统计类语句不再
+      // 能把带真数据的导入拖死。
       final executor = _RecordingExecutor()
         ..failOnStatementContaining = 'VALUES(';
       final livePath = '${tempDir.path}/女优库.db';
@@ -651,11 +660,120 @@ void main() {
         onProgress: (_) {},
       );
       expect(result.ok, isFalse);
-      expect(result.error, contains('全部执行失败'));
+      expect(result.error, contains('没有作品'));
+      expect(result.error, isNot(contains('全部执行失败')));
       // 失败原因不带“导入失败：”前缀（展示处自己带，防双层）。
       expect(result.error, isNot(startsWith('导入失败')));
       expect(await File(livePath).readAsString(), 'OLDDB');
       expect(await File('$livePath.importing').exists(), isFalse);
+    });
+
+    // 2026-11-26 回归（用户手机实报）：.dump 尾部的 ANALYZE
+    // sqlite_schema; 在部分机型 SQLite 上必炸（不认 sqlite_
+    // schema 名），且 sqlite_stat1 表靠它创建——它一炸，后面
+    // 16 条 stat1 INSERT 整批全灭、旧口径整单失败。修法：
+    // ANALYZE 整类 + stat1/stat4 写入在导入前过滤，不执行、
+    // 不计跳过。执行器被设成「碰到 ANALYZE 就抛错、往
+    // sqlite_stat1 插就抛错」，导入还能成功且跳过数为 0，
+    // 证明是被过滤掉、不是碰巧能跑。
+    test('ANALYZE 与 stat1 统计语句整类过滤：不执行、不计数', () async {
+      final sql = File('${tempDir.path}/with_analyze.sql');
+      // 尾部形态与真文件（actress-db-20261125-v3.sql.gz）逐项
+      // 对齐：1 条 ANALYZE sqlite_schema; + 正好 16 条 stat1
+      // INSERT——用户报错里整批死掉的 16 条就是这批统计语句。
+      final stat1Inserts = [
+        for (var i = 0; i < 16; i++)
+          "INSERT INTO sqlite_stat1 VALUES('videos','idx_$i','2 1');\n",
+      ].join();
+      await sql.writeAsString(
+        'PRAGMA foreign_keys=OFF;\n'
+        'BEGIN TRANSACTION;\n'
+        'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
+        'CREATE TABLE actresses(cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT);\n'
+        'CREATE TABLE video_actress(vod_id TEXT, cate_id TEXT);\n'
+        'CREATE TABLE video_play_urls(vod_id TEXT, play_url TEXT);\n'
+        "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
+        'ANALYZE sqlite_schema;\n'
+        "INSERT INTO videos VALUES('v2','片二','p','m','u','成人影片');\n"
+        "INSERT INTO video_play_urls VALUES('v1','u');\n"
+        "INSERT INTO video_play_urls VALUES('v2','u');\n"
+        'ANALYZE sqlite_master;\n'
+        '$stat1Inserts'
+        'ANALYZE;\n'
+        'COMMIT;\n'
+        // 文件尾无分号残段也走同一过滤（splitter.flush 路径）。
+        'ANALYZE sqlite_schema',
+      );
+      final executor = _RecordingExecutor()
+        ..failOnStatementContaining = 'ANALYZE'
+        ..failOnTable = 'sqlite_stat1';
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      final importer = ActressSqlImporter(
+        executorFactory: factoryFor(executor),
+      );
+      final result = await importer.importFile(
+        sqlPath: sql.path,
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(result.ok, isTrue, reason: result.error);
+      expect(result.videos, 2);
+      expect(result.playUrls, 2);
+      expect(result.skippedStatements, 0);
+      // 执行器从没收到过任何统计语句。
+      final executed = <String>[
+        ...executor.singles,
+        for (final batch in executor.batches) ...batch,
+      ];
+      expect(
+        executed.any((s) => s.toUpperCase().contains('ANALYZE')),
+        isFalse,
+      );
+      expect(
+        executed.any((s) => s.toLowerCase().contains('sqlite_stat1')),
+        isFalse,
+      );
+      expect(await File(livePath).readAsString(), 'NEWDB');
+    });
+
+    // 2026-11-26 回归：一整批全是坏语句时不再中途炸单——
+    // 全批跳过计数，后面的好数据照常导入、整单成功（手机
+    // 实报里 stat1 那 16 条就是整批全灭的形态）。
+    test('整批全灭不再炸单：坏批全跳过、后续数据照常导入', () async {
+      final sql = File('${tempDir.path}/bad_batch.sql');
+      await sql.writeAsString(
+        'CREATE TABLE videos(vod_id TEXT PRIMARY KEY, title TEXT, pic_url TEXT, m3u8_url TEXT, vod_play_url TEXT, type_name TEXT);\n'
+        'CREATE TABLE actresses(cate_id TEXT PRIMARY KEY, name TEXT, avatar TEXT);\n'
+        'CREATE TABLE video_actress(vod_id TEXT, cate_id TEXT);\n'
+        'CREATE TABLE video_play_urls(vod_id TEXT, play_url TEXT);\n'
+        "INSERT INTO videos VALUES('BAD1','坏一','p','m','u','成人影片');\n"
+        "INSERT INTO videos VALUES('BAD2','坏二','p','m','u','成人影片');\n"
+        "INSERT INTO videos VALUES('v1','片一','p','m','u','成人影片');\n"
+        "INSERT INTO video_play_urls VALUES('v1','u');\n",
+      );
+      final executor = _RecordingExecutor()
+        ..failOnStatementContaining = "'BAD";
+      final livePath = '${tempDir.path}/女优库.db';
+      await File(livePath).writeAsString('OLDDB');
+      // batchSize=2：BAD1+BAD2 正好凑成一整批全坏。
+      final importer = ActressSqlImporter(
+        batchSize: 2,
+        executorFactory: factoryFor(executor),
+      );
+      final result = await importer.importFile(
+        sqlPath: sql.path,
+        dbPath: livePath,
+        closeDatabase: () async {},
+        onProgress: (_) {},
+      );
+      expect(result.ok, isTrue, reason: result.error);
+      expect(result.videos, 1);
+      expect(result.playUrls, 1);
+      expect(result.skippedStatements, 2);
+      expect(result.skippedStatementTables, {'videos': 2});
+      expect(await File(livePath).readAsString(), 'NEWDB');
     });
   });
 }

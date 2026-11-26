@@ -17,8 +17,18 @@ import 'actress_generic_db.dart';
 /// 校验不过、取消、执行出错都在换库之前停下：原库一字不动，
 /// 临时文件删掉。
 /// 单条语句执行出错不炸整单：整批失败后逐条重跑，坏的跳过并
-/// 按表计数、导完汇总写明；整批一条都跑不成（系统性失败）或
-/// 校验缺表/没作品/没播放地址（结构性失败）才整单失败。
+/// 按表计数、导完汇总写明；整批全灭也只跳过计数、不中途炸单
+/// （2026-11-26 改，见下条）；只有文件读不出、临时库打不开这类
+/// 真致命错误，或校验缺表/没作品/没播放地址（结构性失败）才
+/// 整单失败。
+/// .dump 的统计语句不进执行：ANALYZE 整类过滤，sqlite_stat1 /
+/// sqlite_stat4 的写入一并过滤——它们是 ANALYZE 的统计产物、
+/// 不是数据（导出侧同口径，见 actress_db_export.dart）。部分
+/// 机型的 SQLite 不认 ANALYZE 的目标名 sqlite_schema（老版本
+/// 只有 sqlite_master），这条语句在那些机型上必炸；更糟的是
+/// sqlite_stat1 表靠 ANALYZE 创建，它一炸，后面 16 条 stat1
+/// INSERT 整批全灭、按旧口径把整个导入拖死（2026-11-26 用户
+/// 手机实报，v67 导入在部分机型上栽在这里）。
 ///
 /// 红线：临时库只在导入时存在，导完即改名成主库；正式库的
 /// journal_mode / synchronous 一个字不改（读写库不抄参考文件的
@@ -97,8 +107,9 @@ class ActressSqlImportResult {
   final int skipped;
 
   /// 执行时出错被跳过的语句数（单条坏语句不炸整单：整批失败后
-  /// 逐条重跑，坏的跳过计数、好的照常进库；整批一条都跑不成是
-  /// 系统性失败、仍整单失败，不走这里）。
+  /// 逐条重跑，坏的跳过计数、好的照常进库；整批全灭也只跳过
+  /// 计数，结构不对由随后的校验整单拦下）。ANALYZE 等统计语句
+  /// 是导入前就过滤掉的，不算跳过、不走这里。
   final int skippedStatements;
 
   /// 跳过语句按表计数（表名 → 条数）。
@@ -371,9 +382,13 @@ class ActressSqlImporter {
           statements += batch.length;
         } catch (_) {
           // 整批失败多半是批里混了一条坏语句：整批已回滚，逐条
-          // 重跑定位——坏的跳过计数、好的照常进库。一条都跑不成
-          // 是系统性失败（库锁死、磁盘满之类），抛出去按整单失败
-          // 收尾，绝不把整批静默吞掉。
+          // 重跑定位——坏的跳过计数、好的照常进库。整批全灭也
+          // 不在这里炸单（2026-11-26 改）：部分机型上 .dump 尾
+          // 部的统计类语句整批必失败，旧写法在这里抛 StateError
+          // 把整个导入拖死（首条出错样本还是先前过滤漏掉的统计
+          // 语句，排查极具误导性）。跳过数与首条出错样本都记进
+          // 结果汇总、不静默；真把数据弄坏了，后面的校验（缺
+          // 表/没作品/没播放地址）会整单拦下、原库照样不动。
           var okCount = 0;
           for (final statement in batch) {
             try {
@@ -382,10 +397,6 @@ class ActressSqlImporter {
             } catch (e) {
               recordSkip(statement, e);
             }
-          }
-          if (okCount == 0) {
-            throw StateError('整批 ${batch.length} 条语句全部执行失败'
-                '（首条出错：$skippedSample）');
           }
           statements += okCount;
         }
@@ -420,6 +431,12 @@ class ActressSqlImporter {
           final head = _statementHead(statement);
           if (head == 'BEGIN' || head == 'COMMIT') {
             // .dump 自带的事务起止：事务由这里按批管，跳过它自己的。
+            continue;
+          }
+          if (_isStatisticsStatement(statement, head)) {
+            // .dump 的统计语句（ANALYZE 与 sqlite_stat1/stat4
+            // 的写入）：不是数据，不执行、也不计跳过（文件头注
+            // 释有根因：部分机型执行 ANALYZE 必炸且连累真数据）。
             continue;
           }
           if (head == 'INSERT') {
@@ -459,7 +476,9 @@ class ActressSqlImporter {
       final tail = splitter.flush();
       if (tail != null) {
         final head = _statementHead(tail);
-        if (head != 'BEGIN' && head != 'COMMIT') {
+        if (head != 'BEGIN' &&
+            head != 'COMMIT' &&
+            !_isStatisticsStatement(tail, head)) {
           if (head == 'INSERT') {
             pendingInserts.add(tail);
           } else {
@@ -606,6 +625,22 @@ class ActressSqlImporter {
     final head = (end < 0 ? text : text.substring(0, end)).toUpperCase();
     // CREATE TABLE / CREATE INDEX / CREATE UNIQUE INDEX：头词都是 CREATE。
     return head;
+  }
+
+  /// .dump 统计语句判定（导入前过滤，不执行、不计跳过）：
+  /// ANALYZE 整类（带不带目标、目标是 sqlite_schema 还是
+  /// sqlite_master 都算）；目标表是 sqlite_stat1 / sqlite_stat4
+  /// 的写入类语句（INSERT/DELETE/UPDATE/CREATE/DROP）一并算。
+  /// 判定锚在语句开头的结构上，不做全文子串匹配——数据值里
+  /// 出现 sqlite_stat1 字样（如标题文本）不误伤。
+  static bool _isStatisticsStatement(String statement, String head) {
+    if (head == 'ANALYZE') return true;
+    return RegExp(
+      r'^(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE|'
+      r'CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|'
+      r'DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+"?sqlite_stat[14]\b',
+      caseSensitive: false,
+    ).hasMatch(statement.trimLeft());
   }
 
   /// 语句的目标表名（跳过计数按表归类用）：INSERT INTO / CREATE
