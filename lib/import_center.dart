@@ -30,9 +30,14 @@ class ImportCandidate {
     return at < 0 ? '' : name.substring(at + 1).toLowerCase();
   }
 
+  /// 文件名口径：去路径、去后缀（与 jar 直导入 fileBaseName 同款）。
+  /// zip 包内条目名、分享路径可能带目录段，显示名不能把路径带出来。
   String get baseName {
-    final at = name.lastIndexOf('.');
-    return at < 0 ? name : name.substring(0, at);
+    var base = name.replaceAll('\\', '/');
+    final slash = base.lastIndexOf('/');
+    if (slash >= 0) base = base.substring(slash + 1);
+    final at = base.lastIndexOf('.');
+    return at < 0 ? base : base.substring(0, at);
   }
 }
 
@@ -227,40 +232,24 @@ class ImportEngine {
         contentHash: hash,
         importedAtMs: DateTime.now().millisecondsSinceEpoch,
         ext: candidate.ext,
+        baseName: candidate.baseName,
       ),
     );
     markRecordsChanged();
-    var displayName = candidate.baseName;
-    var nameNote = '';
-    try {
-      final path = await ImportFileStore.pathOf(fileName);
-      // ping 只是尽力同步蜘蛛自报的名字：默认 70 秒超时会让整批导入
-      // 长时间无反馈（选完文件没提示的根因之一），压到 10 秒；
-      // 超时/失败都忽略，登记名保持文件名（外层 catch (_) {}）。
-      final ping = await PyBridge.call(
-        path,
-        {'action': 'ping'},
-      ).timeout(const Duration(seconds: 10));
-      final spiderName = (ping['name'] as String? ?? '').trim();
-      if (spiderName.isNotEmpty && spiderName != displayName) {
-        final index = records.indexWhere((record) => record.id == id);
-        if (index >= 0) {
-          records[index] = records[index].copyWith(name: spiderName);
-          markRecordsChanged();
-          displayName = spiderName;
-          nameNote = '；蜘蛛名为“$spiderName”，已同步';
-        }
-      }
-    } catch (_) {}
+    // 站名以文件名为准（2026-11-26 用户令，与 jar 直导入同口径）：
+    // 不再 ping 蜘蛛拿自报的 getName 覆盖登记名——此前 ping 成功时
+    // 站点显示的是蜘蛛自报名、看不到文件名，用户实报「导入注册的
+    // 站点不显示文件名」。蜘蛛名只影响运行时取数，不进登记名。
+    final displayName = candidate.baseName;
     final filledNote = validation.filledNote;
     return ImportOutcome(
       fileName: candidate.name,
       status: ImportOutcomeStatus.success,
       reason: validation.playOnly
-          ? '已注册为仅播放模式 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote$nameNote'
+          ? '已注册为仅播放模式 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote'
           : filledNote.isEmpty
-          ? '已注册为 Python 蜘蛛站（经 CPython 桥执行）$hostNote$nameNote'
-          : '已注册为 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote$nameNote',
+          ? '已注册为 Python 蜘蛛站（经 CPython 桥执行）$hostNote'
+          : '已注册为 Python 蜘蛛站（经 CPython 桥执行）；$filledNote$hostNote',
       siteName: displayName,
       siteId: id,
     );
@@ -310,6 +299,7 @@ class ImportEngine {
         fileName: fileName,
         contentHash: hash,
         importedAtMs: DateTime.now().millisecondsSinceEpoch,
+        baseName: candidate.baseName,
       ),
     );
     markRecordsChanged();
@@ -509,6 +499,7 @@ class ImportEngine {
         contentHash: hash,
         importedAtMs: DateTime.now().millisecondsSinceEpoch,
         ext: jsonListExtFor(path: jsonPath, name: displayName),
+        baseName: displayName,
       ),
     );
     markRecordsChanged();
@@ -531,7 +522,12 @@ class ImportEngine {
           spiderName != 'JSON列表') {
         final index = records.indexWhere((record) => record.id == id);
         if (index >= 0) {
-          records[index] = records[index].copyWith(name: spiderName);
+          // 基准名一起改：统一序号重排按 baseName 分组，只改 name
+          // 会被重排拉回内容推导名，等于白确认。
+          records[index] = records[index].copyWith(
+            name: spiderName,
+            baseName: spiderName,
+          );
           markRecordsChanged();
         }
       }

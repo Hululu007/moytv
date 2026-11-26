@@ -369,6 +369,9 @@ class LocalStore extends ChangeNotifier {
     } catch (_) {
       _importedSiteRecords = [];
     }
+    // 启动即按同名序号口径重算一遍显示名（只改内存，落盘等下次
+    // syncImportedSites 自然带上），保证重启前后同名组编号一致。
+    _importedSiteRecords = renumberImportedSiteRecords(_importedSiteRecords);
     _syncImportedRegistry();
   }
 
@@ -401,7 +404,11 @@ class LocalStore extends ChangeNotifier {
   /// 只发通知，不重建登记表（登记表由安装/卸载路径直接维护）。
   void refreshSiteRegistry() => _notify();
 
-  Future<void> syncImportedSites(List<ImportedSiteRecord> records) async {
+  Future<void> syncImportedSites(List<ImportedSiteRecord> input) async {
+    // 全部增删入口（导入引擎、导入中心删除、站点导入流、插件市场、
+    // 首页）最终都经这里落盘，先统一重排同名序号：同名组按基准名
+    // 编号、删后自动重排、剩一条回原名，各入口不用各自挂逻辑。
+    final records = renumberImportedSiteRecords(input);
     final epoch = _epoch;
     await _queue(() async {
       if (locked || epoch != _epoch) return;

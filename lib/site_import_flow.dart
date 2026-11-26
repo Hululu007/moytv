@@ -189,6 +189,7 @@ Future<ImportOutcome> _importOneHtml(
         fileName: savedFileName,
         contentHash: hash,
         importedAtMs: DateTime.now().millisecondsSinceEpoch,
+        baseName: parsed.siteName,
       ),
     );
     await store.syncImportedSites(records);
