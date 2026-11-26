@@ -425,6 +425,32 @@ Uint8List m115AesCbcDecrypt(List<int> cipher) {
   return out;
 }
 
+/// 上传 initupload 的 body 加密：与下载同一把 key/iv 的 AES-128-CBC，
+/// 但填充是 p115cipher 的非标准版（_pad）：padSize = -len & 15，
+/// 已对齐时不补块，填充字节值就是 padSize 本身。解密侧
+/// [m115AesCbcDecrypt] 按标准 PKCS#7 去填充：padSize 在 1..15 时
+/// 两边兼容，padSize=0 时本来就没有填充块、也无可去，往返成立。
+Uint8List m115AesCbcEncrypt(List<int> plain) {
+  final padSize = (-plain.length) & 15;
+  final padded = Uint8List(plain.length + padSize);
+  padded.setAll(0, plain);
+  for (var i = plain.length; i < padded.length; i++) {
+    padded[i] = padSize;
+  }
+  final out = Uint8List(padded.length);
+  var previous = _aesIv;
+  for (var off = 0; off < padded.length; off += 16) {
+    final block = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      block[i] = padded[off + i] ^ previous[i];
+    }
+    final encrypted = aesEncryptBlock(_aesKey, block);
+    out.setAll(off, encrypted);
+    previous = encrypted;
+  }
+  return out;
+}
+
 /// LZ4 block 解压。
 Uint8List m115Lz4BlockDecompress(List<int> src) {
   final dest = <int>[];

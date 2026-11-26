@@ -16,8 +16,10 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 
+import 'cloud_115_upload.dart';
 import 'cloud_credential_store.dart';
 import 'cloud_drive_types.dart';
 import 'cloud_m115_crypto.dart';
@@ -172,6 +174,47 @@ class Pan115SpaceInfo {
   final int totalBytes;
   final int usedBytes;
   final int remainBytes;
+}
+
+/// 115 上传信息（files/uploadinfo）：userkey 是 initupload 签名的
+/// 必需品；sizeLimit 是单文件上限（字节），0 = 接口没给。
+class Pan115UploadInfo {
+  const Pan115UploadInfo({
+    required this.userId,
+    required this.userKey,
+    this.sizeLimit = 0,
+    this.uploadAllowed = true,
+    this.uploadAllowedMsg = '',
+  });
+
+  final String userId;
+  final String userKey;
+  final int sizeLimit;
+  final bool uploadAllowed;
+  final String uploadAllowedMsg;
+}
+
+/// initupload 的结果（响应是扁平 JSON，没有 data 包裹）。
+/// status：1 需要上传（走 OSS），2 秒传成功，7 需要二次校验
+/// （带 signKey/signCheck 再 init 一次）。
+class Pan115UploadInit {
+  const Pan115UploadInit({
+    required this.status,
+    this.signKey = '',
+    this.signCheck = '',
+    this.bucket = '',
+    this.objectKey = '',
+    this.callback = '',
+    this.callbackVar = '',
+  });
+
+  final int status;
+  final String signKey;
+  final String signCheck;
+  final String bucket;
+  final String objectKey;
+  final String callback;
+  final String callbackVar;
 }
 
 /// 转码安卓路取地址与播放共用的 UA：m3u8 里的链接绑取它时的 UA，
@@ -530,6 +573,9 @@ class Pan115Provider implements CloudDriveProvider {
   static const _indexInfoUrl = 'https://webapi.115.com/files/index_info';
   static const _userInfoUrl = 'https://webapi.115.com/user/info';
   static const _navUrl = 'https://my.115.com/';
+  static const _uploadInfoUrl = 'https://webapi.115.com/files/uploadinfo';
+  static const _initUploadUrl = 'https://uplb.115.com/4.0/initupload.php';
+  static const _ossTokenUrl = 'https://uplb.115.com/3.0/gettoken.php';
   // 转码安卓路：官方安卓 App 的视频接口，只认安卓绑定的会话——扫码
   // 已改绑 qandroid（一期），配套成立。web 路要 web 绑会话、我们没有，
   // 不做。取地址与播放必须用同一个 UA（Mozilla/5.0）。
@@ -1274,6 +1320,321 @@ class Pan115Provider implements CloudDriveProvider {
       fileId: file.id,
       downloadCookie: downloadCookie,
     );
+  }
+
+  /// 上传信息：user_id/userkey 是 initupload 签名的必需品。
+  /// 返回可能是 data 包裹也可能是扁平的，两种都认；
+  /// upload_allowed 字段缺失时当允许（服务端真不让传时 init 会报错）。
+  Future<Pan115UploadInfo> uploadInfo(
+    http.Client client,
+    CloudCredentials credentials,
+  ) async {
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
+    final response = await _get(
+      client,
+      Uri.parse(_uploadInfoUrl),
+      headers: _authHeaders(credentials),
+    );
+    _throwIfRateLimited(response, '115 上传信息获取失败');
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 上传信息获取失败（HTTP ${response.statusCode}）');
+    }
+    final root = _jsonObject(response.body, '115 上传信息');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 上传信息获取失败',
+    );
+    final data = root['data'];
+    final map = data is Map<String, dynamic> ? data : root;
+    final userId = _asString(map['user_id']);
+    final userKey = _asString(map['userkey']);
+    if (userId.isEmpty || userKey.isEmpty) {
+      throw CloudDriveException('115 上传信息获取失败：服务器返回异常');
+    }
+    var allowed = true;
+    if (map.containsKey('upload_allowed')) {
+      final raw = map['upload_allowed'];
+      allowed = raw == true || raw == 1 || raw == '1' || raw == 'true';
+    }
+    return Pan115UploadInfo(
+      userId: userId,
+      userKey: userKey,
+      sizeLimit: _asInt(map['size_limit']),
+      uploadAllowed: allowed,
+      uploadAllowedMsg: _asString(map['upload_allowed_msg']),
+    );
+  }
+
+  /// 秒传初始化：POST uplb 的 initupload，body 是 AES 加密后的表单
+  /// （cloud_115_upload 的 buildPan115UploadPayload），k_ec 必须 URL
+  /// 编码后拼进查询串（Base64 里的 + 裸拼会被当空格）。偶尔回
+  /// HTTP 401，重试一次。statuscode 0 或 701 都算成功。
+  Future<Pan115UploadInit> uploadInit(
+    http.Client client,
+    CloudCredentials credentials, {
+    required Pan115UploadInfo info,
+    required String fileId,
+    required String fileName,
+    required int fileSize,
+    required String target,
+    String signKey = '',
+    String signVal = '',
+    int? timestampSeconds,
+  }) async {
+    final payload = buildPan115UploadPayload(
+      userId: info.userId,
+      userKey: info.userKey,
+      fileId: fileId,
+      fileName: fileName,
+      fileSize: fileSize,
+      target: target,
+      signKey: signKey,
+      signVal: signVal,
+      appVersion: pan115UploadAppVersion,
+      timestampSeconds:
+          timestampSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+    final uri = Uri.parse(
+      '$_initUploadUrl?k_ec=${Uri.encodeQueryComponent(payload.kEc)}',
+    );
+    final headers = {
+      'User-Agent': pan115UploadUserAgent,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Cookie': credentials.fields['cookie'] ?? '',
+    };
+    var response = await client
+        .post(uri, headers: headers, body: payload.body)
+        .timeout(_requestTimeout);
+    if (response.statusCode == 401) {
+      response = await client
+          .post(uri, headers: headers, body: payload.body)
+          .timeout(_requestTimeout);
+    }
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 上传初始化失败（HTTP ${response.statusCode}）');
+    }
+    final Uint8List plainBytes;
+    try {
+      plainBytes = m115ContentMaybeDecrypt(response.bodyBytes);
+    } catch (_) {
+      throw CloudDriveException('115 上传初始化失败：响应解密失败');
+    }
+    final root = _jsonObject(utf8.decode(plainBytes), '115 上传初始化');
+    final statusCode = _asInt(root['statuscode']);
+    if (statusCode != 0 && statusCode != 701) {
+      final msg = _asString(root['statusmsg']);
+      throw CloudDriveException(
+        msg.isNotEmpty
+            ? '115 上传初始化失败：$msg'
+            : '115 上传初始化失败（错误码 $statusCode）',
+      );
+    }
+    final callback = root['callback'];
+    final callbackMap = callback is Map<String, dynamic> ? callback : null;
+    return Pan115UploadInit(
+      status: _asInt(root['status']),
+      signKey: _asString(root['sign_key']),
+      signCheck: _asString(root['sign_check']),
+      bucket: _asString(root['bucket']),
+      objectKey: _asString(root['object']),
+      callback: _asString(callbackMap?['callback']),
+      callbackVar: _asString(callbackMap?['callback_var']),
+    );
+  }
+
+  /// OSS 临时凭证：不带任何鉴权头取（带了反而可能被拒），
+  /// 有效期约 1 小时，上传会话里现取现用、403 时刷新。
+  Future<Pan115OssToken> fetchOssToken(http.Client client) async {
+    final response = await client
+        .get(Uri.parse(_ossTokenUrl))
+        .timeout(_requestTimeout);
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 上传凭证获取失败（HTTP ${response.statusCode}）');
+    }
+    final root = _jsonObject(response.body, '115 上传凭证');
+    if (_asString(root['StatusCode']) != '200') {
+      throw CloudDriveException('115 上传凭证获取失败');
+    }
+    final token = Pan115OssToken(
+      accessKeyId: _asString(root['AccessKeyId']),
+      accessKeySecret: _asString(root['AccessKeySecret']),
+      securityToken: _asString(root['SecurityToken']),
+    );
+    if (token.accessKeyId.isEmpty ||
+        token.accessKeySecret.isEmpty ||
+        token.securityToken.isEmpty) {
+      throw CloudDriveException('115 上传凭证获取失败：服务器返回异常');
+    }
+    return token;
+  }
+
+  /// 上传一个文件到指定文件夹（整文件字节进内存的协议层实现；
+  /// 界面层的文件挑选/流式读取未接，见二期报告）。
+  /// 流程：全文件 SHA1 → uploadinfo（不允许/超限先拦）→ initupload
+  /// （status 7 带 sign_check 区间 SHA1 再 init 一次；status 2 秒传
+  /// 完成）→ OSS 分片（10MB 串行、单片重试 3 次、403 刷新凭证）→
+  /// complete 带回调登记。任何一步失败都如实抛错，不假成功；
+  /// OSS 阶段失败会尽力 abort 已开的分片会话。
+  Future<void> uploadFile(
+    http.Client client,
+    CloudCredentials credentials, {
+    required String fileName,
+    required List<int> bytes,
+    required String targetFolderId,
+    void Function(int sentBytes, int totalBytes)? onProgress,
+  }) async {
+    if (bytes.isEmpty) {
+      throw CloudDriveException('文件为空，无法上传');
+    }
+    final fileId = crypto.sha1.convert(bytes).toString().toUpperCase();
+    final info = await uploadInfo(client, credentials);
+    if (!info.uploadAllowed) {
+      throw CloudDriveException(
+        info.uploadAllowedMsg.isNotEmpty
+            ? info.uploadAllowedMsg
+            : '当前账号不允许上传',
+      );
+    }
+    if (info.sizeLimit > 0 && bytes.length > info.sizeLimit) {
+      throw CloudDriveException('文件超过大小限制（上限 ${info.sizeLimit} 字节）');
+    }
+    final target = 'U_1_$targetFolderId';
+    var init = await uploadInit(
+      client,
+      credentials,
+      info: info,
+      fileId: fileId,
+      fileName: fileName,
+      fileSize: bytes.length,
+      target: target,
+    );
+    if (init.status == 7) {
+      final range = _parseSignCheck(init.signCheck);
+      if (range == null || range.$1 >= bytes.length) {
+        throw CloudDriveException('115 上传初始化失败：服务器返回的校验区间无法解析');
+      }
+      final end = range.$2 >= bytes.length ? bytes.length - 1 : range.$2;
+      final signVal = crypto.sha1
+          .convert(bytes.sublist(range.$1, end + 1))
+          .toString()
+          .toUpperCase();
+      init = await uploadInit(
+        client,
+        credentials,
+        info: info,
+        fileId: fileId,
+        fileName: fileName,
+        fileSize: bytes.length,
+        target: target,
+        signKey: init.signKey,
+        signVal: signVal,
+      );
+    }
+    if (init.status == 2) return; // 秒传成功，文件已经在网盘里了。
+    if (init.status != 1) {
+      throw CloudDriveException('115 上传初始化失败：服务器返回了未知状态（${init.status}）');
+    }
+    if (init.bucket.isEmpty || init.objectKey.isEmpty) {
+      throw CloudDriveException('115 上传初始化失败：服务器没有返回存储位置');
+    }
+    // 回调为空就算分片传完文件也不会登记进网盘，那种「成功」是假的。
+    if (init.callback.isEmpty || init.callbackVar.isEmpty) {
+      throw CloudDriveException('115 上传初始化失败：服务器没有返回上传回调');
+    }
+    final totalParts =
+        (bytes.length + pan115OssPartSize - 1) ~/ pan115OssPartSize;
+    if (totalParts > 10000) {
+      throw CloudDriveException('文件太大，单次上传最多 10000 个分片');
+    }
+    final oss = Pan115OssClient(client);
+    var token = await fetchOssToken(client);
+    String? uploadId;
+    try {
+      uploadId = await oss.initMultipart(token, init.bucket, init.objectKey);
+      final parts = <Pan115OssPart>[];
+      for (var i = 0; i < totalParts; i++) {
+        final start = i * pan115OssPartSize;
+        final end = start + pan115OssPartSize > bytes.length
+            ? bytes.length
+            : start + pan115OssPartSize;
+        final partBytes = bytes.sublist(start, end);
+        String? etag;
+        Pan115OssException? lastError;
+        var refreshed = false;
+        for (var attempt = 0; attempt < 3 && etag == null; attempt++) {
+          try {
+            etag = await oss.uploadPart(
+              token,
+              init.bucket,
+              init.objectKey,
+              uploadId,
+              i + 1,
+              partBytes,
+            );
+          } on Pan115OssException catch (e) {
+            lastError = e;
+            if (e.httpCode == 403 && !refreshed) {
+              refreshed = true;
+              token = await fetchOssToken(client);
+            }
+          }
+        }
+        if (etag == null) {
+          throw CloudDriveException(
+            '115 上传分片 ${i + 1} 失败：${lastError?.message ?? '未知错误'}',
+          );
+        }
+        parts.add(Pan115OssPart(partNumber: i + 1, etag: etag));
+        onProgress?.call(end, bytes.length);
+      }
+      try {
+        await oss.completeMultipart(
+          token,
+          init.bucket,
+          init.objectKey,
+          uploadId,
+          parts,
+          init.callback,
+          init.callbackVar,
+        );
+      } on Pan115OssException catch (e) {
+        if (e.httpCode != 403) rethrow;
+        // 凭证可能刚好在 complete 前过期：刷新一次再试。
+        token = await fetchOssToken(client);
+        await oss.completeMultipart(
+          token,
+          init.bucket,
+          init.objectKey,
+          uploadId,
+          parts,
+          init.callback,
+          init.callbackVar,
+        );
+      }
+    } on Pan115OssException catch (e) {
+      if (uploadId != null) {
+        await oss.abortMultipart(token, init.bucket, init.objectKey, uploadId);
+      }
+      throw CloudDriveException(e.message);
+    } catch (_) {
+      if (uploadId != null) {
+        await oss.abortMultipart(token, init.bucket, init.objectKey, uploadId);
+      }
+      rethrow;
+    }
+  }
+
+  /// sign_check 的 "start-end"（闭区间）解析；解析不了返回 null。
+  (int, int)? _parseSignCheck(String text) {
+    final parts = text.split('-');
+    if (parts.length != 2) return null;
+    final start = int.tryParse(parts[0].trim());
+    final end = int.tryParse(parts[1].trim());
+    if (start == null || end == null || start < 0 || end < start) return null;
+    return (start, end);
   }
 }
 
