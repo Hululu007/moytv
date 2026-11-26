@@ -277,6 +277,54 @@ class AppUpdateChecker {
     } catch (_) {}
   }
 
+  /// 用户点“稍后再说”后记下的版本：同一版本不再弹窗，有更新的版本才再弹。
+  static const String _dismissedKey = 'app_update_dismissed_version';
+
+  /// 一次启动里最多弹一次，避免首页重建时重复弹。
+  static bool _promptAttempted = false;
+
+  static Future<void> dismissUpdate(AppVersion version) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_dismissedKey, version.toString());
+  }
+
+  static Future<bool> isUpdateDismissed(AppVersion version) async {
+    final preferences = await SharedPreferences.getInstance();
+    return preferences.getString(_dismissedKey) == version.toString();
+  }
+
+  /// 启动后要不要弹更新提示：有新版本且用户没对这版点过“稍后再说”才返回
+  /// 要弹的那一版（带完整发布信息，供弹窗里显示说明与下载）；否则返回 null。
+  /// 任何一步失败（没网、源 404、没配源）都静默返回 null，不打扰用户。
+  static Future<({AppVersion current, AppReleaseInfo latest})?>
+  pendingUpdatePrompt() async {
+    if (_promptAttempted) return null;
+    _promptAttempted = true;
+    try {
+      if (!updateSourceConfigured) return null;
+      final current = await currentVersion();
+      final cached = AppVersion.tryParse(await cachedLatestVersion());
+      if (cached != null && cached > current) {
+        if (await isUpdateDismissed(cached)) return null;
+        final latest = await fetchLatest();
+        if (latest.version <= current) return null;
+        if (await isUpdateDismissed(latest.version)) return null;
+        return (current: current, latest: latest);
+      }
+      final preferences = await SharedPreferences.getInstance();
+      final last = preferences.getInt(_lastCheckKey) ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - last < const Duration(hours: 24).inMilliseconds) return null;
+      await preferences.setInt(_lastCheckKey, now);
+      final latest = await fetchLatest();
+      if (latest.version <= current) return null;
+      if (await isUpdateDismissed(latest.version)) return null;
+      return (current: current, latest: latest);
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<File> downloadApk(
     AppReleaseInfo release, {
     void Function(DownloadProgress progress)? onProgress,

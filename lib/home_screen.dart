@@ -16,6 +16,8 @@ import 'site_icon.dart';
 import 'site_thumb_cache.dart';
 import 'home_zone.dart';
 import 'app_theme_config.dart';
+import 'app_update.dart';
+import 'app_update_prompt.dart';
 import 'content_tier_filter.dart';
 import 'neon/neon_ui.dart';
 import 'ui_style.dart';
@@ -1301,6 +1303,21 @@ class _HomeScreenState extends State<HomeScreen>
       _loading = false;
     }
     unawaited(ensureDramaUiStyleLoaded());
+    // 启动后查一次整包更新，有新版就弹提示框（一次启动最多弹一次，
+    // 用户点过“稍后再说”的版本不再弹，有更新的版本才再弹）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_maybePromptAppUpdate());
+    });
+  }
+
+  Future<void> _maybePromptAppUpdate() async {
+    final prompt = await AppUpdateChecker.pendingUpdatePrompt();
+    if (prompt == null || !mounted) return;
+    await showAppUpdatePrompt(
+      context,
+      current: prompt.current,
+      latest: prompt.latest,
+    );
   }
 
   @override
