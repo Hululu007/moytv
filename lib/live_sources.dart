@@ -314,6 +314,94 @@ class LiveSource {
       greenCategoryFilter: false,
       paginated: true,
     ),
+    // 2026-11-26 真果鉴直播批：虎牙走公开接口（列表 cache.php +
+    // 房间页内嵌 stream 数据直取页面 anticode 拼 FLV），验活验播后登记。
+    LiveSource(
+      id: 'huya',
+      name: '虎果',
+      description: '虎牙直播 · 热门房间 · 列表已验活',
+      protocol: LiveProtocol.api,
+      greenCategoryFilter: false,
+      paginated: true,
+    ),
+    // 2026-11-26 真果鉴直播批：*.445569.xyz 平台聚合表（远端 m3u 清单，
+    // 表内是各平台当前在播房间）。逐表验活 + 抽样验播通过后登记：
+    // 斗鱼/酷狗的表内地址经表方解析后 302 直达官方 CDN（FLV/HLS），
+    // 抖音为官方 CDN 的 HLS 直链，Twitch 经表方 302 直达官方
+    // usher 播放列表，快手/TikTok 为官方签名 FLV 直链。
+    // 分组名是游戏/分区名，与哔哩哔哩同口径关掉绿色分类白名单过滤。
+    LiveSource(
+      id: 'douyu_m3u',
+      name: '斗果',
+      description: '斗鱼直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://douyu.445569.xyz/live.m3u'],
+      group: '斗鱼直播',
+      greenCategoryFilter: false,
+    ),
+    LiveSource(
+      id: 'douyin_m3u',
+      name: '音果',
+      description: '抖音直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://douyin.445569.xyz/live.m3u'],
+      group: '抖音直播',
+      greenCategoryFilter: false,
+    ),
+    LiveSource(
+      id: 'kugou_live_m3u',
+      name: '狗果',
+      description: '酷狗直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://kugou.445569.xyz/live.m3u'],
+      group: '酷狗直播',
+      greenCategoryFilter: false,
+    ),
+    LiveSource(
+      id: 'kuaishou_m3u',
+      name: '手果',
+      description: '快手直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://kuaishou.445569.xyz/list.m3u'],
+      group: '快手直播',
+      greenCategoryFilter: false,
+    ),
+    LiveSource(
+      id: 'twitch_m3u',
+      name: '弦果',
+      description: 'Twitch 直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://twitch.445569.xyz/live.m3u'],
+      group: 'Twitch',
+      greenCategoryFilter: false,
+    ),
+    LiveSource(
+      id: 'tiktok_m3u',
+      name: '跃果',
+      description: 'TikTok 直播聚合表 · 实时在播房间 · 点开即播',
+      protocol: LiveProtocol.list,
+      endpoints: ['https://tiktok.445569.xyz/live.m3u'],
+      group: 'TikTok',
+      greenCategoryFilter: false,
+    ),
+    // 2026-11-26 真果鉴直播批：成人 cam 站走各自公开接口验播后登记，
+    // 成人口径同既有成人源（adult: true，绿色模式整源隐藏）。
+    // Stripchat：前台公开列表接口 + doppiocdn 直拼 HLS；Cam4：目录
+    // JSON 自带 HLS 预览地址。
+    LiveSource(
+      id: 'stripchat',
+      name: '🔞彩果',
+      description: 'Stripchat · 在线主播 · 实时开播',
+      protocol: LiveProtocol.api,
+      adult: true,
+    ),
+    LiveSource(
+      id: 'cam4',
+      name: '🔞卡果',
+      description: 'Cam4 · 在线主播 · 实时开播',
+      protocol: LiveProtocol.api,
+      adult: true,
+    ),
   ];
 
   static final List<LiveSource> importedValues = [];

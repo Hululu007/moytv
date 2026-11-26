@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'live_models.dart';
 
-enum LiveApiPlayKind { direct, bilibili }
+enum LiveApiPlayKind { direct, bilibili, huya, passthrough }
 
 class LiveApiSpec {
   const LiveApiSpec({
@@ -88,6 +88,52 @@ const liveApiSpecs = <String, LiveApiSpec>{
     paginated: true,
     headers: {'Referer': 'https://live.bilibili.com/'},
   ),
+  // 虎牙：www 主机的 cache.php 列表（m.huya.com 回错误页，不用）；
+  // 播放取房间页 HTML 里 hyPlayerConfig.stream 的内嵌 JSON，
+  // 用页面自带的 anticode 拼 FLV 地址（见 _huyaPlayUrl）。
+  'huya': LiveApiSpec(
+    id: 'huya',
+    listUrl:
+        'https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&gameId=0&page={page}',
+    listPaths: ['data.datas'],
+    titleKeys: ['introduction', 'roomName'],
+    nameKeys: ['nick'],
+    coverKeys: ['screenshot'],
+    idKeys: ['profileRoom'],
+    playKeys: [],
+    playUrl: 'https://www.huya.com/{id}',
+    playKind: LiveApiPlayKind.huya,
+    paginated: true,
+    headers: {'Referer': 'https://www.huya.com/'},
+  ),
+  // Stripchat：前台公开列表接口（blocks 首块的 models），
+  // 播放地址按主播 id 直拼 doppiocdn 的 HLS 主列表，不另取流。
+  'stripchat': LiveApiSpec(
+    id: 'stripchat',
+    listUrl: 'https://stripchat.com/api/front/v2/models?limit=60&primaryTag=girls',
+    listPaths: ['blocks.0.models'],
+    titleKeys: ['username'],
+    nameKeys: ['username'],
+    coverKeys: [],
+    idKeys: ['id'],
+    playKeys: [],
+    playUrl: 'https://edge-hls.doppiocdn.com/hls/{id}/master/{id}.m3u8',
+    playKind: LiveApiPlayKind.passthrough,
+    headers: {'Referer': 'https://stripchat.com/'},
+  ),
+  // Cam4：目录 JSON 的 users 自带 hlsPreviewUrl（HLS 预览即公开直播流）。
+  'cam4': LiveApiSpec(
+    id: 'cam4',
+    listUrl:
+        'https://www.cam4.com/directoryCams?directoryJson=true&online=true&url=/directoryCams',
+    listPaths: ['users'],
+    titleKeys: ['username'],
+    nameKeys: ['username'],
+    coverKeys: ['profileImageLink', 'snapshotImageLink'],
+    idKeys: ['username'],
+    playKeys: ['hlsPreviewUrl'],
+    headers: {'Referer': 'https://www.cam4.com/'},
+  ),
 };
 
 LiveApiSpec? liveApiSpecById(String id) => liveApiSpecs[id];
@@ -99,10 +145,8 @@ const pendingLiveApiSources = <String, String>{
   'yy': '只有站址，没有列表与播放接口。',
   'netease_cc': '分类列表已验活，房间列表接口未还原。',
   'chaturbate': '房间列表匿名调被 302 拦回首页，需登录会话。',
-  'stripchat': '只有站址与镜像站，列表接口未还原；播放原走原 App 的 HLS 代理，不用。',
   'myfreecams': 'FcwExtResp.php 已 404，modelobject.php 未验。',
   'bongacams': 'listing_v3.php 匿名调只回 null，需补参数。',
-  'cam4': 'directoryCams 片段归属未证实。',
   'livejasmin': 'front models 路径的宿主未证实。',
   'flirt4free': '只有站址，没有列表与播放接口。',
   'secretfriends': '只有站址，没有列表与播放接口。',
@@ -236,6 +280,8 @@ List<LiveChannel> parseApiChannels(
 }
 
 String? parseApiPlayUrl(LiveApiSpec spec, String text) {
+  // 虎牙的取流输入是房间页 HTML 而不是 JSON，单独走文本解析。
+  if (spec.playKind == LiveApiPlayKind.huya) return _huyaPlayUrl(text);
   final decoded = _decodeJson(text);
   if (decoded == null) return null;
   switch (spec.playKind) {
@@ -247,7 +293,81 @@ String? parseApiPlayUrl(LiveApiSpec spec, String text) {
         if (value is String && isPlayableLiveUrl(value)) return value.trim();
       }
       return null;
+    case LiveApiPlayKind.huya:
+    case LiveApiPlayKind.passthrough:
+      return null;
   }
+}
+
+/// 从虎牙房间页 HTML 里取播放地址：页面脚本 hyPlayerConfig 的
+/// stream 字段是内嵌 JSON，data[0].gameStreamInfoList 给出各 CDN 的
+/// FLV 基址、流名与页面自带的 anticode（服务端按本次页面生成、
+/// 短时有效，取流时现抓现用），拼成完整 FLV 地址。
+String? _huyaPlayUrl(String html) {
+  final configAt = html.indexOf('hyPlayerConfig');
+  if (configAt < 0) return null;
+  final streamAt = html.indexOf('stream:', configAt);
+  if (streamAt < 0) return null;
+  final objectAt = html.indexOf('{', streamAt);
+  if (objectAt < 0) return null;
+  final objectText = _balancedObject(html, objectAt);
+  if (objectText == null) return null;
+  final decoded = _decodeJson(objectText);
+  if (decoded is! Map) return null;
+  final data = decoded['data'];
+  if (data is! List || data.isEmpty) return null;
+  final first = data.first;
+  if (first is! Map) return null;
+  final infos = first['gameStreamInfoList'];
+  if (infos is! List) return null;
+  Map? chosen;
+  for (final info in infos.whereType<Map>()) {
+    final base = '${info['sFlvUrl'] ?? ''}'.trim();
+    if (base.isEmpty) continue;
+    chosen ??= info;
+    if (info['iIsMaster'] == 1) {
+      chosen = info;
+      break;
+    }
+  }
+  if (chosen == null) return null;
+  final base = '${chosen['sFlvUrl']}'.trim();
+  final name = '${chosen['sStreamName'] ?? ''}'.trim();
+  final suffix = '${chosen['sFlvUrlSuffix'] ?? ''}'.trim();
+  final anticode = '${chosen['sFlvAntiCode'] ?? ''}'.trim();
+  if (name.isEmpty || anticode.isEmpty) return null;
+  final url = '$base/$name.${suffix.isEmpty ? 'flv' : suffix}?$anticode';
+  return isPlayableLiveUrl(url) ? url : null;
+}
+
+/// 从 [start]（指向 '{'）起按括号配平截出整个 JSON 对象文本，
+/// 跳过字符串内部的括号与转义；配不平返回 null。
+String? _balancedObject(String text, int start) {
+  var depth = 0;
+  var inString = false;
+  var escaped = false;
+  for (var i = start; i < text.length; i++) {
+    final ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch == r'\') {
+        escaped = true;
+      } else if (ch == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch == '"') {
+      inString = true;
+    } else if (ch == '{') {
+      depth++;
+    } else if (ch == '}') {
+      depth--;
+      if (depth == 0) return text.substring(start, i + 1);
+    }
+  }
+  return null;
 }
 
 String? _bilibiliPlayUrl(dynamic decoded) {

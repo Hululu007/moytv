@@ -269,7 +269,17 @@ class LiveRepository {
     if (channel.urls.isNotEmpty) {
       return LivePlayback(url: channel.urls.first, headers: channel.headers);
     }
-    if (spec.playUrl.isEmpty || channel.token.isEmpty) {
+    if (channel.token.isEmpty) throw AppFailure('该频道没有可用线路');
+    // 直拼型：播放地址就是 playUrl 模板按频道 token 展开的结果，
+    // 不再发取流请求（如 Stripchat 按主播 id 拼 doppiocdn 主列表）。
+    if (spec.playKind == LiveApiPlayKind.passthrough) {
+      if (spec.playUrl.isEmpty) throw AppFailure('该频道没有可用线路');
+      return LivePlayback(
+        url: spec.playUrlFor(channel.token),
+        headers: {...channel.headers, ...spec.headers},
+      );
+    }
+    if (spec.playUrl.isEmpty) {
       throw AppFailure('该频道没有可用线路');
     }
     final text = await _http.get(

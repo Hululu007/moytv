@@ -56,9 +56,10 @@ void main() {
     });
   });
 
-  group('直播区：修仙版四源 + 哔哩哔哩 + 内置 m3u 二十二源', () {
+  group('直播区：内置片库 + 修仙版四源 + 接口源/聚合表 + 内置 m3u 二十二源', () {
     test('内置直播源清单与协议/端点锁定', () {
       expect(LiveSource.values.map((s) => s.id), [
+        'whos_lib',
         'xiuguo',
         'maiyoux',
         'bnzb',
@@ -87,8 +88,20 @@ void main() {
         'm3u_guochanse',
         'm3u_riben2',
         'bilibili',
+        // 2026-11-26 真果鉴直播批：虎牙接口源 + 6 个平台聚合表
+        // + Stripchat/Cam4（逐个验活验播后登记）。
+        'huya',
+        'douyu_m3u',
+        'douyin_m3u',
+        'kugou_live_m3u',
+        'kuaishou_m3u',
+        'twitch_m3u',
+        'tiktok_m3u',
+        'stripchat',
+        'cam4',
       ]);
       expect(LiveSource.values.map((s) => s.name), [
+        '🔞内置片库',
         '🔞秀果',
         '🔞欲火聚合',
         '🔞百年直播',
@@ -116,6 +129,15 @@ void main() {
         '🔞国产色情',
         '🔞日本有码 2',
         '哔哩哔哩',
+        '虎果',
+        '斗果',
+        '音果',
+        '狗果',
+        '手果',
+        '弦果',
+        '跃果',
+        '🔞彩果',
+        '🔞卡果',
       ]);
       final maiyoux = LiveSource.byId('maiyoux')!;
       expect(maiyoux.protocol, LiveProtocol.pingtai);
@@ -141,9 +163,40 @@ void main() {
       expect(bilibili.paginated, isTrue);
       expect(bilibili.greenCategoryFilter, isFalse);
 
-      // 2026-11-15 删站：哔哩哔哩之后的 10 个直播站全部查无此源。
+      // 2026-11-26 真果鉴直播批新增 9 源的协议/口径锁定。
+      final huya = LiveSource.byId('huya')!;
+      expect(huya.protocol, LiveProtocol.api);
+      expect(huya.adult, isFalse);
+      expect(huya.paginated, isTrue);
+      expect(huya.greenCategoryFilter, isFalse);
+
+      final douyuM3u = LiveSource.byId('douyu_m3u')!;
+      expect(douyuM3u.protocol, LiveProtocol.list);
+      expect(douyuM3u.endpoint, 'https://douyu.445569.xyz/live.m3u');
+      expect(douyuM3u.adult, isFalse);
       for (final id in [
-        'huya',
+        'douyin_m3u',
+        'kugou_live_m3u',
+        'kuaishou_m3u',
+        'twitch_m3u',
+        'tiktok_m3u',
+      ]) {
+        final source = LiveSource.byId(id)!;
+        expect(source.protocol, LiveProtocol.list);
+        expect(source.adult, isFalse);
+        expect(source.greenCategoryFilter, isFalse);
+      }
+
+      for (final id in ['stripchat', 'cam4']) {
+        final source = LiveSource.byId(id)!;
+        expect(source.protocol, LiveProtocol.api);
+        expect(source.adult, isTrue);
+      }
+
+      // 2026-11-15 删站的旧登记仍查无此源。（虎牙已于 2026-11-26
+      // 经真果鉴批重验后以新接口重新登记，不在此列；旧 m3u_* 命名
+      // 的聚合表登记也不复活，本批用 *_m3u 的源 id 重新登记。）
+      for (final id in [
         'pandalive',
         'sakuralive',
         'm3u_douyin',
@@ -165,10 +218,20 @@ void main() {
     test('绿色模式下成人源全部隐藏，主流源全部可见', () {
       expect(
         LiveSource.visible(true).map((s) => s.id),
-        ['bilibili'],
+        [
+          'bilibili',
+          'huya',
+          'douyu_m3u',
+          'douyin_m3u',
+          'kugou_live_m3u',
+          'kuaishou_m3u',
+          'twitch_m3u',
+          'tiktok_m3u',
+        ],
       );
-      // 1 个主流源（哔哩哔哩）+ 26 个成人源（4 个原有 + 22 个内置 m3u 清单）。
-      expect(LiveSource.visible(false), hasLength(27));
+      // 8 个主流源（哔哩哔哩 + 虎牙 + 6 个平台聚合表）+ 29 个成人源
+      // （内置片库 + 4 个原有 + 22 个内置 m3u 清单 + Stripchat/Cam4）。
+      expect(LiveSource.visible(false), hasLength(37));
     });
   });
 
