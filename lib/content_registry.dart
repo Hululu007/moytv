@@ -1,5 +1,6 @@
 import 'builtin_legado_sources.dart';
 import 'content_audio.dart';
+import 'content_fanqie_music.dart';
 import 'content_http.dart';
 import 'content_jar_audio.dart';
 import 'content_lrts.dart';
@@ -48,6 +49,7 @@ class ContentRegistry {
       assetPath: 'assets/audio_spiders/asmrmoon.py',
     ),
     JarAudioContentSource(),
+    FanqieMusicSource(_http),
   ];
 
   static final List<ContentSource> _novelBuiltins = [
