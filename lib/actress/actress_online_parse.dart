@@ -488,40 +488,112 @@ OnlineDetailInfo parseAv123Detail(String htmlText) {
   );
 }
 
-/// 123AV 播放器嵌入地址：详情页里 javplayer 的 /e/{id} 地址，
-/// 容忍任意反斜杠转义、连同查询串一起取（取流接口要原样转发
-/// 这些参数）；抠不到再退播放器 JSON 里的第一个 url（与合并页
-/// embedOf 同口径）。
+/// JS 单引号字符串解转义（123AV 内联 player 数据用）：反
+/// 斜杠 + 任意字符 → 该字符本身，\uXXXX → 对应码点。解完
+/// 的文本是标准 JSON，再走 jsonDecode（2026-11-26 出口补
+/// 验批实拉样本验证过此解法）。
+String av123JsUnescape(String input) {
+  final out = StringBuffer();
+  var i = 0;
+  while (i < input.length) {
+    final ch = input[i];
+    if (ch == '\\' && i + 1 < input.length) {
+      final next = input[i + 1];
+      if (next == 'u' && i + 5 < input.length) {
+        final hex = input.substring(i + 2, i + 6);
+        final code = int.tryParse(hex, radix: 16);
+        if (code != null &&
+            RegExp(r'^[0-9a-fA-F]{4}$').hasMatch(hex)) {
+          out.writeCharCode(code);
+          i += 6;
+          continue;
+        }
+      }
+      out.write(next);
+      i += 2;
+      continue;
+    }
+    out.write(ch);
+    i++;
+  }
+  return out.toString();
+}
+
+/// 123AV 集数列表：集数/取址数据不在 iframe 里，在详情页
+/// 内联脚本 `player(JSON.parse('…转义JSON…'), 标题id, 番号,
+/// …)` 的第一个参数里（2026-11-26 出口补验批全链实证：
+/// 主列表 200 → 变体 4819 分片约 4.0 小时全长 → 首分片
+/// Range 206、首字节 0x47）。先解转义再解析 JSON；数组本
+/// 体或 {episodes:[...]} 都认。每集带 number/name/url，
+/// url 是嵌入页地址（域名会轮换——实证时已由 javplayer
+/// 轮换成 sadie-shop.site——绝不写死、从这里现读）。
+List<({int number, String name, String url})> av123EpisodesOf(String raw) {
+  if (raw.isEmpty) return const [];
+  const marker = "player(JSON.parse('";
+  final start = raw.indexOf(marker);
+  if (start < 0) return const [];
+  final contentStart = start + marker.length;
+  var end = raw.indexOf("'),", contentStart);
+  if (end < 0) end = raw.indexOf("')", contentStart);
+  if (end < 0) return const [];
+  try {
+    final decoded = jsonDecode(
+      av123JsUnescape(raw.substring(contentStart, end)),
+    );
+    final List<dynamic> rows;
+    if (decoded is List) {
+      rows = decoded;
+    } else if (decoded is Map && decoded['episodes'] is List) {
+      rows = decoded['episodes'] as List;
+    } else {
+      return const [];
+    }
+    final episodes = <({int number, String name, String url})>[];
+    for (final row in rows) {
+      if (row is! Map) continue;
+      final url = (row['url'] ?? '').toString().trim();
+      if (url.isEmpty) continue;
+      episodes.add((
+        number: row['number'] is num
+            ? (row['number'] as num).toInt()
+            : int.tryParse((row['number'] ?? '').toString()) ??
+                  episodes.length + 1,
+        name: (row['name'] ?? '').toString(),
+        url: url.replaceAll('&amp;', '&'),
+      ));
+    }
+    return episodes;
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// 123AV 播放器嵌入地址：内联 player JSON 第一集的 url
+/// （主路，域名现读不写死）；抠不到再退任意域名的 /e/{id}
+/// 地址正则（容忍反斜杠转义、连同查询串一起取——取流接口
+/// 要原样转发这些参数）。
 String av123EmbedOf(String raw) {
   if (raw.isEmpty) return '';
+  final episodes = av123EpisodesOf(raw);
+  if (episodes.isNotEmpty) return episodes.first.url;
   final m = RegExp(
-    r'https?:[\\/]+[a-z0-9.]*javplayer[a-z0-9.]*[\\/]+e[\\/]+[A-Za-z0-9_-]+(?:\?[^"'
+    r'https?:[\\/]+[a-z0-9.-]+[\\/]+e[\\/]+[A-Za-z0-9_-]+(?:\?[^"'
     r"'\s\\<>]*)?",
     caseSensitive: false,
   ).firstMatch(raw);
   if (m != null) {
     return m.group(0)!.replaceAll('\\', '').replaceAll('&amp;', '&');
   }
-  final pm = raw.indexOf('player(JSON.parse');
-  if (pm >= 0) {
-    final end = pm + 2000 <= raw.length ? pm + 2000 : raw.length;
-    final seg = raw
-        .substring(pm, end)
-        .replaceAll('\\u0022', '"')
-        .replaceAll(RegExp(r'\\+/'), '/')
-        .replaceAll('\\\\', '');
-    final um = RegExp(r'"url"\s*:\s*"(https?:[^"\\]+)"').firstMatch(seg);
-    if (um != null) return um.group(1)!;
-  }
   return '';
 }
 
-/// javplayer 取流接口：id 取自 /e/([a-z0-9_]+)，接口 =
-/// origin + '/stream?' + 原查询串 + '&id=' + id（与合并页
-/// resolveEmbed 同口径）。嵌入地址不是 /e/ 形时回 null。
+/// 嵌入取流接口：id 取自 /e/{id}，接口 = 嵌入源 +
+/// '/stream?' + 原查询串 + '&id=' + id（嵌入页 JS 包写明
+/// 的取流方式，补验批实证回 JSON 取 media.stream）。不要
+/// 再找播放器 iframe。嵌入地址不是 /e/ 形时回 null。
 ({String apiUrl, String origin})? av123StreamRequest(String embed) {
   final m = RegExp(
-    r'^(https?://[^/]+)/e/([A-Za-z0-9_]+)',
+    r'^(https?://[^/]+)/e/([A-Za-z0-9_-]+)',
     caseSensitive: false,
   ).firstMatch(embed);
   if (m == null) return null;
@@ -535,10 +607,30 @@ String av123EmbedOf(String raw) {
   return (apiUrl: api, origin: origin);
 }
 
-/// javplayer 取流接口的回包里取播放地址：stream 字段优先，
-/// 其次 file/url/src/hls，再退全文第一个 m3u8。
+/// 取流接口回包里取播放地址：真回包是 JSON
+/// {"status":"ok","media":{"stream":"…m3u8","vtt":"…"}}，
+/// 先按 JSON 取 media.stream（其次顶层 stream/file）；解不
+/// 出再退正则：stream 字段优先，其次 file/url/src/hls，
+/// 再退全文第一个 m3u8。
 String extractAv123Stream(String text) {
   if (text.isEmpty) return '';
+  try {
+    final decoded = jsonDecode(text);
+    if (decoded is Map) {
+      final media = decoded['media'];
+      if (media is Map) {
+        final stream = (media['stream'] ?? '').toString();
+        if (stream.isNotEmpty) return stream;
+      }
+      for (final key in const ['stream', 'file']) {
+        final value = (decoded[key] ?? '').toString();
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+  } catch (_) {
+    // 非 JSON 回包走下面的正则兜底。
+  }
   final un = text.replaceAll(RegExp(r'\\+/'), '/');
   final m =
       RegExp(r'"stream"\s*:\s*"(https?:[^"]+)"', caseSensitive: false)

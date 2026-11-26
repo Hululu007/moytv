@@ -164,8 +164,10 @@ class PhActressSource extends ActressOnlineSource {
   }
 }
 
-/// 123AV（123av.com）：一级栏目页签；详情页里的 javplayer 嵌入
-/// 地址换取流接口回包中的 m3u8。
+/// 123AV（123av.com）：一级栏目页签；取址走详情页内联
+/// player(JSON.parse(…)) 的集数 JSON（嵌入域名现读不写
+/// 死），再走嵌入源 /stream 接口换 m3u8（2026-11-26 出口
+/// 补验批全链实证）。
 class Av123ActressSource extends ActressOnlineSource {
   const Av123ActressSource();
 
@@ -233,9 +235,11 @@ class Av123ActressSource extends ActressOnlineSource {
       }
       throw AppFailure('这个视频暂时取不到播放地址');
     }
+    // 取流请求头 Referer 用嵌入页地址（补验批实证口径）；
+    // 播放地址的 Referer 同用嵌入页地址。
     final text = await fetch(request.apiUrl, {
       'User-Agent': actressOnlineUserAgent,
-      'Referer': '$site/',
+      'Referer': embed,
     });
     final stream = extractAv123Stream(text);
     if (stream.isEmpty) {
@@ -245,7 +249,7 @@ class Av123ActressSource extends ActressOnlineSource {
       streamUrl: stream,
       headers: {
         'User-Agent': actressOnlineUserAgent,
-        'Referer': '${request.origin}/',
+        'Referer': embed,
       },
       detail: detail,
     );

@@ -227,26 +227,51 @@ void main() {
       expect(detail.maker, isEmpty);
     });
 
-    test('嵌入地址：转义形抠出并还原', () {
+    test('集数 JSON：真页内联 player 样本解出嵌入地址（域名现读）', () {
+      // 样本逐字摘自出口补验批实拉的 123av 详情页（番号
+      // c-2582-uncensored-leaked）：集数在内联 player 的转义
+      // JSON 里，嵌入域名是轮换后的 sadie-shop.site。
+      final raw = '<script>' + r'''player(JSON.parse('[{\u0022number\u0022:1,\u0022name\u0022:\u00221\u0022,\u0022url\u0022:\u0022https:\\\/\\\/sadie-shop.site\\\/e\\\/1RWL3E?poster=https%3A%2F%2Ficdn.123av.me%2Fimg2%2Fs500%2Fcd%2Fc-2582-uncensored-leaked%2Fcover.jpg%3F6b081042\u0022}]')''' + '</script>';
+      final episodes = av123EpisodesOf(raw);
+      expect(episodes, hasLength(1));
+      expect(episodes.single.number, 1);
+      expect(
+        episodes.single.url,
+        'https://sadie-shop.site/e/1RWL3E?poster=https%3A%2F%2Ficdn.123av.me%2Fimg2%2Fs500%2Fcd%2Fc-2582-uncensored-leaked%2Fcover.jpg%3F6b081042',
+      );
+      expect(av123EmbedOf(raw), episodes.single.url);
+    });
+
+    test('嵌入地址兜底：任意域名的 /e/ 地址（转义形）也认', () {
       final raw =
-          r'<script>embed("https:\/\/javplayer.me\/e\/AbC123?token=xyz")</script>';
+          r'<script>embed("https:\/\/player.example.net\/e\/AbC123?token=xyz")</script>';
       expect(
         av123EmbedOf(raw),
-        'https://javplayer.me/e/AbC123?token=xyz',
+        'https://player.example.net/e/AbC123?token=xyz',
       );
     });
 
-    test('取流接口拼址：原查询串 + id', () {
+    test('取流接口拼址：嵌入源 /stream + 原查询串 + id', () {
       final request = av123StreamRequest(
-        'https://javplayer.me/e/AbC123?token=xyz',
+        'https://sadie-shop.site/e/1RWL3E?poster=abc',
       );
       expect(request, isNotNull);
-      expect(request!.origin, 'https://javplayer.me');
+      expect(request!.origin, 'https://sadie-shop.site');
       expect(
         request.apiUrl,
-        'https://javplayer.me/stream?token=xyz&id=AbC123',
+        'https://sadie-shop.site/stream?poster=abc&id=1RWL3E',
       );
       expect(av123StreamRequest('https://example.com/watch/1'), isNull);
+    });
+
+    test('取流回包：真回包形状 media.stream 优先', () {
+      expect(
+        extractAv123Stream(
+          '{"status":"ok","media":{"stream":"https://jd50.example.com/oo5/video.m3u8","vtt":"https://jd50.example.com/preview.vtt"}}',
+        ),
+        'https://jd50.example.com/oo5/video.m3u8',
+      );
+      expect(extractAv123Stream('{"status":"error"}'), '');
     });
 
     test('取流回包：stream 字段优先，其次全文 m3u8', () {
