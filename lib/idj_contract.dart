@@ -235,7 +235,7 @@ class IdjContract {
         needsParse: false,
         expiresAt: _int(result['expiresAt']),
         drm: drm,
-        subs: parseSubtitleSources(result['subs'] ?? stream['subs']),)
+        subs: parseSubtitleSources(result['subs'] ?? stream['subs']),
       );
     }
     throw AppFailure('插件没有返回可播放地址');

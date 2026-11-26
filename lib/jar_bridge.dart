@@ -677,7 +677,7 @@ class JarBridge {
       headers: headers,
       needsParse: needsParse,
       drm: PlaybackDrm.fromJson(result['drm']),
-      subs: parseSubtitleSources(result['subs']),)
+      subs: parseSubtitleSources(result['subs']),
     );
   }
 
