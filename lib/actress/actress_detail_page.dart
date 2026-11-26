@@ -859,15 +859,20 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         }
       }, onError: (_) {}),
     );
-    // 首播地址：这番号竞速赢过就用缓存的已验活地址；没赢过
-    // 就等本轮竞速出赢家（2026-11-26 20:10 起播口径：115
-    // 短优先窗优先、在线与本地库同尺竞速、第一条验活线路
-    // 起播）。与原「库里第一条未验活即开即播」（早上发布版
-    // 的秒开口径）的差异：库地址不再享未验活直开，改走 A
-    // 路同尺验活后参与竞速——验活只拉播放列表/首段，通常
-    // 仍是亚秒级；换来的是不起播死地址、不硬播。
+    // 首播地址（2026-11-26 23:54 修复，恢复 v67 秒开秒播）：
+    // 这番号竞速赢过就用缓存的已验活地址（115 已存货且已验
+    // 活的线路只经这一条进来——点播瞬间已就绪才优先，绝不
+    // 为等 115 阻塞首播）；没赢过时库里有地址就第一条不验
+    // 活直接开播（v67 原口径：探活不过不等于播不了，不少站
+    // 只认播放器头、探针拿不到不代表播放器播不了；真死了
+    // 播放器报错后走换线链）。竞速退回后台，只喂会话缓存
+    // 与换线链。只有库里一条地址都没有时，才等竞速出第一
+    // 条（2026-11-26 20:10 口径保留在竞速内部：115 短优先
+    // 窗、在线与本地库同尺、第一条验活起播——那是换线与
+    // 库外番号的起播序，不再做库内首播的前置门）。
     final cached = cacheKey.isEmpty ? null : _verifiedDetailCache[cacheKey];
-    var firstDetail = cached;
+    var firstDetail =
+        cached ?? (dbRows.isNotEmpty ? dbRows.first.toDramaDetail() : null);
     if (firstDetail == null) {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
@@ -888,7 +893,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           SnackBar(
             content: Text(
               widget.database.isVideoLibrary && _works.isNotEmpty
-                  ? '库里没读出这部作品的地址，在线源也没找到可播线路（先检查 MYTV/db/ 下的库文件）'
+                  ? '库里没读出这部作品的地址，在线源也没找到可播线路（先检查数据库导入是否完整）'
                   : '暂无可播线路：数据库里没有这部片，在线源也没搜到可播地址',
             ),
           ),
@@ -1216,12 +1221,24 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
             uri.host.isEmpty) {
           continue;
         }
-        final response = await _verifyFetch(
-          plan.url,
-          plan.headers,
-          const Duration(seconds: 5),
-        );
-        if (!feedProbePlayable(uri, response)) continue;
+        // 验活尺子（2026-11-26 23:54 配套修复，只限库地址
+        // 腿）：预算 15 秒 + 超时不算死——who's 直链首字节
+        // 实测 11.6–14.2 秒，原 5 秒硬尺让库地址永远验不
+        // 过、竞速缓存永远建不起来。对齐 2026-11-25 定版
+        // 口径（filmProbeBlocksPlayback：只有明确死的才
+        // 拦，超时放行、播放器自己拉流定生死）。明确死的
+        // （非 2xx、回了错内容）仍跳下一条。
+        FeedProbeResponse response;
+        try {
+          response = await _verifyFetch(
+            plan.url,
+            plan.headers,
+            const Duration(seconds: 15),
+          );
+        } on TimeoutException {
+          return detail;
+        }
+        if (!_dbLegPlayable(uri, response)) continue;
         return detail;
       } catch (_) {
         // 这条死了：换库里下一条地址。
@@ -1229,6 +1246,16 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
       }
     }
     return null;
+  }
+
+  /// 库地址腿的验活判定：通用尺子判活即活；2xx 已回但首段
+  /// 字节没到齐（慢首字节被探针自己的分段超时截断）属没验
+  /// 死、不是明确死，按「超时不算死」放行；其余（非 2xx、
+  /// 回了 HTML 错误页等错内容）才是明确死。
+  bool _dbLegPlayable(Uri uri, FeedProbeResponse response) {
+    if (feedProbePlayable(uri, response)) return true;
+    final status = response.statusCode;
+    return status >= 200 && status < 300 && response.headBytes.isEmpty;
   }
 
   /// B 路：MissAV 按番号现查。detailContent('/cn/<番号小写>') 取回

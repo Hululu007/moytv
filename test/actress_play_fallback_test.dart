@@ -928,19 +928,20 @@ void main() {
       );
     });
 
-    testWidgets('mjv 死链：存的 mjv 地址死了，落到同番号 whos 行，不探链', (tester) async {
+    testWidgets('mjv 死链：首播直开库里第一条（mjv 行），竞速在后台把 whos 活行验进换线链', (tester) async {
       suppressKnownListTileAssertion();
       // 主会话 2026-11-20 20:27 查实：mjv011.json 里存的 m3u8
       // 已系统性死亡（7 个 streamfastpro 域名抽验全 404），
       // whos.json 5 条全 200——库里 mjv 死、whos 活是常态，
-      // 不是偶然。存的地址要按站逐条验活、死的跳过、活的播。
+      // 不是偶然。2026-11-26 23:54 恢复 v67 秒开口径后，首播
+      // 不再等竞速逐条验活：库里第一条（mjv 行）不验活直开；
+      // 死链的回落改走换线链——竞速在后台逐条验活，whos 活
+      // 行验进已验活线路，播放器在 mjv 行报错耗尽后换过去。
       repository.resolveUrls = {
         'json:mjv:mjv-row-1': 'https://example.test/dead-mjv.mp4',
         'json:whos:ssis-row-1': 'https://example.test/whos-ssis.mp4',
       };
-      // mjv resolve 1 次 + whos resolve 1 次成功；播放器起播
-      // 再解时失败进错误态，不建真播放器。
-      repository.resolveSuccessBudget = 2;
+      repository.resolveSuccessBudget = -1;
       // 2026-11-23 18:00 改令：点卡时 MissAV 与库里地址竞速——这里
       // 只测“mjv 死 → 落到同番号 whos 行”这条库内回落，让假 MissAV
       // 对这个番号返回空详情（没集数），不抢这条回落、也不多占
@@ -971,15 +972,29 @@ void main() {
         verifyFetch: _playableUnlessDead,
       );
       await tester.tap(find.byType(AvWorkCard).first);
-      await pumpUntilDetail(tester);
+      // 首播直开库里第一条：详情页应在竞速优先窗（2 秒）
+      // 量级内就出现，不等竞速逐条验活出赢家（探针慢时旧
+      // 口径 40 秒也开不了，严格区分见 dbplay_restore 专测
+      // 的探针挂起用例）。开页后播放器在 mjv 死链报错会自
+      // 动换到 whos 活行，标题切换时机随平台通道时序变，
+      // 这里不锁标题，只锁开页时序与验活顺序。
+      var rounds = 0;
+      while (rounds < 30 && find.byType(DetailScreen).evaluate().isEmpty) {
+        await tester.pump(const Duration(milliseconds: 100));
+        rounds++;
+      }
       expect(find.byType(DetailScreen), findsOneWidget);
-      expect(find.text('SSIS-00123 存的标题'), findsWidgets);
-      expect(find.text('SSIS-00123 MJV 死链标题'), findsNothing);
-      // 先解 mjv（死了）、再解 whos（活了播它），不探链。
-      expect(repository.resolveCalls, [
-        'json:mjv:mjv-row-1',
-        'json:whos:ssis-row-1',
-      ]);
+      expect(rounds, lessThanOrEqualTo(20));
+      // 竞速在后台把库地址逐条验活：先 mjv（探针判死）、后
+      // whos（活，验进换线链），顺序即库里行序，不探别的站。
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (repository.resolveCalls.contains('json:whos:ssis-row-1')) break;
+      }
+      final mjvAt = repository.resolveCalls.indexOf('json:mjv:mjv-row-1');
+      final whosAt = repository.resolveCalls.indexOf('json:whos:ssis-row-1');
+      expect(mjvAt, greaterThanOrEqualTo(0));
+      expect(whosAt, greaterThan(mjvAt));
     });
 
     testWidgets('第一档本地 db 活的：播库里的地址，不探链、不走内置', (tester) async {
