@@ -45,6 +45,13 @@ class MainActivity : FlutterActivity() {
     private val pendingJsonFiles = mutableListOf<Map<String, Any?>>()
     private var televisionMode = false
 
+    // 导出另存（saveFileToUserLocation）：系统保存框是异步的，
+    // 先把通道回调与源文件路径挂起，等 onActivityResult 回来
+    // 再流式拷贝。同一时间只允许一个（再来一个直接报忙）。
+    private var pendingSaveResult: MethodChannel.Result? = null
+    private var pendingSaveSourcePath: String? = null
+    private val requestCodeSaveFile = 0x4D59
+
     // 播放页左半屏竖向拖动临时调亮度：只改本窗口 screenBrightness（-1f 表示跟随系统），
     // 不动系统全局亮度设置，退出播放 reset 后自动恢复，无需 WRITE_SETTINGS 权限。
     private fun effectiveScreenBrightness(): Double {
@@ -338,6 +345,37 @@ class MainActivity : FlutterActivity() {
         stageIncomingIntent(intent)
     }
 
+    // 导出另存的系统保存框回来：用户取消回 false；选定位置后
+    // 在后台线程流式拷贝（多大的文件都不进内存），拷完回主
+    // 线程交结果。super 照调，Flutter 引擎给插件的分发不受影响。
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != requestCodeSaveFile) return
+        val pending = pendingSaveResult ?: return
+        val sourcePath = pendingSaveSourcePath
+        pendingSaveResult = null
+        pendingSaveSourcePath = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null || sourcePath == null) {
+            pending.success(false)
+            return
+        }
+        Thread {
+            try {
+                val input = java.io.FileInputStream(java.io.File(sourcePath))
+                val output = contentResolver.openOutputStream(uri)
+                    ?: throw java.io.IOException("打不开目标文件")
+                input.use { ins -> output.use { outs -> ins.copyTo(outs) } }
+                runOnUiThread { pending.success(true) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    pending.error("save_copy_failed", "保存失败：${e.message}", null)
+                }
+            }
+        }.start()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(VideoSurfacePlugin())
@@ -427,6 +465,38 @@ class MainActivity : FlutterActivity() {
                                     "打不开系统设置",
                                     null,
                                 )
+                            }
+                        }
+                        // 2026-11-26 演员库导出另存：系统保存框
+                        // （ACTION_CREATE_DOCUMENT，免任何存储权限）
+                        // 选位置，原生侧流式拷贝源文件过去——导出
+                        // 文件在应用内部目录里用户拿不到，全靠这条
+                        // 通道送出；多大的文件都不整份进内存。
+                        // 结果在 onActivityResult 里回：true 已保存、
+                        // false 用户取消、error 拷贝失败。
+                        "saveFileToUserLocation" -> {
+                            val sourcePath = call.argument<String>("sourcePath")
+                            val fileName = call.argument<String>("fileName")
+                            if (sourcePath.isNullOrEmpty() || fileName.isNullOrEmpty()) {
+                                result.error("invalid_save_request", "缺少源文件或文件名", null)
+                            } else if (pendingSaveResult != null) {
+                                result.error("save_busy", "上一个保存还没结束", null)
+                            } else {
+                                pendingSaveResult = result
+                                pendingSaveSourcePath = sourcePath
+                                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = "*/*"
+                                    putExtra(Intent.EXTRA_TITLE, fileName)
+                                }
+                                try {
+                                    @Suppress("DEPRECATION")
+                                    startActivityForResult(intent, requestCodeSaveFile)
+                                } catch (e: Exception) {
+                                    pendingSaveResult = null
+                                    pendingSaveSourcePath = null
+                                    result.error("save_launch_failed", "打不开系统保存框", null)
+                                }
                             }
                         }
                         "signatureSha256" -> result.success(signatureSha256())

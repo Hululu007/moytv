@@ -51,6 +51,17 @@ class ActressDbTaskController extends ChangeNotifier {
   String? sqlImportSourceName;
   bool _sqlCancelRequested = false;
 
+  /// 选中的 .sql 文件转存到应用文档目录后的路径（安卓兼容批
+  /// 2026-11-26）：file_picker 在安卓上先把所选文件整份拷进应用
+  /// 缓存目录再回路径，导入要流式读几分钟，期间系统清缓存、
+  /// 用户清空间都会让源文件消失、导入半路断掉。开始导入前先
+  /// 把文件转存到文档目录（与工作库同目录）再导，源文件就不
+  /// 受缓存清理影响。导入成功后删掉；失败/取消时保留并置
+  /// [stagedSqlAvailable]，管理页可一键用它重试，不用重新选
+  /// 文件（也不用再等选择器拷一遍大文件）。
+  String? stagedSqlPath;
+  bool stagedSqlAvailable = false;
+
   /// 成功换库次数（页面据此判断要不要重读列表）。
   int swapGeneration = 0;
 
@@ -126,8 +137,32 @@ class ActressDbTaskController extends ChangeNotifier {
     sqlImportSourceName = path.basename(sqlPath);
     _sqlCancelRequested = false;
     notifyListeners();
-    final result = await importerFactory().importFile(
-      sqlPath: sqlPath,
+    // 转存暂存（见 stagedSqlPath 说明）：转存失败（空间不够等）
+    // 不拦导入，退回原路径照常导、失败口径不变。
+    var effectiveSqlPath = sqlPath;
+    String? stagedPath;
+    try {
+      final lower = sqlPath.toLowerCase();
+      final ext = lower.endsWith('.sql.gz')
+          ? '.sql.gz'
+          : lower.endsWith('.gz')
+          ? '.gz'
+          : '.sql';
+      final candidate = path.join(path.dirname(dbPath), '女优库待导入$ext');
+      if (path.normalize(sqlPath) == path.normalize(candidate)) {
+        stagedPath = candidate; // 重试的就是暂存文件本身，不自拷。
+      } else {
+        await File(sqlPath).copy(candidate);
+        stagedPath = candidate;
+      }
+      effectiveSqlPath = candidate;
+      stagedSqlPath = candidate;
+      stagedSqlAvailable = true;
+    } catch (_) {
+      // 转存失败：用原路径导。
+    }
+    var result = await importerFactory().importFile(
+      sqlPath: effectiveSqlPath,
       dbPath: dbPath,
       closeDatabase: closeDatabase,
       onProgress: (progress) {
@@ -136,6 +171,25 @@ class ActressDbTaskController extends ChangeNotifier {
       },
       isCancelled: () => _sqlCancelRequested,
     );
+    result = _withFriendlyError(result);
+    // 暂存收尾：成功删掉清状态；失败/取消留着供一键重试（文件
+    // 已不在了就把状态清掉，别让管理页给出点了必死的重试）。
+    if (stagedPath != null) {
+      if (result.ok) {
+        try {
+          await File(stagedPath).delete();
+        } catch (_) {}
+        if (stagedSqlPath == stagedPath) {
+          stagedSqlPath = null;
+          stagedSqlAvailable = false;
+        }
+      } else {
+        stagedSqlAvailable = await File(stagedPath).exists();
+        if (!stagedSqlAvailable && stagedSqlPath == stagedPath) {
+          stagedSqlPath = null;
+        }
+      }
+    }
     sqlImportRunning = false;
     sqlImportProgress = null;
     sqlImportResult = result;
@@ -169,6 +223,46 @@ class ActressDbTaskController extends ChangeNotifier {
 
   void cancelSqlImport() {
     if (sqlImportRunning) _sqlCancelRequested = true;
+  }
+
+  /// 导入失败原因的用户话术（安卓兼容批 2026-11-26）：底层错误
+  /// 里认得出是基础设施故障的两类（存储空间不足、源文件读不到）
+  /// 翻成能照着做的中文；其余原样——导入器给的原因本身已是
+  /// 中文结论（缺表、没作品之类），不许在这层改写掉。
+  static String friendlySqlImportError(String error) {
+    final text = error.toLowerCase();
+    if (text.contains('no space left') ||
+        text.contains('disk full') ||
+        text.contains('sqlite_full') ||
+        text.contains('code 28')) {
+      return '手机存储空间不足，导入没能完成。先清出空间再重试，原数据库没有改动';
+    }
+    if (text.contains('no such file') || text.contains('file not found')) {
+      return '读取所选文件失败（文件可能被移动、删除或缓存被清理）。重新选一次文件再导入';
+    }
+    return error;
+  }
+
+  ActressSqlImportResult _withFriendlyError(ActressSqlImportResult result) {
+    final error = result.error;
+    if (result.ok || error == null) return result;
+    final friendly = friendlySqlImportError(error);
+    if (friendly == error) return result;
+    return ActressSqlImportResult(
+      ok: false,
+      error: friendly,
+      videos: result.videos,
+      actresses: result.actresses,
+      playUrls: result.playUrls,
+      covers: result.covers,
+      avatars: result.avatars,
+      skipped: result.skipped,
+      skippedStatements: result.skippedStatements,
+      skippedStatementTables: result.skippedStatementTables,
+      skippedStatementSample: result.skippedStatementSample,
+      warnings: result.warnings,
+      needsReload: result.needsReload,
+    );
   }
 
   // ---------------------------------------------------------------------

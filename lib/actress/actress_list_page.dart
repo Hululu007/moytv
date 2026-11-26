@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'actress_database.dart';
 import 'actress_detail_page.dart';
@@ -487,15 +488,25 @@ class _ActressListPageState extends State<ActressListPage> {
       // file_picker 13.1.0：pickFiles 直接回 List<PlatformFile>。
       // 选文件调用包进 try/catch：卓易通容器里选择器一抛错就地报，
       // 不静默（2026-11-25 统一导入入口同款修法）。
-      files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['sql', 'gz'],
-      );
+      // 不让系统选择器按扩展名先筛（安卓兼容批 2026-11-26）：
+      // FileType.custom 在安卓上会变成按 MIME 类型过滤，.sql
+      // 没有公认 MIME，很多机型/文件管理器（鸿蒙容器里的更是
+      // 另一套）会把 .sql 文件直接藏掉、用户选不到。放行全部
+      // 文件，选完在下面按扩展名验、选错有明确提示；导入器
+      // 本身还会再验一次。与导入中心的 FileType.any 同口径。
+      files = await FilePicker.pickFiles(type: FileType.any);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('打不开文件选择器：${e.toString().split('\n').first}')),
-      );
+      // 插件把所选文件拷进应用缓存失败时报 unknown_path（多半
+      // 是文件不在本机、空间不足或容器中转失败），别把英文
+      // 异常原文直接糊给用户。
+      final message =
+          e is PlatformException && e.code == 'unknown_path'
+          ? '没能读取所选文件：请确认文件就在本机、手机空间够用，再选一次'
+          : '打不开文件选择器：${e.toString().split('\n').first}';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
       return;
     }
     if (files.isEmpty) return; // 用户取消选择。

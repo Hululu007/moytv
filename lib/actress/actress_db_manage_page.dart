@@ -2,13 +2,21 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 
 import 'actress_db_export.dart';
 import 'actress_db_info.dart';
 import 'actress_db_meta.dart';
+import 'actress_mytv_bind.dart';
 import 'actress_sql_import.dart';
 import 'actress_sql_import_controller.dart';
+
+/// 原生设备通道：导出另存走系统保存框 + 原生流式拷贝
+/// （saveFileToUserLocation，MainActivity 实现）。通道不存在
+/// （老包/非安卓）时调用抛 MissingPluginException，调用方走
+/// file_picker 字节保存兜底。
+const _deviceChannel = MethodChannel('moyi/device');
 
 /// 数据库管理页（2026-11-25 用户令：「能导入就要能删除数据库，
 /// 要添加一个数据库管理」）。
@@ -71,6 +79,10 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
   var _loadingInfo = true;
   var _acting = false;
 
+  /// MYTV 文件夹是否绑定成功（导出大文件可复制到那里拿走；
+  /// 绑定结果由列表页启动时解析并缓存，这里只读缓存口径）。
+  var _mytvBound = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +114,9 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
         _info = info;
         _meta = meta;
         _loadingInfo = false;
+        // MYTV 绑定状态（导出复制用）：只读列表页启动时已解析的
+        // 缓存，不在这里另起解析（不给本页刷新引入额外异步）。
+        _mytvBound = ActressMytvBind.instance.current?.bound ?? false;
       });
     } catch (_) {
       if (!mounted) return;
@@ -237,6 +252,23 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
     );
   }
 
+  /// 用上次转存的暂存文件重试导入（控制器在导入失败时保留了
+  /// 暂存文件）：不用重新选文件、不用再等选择器拷一遍大文件。
+  Future<void> _retryStagedSqlImport() async {
+    if (_blockedByBusy()) return;
+    final staged = _controller.stagedSqlPath;
+    if (staged == null || staged.isEmpty) return;
+    await _controller.startSqlImport(
+      sqlPath: staged,
+      dbPath: widget.dbPath,
+      closeDatabase: widget.closeDatabase,
+      onSwapped: (_) async {
+        await widget.reloadDatabase();
+        _refresh();
+      },
+    );
+  }
+
   Future<void> _startTableUpdate() async {
     if (_blockedByBusy()) return;
     if (_info != null && !_info!.exists) {
@@ -294,16 +326,45 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
     ActressExportFormat.db => '数据库原文件（.db，整库拷贝）',
   };
 
-  /// 导出文件另存到系统位置（小文件才给：saveFile 要整份字节，
-  /// 大文件直接给路径，用户用文件管理器拷走）。
+  /// 导出文件另存到用户选的位置（安卓兼容批 2026-11-26）：
+  /// 优先走原生 SAF 流式保存（系统保存框选位置、原生侧流式
+  /// 拷贝，多大的文件都不用整份读进内存、不用任何存储权限）；
+  /// 通道不存在（老包/非安卓）时小文件退回 file_picker 的整份
+  /// 字节保存，大文件提示改用「复制到 MYTV 文件夹」。
   Future<void> _saveExportCopy(ActressExportResult result) async {
     final filePath = result.path;
     if (filePath == null) return;
+    final fileName = path.basename(filePath);
+    var channelHandled = false;
+    try {
+      final saved = await _deviceChannel.invokeMethod<bool>(
+        'saveFileToUserLocation',
+        {'sourcePath': filePath, 'fileName': fileName},
+      );
+      if (saved != null) {
+        channelHandled = true;
+        _snack(saved ? '已保存到所选位置' : '已取消保存');
+      }
+    } on MissingPluginException {
+      // 老包没有这个通道：走下面的兜底。
+    } on PlatformException catch (e) {
+      _snack('保存失败：${e.message ?? '系统保存失败'}');
+      return;
+    }
+    if (channelHandled) return;
+    if (result.bytes > 32 * 1024 * 1024) {
+      _snack(
+        _mytvBound
+            ? '文件太大，没法这样保存；请用「复制到 MYTV 文件夹」拿走'
+            : '文件太大，没法这样保存；导出文件留在应用内部目录里',
+      );
+      return;
+    }
     try {
       final bytes = await File(filePath).readAsBytes();
       final saved = await FilePicker.saveFile(
         dialogTitle: '保存导出文件',
-        fileName: path.basename(filePath),
+        fileName: fileName,
         bytes: bytes,
       );
       _snack(saved == null ? '已取消保存' : '已保存到所选位置');
@@ -312,30 +373,82 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
     }
   }
 
+  /// 把导出文件复制到 MYTV 文件夹（用户能用文件管理器拿到的
+  /// 位置）：流式拷贝不进内存，多大都行；没绑定成功不给入口。
+  Future<void> _copyExportToMytv(ActressExportResult result) async {
+    final filePath = result.path;
+    if (filePath == null) return;
+    try {
+      final bind = await ActressMytvBind.instance.ensureBound();
+      if (!bind.bound) {
+        _snack('MYTV 文件夹还没绑定成功，复制不了');
+        return;
+      }
+      final root = path.dirname(bind.mergedJsonExportPath);
+      final target = path.join(root, path.basename(filePath));
+      await File(filePath).copy(target);
+      _snack('已复制到 MYTV 文件夹');
+    } catch (e) {
+      _snack('复制失败：${e.toString().split('\n').first}');
+    }
+  }
+
+  /// 选文件失败的用户话术：插件把所选文件拷进应用缓存失败时
+  /// 报 unknown_path（多半是文件不在本机、空间不足或容器中转
+  /// 失败），别把英文异常原文直接糊给用户。
+  String _pickerErrorText(Object e) {
+    if (e is PlatformException && e.code == 'unknown_path') {
+      return '没能读取所选文件：请确认文件就在本机、手机空间够用，再选一次';
+    }
+    return '打不开文件选择器：${e.toString().split('\n').first}';
+  }
+
   Future<String?> _pickSqlFile() async {
     try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['sql', 'gz'],
-      );
+      // 不让系统选择器按扩展名先筛（安卓兼容批 2026-11-26）：
+      // FileType.custom 在安卓上会变成按 MIME 类型过滤，.sql
+      // 没有公认 MIME，很多机型/文件管理器（鸿蒙容器里的更是
+      // 另一套）会把 .sql 文件直接藏掉、用户选不到。放行全部
+      // 文件，选完在这里按扩展名验、选错有明确提示；导入器
+      // 本身还会再验一次。与导入中心的 FileType.any 同口径。
+      final files = await FilePicker.pickFiles(type: FileType.any);
       if (files.isEmpty) return null;
-      return files.first.path;
+      final picked = files.first.path;
+      if (picked == null || picked.isEmpty) {
+        _snack('选不到文件路径，请重选一次');
+        return null;
+      }
+      final lower = picked.toLowerCase();
+      if (!lower.endsWith('.sql') && !lower.endsWith('.sql.gz')) {
+        _snack('只认 .sql 或 .sql.gz 文件，请重新选');
+        return null;
+      }
+      return picked;
     } catch (e) {
-      _snack('打不开文件选择器：${e.toString().split('\n').first}');
+      _snack(_pickerErrorText(e));
       return null;
     }
   }
 
   Future<String?> _pickTableFile() async {
     try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['csv', 'xlsx'],
-      );
+      // 同 _pickSqlFile：放行全部文件、选完按扩展名验，
+      // 不让系统选择器按 MIME 先筛掉文件。
+      final files = await FilePicker.pickFiles(type: FileType.any);
       if (files.isEmpty) return null;
-      return files.first.path;
+      final picked = files.first.path;
+      if (picked == null || picked.isEmpty) {
+        _snack('选不到文件路径，请重选一次');
+        return null;
+      }
+      final lower = picked.toLowerCase();
+      if (!lower.endsWith('.csv') && !lower.endsWith('.xlsx')) {
+        _snack('只认 .csv 或 .xlsx 表格文件，请重新选');
+        return null;
+      }
+      return picked;
     } catch (e) {
-      _snack('打不开文件选择器：${e.toString().split('\n').first}');
+      _snack(_pickerErrorText(e));
       return null;
     }
   }
@@ -385,6 +498,18 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
               colors,
               textStyle,
               _sqlImportResultText(_controller.sqlImportResult!),
+            ),
+          if (!_controller.busy &&
+              _controller.stagedSqlAvailable &&
+              _controller.stagedSqlPath != null)
+            _actionRow(
+              colors: colors,
+              textStyle: textStyle,
+              title: '重试导入',
+              subtitle: '上次选的文件（${path.basename(_controller.stagedSqlPath!)}）'
+                  '还留着，直接再导一次，不用重新选文件',
+              buttonText: '重试',
+              onPressed: _retryStagedSqlImport,
             ),
           _actionRow(
             colors: colors,
@@ -566,7 +691,6 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
     if (!result.ok) {
       return _resultText(colors, textStyle, '导出失败：${result.error ?? '未知原因'}');
     }
-    final canSaveCopy = result.bytes <= 32 * 1024 * 1024;
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Column(
@@ -574,26 +698,27 @@ class _ActressDbManagePageState extends State<ActressDbManagePage> {
         children: [
           Text(
             '已导出：${path.basename(result.path ?? '')}'
-            '（${formatDbBytes(result.bytes)}）\n保存位置：${result.path}',
+            '（${formatDbBytes(result.bytes)}）\n保存位置：${result.path}\n'
+            '这个位置在应用内部目录里，文件管理器看不到；'
+            '要拿走请用下面「另存到…」选个位置保存'
+            '${_mytvBound ? '，或复制到 MYTV 文件夹' : ''}。',
             style: textStyle.bodySmall?.copyWith(
               color: colors.onSurfaceVariant,
             ),
           ),
-          if (canSaveCopy)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
+          Row(
+            children: [
+              TextButton(
                 onPressed: () => _saveExportCopy(result),
                 child: const Text('另存到…'),
               ),
-            )
-          else
-            Text(
-              '文件较大，用文件管理器到上面的位置拷走即可。',
-              style: textStyle.bodySmall?.copyWith(
-                color: colors.onSurfaceVariant,
-              ),
-            ),
+              if (_mytvBound)
+                TextButton(
+                  onPressed: () => _copyExportToMytv(result),
+                  child: const Text('复制到 MYTV 文件夹'),
+                ),
+            ],
+          ),
         ],
       ),
     );

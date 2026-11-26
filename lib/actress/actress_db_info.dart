@@ -81,14 +81,19 @@ Future<ActressDbInfo> loadActressDbInfo(String dbPath) async {
 }
 
 /// 删工作库文件及其 sqlite 边文件（-wal/-shm/-journal）。
-/// .bak 不在这里删——备份由管理页单独管。删不掉的文件忽略
-/// （调用方关库后调，正常都能删掉）。
+/// .bak 不在这里删——备份由管理页单独管。边文件删不掉忽略；
+/// 但主库文件删完还在就是真失败（多半仍被连接占用）——必须
+/// 抛出来让管理页报「删除失败」，不许静默吞掉后报假成功
+/// （安卓兼容批 2026-11-26 阶梯口径：判死要判出声）。
 Future<void> deleteActressDbFiles(String dbPath) async {
   for (final suffix in const ['', '-wal', '-shm', '-journal']) {
     try {
       final file = File('$dbPath$suffix');
       if (await file.exists()) await file.delete();
     } catch (_) {}
+  }
+  if (await File(dbPath).exists()) {
+    throw StateError('数据库文件删不掉，可能仍被占用，请稍后重试');
   }
 }
 
@@ -105,13 +110,24 @@ Future<void> restoreActressDbBackup(String dbPath) async {
       if (await file.exists()) await file.delete();
     } catch (_) {}
   }
-  await bak.copy(dbPath);
+  try {
+    await bak.copy(dbPath);
+  } catch (_) {
+    // 拷贝失败别把英文文件异常原文糊给用户（管理页只显示
+    // 失败原因首行）：翻成中文结论，当前库未被动过。
+    throw StateError('备份文件读不出来，恢复失败（当前数据库没有改动）');
+  }
 }
 
 /// 删备份文件。
 Future<void> deleteActressDbBackup(String dbPath) async {
   final bak = File('$dbPath.bak');
-  if (await bak.exists()) await bak.delete();
+  if (!await bak.exists()) return;
+  try {
+    await bak.delete();
+  } catch (_) {
+    throw StateError('备份文件删不掉，请稍后重试');
+  }
 }
 
 /// 人类可读文件大小。
