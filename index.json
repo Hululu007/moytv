@@ -1350,6 +1350,42 @@
       "adult": true,
       "description": "JJavFun（en.javfun.me）。10 个分类与站导航一致（全部 + 8 个厂牌 + Jav Uncensored），播放走 get_sources 接口现取 MD5 签名地址、master 清单预解析到子清单。由内置 py 蜘蛛改写。",
       "manifest": "javfun/javfun.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javzw",
+      "name": "Jav中文",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Jav中文（javzw.cyou）。分类由站点接口实时返回（仅 video 模块，与原 py 一致），列表/详情/搜索走 AES 加密 JSON 接口，播放为详情现取的 HLS 直链。由内置 py 蜘蛛改写。",
+      "manifest": "javzw/javzw.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javmit",
+      "name": "JAVMIT",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAVMIT（javmit.com，WordPress 站）。95 个分类与原 py CATS 完全一致、不删减（原 py 无旗标过滤、无成人游戏/赌博分类）。列表为 v-card 卡片（标题/封面/时长），详情页 og:video 给出 s*.javmit.com 的 master.m3u8，play 内预解析到首条子清单。由内置 py 蜘蛛改写。",
+      "manifest": "javmit/javmit.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javhdtube",
+      "name": "JAVHDTube",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAVHDTube（javhdtube.com）。99 个分类（与原 py 固定分类表一致），HTML 解析列表/详情，详情页现取站内 get_file mp4 直链（经 302 到 privatehost CDN）。由内置 py 蜘蛛改写。",
+      "manifest": "javhdtube/javhdtube.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javsiri",
+      "name": "JAVSiri",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAVSiri（javsiri.cc）。7 个分类与原 py 蜘蛛 CATS 1:1 对应，列表走站内 HTML 卡片解析，详情页 flashvar 现取 video_url（get_file mp4），play 把详情响应下发的 kt_acctoken 饼干随流 headers 交给播放器、经 302 落 cloud CDN 播放。由内置 py 蜘蛛改写。",
+      "manifest": "javsiri/javsiri.idjplugin"
     }
   ],
   "cms": []
