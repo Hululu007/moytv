@@ -17,6 +17,36 @@ void main() {
       expect(AppVersion.tryParse('no-version'), isNull);
     });
 
+    test('parses date versions and renders them raw', () {
+      expect(
+        AppVersion.tryParse('20261126'),
+        const AppVersion(20261126, 0, 0, 0),
+      );
+      expect(
+        AppVersion.tryParse('20261126+1'),
+        const AppVersion(20261126, 0, 0, 1),
+      );
+      expect(
+        AppVersion.tryParse('魔蚁TV 20261126'),
+        const AppVersion(20261126, 0, 0, 0),
+      );
+      expect(AppVersion.tryParse('20261326'), isNull);
+      expect(AppVersion.tryParse('20261126').toString(), '20261126');
+      expect(AppVersion.tryParse('20261126+1').toString(), '20261126+1');
+      expect(
+        AppVersion.tryParse('20261126')! > AppVersion.tryParse('1.0.13+38')!,
+        isTrue,
+      );
+      expect(
+        AppVersion.tryParse('20261126+1')! > AppVersion.tryParse('20261126')!,
+        isTrue,
+      );
+      expect(
+        AppVersion.tryParse('20261127')! > AppVersion.tryParse('20261126+9')!,
+        isTrue,
+      );
+    });
+
     test('compares version before build', () {
       expect(
         AppVersion.tryParse('1.4.10+1')! > AppVersion.tryParse('1.4.9+999')!,

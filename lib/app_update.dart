@@ -21,15 +21,34 @@ class AppVersion implements Comparable<AppVersion> {
 
   static final RegExp _pattern = RegExp(r'(\d+)\.(\d+)\.(\d+)(?:[+-](\d+))?');
 
+  // 日期版本号（2026-11-26 起的发版口径）：YYYYMMDD，同日后续版 +N。
+  static final RegExp _datePattern = RegExp(r'(\d{8})(?:\+(\d+))?');
+
   static AppVersion? tryParse(String text) {
     final match = _pattern.firstMatch(text);
-    if (match == null) return null;
-    return AppVersion(
-      int.parse(match.group(1)!),
-      int.parse(match.group(2)!),
-      int.parse(match.group(3)!),
-      int.tryParse(match.group(4) ?? '') ?? 0,
-    );
+    if (match != null) {
+      return AppVersion(
+        int.parse(match.group(1)!),
+        int.parse(match.group(2)!),
+        int.parse(match.group(3)!),
+        int.tryParse(match.group(4) ?? '') ?? 0,
+      );
+    }
+    final dateMatch = _datePattern.firstMatch(text);
+    if (dateMatch != null) {
+      final date = int.parse(dateMatch.group(1)!);
+      final month = (date ~/ 100) % 100;
+      final day = date % 100;
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return AppVersion(
+          date,
+          0,
+          0,
+          int.tryParse(dateMatch.group(2) ?? '') ?? 0,
+        );
+      }
+    }
+    return null;
   }
 
   @override
@@ -57,7 +76,13 @@ class AppVersion implements Comparable<AppVersion> {
   int get hashCode => Object.hash(major, minor, patch, build);
 
   @override
-  String toString() => '$major.$minor.$patch';
+  String toString() {
+    // 日期版本号原样显示（20261126 / 20261126+1），不渲染成 20261126.0.0。
+    if (minor == 0 && patch == 0 && major >= 19000101 && major <= 21991231) {
+      return build > 0 ? '$major+$build' : '$major';
+    }
+    return '$major.$minor.$patch';
+  }
 }
 
 class AppReleaseInfo {
