@@ -1548,6 +1548,24 @@
       "adult": true,
       "description": "thePorny（theporny.com）。30 个分类与原 py 1:1 对应，播放走 /js 接口现取 m3u8 直链（HLS）。由内置 py 蜘蛛改写。",
       "manifest": "theporny/theporny.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.topjav",
+      "name": "TopJAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "TopJAV（topjav.tv）。16 个分类（与原 py 完全一致：人気/修正/無修正/モザイク破壊 + 12 个 genre），HTML 列表/详情/搜索解析，详情页 file: f() 载荷解码出 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "topjav/topjav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.tokyomotion",
+      "name": "TokyoMotion",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "TokyoMotion（tokyomotion.net）。10 个分类与原 py 完全一致（最新视频 + Amateur/Asian/Euro/HENTAI/Homemade/JAV/Pissing/Voyeur/WebCam），列表走 HTML 卡片解析、详情页现取 vsrc 直链并跟随跳转到 wwwNN 子域 mp4 播放。由内置 py 蜘蛛改写。",
+      "manifest": "tokyomotion/tokyomotion.idjplugin"
     }
   ],
   "cms": []
