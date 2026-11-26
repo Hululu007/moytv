@@ -139,6 +139,97 @@ class CloudDirectLink {
   final String? fetchUserAgent;
 }
 
+/// 115 账号信息（provider 层读取；界面接线未做，见二期报告）。
+class Pan115AccountInfo {
+  const Pan115AccountInfo({
+    required this.userId,
+    this.nickname = '',
+    this.avatarUrl = '',
+    this.vipExpireSeconds = 0,
+    this.vipForever = false,
+  });
+
+  /// 账号数字 id（转码安卓路的请求体必须带它）。
+  final String userId;
+  final String nickname;
+  final String avatarUrl;
+
+  /// VIP 到期时间（epoch 秒）；0 = 没拿到/不是 VIP。
+  final int vipExpireSeconds;
+
+  /// 是否永久 VIP。
+  final bool vipForever;
+}
+
+/// 115 容量信息（字节）。
+class Pan115SpaceInfo {
+  const Pan115SpaceInfo({
+    required this.totalBytes,
+    required this.usedBytes,
+    required this.remainBytes,
+  });
+
+  final int totalBytes;
+  final int usedBytes;
+  final int remainBytes;
+}
+
+/// 转码安卓路取地址与播放共用的 UA：m3u8 里的链接绑取它时的 UA，
+/// 两边不一致会被拒（f=1/3 校验）。
+const pan115TranscodeUserAgent = 'Mozilla/5.0';
+
+/// 转码响应 data 解密后的明文 → 直链（纯函数，单测直接覆盖：
+/// RSA 剥壳的正确性由 cloud_m115_crypto 的交叉向量背书，服务端
+/// 密文要私钥才能造、单测里造不出来）。video_url 按 height 取
+/// 最高档，拼 &id={fid}；没有可用地址时按 queue_url 区分
+/// 「正在转码 / 没有转码版本」如实报错。
+CloudDirectLink buildPan115TranscodeLink(
+  Map<String, dynamic> dataObj, {
+  required String fileId,
+  String? downloadCookie,
+}) {
+  String? bestUrl;
+  var bestHeight = -1;
+  final variants = dataObj['video_url'];
+  if (variants is List) {
+    for (final variant in variants) {
+      if (variant is! Map<String, dynamic>) continue;
+      final url = _asString(variant['url']);
+      final height = _asInt(variant['height']);
+      if (url.isNotEmpty && height > bestHeight) {
+        bestHeight = height;
+        bestUrl = url;
+      }
+    }
+  }
+  if (bestUrl == null) {
+    if (_asString(dataObj['queue_url']).isNotEmpty) {
+      throw CloudDriveException('视频正在转码，请稍后再试');
+    }
+    throw CloudDriveException('这个视频没有转码版本');
+  }
+  var url = bestUrl;
+  if (fileId.isNotEmpty) {
+    url = url.contains('?') ? '$url&id=$fileId' : '$url?id=$fileId';
+  }
+  final query = Uri.tryParse(url)?.queryParameters ?? const {};
+  final linkF = int.tryParse(query['f'] ?? '');
+  final expiresAtMs = (int.tryParse(query['t'] ?? '') ?? 0) * 1000;
+  final headers = <String, String>{'User-Agent': pan115TranscodeUserAgent};
+  if ((linkF == null || linkF == 3) && downloadCookie != null) {
+    headers['Cookie'] = downloadCookie;
+  }
+  return CloudDirectLink(
+    url: url,
+    headers: headers,
+    isTranscoded: true,
+    downloadCookie: downloadCookie,
+    expiresAtMs: expiresAtMs,
+    linkF: linkF,
+    fetchUserAgent: pan115TranscodeUserAgent,
+  );
+}
+
 /// 网盘客户端的统一接口。
 abstract class CloudDriveProvider {
   /// 网盘 id：pan115 / quark / aliyun / baidu / yun139。
@@ -437,6 +528,12 @@ class Pan115Provider implements CloudDriveProvider {
   static const _categoryUrl = 'https://webapi.115.com/category/get';
   static const _downloadUrl = 'https://webapi.115.com/files/download';
   static const _indexInfoUrl = 'https://webapi.115.com/files/index_info';
+  static const _userInfoUrl = 'https://webapi.115.com/user/info';
+  static const _navUrl = 'https://my.115.com/';
+  // 转码安卓路：官方安卓 App 的视频接口，只认安卓绑定的会话——扫码
+  // 已改绑 qandroid（一期），配套成立。web 路要 web 绑会话、我们没有，
+  // 不做。取地址与播放必须用同一个 UA（Mozilla/5.0）。
+  static const _videoPlayUrl = 'https://proapi.115.com/android/2.0/video/play';
   static const _pageSize = 40;
 
   /// 登录过期三码：凭证无效 / 已退出 / 会话已退出。命中才算凭证失效；
@@ -968,6 +1065,215 @@ class Pan115Provider implements CloudDriveProvider {
       }
     }
     return '';
+  }
+
+  /// 账号信息：先走 my.115.com 的 nav 接口（115 网页版自己用的，
+  /// user_id/昵称/头像/VIP 到期都在 data 里），解析不出再走
+  /// webapi 的 user/info 备路。两路都拿不到才报错。
+  Future<Pan115AccountInfo> accountInfo(
+    http.Client client,
+    CloudCredentials credentials,
+  ) async {
+    try {
+      final response = await _get(
+        client,
+        Uri.parse(_navUrl).replace(
+          queryParameters: {'ct': 'ajax', 'ac': 'nav'},
+        ),
+        headers: _authHeaders(credentials),
+      );
+      if (response.statusCode == 200) {
+        final info = _parseAccountInfo(
+          _jsonObject(response.body, '115 账号信息'),
+        );
+        if (info != null) return info;
+      }
+    } catch (_) {
+      // 主路任何失败（网络/限频/返回不是 JSON/字段缺失）都往下试备路；
+      // 凭证真过期的话备路的统一判读会给出过期报错并清登录态。
+    }
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
+    final response = await _get(
+      client,
+      Uri.parse(_userInfoUrl),
+      headers: _authHeaders(credentials),
+    );
+    _throwIfRateLimited(response, '115 账号信息获取失败');
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 账号信息获取失败（HTTP ${response.statusCode}）');
+    }
+    final root = _jsonObject(response.body, '115 账号信息');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 账号信息获取失败',
+    );
+    final info = _parseAccountInfo(root);
+    if (info == null) {
+      throw CloudDriveException('115 账号信息获取失败：未获取到用户信息');
+    }
+    return info;
+  }
+
+  /// 从用户信息返回里宽容解析：data 下和顶层都找，字段名多候选。
+  /// 昵称/头像/user_id 三者全空才算没拿到（转码只需要 user_id，
+  /// 只有 user_id 也认）。
+  Pan115AccountInfo? _parseAccountInfo(Map<String, dynamic> root) {
+    final data = root['data'];
+    final map = data is Map<String, dynamic> ? data : root;
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = _asString(map[key]);
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    final nickname = pick(['user_name', 'nick_name', 'username', 'user_nick_name']);
+    var avatar = pick(['face', 'avatar', 'userface']);
+    if (avatar.startsWith('//')) avatar = 'https:$avatar';
+    final userId = pick(['user_id', 'uid']);
+    if (nickname.isEmpty && avatar.isEmpty && userId.isEmpty) return null;
+    final forever = map['forever'];
+    return Pan115AccountInfo(
+      userId: userId,
+      nickname: nickname,
+      avatarUrl: avatar,
+      vipExpireSeconds: _asInt(map['expire']),
+      vipForever: forever == true || forever == 1 || forever == '1',
+    );
+  }
+
+  /// 容量信息（files/index_info 的 space_info）。
+  Future<Pan115SpaceInfo> spaceInfo(
+    http.Client client,
+    CloudCredentials credentials,
+  ) async {
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
+    final response = await _get(
+      client,
+      Uri.parse(_indexInfoUrl),
+      headers: _authHeaders(credentials),
+    );
+    _throwIfRateLimited(response, '115 容量信息获取失败');
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 容量信息获取失败（HTTP ${response.statusCode}）');
+    }
+    final root = _jsonObject(response.body, '115 容量信息');
+    _checkState(
+      root,
+      cookieUsed: cookieUsed,
+      generation: generation,
+      what: '115 容量信息获取失败',
+    );
+    final data = root['data'];
+    final space = data is Map<String, dynamic> ? data['space_info'] : null;
+    int sizeOf(Object? node) =>
+        node is Map<String, dynamic> ? _asInt(node['size']) : 0;
+    final spaceMap = space is Map<String, dynamic> ? space : null;
+    final total = sizeOf(spaceMap?['all_total']);
+    if (total <= 0) {
+      throw CloudDriveException('115 容量信息获取失败：服务器没有返回容量');
+    }
+    return Pan115SpaceInfo(
+      totalBytes: total,
+      usedBytes: sizeOf(spaceMap?['all_use']),
+      remainBytes: sizeOf(spaceMap?['all_remain']),
+    );
+  }
+
+  /// 转码播放地址（安卓路，兜底用）：POST proapi 的
+  /// android/2.0/video/play，请求体 {pickcode, user_id} 经 m115 加密
+  /// 作 data 字段（与取直链同套加密）；响应同套剥壳，data 是 RSA
+  /// 密文字符串，解开后 video_url 按 height 取最高档，再拼 &id={fid}。
+  /// state 为假时只有 errno 409 也要解 data（服务端在 409 时仍给
+  /// 地址）；video_url 为空时：有 queue_url 是正在转码、没有就是
+  /// 没有转码版本，两种都如实报错，不假装能播。
+  /// 播放契约与直链同规矩：播放 UA 必须与取地址 UA 一致
+  /// （Mozilla/5.0）；f=3 时带响应 Set-Cookie 里那对下载会话 Cookie。
+  Future<CloudDirectLink> transcodeLink(
+    http.Client client,
+    CloudCredentials credentials,
+    CloudDriveFile file,
+  ) async {
+    var pickcode = file.extra['pickcode'] ?? '';
+    if (pickcode.isEmpty) {
+      pickcode = await _fetchPickcode(client, credentials, file.id);
+    }
+    if (pickcode.isEmpty) {
+      throw CloudDriveException('115 取转码地址失败：没有拿到文件提取码');
+    }
+    final info = await accountInfo(client, credentials);
+    if (info.userId.isEmpty) {
+      throw CloudDriveException('115 取转码地址失败：没能拿到账号信息，请重试');
+    }
+    final userIdNumber = int.tryParse(info.userId);
+    final encrypted = m115RsaEncrypt(
+      utf8.encode(
+        jsonEncode({
+          'pickcode': pickcode,
+          'user_id': userIdNumber ?? info.userId,
+        }),
+      ),
+    );
+    final generation = _sessionGeneration;
+    final cookieUsed = credentials.fields['cookie'] ?? '';
+    final response = await _postForm(
+      client,
+      Uri.parse(_videoPlayUrl),
+      {'data': encrypted},
+      headers: {'User-Agent': pan115TranscodeUserAgent, 'Cookie': cookieUsed},
+    );
+    _throwIfRateLimited(response, '115 取转码地址失败');
+    if (response.statusCode != 200) {
+      throw CloudDriveException('115 取转码地址失败（HTTP ${response.statusCode}）');
+    }
+    String? downloadCookie;
+    final setCookie = response.headers['set-cookie'];
+    if (setCookie != null) {
+      for (final match in _downloadCookiePattern.allMatches(setCookie)) {
+        downloadCookie = match.group(0);
+      }
+    }
+    final Uint8List plainBytes;
+    try {
+      plainBytes = m115ContentMaybeDecrypt(response.bodyBytes);
+    } catch (_) {
+      throw CloudDriveException('115 取转码地址失败：响应解密失败');
+    }
+    final root = _jsonObject(utf8.decode(plainBytes), '115 取转码地址');
+    if (!_stateOk(root) && _errnoOf(root) != 409) {
+      // 过期三码在这里面会被判成过期并清登录态，其余按接口报错抛。
+      _checkState(
+        root,
+        cookieUsed: cookieUsed,
+        generation: generation,
+        what: '115 取转码地址失败',
+      );
+      throw CloudDriveException('115 取转码地址失败：接口报错');
+    }
+    final rawData = root['data'];
+    if (rawData is! String) {
+      throw CloudDriveException('115 取转码地址失败：服务器没有返回转码地址');
+    }
+    Map<String, dynamic> dataObj;
+    try {
+      final decoded = jsonDecode(utf8.decode(m115RsaDecrypt(rawData)));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('data 不是对象');
+      }
+      dataObj = decoded;
+    } catch (_) {
+      throw CloudDriveException('115 取转码地址失败：转码地址解析失败');
+    }
+    return buildPan115TranscodeLink(
+      dataObj,
+      fileId: file.id,
+      downloadCookie: downloadCookie,
+    );
   }
 }
 

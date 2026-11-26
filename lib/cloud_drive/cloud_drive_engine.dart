@@ -889,7 +889,7 @@ class CloudDriveEngine {
     }
     final credentials = _credentials(providerId);
     try {
-      final link = await provider.directLink(_httpClient, credentials, file);
+      final link = await _directOrTranscode(provider, credentials, file);
       if (isStrmFile(file.name)) {
         // STRM 指针文件：读内容取第一行流地址，再走正常播放链；
         // 内容无效时诚实报错。只展开一层，不递归。
@@ -927,6 +927,65 @@ class CloudDriveEngine {
       );
     } on CloudDriveException catch (e) {
       throw AppFailure(e.message);
+    }
+  }
+
+  /// 取播放地址：一般网盘只走直链；115 的视频多一条转码兜底——
+  /// 直链取不到、或直链首请求被 CDN 明确拒掉（403，多半是 f 校验
+  /// 在当前环境对不上）时，回退转码 m3u8（安卓路）。两条都失败时
+  /// 把两边的原因一起报，不让用户只看到一条路的错。
+  Future<CloudDirectLink> _directOrTranscode(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+    CloudDriveFile file,
+  ) async {
+    final canTranscode =
+        provider is Pan115Provider &&
+        file.kind == CloudFileKind.video &&
+        !isStrmFile(file.name);
+    if (!canTranscode) {
+      return provider.directLink(_httpClient, credentials, file);
+    }
+    CloudDriveException? directError;
+    CloudDirectLink? link;
+    try {
+      link = await provider.directLink(_httpClient, credentials, file);
+    } on CloudDriveException catch (e) {
+      directError = e;
+    }
+    if (link != null && !await _probeForbidden(link)) return link;
+    try {
+      return await provider.transcodeLink(_httpClient, credentials, file);
+    } on CloudDriveException catch (transError) {
+      if (directError != null) {
+        throw CloudDriveException(
+          '115 直链取不到（${directError.message}），'
+          '转码兜底也失败（${transError.message}）',
+        );
+      }
+      throw CloudDriveException(
+        '115 直链被服务器拒绝，转码兜底也失败（${transError.message}）',
+      );
+    }
+  }
+
+  /// 直链首请求探针：带上计划的请求头打一个 1 字节的 Range GET，
+  /// 不跟重定向（302 跳 CDN 是正常形态）。只有明确回 403 才算被拒；
+  /// 网络失败、超时、其它状态一律不拦——探不准就不惩罚，交给
+  /// 播放器自己试。
+  Future<bool> _probeForbidden(CloudDirectLink link) async {
+    try {
+      final request = http.Request('GET', Uri.parse(link.url));
+      request.followRedirects = false;
+      request.headers.addAll(link.headers);
+      request.headers.putIfAbsent('Range', () => 'bytes=0-0');
+      final response = await _httpClient
+          .send(request)
+          .timeout(const Duration(seconds: 10));
+      await response.stream.listen(null).cancel().catchError((_) {});
+      return response.statusCode == 403;
+    } catch (_) {
+      return false;
     }
   }
 
