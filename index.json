@@ -1161,6 +1161,33 @@
       "adult": true,
       "description": "吉吉资源（caiji.jjzyapi.com）。33 个分类（与原 py 完全一致：接口 class 实时返回 33 类、经原 py 旗标过滤，EXCLUDED_IDS 为空、名称含游戏/棋牌/博彩/彩票/赌的分类剔除，兜底分类同 py 33 类），MacCMS 资源接口（JSON 主、XML 备）列表/详情/搜索，列表无封面时经详情补封面（同 py），播放双线：jjm3u8 直给 m3u8（play 内预解析主清单）、jjzy 线为 watch 播放页、play 内提取页内签名 m3u8。由内置 py 蜘蛛改写。",
       "manifest": "jjzy/jjzy.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.91crdjai",
+      "name": "91成人短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "91成人短剧（91crdjai.com）。4 个固定分类与原 py 完全一致（成人短剧/成人漫剧/真人剧/成人视频，不删减），服务端渲染 HTML 列表/详情/搜索，剧集结构照原 py（详情页数字选集排序、单线路「在线播放」）；播放页 SSR 的 src 已空置，play 改走页面内嵌 playbackEndpoint 模板的 POST 播放接口现取 m3u8（py 的页面正则链保留为第一顺位），主清单在 play 内预解析。封面图床字节为 AES-CBC 加密（原 py 靠 localProxy 解密），插件宿主无二进制取图能力，封面直出原地址、个别客户端可能无法显示。由内置 py 蜘蛛改写。",
+      "manifest": "91crdjai/91crdjai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ddys",
+      "name": "低端影视",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "低端影视（ddys.io，官方备用域名 ddys.cloud/ddys.fyi/ddys.ceo 同站兜底）。5 个分类（首页/电影/剧集/综艺/动漫，与原 py 完全一致），首页走 /api/hot-movies 接口、分类走 HTML 列表页、搜索走 /api/search-suggest，详情页 switchSource 内嵌 m3u8 多源按原 py 探活选源，play 内预解析主清单到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "ddys/ddys.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.chinaxjx",
+      "name": "中国X站精选",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "中国X站精选（chinaxselecla08.xyz/c2）。4 个分类，HTML 解析列表/详情，播放页现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "chinaxjx/chinaxjx.idjplugin"
     }
   ],
   "cms": []
