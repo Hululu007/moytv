@@ -1188,6 +1188,105 @@
       "adult": true,
       "description": "中国X站精选（chinaxselecla08.xyz/c2）。4 个分类，HTML 解析列表/详情，播放页现取 m3u8 直链。由内置 py 蜘蛛改写。",
       "manifest": "chinaxjx/chinaxjx.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.guzhuang",
+      "name": "古装AI",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "古装AI（5g.guzhuangai8.cc/rukou）。9 个分类与原 py 完全一致（斯卡资源/51资源/黄瓜资源/番茄资源/兔兔资源/森林资源/库库资源/制服诱惑/AI短剧，首页导航实测解析、同为 9 个），MacCMS 式 HTML 列表/详情/搜索，详情单线路『在线播放』、分集照原 py 按 nid 排序，play 取播放页 player_aaaa 内嵌 m3u8 并在 play 内预解析主清单。由内置 py 蜘蛛改写。",
+      "manifest": "guzhuang/guzhuang.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hbook",
+      "name": "HBook",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "HBook（hbook.tv，小黄书，HTML 站）。11 个分类与原 py 完全一致（最新视频/免费试看/中文字幕/女优/痴女/恋足/高清/独家/后宫/4K/人妻）。详情页内嵌 source 即播放地址：免费区为完整 HLS、其余默认 60 秒预览清单；原 py 的 Bunny 全片线路靠 Cookie 切换 CDN 偏好，宿主禁发 Cookie 会被剥离，该线路在宿主内通常与预览同源被去重。由内置 py 蜘蛛改写。",
+      "manifest": "hbook/hbook.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hduanju",
+      "name": "H-短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "H-短剧（xiaonverjtx.click）。分类按原 py 从首页导航解析、取不到时回退原 py 的 39 个固定分类（不删减，原 py 无分类过滤），服务端渲染 HTML 列表/搜索，详情单线路「在线播放」单集结构照原 py；播放页 var playUrl 现取 m3u8，主清单在 play 内预解析。站方 /info/ 详情页现全量回 nginx 404，详情标题改由同 id 的 /play/ 页 pagetitle 兜底（封面/简介/分类名只在 /info/ 页有、兜底时为空，列表封面不受影响）。封面与流媒体域名为站方轮换域名，已按实测域名与通配形态登记。由内置 py 蜘蛛改写。",
+      "manifest": "hduanju/hduanju.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.heitaoduanju",
+      "name": "黑桃短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "黑桃短剧（heitaoduanju7.cc / heitaoduanju8.cc 双基址）。8 个分类与原 py 完全一致（黄瓜资源/番号资源/不卡资源/黑桃资源/玉兔资源/裤子资源/森林资源/163资源，页面解析优先、固定表兜底，不删减），MacCMS 式服务端渲染 HTML 列表/详情/搜索，剧集结构照原 py（详情页选集、单线路「在线播放」）；play 走播放页 player_aaaa 正则现取 m3u8，主清单在 play 内预解析。站点响应慢（单页约 35–45 秒），超时放宽 60 秒、双基址各重试 2 次。由内置 py 蜘蛛改写。",
+      "manifest": "heitaoduanju/heitaoduanju.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.henhenlu",
+      "name": "狠狠撸",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "狠狠撸（hhlu2127.lol）。3 个分类（视频一区/二区/三区），HTML 解析列表/详情，播放页现取 m3u8 直链。由内置 py 蜘蛛改写。",
+      "manifest": "henhenlu/henhenlu.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.herexxx",
+      "name": "HereXXX",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "HereXXX（herexxx.com）。17 个分类，HTML 解析列表/详情，详情页 flashvars base64 现解站内 mp4 直链（经 302 到 CDN）。由内置 py 蜘蛛改写。",
+      "manifest": "herexxx/herexxx.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hgai",
+      "name": "黄瓜AI短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "黄瓜AI短剧（hgai8.cc）。入口页解析随机子域名基址（*.cyou 后缀），数据走 /api JSON 接口（响应可为 AES-CBC cipher 包裹，插件内用原 py 同一 key/iv 解密）；分类以接口 module=video 全量为准（实测 40 个，不删减），接口无数据时回退原 py 内置 30 分类；详情剧集照原 py 由 play_url 按 # 切分、单线路「在线播放」；播放照原 py 链：.m3u8 直通、播放页直链正则、player_data huangguo 接口三路，主清单在 play 内预解析。由内置 py 蜘蛛改写。",
+      "manifest": "hgai/hgai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hgaidj",
+      "name": "黄果AI短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黄果AI短剧（hgaidjzun.lol）。分类按原 py 从首页 hunt 链接解析（解析不到时用原 py 的 12 个固定分类兜底，不删减），服务端渲染 HTML 列表/详情/搜索；详情页取标题/封面/简介，播放页取 playUrl 单线路「在线播放」单集结构与原 py 一致；主清单在 play 内预解析到子清单。流与封面均为多 CDN 轮换域名，清单按实测根域以 *. 形态覆盖。由内置 py 蜘蛛改写。",
+      "manifest": "hgaidj/hgaidj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hghub",
+      "name": "HGhub",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "HGhub（huangguoai.com，黄果）。5 个分类与原 py 完全一致（AI成人短剧/AI成人漫剧/AI换脸/AI魔改/黄果吃瓜）。列表/详情/搜索走明文 JSON 接口；播放走站点加密播放会话（ECDH P-256 + HKDF-SHA256 + AES-256-GCM，dx150-edge-v1），已在插件内纯 JS 复刻原 py 实现，明文 /play 回退接口现回空地址。封面图床 pic.qnlycc.cn 回的是 AES-128-CBC 加密字节（已用原 py 的 key/iv 本地解密验真为真 JPEG），原 py 靠本地代理解密回图；插件宿主只有文本 http、无二进制取图能力，封面只能直出原链、客户端可能无法显示，此为宿主能力边界。由内置 py 蜘蛛改写。",
+      "manifest": "hghub/hghub.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hgdj58",
+      "name": "黄果短剧",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "黄果短剧（hgdj58）。分类与原 py 完全一致：/categories 接口返回的 4 个分类（黄果原创🔥/AI成人短剧/AI成人漫剧/AI魔改）前置固定「推荐」，不删减；JSON 接口取列表/详情/搜索，剧集结构照原 py（预告/正片命名、锁定集标注 VIP/金币、单线路「在线播放」）；封面走原 py 的描述符解析（cover 路径换 routes 真实地址，多线路试探取可达的一条）；play 走原 py 的 POST /episodes/{id}/play 接口，media_routes 相对地址按响应镜像补绝对，多线路（源站/R2/第三方 CDN）逐条验清单+首分片取首条验通者。锁定集（含标 free 的锁定集）无游客令牌时接口不给流，游客登录接口现回 426（站方 2026-11-25 升级后原 py 契约失效），未锁预告集可正常播。由内置 py 蜘蛛改写。",
+      "manifest": "hgdj58/hgdj58.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hgtvim",
+      "name": "黄果短剧HGTV",
+      "version": "1.0.0",
+      "type": "shortdrama",
+      "adult": true,
+      "description": "黄果短剧HGTV（hgtv.im）。14 个固定分类与原 py 完全一致（首页/经典魔改/家庭伦理/都市爱情/特殊趣味/校园记忆/古装玄幻/现代惊悚/域外传奇/经典动漫/AI演示/特殊口味/异能穿越/二次元区，不删减），服务端渲染 HTML 列表/详情/搜索；详情照原 py 取 JSON-LD 字段与 /watch/ 选集、单线路「在线播放」；播放照原 py 链：/watch 页 data-src（默认 /play/{sid}_{ep}.html）取播放地址，播放端点回内联主清单时在 play 内预解析到子清单。播放端点须带会话 cookie（原 py 靠 cookie 罐），插件侧由宿主按插件隔离的自动 cookie 罐承接。由内置 py 蜘蛛改写。",
+      "manifest": "hgtvim/hgtvim.idjplugin"
     }
   ],
   "cms": []
