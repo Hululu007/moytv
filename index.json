@@ -1611,6 +1611,33 @@
       "adult": false,
       "description": "YouTube（www.youtube.com，Innertube 接口）。21 个分类与原 py CLASSES 1:1（动漫/短剧/电视剧/电影/战争片/沙雕动漫/新闻/首页/Shorts/音乐/直播/学习/纪录片/综艺/体育/科技/时尚/科普/新闻直播/4K/直播台；原 py 登录三类仅在配 cookie 时出现，插件无登录配置、与原 py 无 cookie 时一致未列），含 91 个直播台直列；列表解析、标题清洗、合集去重与季度分组、筛选转查询、详情（player+oembed 兜底+相关视频线）与播放（VISIONOS HLS/多端回退、主清单预解析到子清单）均与原 py 一致。由内置 py 蜘蛛改写。",
       "manifest": "youtube/youtube.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.km2",
+      "name": "新快猫",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "新快猫（快猫 App 接口站）。3 个分类（热门/发现/精选，与原内置蜘蛛导航一致），接口为 AES 加密加 MD5 签名协议，播放为 AES-128 加密 HLS。由内置 jar 蜘蛛 ZakaKm2Amns 改写。",
+      "manifest": "km2/km2.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hl365",
+      "name": "黑料不打烊",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黑料不打烊（hl365.com）。分类与站点导航 1:1 共 23 类（今日看料/优选投放/每日大赛/AI短剧/每日热瓜/黑料大事/热门吃瓜/反差女神/学院热瓜/网红吃瓜/撸友看片/海角乱伦/黑料杂谈/探花大全/网黄专辑/明星吃瓜/av解说/原创投稿/性爱技巧/偷拍盗摄/官场秘闻/禁播动漫/PMV混剪）。Typecho 博客 HTML 解析列表，详情页 DPlayer 配置直取 m3u8（含加密地址 AES 解密兜底，同内置 jar 蜘蛛），play 内主清单预解析到子清单。由内置 jar 蜘蛛 ZakaHl365Amns 改写。",
+      "manifest": "hl365/hl365.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hgdjv",
+      "name": "黄果短剧视频",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黄果短剧视频（内置 jar 站 ZakaHgdjV 改写）。接口域名走 crks.json 分发加 /api/sys/live 探活（回退线路域名随机子域），游客登录走 jar 同款 AES-ECB 加密契约，接口 encData 用令牌片段 AES-CBC 解密（插件内自带 AES 实现）；分类照 /api/video/classifyList 全量 11 个（短剧精选/魔改短剧/小编推荐/伦理之爱/国产精选/动漫/网黄精选/新番AV/原创传媒/欧美精选/禁区），不删减不合并；列表 /api/video/getVideoList、搜索 /api/search/keyWord、详情 /api/video/getVideoById（serialVideos 为分集）；播放走 jar 的签名网关 /api/v2/m3u8/play（HMAC-SHA256 签名加 authKey），主清单在 play 内预解析到子清单。封面照 jar 走 hgimg.ystv.top 图片代理（图床原图为加密块、代理还原，图床域名轮换）。",
+      "manifest": "hgdjv/hgdjv.idjplugin"
     }
   ],
   "cms": []
