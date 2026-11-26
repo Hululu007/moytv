@@ -1467,6 +1467,42 @@
       "adult": true,
       "description": "91porna（91porna.com）。9 个分类与原 py 蜘蛛一致，播放走站点 playback 接口现取签名 HLS。由内置 py 蜘蛛改写。",
       "manifest": "porna91/porna91.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.senzuri",
+      "name": "Senzuri Tube",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "Senzuri Tube（senzuri.tube）。13 个分类与原 py 完全一致，播放为 videofile 接口现取、B164 解码 /get_file/ 路径后预解析 HLS 子清单，失败回退直链 mp4。由内置 py 蜘蛛改写。",
+      "manifest": "senzuri/senzuri.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.shaofu",
+      "name": "少妇·短剧AV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "少妇·短剧AV（shaofudj.top）。4 个分类与原 py 完全一致（玉兔资源/网曝系列/番茄资源/杏吧资源），MacCMS 列表页解析，播放页 player_aaaa 现取 master m3u8 并在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "shaofu/shaofu.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.shunvqu",
+      "name": "熟女群",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "熟女群（snq2.cc/snq3.cc）。7 个资源分类（与原 py 完全一致），MacCMS 列表/详情解析，player_aaaa 取 m3u8 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "shunvqu/shunvqu.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.shunvwang",
+      "name": "熟女网",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "熟女网（shunvwang）。7 个资源分类与站导航一致，播放为播放页 player_aaaa 现取 HLS。由内置 py 蜘蛛改写。",
+      "manifest": "shunvwang/shunvwang.idjplugin"
     }
   ],
   "cms": []
