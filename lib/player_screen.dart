@@ -2473,6 +2473,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           // 不带头（带了会在 on_load 钩子里覆盖掉属性）。没有空 UA 时
           // 清掉属性防上一份计划的字段表串过来，其余头照旧走 Media。
           Map<String, String>? mediaHeaders = plan.headers;
+          final platform = _player.platform;
           if (platform is NativePlayer) {
             final fields = mpvHttpHeaderFields(plan.headers);
             if (fields != null) {
