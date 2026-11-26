@@ -1112,6 +1112,334 @@ void main() {
       }
       expect(seen.length, 4);
     });
+
+    test('native segment lists js and idj sites when the chain is injected',
+        () async {
+      SourceSite.importedJsFiles['test_js_import'] = 'test_js_import.js';
+      addTearDown(() => SourceSite.importedJsFiles.remove('test_js_import'));
+      final provider = HostMiniAppSourceProvider(
+        nativeCall: (source, operation,
+            {category = '', page = 1, query = '', vodId = '', flag = '',
+            playId = ''}) async =>
+            {},
+      );
+      final sites = await provider.listSites();
+      final keys = [for (final e in sites) e['key']];
+      expect(keys.toSet().length, keys.length);
+      final js = sites.firstWhere((e) => e['key'] == 'test_js_import');
+      expect(js['type'], 'js');
+      expect(js['name'], '导入 JS 站');
+      expect(js['searchable'], isTrue);
+      expect(js['available'], isTrue);
+      final idj = sites.firstWhere((e) => e['key'] == 'idj_testplug');
+      expect(idj['type'], 'idj');
+      expect(idj['name'], '测试插件站');
+      expect(idj['searchable'], isTrue);
+      expect(idj['available'], isTrue);
+      // 原生段在汇合段之后：排在最后一个 py 条目之后。
+      expect(
+        keys.indexOf('test_js_import') > keys.indexOf('test_jsonlist_import'),
+        isTrue,
+      );
+      expect(
+        keys.indexOf('idj_testplug') > keys.indexOf('test_jsonlist_import'),
+        isTrue,
+      );
+    });
+
+    test('js sites route through the native call with spider operations',
+        () async {
+      final seen = <String>[];
+      final provider = HostMiniAppSourceProvider(
+        nativeCall: (source, operation,
+            {category = '', page = 1, query = '', vodId = '', flag = '',
+            playId = ''}) async {
+          seen.add(
+            '$operation|cat=$category|pg=$page|q=$query|id=$vodId'
+            '|flag=$flag|play=$playId',
+          );
+          switch (operation) {
+            case 'home':
+              return {
+                'class': [
+                  {'type_id': '1', 'type_name': '电影'},
+                ],
+                'list': [
+                  {'vod_id': 'j1', 'vod_name': 'JS 片'},
+                ],
+              };
+            case 'category':
+              return {
+                'list': [
+                  {'vod_id': 'j2', 'vod_name': 'JS 分类片'},
+                ],
+              };
+            case 'search':
+              return {
+                'list': [
+                  {'vod_id': 'j3', 'vod_name': 'JS 搜片'},
+                ],
+              };
+            case 'detail':
+              return {
+                'list': [
+                  {
+                    'vod_id': 'j1',
+                    'vod_play_from': '线路A',
+                    'vod_play_url': '第1集\$e1',
+                  },
+                ],
+              };
+            case 'player':
+              return {
+                'url': 'https://cdn.example.com/js.m3u8',
+                'header': {'Referer': 'https://example.com/'},
+                'parse': 0,
+              };
+          }
+          return {};
+        },
+      );
+
+      final home = await provider.home('test_js_import');
+      expect((home['list'] as List).length, 1);
+      expect((home['classes'] as List).length, 1);
+      final category = await provider.category(
+        siteKey: 'test_js_import',
+        tid: '1',
+        page: 2,
+      );
+      expect((category['list'] as List).length, 1);
+      final search = await provider.search(
+        siteKey: 'test_js_import',
+        wd: '词',
+        page: 1,
+      );
+      expect((search['list'] as List).length, 1);
+      final detail = await provider.detail(
+        siteKey: 'test_js_import',
+        id: 'j1',
+      );
+      expect(detail['vod_id'], 'j1');
+      expect(detail['vod_play_from'], ['线路A']);
+      expect(detail['vod_play_url'], ['第1集\$e1']);
+      final play = await provider.play(
+        siteKey: 'test_js_import',
+        flag: '线路A',
+        id: 'e1',
+      );
+      expect(play['url'], 'https://cdn.example.com/js.m3u8');
+      expect(play['header'], {'Referer': 'https://example.com/'});
+      expect(play['parse'], '0');
+      expect(seen, [
+        'home|cat=|pg=1|q=|id=|flag=|play=',
+        'category|cat=1|pg=2|q=|id=|flag=|play=',
+        'search|cat=|pg=1|q=词|id=|flag=|play=',
+        'detail|cat=|pg=1|q=|id=j1|flag=|play=',
+        'player|cat=|pg=1|q=|id=|flag=线路A|play=e1',
+      ]);
+    });
+
+    test('idj sites translate the idj1 shapes', () async {
+      final seen = <String>[];
+      final provider = HostMiniAppSourceProvider(
+        nativeCall: (source, operation,
+            {category = '', page = 1, query = '', vodId = '', flag = '',
+            playId = ''}) async {
+          seen.add('$operation|cat=$category|pg=$page|q=$query|id=$vodId');
+          switch (operation) {
+            case 'home':
+              return {
+                'categories': [
+                  {'id': 'movie', 'name': '电影'},
+                  {'id': '', 'name': '坏行'},
+                  {'id': 'tv'},
+                ],
+                'items': [
+                  {
+                    'id': 'a1',
+                    'title': '插件片',
+                    'cover': 'https://img.example.com/a1.jpg',
+                    'remarks': '12集',
+                    'duration': '45分钟',
+                  },
+                  {
+                    'id': 'a2',
+                    'title': '插件片二',
+                    'cover': '',
+                    'duration': '30分钟',
+                  },
+                ],
+                'hasMore': true,
+              };
+            case 'category':
+              return {
+                'items': [
+                  {'id': 'a3', 'title': '分类片', 'cover': ''},
+                ],
+                'hasMore': false,
+              };
+            case 'search':
+              return {
+                'items': [
+                  {'id': 'a4', 'title': '搜到的插件片', 'cover': ''},
+                ],
+                'hasMore': false,
+              };
+            case 'detail':
+              return {
+                'id': 'a1',
+                'title': '插件片',
+                'cover': 'https://img.example.com/a1.jpg',
+                'desc': '简介',
+                'tags': ['动作', ''],
+                'lines': [
+                  {
+                    'name': '线路一',
+                    'episodes': [
+                      {'id': 'e1', 'name': '第1集'},
+                      {'id': 'e2'},
+                    ],
+                  },
+                  {'name': '空线路', 'episodes': []},
+                ],
+              };
+          }
+          return {};
+        },
+      );
+
+      final home = await provider.home('idj_testplug');
+      expect(home['class'], [
+        {'type_id': '', 'type_name': '全部'},
+        {'type_id': 'movie', 'type_name': '电影'},
+        {'type_id': 'tv', 'type_name': 'tv'},
+      ]);
+      expect(home['classes'], home['class']);
+      final homeList = home['list'] as List;
+      expect(homeList.length, 2);
+      expect((homeList[0] as Map)['vod_remarks'], '12集');
+      expect((homeList[1] as Map)['vod_remarks'], '30分钟');
+      expect(home['hasMore'], isTrue);
+
+      // 空分类不调 category：改走 home 取首页内容，只取第一页。
+      final homeCategory = await provider.category(
+        siteKey: 'idj_testplug',
+        tid: '',
+        page: 1,
+      );
+      expect((homeCategory['list'] as List).length, 2);
+      final beyond = await provider.category(
+        siteKey: 'idj_testplug',
+        tid: '',
+        page: 2,
+      );
+      expect(beyond['list'], isEmpty);
+      final category = await provider.category(
+        siteKey: 'idj_testplug',
+        tid: 'movie',
+        page: 1,
+      );
+      expect((category['list'] as List).length, 1);
+      expect(category['hasMore'], isFalse);
+      final search = await provider.search(
+        siteKey: 'idj_testplug',
+        wd: '插件',
+        page: 1,
+      );
+      expect((search['list'] as List).length, 1);
+
+      final detail = await provider.detail(siteKey: 'idj_testplug', id: 'a1');
+      expect(detail['vod_id'], 'a1');
+      expect(detail['vod_name'], '插件片');
+      expect(detail['vod_content'], '简介');
+      expect(detail['vod_class'], '动作');
+      expect(detail['vod_play_from'], ['线路一']);
+      expect(detail['vod_play_url'], ['第1集\$e1#e2\$e2']);
+
+      // category 只被以非空 tid 调过一次；空 tid 两页都没触发新调用。
+      expect(seen, [
+        'home|cat=|pg=1|q=|id=',
+        'home|cat=|pg=1|q=|id=',
+        'category|cat=movie|pg=1|q=|id=',
+        'search|cat=|pg=1|q=插件|id=',
+        'detail|cat=|pg=1|q=|id=a1',
+      ]);
+    });
+
+    test('idj play goes through the plan call and maps the plan', () async {
+      final seen = <String>[];
+      var drm = false;
+      final provider = HostMiniAppSourceProvider(
+        nativeCall: (source, operation,
+            {category = '', page = 1, query = '', vodId = '', flag = '',
+            playId = ''}) async =>
+            {},
+        idjPlanCall: (source, {required flag, required playId}) async {
+          seen.add('$source:$flag:$playId');
+          return PlaybackPlan(
+            url: 'https://cdn.example.com/p.m3u8',
+            headers: const {'User-Agent': 'UA'},
+            drm: drm ? const PlaybackDrm(type: 'widevine', key: 'k') : null,
+          );
+        },
+      );
+      final play = await provider.play(
+        siteKey: 'idj_testplug',
+        flag: '线路一',
+        id: 'e1',
+      );
+      expect(play['url'], 'https://cdn.example.com/p.m3u8');
+      expect(play['header'], {'User-Agent': 'UA'});
+      expect(play['parse'], '0');
+      expect(seen, ['idj_testplug:线路一:e1']);
+
+      // DRM 计划不回裸地址冒充可播，如实报失败。
+      drm = true;
+      await expectLater(
+        provider.play(siteKey: 'idj_testplug', flag: '线路一', id: 'e1'),
+        throwsA(
+          isA<MiniAppSourceFailure>().having(
+            (e) => e.code,
+            'code',
+            'SOURCE_FAILED',
+          ),
+        ),
+      );
+    });
+
+    test('native chain errors become SOURCE_FAILED and proxy stays closed',
+        () async {
+      final provider = HostMiniAppSourceProvider(
+        nativeCall: (source, operation,
+            {category = '', page = 1, query = '', vodId = '', flag = '',
+            playId = ''}) async =>
+            throw StateError('核调用炸了'),
+      );
+      await expectLater(
+        provider.home('test_js_import'),
+        throwsA(
+          isA<MiniAppSourceFailure>().having(
+            (e) => e.code,
+            'code',
+            'SOURCE_FAILED',
+          ),
+        ),
+      );
+      // proxyFetch 不接 JS/idj：主链没有这两类的取图代理路径。
+      for (final key in ['test_js_import', 'idj_testplug']) {
+        await expectLater(
+          provider.proxyFetch(key, {'u': 'https://x/a.jpg'}),
+          throwsA(
+            isA<MiniAppSourceFailure>().having(
+              (e) => e.code,
+              'code',
+              'SITE_NOT_FOUND',
+            ),
+          ),
+        );
+      }
+    });
   });
 
   group('play result normalization', () {

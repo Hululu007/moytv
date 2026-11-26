@@ -1105,7 +1105,7 @@ class _HongguoDramaHomeState extends State<HongguoDramaHome>
         : switch (_tab) {
             1 => _multimedia(context),
             2 => _mine(context),
-            5 => const MiniAppHomePage(),
+            5 => MiniAppHomePage(repository: widget.repository),
             6 => _actress(context),
             7 => _gameZone(context),
             _ => _feed(context),

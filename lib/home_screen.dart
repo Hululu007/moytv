@@ -2969,7 +2969,10 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         );
       case Win7WindowKind.miniApp:
-        return const MiniAppHomePage(key: ValueKey('win7-miniapp'));
+        return MiniAppHomePage(
+          key: const ValueKey('win7-miniapp'),
+          repository: widget.repository,
+        );
       case Win7WindowKind.multimedia:
         return MultimediaScreen(
           key: const ValueKey('win7-multimedia'),
@@ -3651,7 +3654,7 @@ class _HomeScreenState extends State<HomeScreen>
     // 小程序：与短剧首页内层页签是同一个首页（抽屉里的小程序
     // 入口已移到这里），不依赖片库站源，同样放空态判断之前。
     if (_miniAppRequested) {
-      return const MiniAppHomePage();
+      return MiniAppHomePage(repository: widget.repository);
     }
     // 我的：与短剧首页内层页签是同一个共享页。
     if (_mineRequested) {

@@ -954,6 +954,70 @@ class NativeRepository extends AppRepository {
     return {};
   }
 
+  /// 小程序宿主数据桥（HostMiniAppSourceProvider）的原始取数入口：
+  /// 与主界面 categories / catalog / detail 对 js/idj 站走的是同一条
+  /// `_jsCall` / `_idjCall`——`_authorize` 用户权限校验在两条链内部，
+  /// idj 的失败看门狗计数也在 `_idjCall` 内部，本方法只把操作名与
+  /// 参数按两条链各自的口径转交，不新开通道、不绕校验。返回蜘蛛 /
+  /// 插件的原始结果，形状翻译归调用方。
+  /// operation 两边同名：home / category / search / detail / player
+  /// （player 只对 js 站走本方法；idj 取流的结果是 streams 形状，
+  /// 走 [idjPlaybackPlan] 过契约翻译）。
+  Future<Map<String, dynamic>> spiderRawCall(
+    String source,
+    String operation, {
+    String category = '',
+    int page = 1,
+    String query = '',
+    String vodId = '',
+    String flag = '',
+    String playId = '',
+  }) async {
+    if (!isJsSource(source)) {
+      throw AppFailure('站点不是 JS 蜘蛛/插件站：$source');
+    }
+    if (isIdjSource(source)) {
+      final Map<String, dynamic> args = switch (operation) {
+        'category' => <String, dynamic>{'id': category, 'page': page},
+        'search' => <String, dynamic>{'keyword': query, 'page': page},
+        'detail' => <String, dynamic>{'id': vodId},
+        'player' => <String, dynamic>{'flag': flag, 'playId': playId},
+        _ => const <String, dynamic>{},
+      };
+      return _idjCall(source, operation, args: args);
+    }
+    return _jsCall(
+      source,
+      operation,
+      category: category,
+      page: page,
+      query: query,
+      vodId: vodId,
+      flag: flag,
+      playId: playId,
+    );
+  }
+
+  /// idj 取流：与 resolvePlayback 的 idj 分支同一口径——manifest 的
+  /// media 白名单 + `_idjCall('player')` + [IdjContract] 形状翻译；
+  /// `_authorize` 与看门狗都在 `_idjCall` 内，不另起通道。
+  Future<PlaybackPlan> idjPlaybackPlan(
+    String source, {
+    required String flag,
+    required String playId,
+  }) async {
+    final manifest = await _idjManifest(source);
+    final result = await _idjCall(
+      source,
+      'player',
+      args: {'flag': flag, 'playId': playId},
+    );
+    return IdjContract.planFromResult(
+      result,
+      mediaAllowlist: manifest.mediaDomains,
+    );
+  }
+
   Future<String> _jsSpiderScript(String source) async {
     final fileName = SourceSite.importedJsFiles[source];
     if (fileName != null && fileName.isNotEmpty) {

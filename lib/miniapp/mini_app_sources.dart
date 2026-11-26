@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../core_bridge.dart';
 import '../import_file_store.dart';
 import '../jar_bridge.dart';
 import '../models.dart';
@@ -61,20 +62,25 @@ abstract class MiniAppSourceProvider {
   });
 }
 
-enum _SiteKind { jar, py }
+enum _SiteKind { jar, py, native }
 
 class _ResolvedSite {
-  const _ResolvedSite(this.kind, this.siteId, this.spec);
+  const _ResolvedSite(this.kind, this.siteId, this.spec, {this.idj = false});
 
   final _SiteKind kind;
   final String siteId;
   final JarSiteSpec? spec;
+
+  /// 原生段细分：true 是 idj 插件站（结果是 idj1 形状，要翻译），
+  /// false 是 JS 蜘蛛站（结果是 TVBox 形状，与 py 同口径归一）。
+  final bool idj;
 }
 
 /// 默认实现：只读复用站点区同一套注册表，不另起一份。
 ///
-/// 清单分两段，顺序固定：先是内置段（构成与顺序与汇合前一字不变），
-/// 其后是汇合段，按站 id 去重（已在内置段出现的不重复列）。
+/// 清单分三段，顺序固定：先是内置段（构成与顺序与汇合前一字不变），
+/// 其后是汇合段，再其后是原生段（JS 蜘蛛 / idj 插件站，仅在注入了
+/// 宿主仓库链时出现），全程按站 id 去重（已在前段出现的不重复列）。
 /// 内置段：jar 站读静态表 zakatvBuiltinSites + missav30BuiltinSites
 /// （跳过纯音频站，与站点区注册口径一致；一点播 oneBuiltinSites 不
 /// 在此列，与搬 MissAV 之前一致）；py 站读运行时注册表
@@ -86,10 +92,14 @@ class _ResolvedSite {
 /// jsonlist 登记执行时走生成的 py 蜘蛛，与宿主 _pyCall 同口径）。
 /// 取数走宿主现有链路：jar 经 JarBridge.callJson，py 经 PyBridge.call，
 /// 不另写爬虫。Go 核站（红果等）不是 TVBox 蜘蛛形态，不在此列；
-/// JS 蜘蛛与 idj 插件站的取数链在 NativeRepository（Go 核实例，
-/// 带用户权限与插件看门狗），本提供者两条链都够不着，不列入清单、
-/// 解析时报 SITE_NOT_FOUND，不冒充可达；HTML 导入站不是蜘蛛形态，
-/// 同样不在列。
+/// HTML 导入站不是蜘蛛形态，同样不在列。
+/// JS 蜘蛛与 idj 插件站（清单第三段「原生段」）的取数链在
+/// NativeRepository 的 Go 核调用上：经注入的宿主仓库实例走它的
+/// spiderRawCall / idjPlaybackPlan——与主界面同一入口、同一实例
+/// （启动装配时由 _AppBootstrapState 的仓库一路传进来），
+/// _authorize 用户权限校验与 idj 插件看门狗都在那条链内部，
+/// 本提供者不另起直调通道。没注入仓库（也没有测试替身）时原生段
+/// 不进清单、解析报 SITE_NOT_FOUND，不冒充可达。
 class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   HostMiniAppSourceProvider({
     Future<Map<String, dynamic>> Function(
@@ -103,10 +113,31 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
       Map<String, dynamic> request,
     )?
     pyCall,
+    NativeRepository? repository,
+    Future<Map<String, dynamic>> Function(
+      String source,
+      String operation, {
+      String category,
+      int page,
+      String query,
+      String vodId,
+      String flag,
+      String playId,
+    })?
+    nativeCall,
+    Future<PlaybackPlan> Function(
+      String source, {
+      required String flag,
+      required String playId,
+    })?
+    idjPlanCall,
     Duration callTimeout = const Duration(seconds: 60),
     String? imageBaseUrl,
   }) : _jarCall = jarCall ?? JarBridge.callJson,
        _pyCall = pyCall,
+       _repository = repository,
+       _nativeCall = nativeCall,
+       _idjPlanCall = idjPlanCall,
        _callTimeout = callTimeout,
        _imageBaseUrl = imageBaseUrl;
 
@@ -124,6 +155,32 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     Map<String, dynamic> request,
   )?
   _pyCall;
+
+  /// 宿主仓库实例（主界面同一实例，启动装配时一路注入）：JS/idj 站
+  /// 的取数经它的 spiderRawCall / idjPlaybackPlan 走，权限校验与
+  /// 插件看门狗都在那条链内部。为 null 且没有测试替身时，原生段
+  /// 不进清单、解析报 SITE_NOT_FOUND。
+  final NativeRepository? _repository;
+  final Future<Map<String, dynamic>> Function(
+    String source,
+    String operation, {
+    String category,
+    int page,
+    String query,
+    String vodId,
+    String flag,
+    String playId,
+  })?
+  _nativeCall;
+  final Future<PlaybackPlan> Function(
+    String source, {
+    required String flag,
+    required String playId,
+  })?
+  _idjPlanCall;
+
+  bool get _hasNativeChain => _nativeCall != null || _repository != null;
+
   final Duration _callTimeout;
 
   /// 小程序本地服务的基址（MiniAppServer.baseUrl，WebView 已在用
@@ -190,6 +247,30 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         });
       }
     }
+    // 原生段：JS 蜘蛛站与 idj 插件站（importType 为 'js'）。仅在
+    // 注入了宿主仓库链时追加——没链时列了也取不到数，不冒充可达。
+    // 看门狗自动停用的插件会被注销出注册表，所以注册表里在场的
+    // idj 站即与看门狗状态一致，available 与汇合段 jar 同口径记
+    // true；JS 站按脚本文件/远程地址是否就位记（与 py 口径一致，
+    // 远程站首次取数时懒加载）。
+    if (_hasNativeChain) {
+      for (final entry in SourceSite.importedSites.entries) {
+        final site = entry.value;
+        if (site.importType != 'js') continue;
+        final idj = NativeRepository.isIdjSource(site.id);
+        addSite(<String, dynamic>{
+          'key': site.id,
+          'name': site.name,
+          'type': idj ? 'idj' : 'js',
+          'searchable': true,
+          'available': idj
+              ? true
+              : SourceSite.importedJsFiles.containsKey(site.id) ||
+                    (SourceSite.importedJsRemoteUrls[site.id]?.isNotEmpty ??
+                        false),
+        });
+      }
+    }
     return sites;
   }
 
@@ -208,6 +289,10 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
           'filter': true,
         });
         return withClassesAlias(raw);
+      }
+      if (site.kind == _SiteKind.native) {
+        final raw = await _callNative(site.siteId, 'home');
+        return site.idj ? _idjHomeResult(raw) : withClassesAlias(raw);
       }
       final raw = await _callPy(site.siteId, {'action': 'home'});
       return _withProxyImages(withClassesAlias(raw), site.siteId);
@@ -246,6 +331,38 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         });
         return withClassesAlias(raw);
       }
+      if (site.kind == _SiteKind.native) {
+        if (site.idj) {
+          // 与宿主 catalog 的 idj 分支同口径：空分类不调
+          // category({id: ''})（部分插件会抛 E_ARGS），改调 home
+          // 取首页内容，且只取第一页；筛选 ext 与宿主一样不下传。
+          if (tid.isEmpty) {
+            if (safePage > 1) {
+              return <String, dynamic>{
+                'list': const [],
+                'page': safePage,
+                'hasMore': false,
+              };
+            }
+            final raw = await _callNative(site.siteId, 'home');
+            return _idjListResult(raw, safePage);
+          }
+          final raw = await _callNative(
+            site.siteId,
+            'category',
+            category: tid,
+            page: safePage,
+          );
+          return _idjListResult(raw, safePage);
+        }
+        final raw = await _callNative(
+          site.siteId,
+          'category',
+          category: tid,
+          page: safePage,
+        );
+        return Map<String, dynamic>.from(raw);
+      }
       final raw = await _callPy(site.siteId, {
         'action': 'catalog',
         'page': safePage,
@@ -277,6 +394,15 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         });
         return normalizeDetailResult(raw);
       }
+      if (site.kind == _SiteKind.native) {
+        final raw = await _callNative(site.siteId, 'detail', vodId: id);
+        if (site.idj) {
+          return normalizeDetailResult(<String, dynamic>{
+            'list': [_idjDetailToVod(raw, id)],
+          });
+        }
+        return normalizeDetailResult(raw);
+      }
       final raw = await _callPy(site.siteId, {
         'action': 'detail',
         'vodId': id,
@@ -296,6 +422,23 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     }
     final site = _resolveSite(siteKey);
     return _guarded(() async {
+      if (site.kind == _SiteKind.native) {
+        if (site.idj) {
+          final plan = await _callIdjPlan(
+            site.siteId,
+            flag: flag,
+            playId: id,
+          );
+          return _playResultFromPlan(plan);
+        }
+        final raw = await _callNative(
+          site.siteId,
+          'player',
+          flag: flag,
+          playId: id,
+        );
+        return normalizePlayResult(raw);
+      }
       final raw = site.kind == _SiteKind.jar
           ? await _jarCall(site.spec!, 'playerContent', {
               'flag': flag,
@@ -334,6 +477,17 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
         });
         return Map<String, dynamic>.from(raw);
       }
+      if (site.kind == _SiteKind.native) {
+        final raw = await _callNative(
+          site.siteId,
+          'search',
+          query: wd,
+          page: safePage,
+        );
+        return site.idj
+            ? _idjListResult(raw, safePage)
+            : Map<String, dynamic>.from(raw);
+      }
       final raw = await _callPy(site.siteId, {
         'action': 'catalog',
         'page': safePage,
@@ -350,9 +504,10 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   /// `jar:zakatv:<key>` / `jar:missav30:<key>`，也认短 key）；
   /// 其余 jar 站认 jar 桥已注册的 spec（配置 jar 站、独立导入 jar、
   /// 插件市场装回的 jar 包）；py 站认运行时注册表里 importType 为
-  /// 'py'/'jsonlist' 的任意来源条目（内置/导入/配置/插件装回）。
-  /// JS 蜘蛛、idj 插件站与 HTML 站不在本提供者的取数链上，
-  /// 一律报 SITE_NOT_FOUND（见类注释）。
+  /// 'py'/'jsonlist' 的任意来源条目（内置/导入/配置/插件装回）；
+  /// JS 蜘蛛与 idj 插件站（importType 为 'js'）在注入了宿主仓库链
+  /// 时认原生段。HTML 站不在本提供者的取数链上；没有仓库链时
+  /// JS/idj 站与未知站一样报 SITE_NOT_FOUND（见类注释）。
   _ResolvedSite _resolveSite(String siteKey) {
     final key = siteKey.trim();
     if (key.isEmpty) {
@@ -393,6 +548,14 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
     final site = SourceSite.importedSites[key];
     if (site != null && _isPySpiderSite(site)) {
       return _ResolvedSite(_SiteKind.py, site.id, null);
+    }
+    if (site != null && site.importType == 'js' && _hasNativeChain) {
+      return _ResolvedSite(
+        _SiteKind.native,
+        site.id,
+        null,
+        idj: NativeRepository.isIdjSource(site.id),
+      );
     }
     throw MiniAppSourceFailure('SITE_NOT_FOUND', '未找到站点：$key');
   }
@@ -435,6 +598,197 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
       'cfDisguise': true,
     };
     return PyBridge.call(path, payload);
+  }
+
+  /// 原生段取数分发：优先测试替身，否则走注入的宿主仓库实例的
+  /// spiderRawCall（与主界面同一入口，_authorize 与看门狗在链内）。
+  /// 两者都没有时报 SITE_UNAVAILABLE——正常路径下 _resolveSite 已
+  /// 用 _hasNativeChain 拦住，这里是兜底。
+  Future<Map<String, dynamic>> _callNative(
+    String source,
+    String operation, {
+    String category = '',
+    int page = 1,
+    String query = '',
+    String vodId = '',
+    String flag = '',
+    String playId = '',
+  }) {
+    final override = _nativeCall;
+    if (override != null) {
+      return override(
+        source,
+        operation,
+        category: category,
+        page: page,
+        query: query,
+        vodId: vodId,
+        flag: flag,
+        playId: playId,
+      );
+    }
+    final repository = _repository;
+    if (repository == null) {
+      throw const MiniAppSourceFailure(
+        'SITE_UNAVAILABLE',
+        '该站的宿主仓库取数链尚未接通',
+      );
+    }
+    return repository.spiderRawCall(
+      source,
+      operation,
+      category: category,
+      page: page,
+      query: query,
+      vodId: vodId,
+      flag: flag,
+      playId: playId,
+    );
+  }
+
+  /// idj 取流分发：优先测试替身，否则走宿主仓库的 idjPlaybackPlan
+  /// （manifest 白名单 + 看门狗都在那条链内）。
+  Future<PlaybackPlan> _callIdjPlan(
+    String source, {
+    required String flag,
+    required String playId,
+  }) {
+    final override = _idjPlanCall;
+    if (override != null) {
+      return override(source, flag: flag, playId: playId);
+    }
+    final repository = _repository;
+    if (repository == null) {
+      throw const MiniAppSourceFailure(
+        'SITE_UNAVAILABLE',
+        '该站的宿主仓库取数链尚未接通',
+      );
+    }
+    return repository.idjPlaybackPlan(source, flag: flag, playId: playId);
+  }
+
+  /// idj 播放计划 → 契约 play 形状：url / header / parse。带有效
+  /// DRM 的计划小程序播放链表达不了（主界面靠 DRM 信息强制走
+  /// EXO），不许只回裸地址冒充可播，如实报 SOURCE_FAILED；
+  /// 字幕等契约外字段不编。
+  static Map<String, dynamic> _playResultFromPlan(PlaybackPlan plan) {
+    if (plan.url.isEmpty) {
+      throw const MiniAppSourceFailure(
+        'SOURCE_FAILED',
+        '采集源取流未返回播放地址',
+      );
+    }
+    if (plan.hasDrm) {
+      throw const MiniAppSourceFailure(
+        'SOURCE_FAILED',
+        '该站返回的是加密流（DRM），小程序播放链暂不支持',
+      );
+    }
+    return <String, dynamic>{
+      'url': plan.url,
+      'header': Map<String, String>.from(plan.headers),
+      'parse': plan.needsParse ? '1' : '0',
+    };
+  }
+
+  /// idj home() 的 idj1 形状 → 契约形状：categories 转 class
+  /// （前置「全部」，与宿主 IdjContract.categoriesFromHome 同口径：
+  /// 无 id 的行跳过、name 空时以 id 顶上），items 转 vod 行，
+  /// hasMore 原样带上。再过 withClassesAlias 补 classes 别名。
+  static Map<String, dynamic> _idjHomeResult(Map<String, dynamic> raw) {
+    final classes = <Map<String, dynamic>>[
+      {'type_id': '', 'type_name': '全部'},
+      for (final row in raw['categories'] as List? ?? const [])
+        if (row is Map && (row['id']?.toString().isNotEmpty ?? false))
+          {
+            'type_id': row['id'].toString(),
+            'type_name':
+                (row['name']?.toString().isNotEmpty ?? false)
+                    ? row['name'].toString()
+                    : row['id'].toString(),
+          },
+    ];
+    return withClassesAlias(<String, dynamic>{
+      'class': classes,
+      'list': _idjItemRows(raw),
+      'hasMore': raw['hasMore'] == true,
+    });
+  }
+
+  /// idj 列表结果（category / search / home 的 items）→ 契约形状。
+  static Map<String, dynamic> _idjListResult(
+    Map<String, dynamic> raw,
+    int page,
+  ) {
+    return <String, dynamic>{
+      'list': _idjItemRows(raw),
+      'page': page,
+      'hasMore': raw['hasMore'] == true,
+    };
+  }
+
+  static List<Map<String, dynamic>> _idjItemRows(Map<String, dynamic> raw) {
+    return [
+      for (final row in raw['items'] as List? ?? const [])
+        if (row is Map) _idjItemToVod(row),
+    ];
+  }
+
+  /// idj 条目 → vod 行：remarks 本身就是展示文案，为空时才用
+  /// duration 顶上（与 IdjContract 的条目翻译同口径）。
+  static Map<String, dynamic> _idjItemToVod(Map row) {
+    final item = Map<String, dynamic>.from(row);
+    final remarks = item['remarks']?.toString() ?? '';
+    final duration = item['duration']?.toString() ?? '';
+    return <String, dynamic>{
+      'vod_id': item['id']?.toString() ?? '',
+      'vod_name': item['title']?.toString() ?? '',
+      'vod_pic': item['cover']?.toString() ?? '',
+      'vod_remarks': remarks.isNotEmpty ? remarks : duration,
+    };
+  }
+
+  /// idj detail 的 idj1 形状 → 单个 vod（play_from / play_url 先按
+  /// TVBox 惯例拼成 $$$ / # 字符串，交给 normalizeDetailResult 切成
+  /// 数组）：线路名进 flag（展示名，与宿主 Episode.raw 同口径），
+  /// 分集键是 episodes[].id，集名缺失时以分集键顶上；没有有效分集
+  /// 的线路不进结果（与 IdjContract 不产空集合同口径）。
+  static Map<String, dynamic> _idjDetailToVod(
+    Map<String, dynamic> raw,
+    String requestedId,
+  ) {
+    final from = <String>[];
+    final urls = <String>[];
+    for (final lineRow in raw['lines'] as List? ?? const []) {
+      if (lineRow is! Map) continue;
+      final line = Map<String, dynamic>.from(lineRow);
+      final episodes = <String>[];
+      for (final episodeRow in line['episodes'] as List? ?? const []) {
+        if (episodeRow is! Map) continue;
+        final episode = Map<String, dynamic>.from(episodeRow);
+        final playId = episode['id']?.toString() ?? '';
+        if (playId.isEmpty) continue;
+        final name = episode['name']?.toString() ?? '';
+        episodes.add('${name.isEmpty ? playId : name}\$$playId');
+      }
+      if (episodes.isEmpty) continue;
+      from.add(line['name']?.toString() ?? '');
+      urls.add(episodes.join('#'));
+    }
+    final resultId = raw['id']?.toString() ?? '';
+    final tags = [
+      for (final tag in raw['tags'] as List? ?? const [])
+        if (tag != null && tag.toString().isNotEmpty) tag.toString(),
+    ];
+    return <String, dynamic>{
+      'vod_id': resultId.isNotEmpty ? resultId : requestedId,
+      'vod_name': raw['title']?.toString() ?? '',
+      'vod_pic': raw['cover']?.toString() ?? '',
+      'vod_content': raw['desc']?.toString() ?? '',
+      if (tags.isNotEmpty) 'vod_class': tags.join(','),
+      'vod_play_from': from.join(r'$$$'),
+      'vod_play_url': urls.join(r'$$$'),
+    };
   }
 
   /// 与 NativeRepository._pySpiderPath 同一口径：已保存文件优先，
@@ -495,6 +849,9 @@ class HostMiniAppSourceProvider implements MiniAppSourceProvider {
   /// py 站（与 _resolveSite 同一口径：importType 为 'py'/'jsonlist'
   /// 的任意来源条目），走蜘蛛 localProxy 的现成路径
   /// （Referer + 解密都在蜘蛛里），不另写取图逻辑。
+  /// JS/idj 站在宿主主链里没有 localProxy 式取图路径（idj 封面是
+  /// 插件直给的 https 地址、JS 站封面同样是页面直链，不经代理），
+  /// 维持 SITE_NOT_FOUND，不编代理通道。
   Future<Map<String, dynamic>> proxyFetch(String source, Object? param) async {
     final site = SourceSite.importedSites[source];
     if (site == null || !_isPySpiderSite(site)) {

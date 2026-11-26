@@ -8,6 +8,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart'
     as android_webview;
 
+import '../core_bridge.dart';
 import 'mini_app_ad_filter.dart';
 import 'mini_app_bridge.dart';
 import 'mini_app_manifest.dart';
@@ -45,12 +46,18 @@ class MiniAppHostPage extends StatefulWidget {
     this.launchOptions = const <String, dynamic>{},
     this.playerFactory,
     this.videoBuilder,
+    this.repository,
   });
 
   final MiniAppManifest manifest;
   final MiniAppRuntime runtime;
   final MiniAppSettings settings;
   final Map<String, dynamic> launchOptions;
+
+  /// 宿主仓库（主界面同一实例）：传给数据桥提供者接 JS 蜘蛛 /
+  /// idj 插件站的取数链；不是 NativeRepository 时提供者按无链
+  /// 口径处理（这类站不进清单），不另起直调通道。
+  final AppRepository? repository;
 
   /// 测试注入播放器：默认内嵌视图直接 new Player()。
   final Player Function()? playerFactory;
@@ -109,8 +116,12 @@ class _MiniAppHostPageState extends State<MiniAppHostPage> {
       // 封面改写与图片代理共用同一个 provider：改写指向本实例
       // 的服务基址（WebView 已在用的地址），/pyproxy 路由走
       // provider 的 proxyFetch（蜘蛛 localProxy 现成路径）。
+      final hostRepository = widget.repository;
       final sourceProvider = HostMiniAppSourceProvider(
         imageBaseUrl: instance.baseUrl,
+        repository: hostRepository is NativeRepository
+            ? hostRepository
+            : null,
       );
       instance.server.proxyFetch = sourceProvider.proxyFetch;
       late final MiniAppBridge bridge;

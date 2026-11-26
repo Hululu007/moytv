@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../core_bridge.dart';
 import 'mini_app_builtin.dart';
 import 'mini_app_host_page.dart';
 import 'mini_app_manifest.dart';
@@ -25,7 +26,12 @@ import 'idj_plugin_tab.dart';
 /// 海阔小程序有自己的独立标签（海阔规则列表与导入入口都在那页里），
 /// 不再以固定卡片挂在「已安装」列表顶部。
 class MiniAppHomePage extends StatefulWidget {
-  const MiniAppHomePage({super.key});
+  const MiniAppHomePage({super.key, this.repository});
+
+  /// 宿主仓库（主界面同一实例）：透传给宿主页的数据桥提供者，
+  /// 让小程序能取 JS 蜘蛛 / idj 插件站的数据。为 null 时这类站
+  /// 不进小程序的宿主站清单（提供者按无链口径处理）。
+  final AppRepository? repository;
 
   @override
   State<MiniAppHomePage> createState() => _MiniAppHomePageState();
@@ -218,6 +224,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
           manifest: manifest,
           runtime: runtime,
           settings: settings,
+          repository: widget.repository,
         ),
       ),
     );
