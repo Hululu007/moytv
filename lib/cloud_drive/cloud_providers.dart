@@ -13,10 +13,10 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 
 import 'cloud_115_upload.dart';
@@ -141,7 +141,7 @@ class CloudDirectLink {
   final String? fetchUserAgent;
 }
 
-/// 115 账号信息（provider 层读取；界面接线未做，见二期报告）。
+/// 115 账号信息（provider 层读取；网盘页账号信息位展示）。
 class Pan115AccountInfo {
   const Pan115AccountInfo({
     required this.userId,
@@ -1471,13 +1471,9 @@ class Pan115Provider implements CloudDriveProvider {
     return token;
   }
 
-  /// 上传一个文件到指定文件夹（整文件字节进内存的协议层实现；
-  /// 界面层的文件挑选/流式读取未接，见二期报告）。
-  /// 流程：全文件 SHA1 → uploadinfo（不允许/超限先拦）→ initupload
-  /// （status 7 带 sign_check 区间 SHA1 再 init 一次；status 2 秒传
-  /// 完成）→ OSS 分片（10MB 串行、单片重试 3 次、403 刷新凭证）→
-  /// complete 带回调登记。任何一步失败都如实抛错，不假成功；
-  /// OSS 阶段失败会尽力 abort 已开的分片会话。
+  /// 上传一份内存字节到指定文件夹（小内容与单测用；界面层走
+  /// [uploadLocalFile] 流式读本地文件）。编排与流式版共用
+  /// [_uploadFromSource]。
   Future<void> uploadFile(
     http.Client client,
     CloudCredentials credentials, {
@@ -1485,11 +1481,67 @@ class Pan115Provider implements CloudDriveProvider {
     required List<int> bytes,
     required String targetFolderId,
     void Function(int sentBytes, int totalBytes)? onProgress,
+  }) {
+    return _uploadFromSource(
+      client,
+      credentials,
+      fileName: fileName,
+      source: MemoryPan115UploadSource(bytes),
+      targetFolderId: targetFolderId,
+      onProgress: onProgress,
+    );
+  }
+
+  /// 上传本地文件到指定文件夹（界面层入口）：全程流式读——全文件
+  /// SHA1 边读边算、二次校验只读校验区间、OSS 分片按片读，整文件
+  /// 不进内存，几个 GB 的文件也能传。[fileName] 不给时用文件
+  /// 本身的名字。文件读不到时抛干净的中文错，不带文件路径原文。
+  Future<void> uploadLocalFile(
+    http.Client client,
+    CloudCredentials credentials, {
+    required File file,
+    String? fileName,
+    required String targetFolderId,
+    void Function(int sentBytes, int totalBytes)? onProgress,
   }) async {
-    if (bytes.isEmpty) {
+    final int length;
+    try {
+      length = await file.length();
+    } on FileSystemException {
+      throw CloudDriveException('读取所选文件失败，请重新选择文件');
+    }
+    try {
+      await _uploadFromSource(
+        client,
+        credentials,
+        fileName: fileName ?? file.uri.pathSegments.last,
+        source: FilePan115UploadSource(file, length),
+        targetFolderId: targetFolderId,
+        onProgress: onProgress,
+      );
+    } on FileSystemException {
+      throw CloudDriveException('读取所选文件失败，请重新选择文件');
+    }
+  }
+
+  /// 上传编排（内存/流式共用）：全文件 SHA1 → uploadinfo（不允许/
+  /// 超限先拦）→ initupload（status 7 带 sign_check 区间 SHA1 再
+  /// init 一次；status 2 秒传完成）→ OSS 分片（10MB 串行、单片
+  /// 重试 3 次、403 刷新凭证）→ complete 带回调登记。任何一步
+  /// 失败都如实抛错，不假成功；OSS 阶段失败会尽力 abort 已开的
+  /// 分片会话。
+  Future<void> _uploadFromSource(
+    http.Client client,
+    CloudCredentials credentials, {
+    required String fileName,
+    required Pan115UploadSource source,
+    required String targetFolderId,
+    void Function(int sentBytes, int totalBytes)? onProgress,
+  }) async {
+    if (source.length == 0) {
       throw CloudDriveException('文件为空，无法上传');
     }
-    final fileId = crypto.sha1.convert(bytes).toString().toUpperCase();
+    final fileId = await source.sha1All();
     final info = await uploadInfo(client, credentials);
     if (!info.uploadAllowed) {
       throw CloudDriveException(
@@ -1498,7 +1550,7 @@ class Pan115Provider implements CloudDriveProvider {
             : '当前账号不允许上传',
       );
     }
-    if (info.sizeLimit > 0 && bytes.length > info.sizeLimit) {
+    if (info.sizeLimit > 0 && source.length > info.sizeLimit) {
       throw CloudDriveException('文件超过大小限制（上限 ${info.sizeLimit} 字节）');
     }
     final target = 'U_1_$targetFolderId';
@@ -1508,26 +1560,23 @@ class Pan115Provider implements CloudDriveProvider {
       info: info,
       fileId: fileId,
       fileName: fileName,
-      fileSize: bytes.length,
+      fileSize: source.length,
       target: target,
     );
     if (init.status == 7) {
       final range = _parseSignCheck(init.signCheck);
-      if (range == null || range.$1 >= bytes.length) {
+      if (range == null || range.$1 >= source.length) {
         throw CloudDriveException('115 上传初始化失败：服务器返回的校验区间无法解析');
       }
-      final end = range.$2 >= bytes.length ? bytes.length - 1 : range.$2;
-      final signVal = crypto.sha1
-          .convert(bytes.sublist(range.$1, end + 1))
-          .toString()
-          .toUpperCase();
+      final end = range.$2 >= source.length ? source.length - 1 : range.$2;
+      final signVal = await source.sha1Range(range.$1, end);
       init = await uploadInit(
         client,
         credentials,
         info: info,
         fileId: fileId,
         fileName: fileName,
-        fileSize: bytes.length,
+        fileSize: source.length,
         target: target,
         signKey: init.signKey,
         signVal: signVal,
@@ -1545,7 +1594,7 @@ class Pan115Provider implements CloudDriveProvider {
       throw CloudDriveException('115 上传初始化失败：服务器没有返回上传回调');
     }
     final totalParts =
-        (bytes.length + pan115OssPartSize - 1) ~/ pan115OssPartSize;
+        (source.length + pan115OssPartSize - 1) ~/ pan115OssPartSize;
     if (totalParts > 10000) {
       throw CloudDriveException('文件太大，单次上传最多 10000 个分片');
     }
@@ -1557,10 +1606,10 @@ class Pan115Provider implements CloudDriveProvider {
       final parts = <Pan115OssPart>[];
       for (var i = 0; i < totalParts; i++) {
         final start = i * pan115OssPartSize;
-        final end = start + pan115OssPartSize > bytes.length
-            ? bytes.length
+        final end = start + pan115OssPartSize > source.length
+            ? source.length
             : start + pan115OssPartSize;
-        final partBytes = bytes.sublist(start, end);
+        final partBytes = await source.readRange(start, end);
         String? etag;
         Pan115OssException? lastError;
         var refreshed = false;
@@ -1588,7 +1637,7 @@ class Pan115Provider implements CloudDriveProvider {
           );
         }
         parts.add(Pan115OssPart(partNumber: i + 1, etag: etag));
-        onProgress?.call(end, bytes.length);
+        onProgress?.call(end, source.length);
       }
       try {
         await oss.completeMultipart(

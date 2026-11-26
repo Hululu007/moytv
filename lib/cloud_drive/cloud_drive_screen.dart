@@ -1,4 +1,6 @@
 /// 网盘登录中心（设置内入口）：五家网盘登录 + 凭证管理。
+/// 115 登录后另有账号信息位（昵称/ID/会员/容量，接口真返回才显示）
+/// 与上传入口（选本地文件流式上传到根目录，进度弹窗如实反馈）。
 ///
 /// 对标 TVBox_Web website.html 的配置中心，界面与文案全是魔蚁自己的。
 /// 115/夸克/阿里/百度走扫码登录，移动云盘走手机号 + 短信验证码登录
@@ -10,6 +12,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -32,13 +35,24 @@ const _verifyNotes = <String, String>{
   'yun139': '短信登录；文件浏览与播放需真账号验证',
 };
 
+/// 115 上传的选文件结果：本地路径 + 显示名（路径拿不到时为空串）。
+typedef Pan115UploadPick = ({String path, String name});
+
 class CloudDriveScreen extends StatefulWidget {
-  const CloudDriveScreen({super.key, required this.store, this.providers});
+  const CloudDriveScreen({
+    super.key,
+    required this.store,
+    this.providers,
+    this.uploadPicker,
+  });
 
   final LocalStore store;
 
   /// 注入网盘列表（单测用假 provider；不传则用五家真实 provider）。
   final List<CloudDriveProvider>? providers;
+
+  /// 注入 115 上传的选文件动作（单测/预览用；不传走系统文件选择器）。
+  final Future<Pan115UploadPick?> Function()? uploadPicker;
 
   @override
   State<CloudDriveScreen> createState() => _CloudDriveScreenState();
@@ -50,6 +64,13 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
   CloudCredentialStore? _credentialStore;
   Set<String> _loggedIn = {};
   bool _loading = true;
+
+  /// 115 账号信息位的状态：账号与容量各自独立成败，拉到哪个显示
+  /// 哪个；两个都失败才落 [_pan115InfoError] 显示原因。
+  Pan115AccountInfo? _pan115Account;
+  Pan115SpaceInfo? _pan115Space;
+  String? _pan115InfoError;
+  bool _pan115InfoLoading = false;
 
   @override
   void initState() {
@@ -72,6 +93,7 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
       _loggedIn = store.loggedInProviderIds(_providers.map((p) => p.id)).toSet();
       _loading = false;
     });
+    unawaited(_loadPan115Info());
   }
 
   void _refreshStations() {
@@ -81,6 +103,112 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
     setState(() {
       _loggedIn = store.loggedInProviderIds(_providers.map((p) => p.id)).toSet();
     });
+    unawaited(_loadPan115Info());
+  }
+
+  /// 拉 115 账号/容量信息（账号信息位用）：未登录就清空；账号与
+  /// 容量各自独立成败，失败原因如实落字，不编数据。
+  Future<void> _loadPan115Info() async {
+    final store = _credentialStore;
+    if (store == null || _pan115InfoLoading) return;
+    Pan115Provider? pan115;
+    for (final provider in _providers) {
+      if (provider is Pan115Provider) {
+        pan115 = provider;
+        break;
+      }
+    }
+    if (pan115 == null) return;
+    if (!_loggedIn.contains(pan115.id)) {
+      if (_pan115Account != null ||
+          _pan115Space != null ||
+          _pan115InfoError != null) {
+        setState(() {
+          _pan115Account = null;
+          _pan115Space = null;
+          _pan115InfoError = null;
+        });
+      }
+      return;
+    }
+    final credentials = store.load(pan115.id);
+    if (credentials == null) return;
+    setState(() => _pan115InfoLoading = true);
+    Pan115AccountInfo? account;
+    Pan115SpaceInfo? space;
+    String? error;
+    try {
+      account = await pan115.accountInfo(_client, credentials);
+    } catch (e) {
+      error = _qrErrorMessage(e, '账号信息获取失败，请检查网络后重试');
+    }
+    try {
+      space = await pan115.spaceInfo(_client, credentials);
+    } catch (e) {
+      error ??= _qrErrorMessage(e, '容量信息获取失败，请检查网络后重试');
+    }
+    if (!mounted) return;
+    setState(() {
+      _pan115InfoLoading = false;
+      if (account != null) _pan115Account = account;
+      if (space != null) _pan115Space = space;
+      _pan115InfoError = (account == null && space == null) ? error : null;
+    });
+  }
+
+  /// 115 上传入口：选本地文件 → 流式上传到网盘根目录，进度与成败
+  /// 在弹窗里如实反馈（失败原因显示 provider 给的中文说明）。
+  Future<void> _startPan115Upload(Pan115Provider provider) async {
+    final store = _credentialStore;
+    if (store == null) return;
+    final credentials = store.load(provider.id);
+    if (credentials == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先登录 115 网盘')),
+      );
+      return;
+    }
+    Pan115UploadPick? pick;
+    try {
+      pick = await (widget.uploadPicker?.call() ?? _pickUploadFile());
+    } catch (_) {
+      pick = null;
+    }
+    if (!mounted) return;
+    if (pick == null) return; // 用户取消选文件，不打扰。
+    if (pick.path.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没能拿到所选文件的路径，请换个文件再试')),
+      );
+      return;
+    }
+    final picked = pick;
+    final done = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _Pan115UploadDialog(
+        provider: provider,
+        client: _client,
+        credentials: credentials,
+        file: File(picked.path),
+        fileName: picked.name,
+        targetFolderId: provider.rootFolderId,
+      ),
+    );
+    if (done == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('上传完成，文件已存入 115 网盘根目录')),
+      );
+    }
+  }
+
+  Future<Pan115UploadPick?> _pickUploadFile() async {
+    // file_picker 13.1.0：pickFiles 直接回 List<PlatformFile>，
+    // 取消选择回空列表。
+    final files = await FilePicker.pickFiles(type: FileType.any);
+    if (files.isEmpty) return null;
+    final file = files.first;
+    return (path: file.path ?? '', name: file.name);
   }
 
   Future<void> _clear(CloudDriveProvider provider) async {
@@ -332,6 +460,10 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
               _verifyNotes[provider.id] ?? '',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            if (provider is Pan115Provider && loggedIn) ...[
+              const SizedBox(height: 8),
+              _pan115InfoBlock(),
+            ],
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -356,6 +488,11 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
                     onPressed: () => _refreshYun139(provider),
                     child: const Text('刷新登录'),
                   ),
+                if (loggedIn && provider is Pan115Provider)
+                  OutlinedButton(
+                    onPressed: () => _startPan115Upload(provider),
+                    child: const Text('上传文件到根目录'),
+                  ),
                 if (loggedIn)
                   OutlinedButton(
                     onPressed: () => _clear(provider),
@@ -366,6 +503,205 @@ class _CloudDriveScreenState extends State<CloudDriveScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 115 账号信息位：只展示接口真拿到的字段；昵称/ID 没返回就写
+  /// “未返回”，容量没拉到写“未获取到”，不编数据。两个接口都失败
+  /// 时显示失败原因 + 重试。
+  Widget _pan115InfoBlock() {
+    final account = _pan115Account;
+    final space = _pan115Space;
+    if (account == null && space == null) {
+      if (_pan115InfoError != null) {
+        return Row(
+          children: [
+            Expanded(child: Text('账号信息获取失败：$_pan115InfoError')),
+            TextButton(
+              onPressed: () => unawaited(_loadPan115Info()),
+              child: const Text('重试'),
+            ),
+          ],
+        );
+      }
+      return const Text('正在读取账号信息…');
+    }
+    String two(int v) => v.toString().padLeft(2, '0');
+    String vipExpireText = '';
+    if (account != null && !account.vipForever && account.vipExpireSeconds > 0) {
+      final d = DateTime.fromMillisecondsSinceEpoch(
+        account.vipExpireSeconds * 1000,
+      );
+      vipExpireText = '${d.year}-${two(d.month)}-${two(d.day)}';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (account != null && account.avatarUrl.isNotEmpty) ...[
+              CircleAvatar(
+                radius: 14,
+                backgroundImage: NetworkImage(account.avatarUrl),
+                onBackgroundImageError: (_, _) {},
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                account == null
+                    ? '账号：未获取到'
+                    : '昵称：${account.nickname.isEmpty ? '未返回' : account.nickname}',
+              ),
+            ),
+          ],
+        ),
+        if (account != null) ...[
+          Text('账号 ID：${account.userId.isEmpty ? '未返回' : account.userId}'),
+          if (account.vipForever)
+            const Text('会员：永久会员')
+          else if (account.vipExpireSeconds > 0)
+            Text('会员到期：$vipExpireText'),
+        ],
+        Text(
+          space == null
+              ? '容量：未获取到'
+              : '容量：已用 ${_formatBytes(space.usedBytes)} / '
+                    '共 ${_formatBytes(space.totalBytes)}'
+                    '（剩余 ${_formatBytes(space.remainBytes)}）',
+        ),
+        if (_pan115InfoLoading) const Text('正在刷新账号信息…'),
+      ],
+    );
+  }
+}
+
+/// 字节数显示（账号信息位的容量、上传进度共用）。
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+  var value = bytes / 1024;
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+}
+
+/// 115 上传进度弹窗：打开即开始上传（流式读本地文件），进度按已发
+/// 字节走；成功/失败都如实落字，失败显示 provider 给的中文原因，
+/// 其余异常只给干净的通用文案（异常原文可能带请求地址）。
+class _Pan115UploadDialog extends StatefulWidget {
+  const _Pan115UploadDialog({
+    required this.provider,
+    required this.client,
+    required this.credentials,
+    required this.file,
+    required this.fileName,
+    required this.targetFolderId,
+  });
+
+  final Pan115Provider provider;
+  final http.Client client;
+  final CloudCredentials credentials;
+  final File file;
+  final String fileName;
+  final String targetFolderId;
+
+  @override
+  State<_Pan115UploadDialog> createState() => _Pan115UploadDialogState();
+}
+
+class _Pan115UploadDialogState extends State<_Pan115UploadDialog> {
+  int _sent = 0;
+  int _total = 0;
+  bool _done = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_run());
+  }
+
+  Future<void> _run() async {
+    try {
+      await widget.provider.uploadLocalFile(
+        widget.client,
+        widget.credentials,
+        file: widget.file,
+        fileName: widget.fileName,
+        targetFolderId: widget.targetFolderId,
+        onProgress: (sent, total) {
+          if (!mounted) return;
+          setState(() {
+            _sent = sent;
+            _total = total;
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() => _done = true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e is CloudDriveException ? e.message : '上传失败，请检查网络后重试';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('上传到 115 网盘'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.fileName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 12),
+          if (_error != null)
+            Text(
+              '上传失败：$_error',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            )
+          else if (_done)
+            const Text('上传完成，文件已存入网盘根目录。')
+          else ...[
+            LinearProgressIndicator(
+              value: _total > 0 ? _sent / _total : null,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _total > 0
+                  ? '正在上传：${_formatBytes(_sent)} / ${_formatBytes(_total)}'
+                  : '正在准备上传（校验文件、判断秒传）…',
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        if (_error != null)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('关闭'),
+          ),
+        if (_done)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('完成'),
+          ),
+        if (_error == null && !_done)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('隐藏（上传继续）'),
+          ),
+      ],
     );
   }
 }

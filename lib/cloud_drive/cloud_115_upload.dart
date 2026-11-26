@@ -7,6 +7,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -524,5 +525,84 @@ class Pan115OssClient {
     } catch (_) {
       // 收尾失败不报错。
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 上传字节来源：编排层（Pan115Provider 的上传链）只按三件事取内容——
+// 全文件 SHA1、区间 SHA1、按区间读字节——内存与本地文件各一份实现。
+// 文件实现全程流式：SHA1 边读边算、分片按需读，整文件不进内存。
+// ---------------------------------------------------------------------------
+
+/// 115 上传的内容来源。[readRange] 的调用粒度是 OSS 单片（10MB），
+/// 任何实现一次最多交出一片的字节。
+abstract class Pan115UploadSource {
+  /// 内容总字节数。
+  int get length;
+
+  /// 全文件 SHA1（大写十六进制，initupload 的 fileid）。
+  Future<String> sha1All();
+
+  /// 闭区间 [start, endInclusive] 的 SHA1（大写，二次校验 sign_val）。
+  Future<String> sha1Range(int start, int endInclusive);
+
+  /// 读 [start, endExclusive) 区间的字节。
+  Future<List<int>> readRange(int start, int endExclusive);
+}
+
+/// 内存字节来源（小内容与单测用）。
+class MemoryPan115UploadSource implements Pan115UploadSource {
+  MemoryPan115UploadSource(this.bytes);
+
+  final List<int> bytes;
+
+  @override
+  int get length => bytes.length;
+
+  @override
+  Future<String> sha1All() async =>
+      crypto.sha1.convert(bytes).toString().toUpperCase();
+
+  @override
+  Future<String> sha1Range(int start, int endInclusive) async => crypto.sha1
+      .convert(bytes.sublist(start, endInclusive + 1))
+      .toString()
+      .toUpperCase();
+
+  @override
+  Future<List<int>> readRange(int start, int endExclusive) async =>
+      bytes.sublist(start, endExclusive);
+}
+
+/// 本地文件流式来源：几个 GB 的文件也只占一片（10MB）的内存。
+class FilePan115UploadSource implements Pan115UploadSource {
+  FilePan115UploadSource(this.file, this.length);
+
+  final File file;
+
+  @override
+  final int length;
+
+  @override
+  Future<String> sha1All() async {
+    final digest = await crypto.sha1.bind(file.openRead()).first;
+    return digest.toString().toUpperCase();
+  }
+
+  @override
+  Future<String> sha1Range(int start, int endInclusive) async {
+    final digest = await crypto.sha1
+        .bind(file.openRead(start, endInclusive + 1))
+        .first;
+    return digest.toString().toUpperCase();
+  }
+
+  @override
+  Future<List<int>> readRange(int start, int endExclusive) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in file.openRead(start, endExclusive)) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
   }
 }
