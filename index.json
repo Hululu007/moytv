@@ -1503,6 +1503,51 @@
       "adult": true,
       "description": "熟女网（shunvwang）。7 个资源分类与站导航一致，播放为播放页 player_aaaa 现取 HLS。由内置 py 蜘蛛改写。",
       "manifest": "shunvwang/shunvwang.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.ssis",
+      "name": "ssisJAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "ssisJAV（ssis1.cc）。36 个分类与原 py 完全一致，页面 XOR 解密后取 __INITIAL_DATA__ 数据，播放为详情页直出 m3u8（myavimg.top 清单、senlin2026 分片、slp261028 图床，子域名带编号会轮换故用通配）。由内置 py 蜘蛛改写。",
+      "manifest": "ssis/ssis.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.swagr",
+      "name": "SWAG资源合集",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "SWAG资源合集（zi.ri511.xyz）。热门/最新/推荐三页签加主播分类与站点导航 1:1（实时抓取、兜底 18 位主播），详情页现取预告片 mp4 直链播放。由内置 py 蜘蛛改写。",
+      "manifest": "swagr/swagr.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.taiav",
+      "name": "TaiAV",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "TaiAV（taiav.com）。6 个分类（无码/有码/国产AV/网红主播/热门视频/随机，与原 py 一致），播放走 /api/getmovie 接口现取 m3u8，master 清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "taiav/taiav.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.tanhua91",
+      "name": "九色",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "九色（91探花，www.91tanhua196.sbs 等三镜像）。三段分类：/video 短视频（动态页签+写死 41 项兜底）、/videos 长视频（排序+分类页签）、/vod 精品与站外搜索段；详情页 data-src 现取 HLS/MP4 直链，按原 py 的时长校验（__vnotice 试看段/清单时长不足声称一半则改走 embed 页、再退 js10 预览清单）过滤假流。由内置 py 蜘蛛改写。",
+      "manifest": "tanhua91/tanhua91.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.theporny",
+      "name": "thePorny",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "thePorny（theporny.com）。30 个分类与原 py 1:1 对应，播放走 /js 接口现取 m3u8 直链（HLS）。由内置 py 蜘蛛改写。",
+      "manifest": "theporny/theporny.idjplugin"
     }
   ],
   "cms": []
