@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
@@ -18,7 +19,6 @@ import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
 import 'package:moyi/playback_sniffer.dart';
-import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -909,7 +909,7 @@ void main() {
           ],
         }),
       );
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       await pumpUntilDetail(tester);
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
@@ -970,7 +970,7 @@ void main() {
         }),
         verifyFetch: _playableUnlessDead,
       );
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       await pumpUntilDetail(tester);
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 存的标题'), findsWidgets);
@@ -1003,7 +1003,7 @@ void main() {
           ],
         }),
       );
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       await pumpUntilDetail(tester);
       expect(find.byType(DetailScreen), findsOneWidget);
       expect(find.text('SSIS-00123 库里标题'), findsWidgets);
@@ -1039,7 +1039,7 @@ void main() {
         }),
         verifyFetch: _playableUnlessDead,
       );
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       await pumpUntilDetail(tester);
       expect(find.byType(DetailScreen), findsOneWidget);
       // MissAV 被探过（竞速跑了 B 路），且详情页不是报暂无。

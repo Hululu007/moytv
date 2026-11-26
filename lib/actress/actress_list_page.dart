@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'actress_av_style.dart';
 import 'actress_database.dart';
 import 'actress_detail_page.dart';
 import 'actress_film_library.dart';
@@ -23,7 +24,6 @@ import 'actress_db_manage_page.dart';
 import 'actress_whos_topup.dart';
 import 'whos_json_index.dart';
 import 'actress_tag_sheet.dart';
-import 'actress_widgets.dart';
 import '../models.dart';
 import '../whos_fallback.dart';
 import '../whos_local_library.dart';
@@ -1150,21 +1150,21 @@ class _ActressListPageState extends State<ActressListPage> {
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
       child: Row(
         children: [
-          ActressNeonPill(
+          AvPill(
             key: const ValueKey('actress-sex-all'),
             label: '全部',
             selected: _sex == ActressSexFilter.all,
             onTap: () => _setSex(ActressSexFilter.all),
           ),
           const SizedBox(width: 8),
-          ActressNeonPill(
+          AvPill(
             key: const ValueKey('actress-sex-female'),
             label: '女优',
             selected: _sex == ActressSexFilter.female,
             onTap: () => _setSex(ActressSexFilter.female),
           ),
           const SizedBox(width: 8),
-          ActressNeonPill(
+          AvPill(
             key: const ValueKey('actress-sex-male'),
             label: '男优',
             selected: _sex == ActressSexFilter.male,
@@ -1254,6 +1254,9 @@ class _ActressListPageState extends State<ActressListPage> {
           // 国产/4K/动漫/三级/其他，值取自数据库 video_category
           // 主分类（见 ActressTagFilter），接在欧美后面同一排平铺；
           // 9 个胶囊排不下就横向滑，不另起一排。
+          // 2026-11-26 照 AvPlay 演员页页签改样式：文字页签，
+          // 选中酒红粗体 + 底部红线（分类口径一字不变）；测试
+          // 按 ChoiceChip 找这一行，控件换了、找法改按文字。
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
             child: SingleChildScrollView(
@@ -1261,12 +1264,12 @@ class _ActressListPageState extends State<ActressListPage> {
               child: Row(
                 children: [
                   for (final filter in ActressTagFilter.values) ...[
-                    ChoiceChip(
-                      label: Text(filter.label),
+                    AvTabText(
+                      label: filter.label,
                       selected: _tagFilter == filter,
-                      onSelected: (_) => _setTagFilter(filter),
+                      onTap: () => _setTagFilter(filter),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 18),
                   ],
                 ],
               ),
@@ -1295,7 +1298,7 @@ class _ActressListPageState extends State<ActressListPage> {
                 child: Row(
                   children: [
                     for (final category in _siteCategories) ...[
-                      ActressNeonPill(
+                      AvPill(
                         key: ValueKey('site-category-${category.id}'),
                         label: category.name,
                         selected: _siteWorksCategory == category.id,
@@ -1540,7 +1543,7 @@ class _ActressListPageState extends State<ActressListPage> {
     required VoidCallback onClear,
   }) {
     return [
-      ActressNeonPill(
+      AvPill(
         key: const ValueKey('actress-tag-open'),
         label: selected.isEmpty ? '标签' : '标签：$selected',
         selected: selected.isNotEmpty,
@@ -1548,7 +1551,7 @@ class _ActressListPageState extends State<ActressListPage> {
       ),
       const SizedBox(width: 8),
       if (selected.isNotEmpty) ...[
-        ActressNeonPill(
+        AvPill(
           key: const ValueKey('actress-tag-clear'),
           label: '清除',
           selected: false,
@@ -1560,15 +1563,15 @@ class _ActressListPageState extends State<ActressListPage> {
   }
 
   /// 人物宫格布局：普通列表与姓名分组共用同一套格子尺寸。
+  /// 2026-11-26 照 AvPlay 演员页改方形照片卡后格高重算：
+  /// 照片（宽 × 0.85）+ 名字一行 + 部数一行 ≈ 宽 × 0.85 + 44，
+  /// 0.80 时格高约 145（宽 116）刚好装下。间距照规格表
+  /// （UI_SPEC.md：演员网格 3 列、间距 10dp）。
   static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: 3,
-    mainAxisSpacing: 16,
-    crossAxisSpacing: 8,
-    // 人物卡内容高约 142（上下 padding 12 + 头像 84 + 间距 10 +
-    // 两行字约 36）：0.88 时格高约 132，底部“约 N 部”一行溢出，
-    // 预览图上能看到黄黑溢出条（真机 release 不画条但字会被裁）；
-    // 0.78 时格高约 150，刚好装下。
-    childAspectRatio: 0.78,
+    mainAxisSpacing: 10,
+    crossAxisSpacing: 10,
+    childAspectRatio: 0.80,
   );
 
   /// 加载失败态（2026-11-26 加载优化）：原因 + 重试钮，替代原来
@@ -1764,42 +1767,61 @@ class _ActressGridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: actressNeonCardDecoration(),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(15),
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              ActressAvatar(
-                avatarUrl: person.avatarUrl,
-                name: person.displayName,
-                radius: 42,
+    // 2026-11-26 照 AvPlay 演员页卡片：方形圆角照片在上，
+    // 名字居中加粗在图下；「约 N 部」是先前用户令的入库数
+    // 显示，保留为名字下的一行灰字。
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: AspectRatio(
+              aspectRatio: 1 / 0.85,
+              child: Container(
+                color: AvStyle.softBg,
+                child: person.avatarUrl.isEmpty
+                    ? Center(
+                        child: Text(
+                          person.displayName.isEmpty
+                              ? '?'
+                              : person.displayName.characters.first,
+                          style: const TextStyle(
+                            color: AvStyle.dim,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )
+                    : Image.network(
+                        person.avatarUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                person.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(color: Neon.text),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '约 ${person.displayWorks} 部',
-                maxLines: 1,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Neon.textDim),
-              ),
-            ],
+            ),
           ),
-        ),
+          const SizedBox(height: 7),
+          Text(
+            person.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AvStyle.text,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '约 ${person.displayWorks} 部',
+            maxLines: 1,
+            style: const TextStyle(color: AvStyle.dim, fontSize: 11),
+          ),
+        ],
       ),
     );
   }

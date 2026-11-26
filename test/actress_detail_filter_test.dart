@@ -7,12 +7,12 @@
 // ④ 头顶“无码”“推荐”人物标签原样不动，与筛选行互不干扰。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/local_store.dart';
-import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -210,8 +210,8 @@ void main() {
       // 头顶人物标签原样不动。
       expect(find.text('无码'), findsOneWidget);
       expect(find.text('推荐'), findsOneWidget);
-      expect(find.text('作品 4 部 · 女'), findsOneWidget);
-      expect(find.byType(DramaTile), findsNWidgets(4));
+      expect(find.text('4 部影片'), findsOneWidget);
+      expect(find.byType(AvWorkCard), findsNWidgets(4));
       expect(find.text('无分类作品'), findsOneWidget);
     });
 
@@ -221,15 +221,15 @@ void main() {
       await pumpDetail(tester);
       await tester.tap(find.text('国产自拍（1）'));
       await tester.pumpAndSettle();
-      expect(find.byType(DramaTile), findsOneWidget);
+      expect(find.byType(AvWorkCard), findsOneWidget);
       expect(find.text('国产自拍作品'), findsOneWidget);
       expect(find.text('中文字幕作品一'), findsNothing);
       expect(find.text('无分类作品'), findsNothing);
       // 头顶总数还是入库总数，不跟着筛选变。
-      expect(find.text('作品 4 部 · 女'), findsOneWidget);
+      expect(find.text('4 部影片'), findsOneWidget);
       await tester.tap(find.text('全部'));
       await tester.pumpAndSettle();
-      expect(find.byType(DramaTile), findsNWidgets(4));
+      expect(find.byType(AvWorkCard), findsNWidgets(4));
       expect(find.text('无分类作品'), findsOneWidget);
     });
 
@@ -261,7 +261,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('全部'), findsNothing);
-      expect(find.byType(DramaTile), findsOneWidget);
+      expect(find.byType(AvWorkCard), findsOneWidget);
     });
   });
 }

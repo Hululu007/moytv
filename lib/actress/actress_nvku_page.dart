@@ -8,13 +8,18 @@ import '../core_bridge.dart';
 import '../local_store.dart';
 import '../models.dart';
 import '../player_picker.dart';
+import 'actress_av_style.dart';
 import 'actress_database.dart';
+import 'actress_db_manage_page.dart';
+import 'actress_working_db.dart';
 import 'actress_film_library.dart';
 import 'actress_list_page.dart';
-import 'actress_neon.dart';
 import 'actress_nvku_cache.dart';
+import 'actress_online_sources.dart';
+import 'actress_online_view.dart';
+import 'javdb_view.dart';
+import 'actress_ranking_page.dart';
 import 'actress_tag_sheet.dart';
-import 'actress_type_folders.dart';
 import '../whos_fallback.dart';
 import '../whos_local_library.dart';
 
@@ -29,6 +34,13 @@ import '../whos_local_library.dart';
 ///   数据库同一口径，在线取不到内容时自动降级到本地，不留白屏。
 /// 「女优」页签就是原来的女优库列表页（本地库名册 + 站点筛选 +
 /// 同步/现爬都在那边），这里只换外壳，不重做数据层。
+///
+/// 2026-11-26 用户令收口：演员库就用这套原生界面（合并网页
+/// 路线作废、入口改回本页）；底部导航删掉「分类」一项（原分类
+/// 页签打开的是类型文件夹视图，随该项一并撤下，见本批报告）；
+/// 顶部加一条源切换条，123AV 与 PH 两个在线源只进源切换
+/// （Dart 直连，见 actress_online_view.dart），不动底部导航
+/// 结构。在线 who's 仍走 py 版 who's 源链，不走网页抓取。
 class ActressNvkuPage extends StatefulWidget {
   const ActressNvkuPage({
     super.key,
@@ -44,17 +56,13 @@ class ActressNvkuPage extends StatefulWidget {
   final ActressDatabase? database;
   final bool showTitle;
 
-  /// 影视库服务（文件夹/标签读库用）：不传时页内自己建一个
+  /// 影视库服务（标签读库用）：不传时页内自己建一个
   /// （绑 MYTV/db 的库）；测试可注入假服务，不碰真库。
   final FilmLibraryService? filmService;
 
   @override
   State<ActressNvkuPage> createState() => _ActressNvkuPageState();
 }
-
-// nvku 网页配色（style.css 的 :root）：霓虹化后正文/卡面/线条
-// 走 Neon 常量，只剩品牌粉 _pk 还用在加载圈上。
-const _pk = Color(0xFFFF2F6D);
 
 const _favKey = 'actress_nvku_fav';
 
@@ -116,6 +124,16 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
   var _tab = 0;
+  // 在线源（2026-11-26）：顶部源切换条的状态——_onlineId 非空
+  // = 123AV / PH 在线源激活（'' 是女优库本体）；在线搜索词与
+  // 刷新计数单独记，不与女优库的作品搜索互相污染。
+  var _onlineId = '';
+  var _onlineQuery = '';
+  var _onlineRefreshTick = 0;
+
+  /// 库代次：管理页导入/换库回来后 +1，女优列表页换 key 重
+  /// 建重读（见 _actressTab 的 key 与 _openDbManagePage）。
+  var _dbEpoch = 0;
   var _query = '';
 
   var _siteCategories = <CatalogCategory>[];
@@ -131,7 +149,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   var _favorites = <_FavItem>[];
   var _generation = 0;
 
-  /// 影视库服务（文件夹/标签读库）：注入的直接用，没注入的页内建
+  /// 影视库服务（标签读库）：注入的直接用，没注入的页内建
   /// 一个（绑 MYTV/db 的库）；[_ownsFilmService] 为真时退出关掉。
   FilmLibraryService? _filmService;
   var _ownsFilmService = false;
@@ -140,24 +158,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   /// 文件名（例如“女优库.db”），只当标题/标识，不做分类；没绑上
   /// 库、或库打不开时为空，顶栏回落显示“女优库”。
   var _dbTitle = '';
-
-  /// 类型文件夹（2026-11-24 文件夹视图）：videos.type_name 分组
-  /// 计数，从多到少；[_foldersLoaded] 为真且列表为空 = 这个库没有
-  /// type_name 维度，页里如实显示“暂无文件夹”，不编。
-  var _folders = <(String, int)>[];
-  var _foldersLoading = false;
-  var _foldersLoaded = false;
-
-  /// 类型文件夹封面（2026-11-24 文件夹卡片用封面）：类型名 →
-  /// 该类型视频列表第一条视频的 pic_url；没封面的类型值为空，
-  /// 卡片回落文件夹图标。随文件夹一起重算（换标签时第一条
-  /// 带标签的视频可能变，封面跟着变）。
-  var _folderCovers = <String, String>{};
-
-  /// 当前打开的文件夹（类型名）：null = 文件夹网格；非空 = 该类型
-  /// 的视频列表（在分类 tab 里看）。点文件夹从首页进来时先切到
-  /// 分类 tab 再开（见 [_openFolder]）。
-  String? _openFolderName;
 
   /// 当前库文件指纹（路径 + mtime + 大小，见 [NvkuEntryCache.dbStamp]）：
   /// 文件夹/标签/分类缓存的 key 成分，库文件一变就自然失效、重查。
@@ -170,37 +170,17 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   /// 不能在进库首页时就替用户提前跑——第一次点到女优 tab 时才建，
   /// 建好后常驻、再切回来不再重跑。
   var _actressTabVisited = false;
-  var _folderWorks = <FilmLibraryEntry>[];
-  var _folderTotal = -1; // -1 = 还没数过
-  var _folderLoading = false;
-  /// 文件夹视频加载失败原因（2026-11-25 转圈死锁修复）：非空时
-  /// 界面显示“加载失败，点我重试”，不再永远转圈。
-  String? _folderError;
-  var _folderLoadingMore = false;
-  var _folderHasMore = false;
-  var _folderGeneration = 0;
-  static const _folderPageSize = 30;
-  final _folderScroll = ScrollController();
-
-  /// 分类页（未开文件夹）的滚动条：首页 `_scroll` 已被首页 ListView 与
-  /// 分类页搜索网格共用（IndexedStack 下两页同时挂在树里），分类页
-  /// 的文件夹 + 胶囊 + 作品区另用一根，免得抢一个控制器。
-  final _categoryScroll = ScrollController();
-
   /// 标签筛选（2026-11-24，与列表页同一套）：[_videoTag] 是当前
-  /// 选中的标签（空 = 全部）；[_tagKey] 是通用结构下传给服务的
-  /// filters 键（[FilmLibraryService.tags] 回的 key）；[_tags]
-  /// 是弹窗里列的全部标签（带作品数）。
+  /// 选中的标签（空 = 全部）；[_tags] 是弹窗里列的全部标签
+  /// （带作品数）。原先随标签一起传给文件夹查询的 filters 键
+  /// （tags() 回的 key）随分类页签撤下后无人再用，一并去掉。
   var _videoTag = '';
-  var _tagKey = '';
   var _tags = <(String, int)>[];
 
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
-    _folderScroll.addListener(_onFolderScroll);
-    _categoryScroll.addListener(_onCategoryScroll);
     _filmService = widget.filmService;
     _ownsFilmService = _filmService == null;
     if (_filmService == null) {
@@ -214,8 +194,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   @override
   void dispose() {
     _scroll.dispose();
-    _folderScroll.dispose();
-    _categoryScroll.dispose();
     _search.dispose();
     final service = _filmService;
     _filmService = null;
@@ -230,8 +208,8 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     // 平常进库走缓存（见 [NvkuEntryCache]），第二次进不再全量重查。
     if (refresh) NvkuEntryCache.clear();
     await _loadFavorites();
-    // 文件夹先于作品加载：文件夹在首页最顶，作品随后；库打不开时
-    // 这里直接回空，不挡后面的作品加载。
+    // 影视库先开（库名标题/标签随后要用）；库打不开时这里直接
+    // 回空，不挡后面的作品加载。
     await _loadFilmLibrary();
     await _loadCategories();
     await _loadWorks(reset: true);
@@ -322,26 +300,10 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     });
   }
 
-  void _onFolderScroll() {
-    if (!_folderScroll.hasClients) return;
-    if (_folderScroll.position.pixels >=
-        _folderScroll.position.maxScrollExtent - 600) {
-      unawaited(_loadFolderWorks());
-    }
-  }
-
-  /// 分类页（未开文件夹）滑到底自动翻页，与首页 `_onScroll` 同款。
-  void _onCategoryScroll() {
-    if (!_categoryScroll.hasClients) return;
-    if (_categoryScroll.position.pixels >=
-        _categoryScroll.position.maxScrollExtent - 600) {
-      unawaited(_loadWorks());
-    }
-  }
-
-  /// 打开影视库服务并取库名标题、标签列表、类型文件夹（2026-11-24
-  /// 文件夹视图）：库打不开（没绑库/文件不存在）时标题留空、文件夹
-  /// 留空，不抛错、不挡后面的作品加载。
+  /// 打开影视库服务并取库名标题、标签列表：库打不开（没绑库/
+  /// 文件不存在）时标题留空、标签留空，不抛错、不挡后面的
+  /// 作品加载。（类型文件夹视图已随底部「分类」页签撤下，
+  /// 2026-11-26 用户令，本方法不再加载文件夹。）
   Future<void> _loadFilmLibrary() async {
     final service = _filmService;
     if (service == null) return;
@@ -355,12 +317,11 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       if (name.isNotEmpty) setState(() => _dbTitle = name);
     }
     await _loadTags();
-    await _loadFolders();
   }
 
   /// 标签列表：服务 open 之后调；严格结构读 video_tag 表，通用
-  /// 结构走 tagFacet。key 一起记下来，文件夹与视频列表筛选时传回。
-  /// 进库不重载：命中会话缓存直接用，不再跑 video_tag 全表聚合。
+  /// 结构走 tagFacet。进库不重载：命中会话缓存直接用，不再跑
+  /// video_tag 全表聚合。
   Future<void> _loadTags() async {
     final service = _filmService;
     if (service == null) return;
@@ -368,7 +329,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     if (cached != null) {
       if (!mounted) return;
       setState(() {
-        _tagKey = cached.key;
         _tags = cached.values;
       });
       return;
@@ -384,7 +344,6 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       );
       if (!mounted) return;
       setState(() {
-        _tagKey = tags.key;
         _tags = tags.values;
       });
     } catch (_) {
@@ -392,199 +351,9 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     }
   }
 
-  /// 类型文件夹：按 videos.type_name 分组计数；选了标签时计数只算
-  /// 带该标签的作品（与标签筛选 AND），反过来标签筛出的结果也就
-  /// 按 type_name 分得出文件夹（同一份计数）。封面随后按同一口径
-  /// 取（typeFolderCovers，第一条视频的 pic_url）；封面是装饰，
-  /// 取不到也不挡文件夹网格（那几张卡回落文件夹图标）。
-  /// 进库不重载：文件夹与封面按同一份 key 一起缓存，命中直接用，
-  /// 不再跑全表 GROUP BY 与 26 条取封面查询。
-  Future<void> _loadFolders() async {
-    final service = _filmService;
-    if (service == null) return;
-    final cached = NvkuEntryCache.folders(
-      _dbStamp,
-      videoTag: _videoTag,
-      genericTagKey: _tagKey,
-    );
-    if (cached != null) {
-      if (!mounted) return;
-      setState(() {
-        _folders = cached.folders;
-        _folderCovers = cached.covers;
-        _foldersLoading = false;
-        _foldersLoaded = true;
-      });
-      return;
-    }
-    setState(() => _foldersLoading = true);
-    // 2026-11-25 转圈死锁修复：主查询 typeFolders 原来不在 try 里，
-    // 一抛错 _foldersLoading 永久为真、页面永远转圈；现在抛错也复位，
-    // 界面按“暂无文件夹”走，不再卡死。
-    late final List<(String, int)> folders;
-    try {
-      folders = await service
-          .typeFolders(
-            videoTag: _videoTag,
-            genericTagKey: _tagKey,
-          )
-          .timeout(const Duration(seconds: 15));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _foldersLoading = false;
-        _foldersLoaded = true;
-      });
-      return;
-    }
-    var covers = const <String, String>{};
-    try {
-      covers = await service.typeFolderCovers(
-        typeNames: [for (final f in folders) f.$1],
-        videoTag: _videoTag,
-        genericTagKey: _tagKey,
-      );
-    } catch (_) {
-      covers = const <String, String>{};
-    }
-    NvkuEntryCache.putFolders(
-      _dbStamp,
-      videoTag: _videoTag,
-      genericTagKey: _tagKey,
-      folders: folders,
-      covers: covers,
-    );
-    if (!mounted) return;
-    setState(() {
-      _folders = folders;
-      _folderCovers = covers;
-      _foldersLoading = false;
-      _foldersLoaded = true;
-    });
-  }
-
-  /// 点文件夹：切到分类 tab，在那里看该类型的视频列表。
-  Future<void> _openFolder(String name) async {
-    setState(() => _tab = 1);
-    if (_openFolderName == name) return;
-    setState(() => _openFolderName = name);
-    await _loadFolderWorks(reset: true);
-  }
-
-  /// 退回文件夹网格（“全部”）：清掉已开文件夹与它的视频列表。
-  void _closeFolder() {
-    setState(() {
-      _openFolderName = null;
-      _folderWorks = [];
-      _folderTotal = -1;
-      _folderError = null;
-      _folderHasMore = false;
-    });
-  }
-
-  /// 文件夹里的视频分页：类型名 + 标签两筛（与文件夹计数同一口径）；
-  /// 点卡开 FilmDetailPage 直接播，不绕站点取流。
-  Future<void> _loadFolderWorks({bool reset = false}) async {
-    final service = _filmService;
-    final folder = _openFolderName;
-    if (service == null || folder == null) return;
-    if (reset) {
-      final generation = ++_folderGeneration;
-      setState(() {
-        _folderLoading = true;
-        _folderError = null;
-        _folderWorks = [];
-        _folderTotal = -1;
-        _folderHasMore = false;
-        _folderLoadingMore = false;
-      });
-      // 2026-11-25 转圈死锁修复：两条查询包 try/catch/finally，
-      // 15 秒超时，失败记 _folderError 并复位 _folderLoading，
-      // 界面显示重试、不再永远转圈；两条查询并跑，不再串行等两次。
-      // Future.wait（eagerError 关）：一条抛错也等另一条跑完，
-      // 不留未处理的异步错误。
-      try {
-        final results = await Future.wait<Object?>([
-          service
-              .listFilms(
-                typeName: folder,
-                videoTag: _videoTag,
-                genericTagKey: _tagKey,
-                offset: 0,
-                limit: _folderPageSize,
-              )
-              .timeout(const Duration(seconds: 15)),
-          service
-              .countFilms(
-                typeName: folder,
-                videoTag: _videoTag,
-                genericTagKey: _tagKey,
-              )
-              .timeout(const Duration(seconds: 15)),
-        ]);
-        final rows = results[0] as List<FilmLibraryEntry>;
-        final total = results[1] as int;
-        if (!mounted || generation != _folderGeneration) return;
-        setState(() {
-          _folderWorks = rows;
-          _folderTotal = total;
-          _folderLoading = false;
-          _folderHasMore = rows.length >= _folderPageSize;
-        });
-      } catch (e) {
-        if (!mounted || generation != _folderGeneration) return;
-        setState(() {
-          _folderLoading = false;
-          _folderError = e.toString();
-        });
-      }
-      return;
-    }
-    if (_folderLoadingMore || !_folderHasMore || _folderLoading) return;
-    final generation = _folderGeneration;
-    setState(() => _folderLoadingMore = true);
-    try {
-      final rows = await service
-          .listFilms(
-            typeName: folder,
-            videoTag: _videoTag,
-            genericTagKey: _tagKey,
-            offset: _folderWorks.length,
-            limit: _folderPageSize,
-          )
-          .timeout(const Duration(seconds: 15));
-      if (!mounted || generation != _folderGeneration) return;
-      setState(() {
-        _folderWorks = [..._folderWorks, ...rows];
-        _folderLoadingMore = false;
-        _folderHasMore = rows.length >= _folderPageSize;
-      });
-    } catch (_) {
-      if (!mounted || generation != _folderGeneration) return;
-      setState(() => _folderLoadingMore = false);
-    }
-  }
-
-  Future<void> _openFolderFilm(FilmLibraryEntry entry) async {
-    final service = _filmService;
-    if (service == null) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => FilmDetailPage(
-          entry: entry,
-          database:
-              widget.database ?? SqfliteActressDatabase.instance,
-          repository: widget.repository,
-          store: widget.store,
-          service: service,
-        ),
-      ),
-    );
-  }
-
   /// 标签底部弹窗（2026-11-24，与列表页同一只弹窗）：标签列表由
-  /// 服务查好；没标签时弹窗如实显示“暂无标签”。点标签后文件夹
-  /// 计数与已开文件夹的视频列表一起按新标签重算。
+  /// 服务查好；没标签时弹窗如实显示“暂无标签”。点标签后记下
+  /// 选中态（见 [_setVideoTag]）。
   Future<void> _openTagSheet() async {
     final picked = await showModalBottomSheet<String>(
       context: context,
@@ -606,11 +375,12 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     await _setVideoTag(picked);
   }
 
+  /// 选标签（2026-11-26 起只记选择态）：原先选标签是给已撤下的
+  /// 类型文件夹视图筛选计数用的；分类页签撤下后，标签行与弹窗
+  /// 照原 UI 保留，选中态仍如实显示在标签行上。
   Future<void> _setVideoTag(String tag) async {
     if (_videoTag == tag) return;
     setState(() => _videoTag = tag);
-    await _loadFolders();
-    if (_openFolderName != null) await _loadFolderWorks(reset: true);
   }
 
   /// 标签入口行：没选时只显示“标签”，选了显示“标签：<名>”高亮 +
@@ -620,7 +390,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
       child: Row(
         children: [
-          ActressNeonPill(
+          AvPill(
             key: const ValueKey('nvku-tag-open'),
             label: _videoTag.isEmpty ? '标签' : '标签：$_videoTag',
             selected: _videoTag.isNotEmpty,
@@ -628,7 +398,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           ),
           if (_videoTag.isNotEmpty) ...[
             const SizedBox(width: 8),
-            ActressNeonPill(
+            AvPill(
               key: const ValueKey('nvku-tag-clear'),
               label: '清除',
               selected: false,
@@ -872,17 +642,20 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
 
   void _submitSearch(String value) {
     final next = value.trim();
+    // 在线源激活（2026-11-26）：统一搜索框切到哪源搜哪源——词
+    // 下传给在线视图按该源重搜，不碰女优库的作品列表。
+    if (_onlineId.isNotEmpty) {
+      setState(() => _onlineQuery = next);
+      return;
+    }
     // 女优页签（2026-11-21）：这条搜索框由演员列表页接管（同一个
     // controller，列表自己 debounce 搜索），这里不再拿它搜作品，
     // 免得把「首页」那套作品列表也一起刷一遍。
-    if (_tab == 2) {
+    if (_tab == 1) {
       setState(() {});
       return;
     }
     if (next == _query) return;
-    // 搜的是全库作品，不是文件夹里的：先退回文件夹网格，搜完再看
-    // 搜索结果（文件夹计数不认搜索词，搜的时候网格先藏起来）。
-    if (_openFolderName != null) _closeFolder();
     setState(() => _query = next);
     unawaited(_loadWorks(reset: true));
   }
@@ -912,31 +685,181 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
+  /// 管理弹层（2026-11-26 16:55 用户令「设置不能少」）：顶栏
+  /// 管理钮打开，挂齐数据库管理整套入口——数据库管理页（导
+  /// 入 .sql / 表格更新 / 导出 / 备份恢复 / 删除数据库都在
+  /// 里面）、影片库、重新加载数据库。女优列表页齿轮里的设
+  /// 置弹窗照旧保留，两处入口并行不冲突。管理页回来后 bump
+  /// 库代次重建女优列表页，导入/换库结果立刻可见。
+  Future<void> _openManageSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AvStyle.bg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text(
+                '管理',
+                style: TextStyle(
+                  color: AvStyle.text,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            _manageRow(
+              icon: Icons.storage_rounded,
+              title: '数据库管理',
+              subtitle: '导入 .sql、表格更新、导出、备份恢复、删除数据库',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                unawaited(_openDbManagePage());
+              },
+            ),
+            _manageRow(
+              icon: Icons.video_library_rounded,
+              title: '影片库',
+              subtitle: '浏览绑定的库文件、把作品追加进女优库',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _openFilmLibrary();
+              },
+            ),
+            _manageRow(
+              icon: Icons.refresh_rounded,
+              title: '重新加载数据库',
+              subtitle: '库文件换了或刚导入完，点这里重读',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                unawaited(_reloadDatabase());
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _manageRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: AvStyle.accent),
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: AvStyle.text,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(color: AvStyle.dim, fontSize: 12),
+      ),
+      onTap: onTap,
+    );
+  }
+
+  /// 数据库管理页（与女优列表页齿轮里同一个页、同一套回调
+  /// 口径）：导完/恢复/删库后页面自己会调 reloadDatabase，
+  /// 回到本页再 bump 代次让女优列表重读。
+  Future<void> _openDbManagePage() async {
+    final db = widget.database ?? SqfliteActressDatabase.instance;
+    final dbPath = await actressWorkingDbPath();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ActressDbManagePage(
+          dbPath: dbPath,
+          closeDatabase: db.close,
+          reloadDatabase: () async {
+            await db.reloadIfChanged();
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _dbEpoch++);
+  }
+
+  /// 重新加载数据库（顶栏管理弹层直达）：库文件戳变了才真
+  /// 重读，结果用提示条如实报（已重载/没变化/失败原因）。
+  Future<void> _reloadDatabase() async {
+    final db = widget.database ?? SqfliteActressDatabase.instance;
+    final result = await db.reloadIfChanged();
+    if (!mounted) return;
+    if (result.error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(actressReloadErrorText(result.error!))),
+      );
+      return;
+    }
+    setState(() => _dbEpoch++);
+    unawaited(_boot(refresh: true));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(result.reloaded ? '已重新加载数据库' : '数据库没有变化'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final online = _onlineId.isNotEmpty;
     return Scaffold(
-      backgroundColor: Neon.bg,
+      // 2026-11-26 照 AvPlay 截图改浅色：白底（本模块三屏统一）。
+      backgroundColor: AvStyle.bg,
       body: SafeArea(
         bottom: false,
         child: Column(
           children: [
             _topBar(),
+            _sourceBar(),
             Expanded(
-              // 进库不重载（内层）：四个页签用 IndexedStack 常驻，切走
+              // 进库不重载（内层）：三个页签用 IndexedStack 常驻，切走
               // 再回来状态还在——女优列表页不再每次重跑 _bootstrap，
-              // 首页/分类的滚动位置也保住。女优 tab 第一次点到时才建
+              // 首页的滚动位置也保住。女优 tab 第一次点到时才建
               // （_actressTabVisited），不提前跑它的开库流程。
-              child: IndexedStack(
-                index: _tab,
-                children: [
-                  _homeTab(),
-                  _categoryTab(),
-                  _actressTabVisited
-                      ? _actressTab()
-                      : const SizedBox.shrink(),
-                  _favoriteTab(),
-                ],
-              ),
+              // 切到在线源时换成在线视图（女优库页签状态在页面
+              // State 里，切回来不重查）。
+              child: _onlineId == 'javdb'
+                  ? JavdbSourceView(
+                      key: const ValueKey('actress-online-javdb'),
+                      initialQuery: _onlineQuery,
+                      repository: widget.repository,
+                      store: widget.store,
+                    )
+                  : online
+                  ? ActressOnlineSourceView(
+                      key: ValueKey('actress-online-$_onlineId'),
+                      source: actressOnlineSourceById(_onlineId)!,
+                      repository: widget.repository,
+                      store: widget.store,
+                      query: _onlineQuery,
+                      refreshTick: _onlineRefreshTick,
+                    )
+                  : IndexedStack(
+                      index: _tab,
+                      children: [
+                        _homeTab(),
+                        _actressTabVisited
+                            ? _actressTab()
+                            : const SizedBox.shrink(),
+                        _favoriteTab(),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -945,26 +868,69 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
-  /// 底部四页签切换：点到女优 tab 时记下已访问（下次起常驻）。
+  /// 底部三页签切换：点到女优 tab 时记下已访问（下次起常驻）。
   void _selectTab(int index) {
     setState(() {
-      if (index == 2) _actressTabVisited = true;
+      if (index == 1) _actressTabVisited = true;
       _tab = index;
     });
   }
 
-  /// 顶栏（2026-11-22 霓虹化：照活树改版走霓虹配色——深紫底 +
-  /// 紫底边，与 actressNeonAppBar 同一套色；不改成真 AppBar，
-  /// 搜索框本来就嵌在顶栏里、showTitle=false 内嵌时宿主已有
-  /// 自己的顶栏，再套一层 AppBar 会叠两条栏）。
+  /// 源切换条（2026-11-26 用户令）：女优库为首段默认，其后是
+  /// JavDB 接口演员库（17:18 令挨着 who's 加）、123AV、PH；
+  /// 只进源切换，不动底部导航结构。
+  /// 数据库管理/导入入口：女优列表页齿轮弹窗里照旧保留，
+  /// 顶栏另加管理钮弹层直达（2026-11-26 16:55「设置不能
+  /// 少」），两处并行。
+  Widget _sourceBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+      child: Row(
+        children: [
+          AvPill(
+            key: const ValueKey('actress-source-nvku'),
+            label: '女优库',
+            selected: _onlineId.isEmpty,
+            onTap: () => _selectSource(''),
+          ),
+          const SizedBox(width: 8),
+          AvPill(
+            key: const ValueKey('actress-source-javdb'),
+            label: 'JavDB',
+            selected: _onlineId == 'javdb',
+            onTap: () => _selectSource('javdb'),
+          ),
+          for (final source in kActressOnlineSources) ...[
+            const SizedBox(width: 8),
+            AvPill(
+              key: ValueKey('actress-source-${source.id}'),
+              label: source.label,
+              selected: _onlineId == source.id,
+              onTap: () => _selectSource(source.id),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 源切换：女优库（本地库直读 + py 版 who's 链）与两个在线
+  /// 源之间切；切源不清搜索框，在线源的词单独记在 [_onlineQuery]。
+  void _selectSource(String id) {
+    if (_onlineId == id) return;
+    setState(() => _onlineId = id);
+  }
+
+  /// 顶栏（2026-11-26 照 AvPlay 截图改浅色：白底 + 浅灰底边，
+  /// 搜索框浅灰填充；结构不变——搜索框本来就嵌在顶栏里、
+  /// showTitle=false 内嵌时宿主已有自己的顶栏，再套一层
+  /// AppBar 会叠两条栏）。
   Widget _topBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
-      decoration: BoxDecoration(
-        color: Neon.bg,
-        border: Border(
-          bottom: BorderSide(color: Neon.violet.withValues(alpha: .55)),
-        ),
+      decoration: const BoxDecoration(
+        color: AvStyle.bg,
+        border: Border(bottom: BorderSide(color: AvStyle.border)),
       ),
       child: Column(
         children: [
@@ -984,7 +950,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: Neon.text,
+                    color: AvStyle.text,
                     fontSize: 17,
                     fontWeight: FontWeight.w800,
                     letterSpacing: .5,
@@ -995,13 +961,17 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Neon.surface,
+                  color: AvStyle.accentSoft,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  _offline ? '本地库' : '在线 + 本地',
+                  _onlineId.isNotEmpty
+                      ? actressOnlineSourceById(_onlineId)!.label
+                      : _offline
+                      ? '本地库'
+                      : '在线 + 本地',
                   style: const TextStyle(
-                    color: Neon.textDim,
+                    color: AvStyle.accent,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1011,8 +981,27 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               IconButton(
                 tooltip: '刷新',
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.refresh_rounded, color: Neon.textDim, size: 20),
-                onPressed: () => unawaited(_boot(refresh: true)),
+                icon: const Icon(Icons.refresh_rounded, color: AvStyle.dim, size: 20),
+                onPressed: () {
+                  // 在线源激活时刷新只重拉在线列表；女优库模式
+                  // 照旧整页刷新（清会话缓存重查）。
+                  if (_onlineId.isNotEmpty) {
+                    setState(() => _onlineRefreshTick++);
+                  } else {
+                    unawaited(_boot(refresh: true));
+                  }
+                },
+              ),
+              IconButton(
+                key: const ValueKey('nvku-manage-open'),
+                tooltip: '管理',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(
+                  Icons.settings_outlined,
+                  color: AvStyle.dim,
+                  size: 20,
+                ),
+                onPressed: () => unawaited(_openManageSheet()),
               ),
             ],
           ),
@@ -1030,7 +1019,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                   const Icon(
                     Icons.folder_rounded,
                     size: 13,
-                    color: Neon.textDim,
+                    color: AvStyle.dim,
                   ),
                   const SizedBox(width: 4),
                   Flexible(
@@ -1039,7 +1028,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Neon.textDim,
+                        color: AvStyle.dim,
                         fontSize: 11,
                       ),
                     ),
@@ -1055,19 +1044,25 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                   controller: _search,
                   onSubmitted: _submitSearch,
                   textInputAction: TextInputAction.search,
-                  style: const TextStyle(color: Neon.text, fontSize: 15),
+                  style: const TextStyle(color: AvStyle.text, fontSize: 15),
                   decoration: InputDecoration(
                     isDense: true,
-                    hintText: _tab == 2 ? '搜女优名 / 番号' : '搜番号 / 片名 / 女优',
-                    hintStyle: const TextStyle(color: Neon.textDim, fontSize: 14),
-                    prefixIcon: const Icon(Icons.search, color: Neon.textDim, size: 20),
+                    hintText: _onlineId.isNotEmpty
+                        ? '在本源搜片名 / 番号'
+                        : _tab == 1
+                        ? '搜女优名 / 番号'
+                        : '搜索 番号、影片、演员',
+                    hintStyle: const TextStyle(color: AvStyle.dim, fontSize: 14),
+                    prefixIcon: const Icon(Icons.search, color: AvStyle.dim, size: 20),
                     suffixIcon: _search.text.isEmpty
                         ? null
                         : IconButton(
-                            icon: const Icon(Icons.close, color: Neon.textDim, size: 18),
+                            icon: const Icon(Icons.close, color: AvStyle.dim, size: 18),
                             onPressed: () {
                               _search.clear();
-                              if (_tab == 2) {
+                              if (_onlineId.isNotEmpty) {
+                                setState(() => _onlineQuery = '');
+                              } else if (_tab == 1) {
                                 setState(() {});
                               } else {
                                 _submitSearch('');
@@ -1075,23 +1070,23 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                             },
                           ),
                     filled: true,
-                    fillColor: Neon.surface,
+                    fillColor: AvStyle.fieldFill,
                     contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: Neon.violet.withValues(alpha: .55),
+                      borderSide: const BorderSide(
+                        color: AvStyle.fieldFill,
                       ),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Neon.cyan),
+                      borderSide: const BorderSide(color: AvStyle.accent),
                     ),
                   ),
                 ),
               ),
               const SizedBox(width: 8),
-              ActressNeonPill(
+              AvPill(
                 key: const ValueKey('nvku-open-film-library'),
                 label: '影片库',
                 selected: false,
@@ -1105,22 +1100,20 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
-  /// 底部四页签（2026-11-22：保留主树首页 / 分类 / 女优 / 收藏
-  /// 四页签，不换成活树的五页签胶囊栏；只做霓虹样式适配——深紫底
-  /// + 紫顶边，选中态走霓虹青、未选中走次字色）。
+  /// 底部三页签（2026-11-26 用户令删「分类」：原四页签里的
+  /// 分类项打开的是类型文件夹视图，随该项一并撤下；其余三项
+  /// 顺移补齐、不留空位。同日照 AvPlay 截图改浅色：白底 +
+  /// 浅灰顶边，选中态酒红、未选中灰）。
   Widget _bottomTabs() {
     const items = [
       (Icons.grid_view_rounded, '首页'),
-      (Icons.category_outlined, '分类'),
       (Icons.face_retouching_natural, '女优'),
       (Icons.star_border_rounded, '收藏'),
     ];
     return Container(
-      decoration: BoxDecoration(
-        color: Neon.bg.withValues(alpha: .95),
-        border: Border(
-          top: BorderSide(color: Neon.violet.withValues(alpha: .5)),
-        ),
+      decoration: const BoxDecoration(
+        color: AvStyle.bg,
+        border: Border(top: BorderSide(color: AvStyle.border)),
       ),
       child: SafeArea(
         top: false,
@@ -1129,6 +1122,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
             for (var i = 0; i < items.length; i++)
               Expanded(
                 child: InkWell(
+                  key: ValueKey('nvku-tab-$i'),
                   onTap: () => _selectTab(i),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 9),
@@ -1138,7 +1132,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                         Icon(
                           items[i].$1,
                           size: 21,
-                          color: _tab == i ? Neon.cyan : Neon.textDim,
+                          color: _tab == i ? AvStyle.accent : AvStyle.dim,
                         ),
                         const SizedBox(height: 2),
                         Text(
@@ -1148,7 +1142,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
                             fontWeight: _tab == i
                                 ? FontWeight.w700
                                 : FontWeight.w500,
-                            color: _tab == i ? Neon.cyan : Neon.textDim,
+                            color: _tab == i ? AvStyle.accent : AvStyle.dim,
                           ),
                         ),
                       ],
@@ -1172,42 +1166,133 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           Text(
             title,
             style: const TextStyle(
-              color: Neon.text,
-              fontSize: 15,
+              color: AvStyle.text,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
             ),
           ),
           const Spacer(),
-          Text(note, style: const TextStyle(color: Neon.textDim, fontSize: 12)),
+          Text(note, style: const TextStyle(color: AvStyle.dim, fontSize: 12)),
         ],
       ),
     );
   }
 
-  /// 文件夹区右上角的说明：类型数 + 总部数；还没查出来时如实写
-  /// 加载中，库里没有 type_name 维度时如实写没有文件夹。
-  /// （2026-11-25：首页不再放文件夹网格，标题与汇总改到分类页；
-  /// 首页只留标签筛选行，见 _homeTab。）
-  String _foldersSummary() {
-    if (!_foldersLoaded) return '加载中…';
-    if (_folders.isEmpty) return '这个库没有类型文件夹';
-    final total = _folders.fold<int>(0, (sum, f) => sum + f.$2);
-    return '${_folders.length} 个类型 · 共 $total 部';
+  /// 快捷入口行（2026-11-26 照 AvPlay 首页入口排的摆法）：
+  /// 白色圆角方块（浅边）里图标在上、文字在下，一排四个：
+  /// 全部 / 女优 / 排行榜 / 收藏。AvPlay 那排第四个是「磁力」，
+  /// 我们没有磁力功能，不编——换成排行榜（与女优页签内工具栏
+  /// 奖杯钮打开的是同一个页）；「全部」回首页最新上架。
+  Widget _entranceRow() {
+    Widget item({
+      required String keyName,
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: InkWell(
+          key: ValueKey(keyName),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: AvStyle.bg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AvStyle.border),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0D000000),
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: AvStyle.text, size: 23),
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  style: const TextStyle(color: AvStyle.text, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 6, 2, 2),
+      child: Row(
+        children: [
+          item(
+            keyName: 'nvku-entrance-all',
+            icon: Icons.grid_view_rounded,
+            label: '全部',
+            onTap: () {
+              _selectTab(0);
+              if (_category != 'new') _pickCategory('new');
+            },
+          ),
+          const SizedBox(width: 10),
+          item(
+            keyName: 'nvku-entrance-actress',
+            icon: Icons.face_retouching_natural_outlined,
+            label: '女优',
+            onTap: () => _selectTab(1),
+          ),
+          const SizedBox(width: 10),
+          item(
+            keyName: 'nvku-entrance-ranking',
+            icon: Icons.emoji_events_outlined,
+            label: '排行榜',
+            onTap: _openRanking,
+          ),
+          const SizedBox(width: 10),
+          item(
+            keyName: 'nvku-entrance-fav',
+            icon: Icons.star_border_rounded,
+            label: '收藏',
+            onTap: () => _selectTab(2),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 排行榜页（演员排行）：与女优列表页工具栏的奖杯钮同一个页、
+  /// 同一套构造参数。
+  void _openRanking() {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ActressRankingPage(
+          repository: widget.repository,
+          store: widget.store,
+          database: widget.database ?? SqfliteActressDatabase.instance,
+        ),
+      ),
+    );
   }
 
   Widget _homeTab() {
     final cats = _allCategories();
     return RefreshIndicator(
-      color: _pk,
-      backgroundColor: Neon.surface,
+      color: AvStyle.accent,
+      backgroundColor: AvStyle.bg,
       onRefresh: () => _boot(refresh: true),
       child: ListView(
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
         children: [
-          // 2026-11-25 分类/首页归位：类型文件夹网格只在分类页，
-          // 首页只剩分类胶囊 + 作品（原来放首页最顶，用户报颠倒了）。
-          // 标签筛选行留首页（筛的是作品列表，与文件夹无关）。
+          // 快捷入口行（2026-11-26 照 AvPlay 首页入口排的摆法）：
+          // 女优 / 排行榜 / 收藏，图标在上、文字在下。
+          if (_query.isEmpty) _entranceRow(),
+          // 首页只有分类胶囊 + 作品；标签筛选行留首页（原分类
+          // 页签已于 2026-11-26 随底部导航删项一并撤下）。
           if (_query.isEmpty) _buildTagRow(),
           // 2026-11-22 用户令「分类不是卡片」：分类改成一条横向胶囊
           // 标签，置顶放在作品前面（原来是排在作品下面的两列卡片
@@ -1218,13 +1303,15 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
             ),
           _sectionTitle(
-            _query.isEmpty ? _currentCategoryLabel() : '搜索结果',
-            _query.isEmpty ? _worksSubtitle : _query,
+            _query.isEmpty ? _currentCategoryLabel() : '“$_query”的搜索结果',
+            _query.isEmpty ? _worksSubtitle : '',
           ),
           if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 40),
-              child: Center(child: CircularProgressIndicator(color: _pk)),
+              child: Center(
+                child: CircularProgressIndicator(color: AvStyle.accent),
+              ),
             )
           else if (_works.isEmpty)
             Padding(
@@ -1232,7 +1319,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
               child: Center(
                 child: Text(
                   _query.isEmpty ? '暂时取不到作品' : '没有找到“$_query”',
-                  style: const TextStyle(color: Neon.textDim),
+                  style: const TextStyle(color: AvStyle.dim),
                 ),
               ),
             )
@@ -1241,7 +1328,9 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           if (_loadingMore)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(child: CircularProgressIndicator(color: _pk)),
+              child: Center(
+                child: CircularProgressIndicator(color: AvStyle.accent),
+              ),
             ),
         ],
       ),
@@ -1265,10 +1354,9 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
   String get _worksSubtitle =>
       _category == whosLocalRankCategory ? '榜单顺序' : '按发行日期';
 
-  /// 分类胶囊条（首页与分类页共用）：横向滚动的一排霓虹药丸钮，
-  /// 选中项用紫→青渐变 + 辉光，不占版面、不像卡片。
-  /// （2026-11-22 照活树改版：ChoiceChip 换成 ActressNeonPill；
-  /// 横向 ListView 里药丸钮会被拉满 46 高，外面套 Center 定高。）
+  /// 分类胶囊条（首页共用）：横向滚动的一排浅色胶囊
+  /// （2026-11-26 照 AvPlay 截图：选中浅粉底 + 酒红字），
+  /// 横向 ListView 里胶囊会被拉满 46 高，外面套 Center 定高。
   Widget _categoryChips(
     List<CatalogCategory> cats, {
     EdgeInsets padding = const EdgeInsets.fromLTRB(12, 8, 12, 6),
@@ -1284,7 +1372,7 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
           final cat = cats[index];
           final on = _category == cat.id;
           return Center(
-            child: ActressNeonPill(
+            child: AvPill(
               key: ValueKey('nvku-chip-${cat.id}'),
               label: cat.name,
               selected: on,
@@ -1296,358 +1384,80 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
     );
   }
 
-  Widget _categoryTab() {
-    // 2026-11-24 文件夹视图：分类 tab 的内容就是类型文件夹网格
-    // （一级分类，照百合截图）；点文件夹进该类型的视频列表，
-    // “‹ 全部类型”退回网格。搜的时候显示搜索结果（原来的作品
-    // 网格），不搜时只看文件夹——文件夹计数不认搜索词。
-    if (_query.isNotEmpty) {
-      final cats = _allCategories();
-      return Column(
-        children: [
-          if (cats.isNotEmpty) _categoryChips(cats),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: _pk))
-                : _works.isEmpty
-                ? Center(
-                    child: Text(
-                      '没有找到“$_query”',
-                      style: const TextStyle(color: Neon.textDim),
-                    ),
-                  )
-                : GridView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
-                    itemCount: _works.length + (_hasMore ? 1 : 0),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 130,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 10,
-                          childAspectRatio: 0.56,
-                        ),
-                    itemBuilder: (context, index) {
-                      if (index >= _works.length) {
-                        return const Center(
-                          child: CircularProgressIndicator(color: _pk),
-                        );
-                      }
-                      return _workCard(_works[index]);
-                    },
-                  ),
-          ),
-        ],
-      );
-    }
-    final open = _openFolderName;
-    if (open != null) {
-      return Column(
-        children: [
-          _buildTagRow(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            child: Row(
-              children: [
-                ActressNeonPill(
-                  key: const ValueKey('folder-back-all'),
-                  label: '‹ 全部类型',
-                  selected: false,
-                  onTap: _closeFolder,
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    _folderError != null
-                        ? '$open · 加载失败'
-                        : _folderTotal < 0
-                        ? '$open · 加载中…'
-                        : '$open · 共$_folderTotal条',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Neon.text,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _folderLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: _pk),
-                  )
-                : _folderError != null
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          '加载失败，点下面重试',
-                          style: TextStyle(color: Neon.textDim),
-                        ),
-                        const SizedBox(height: 12),
-                        ActressNeonPill(
-                          key: const ValueKey('folder-retry'),
-                          label: '重试',
-                          selected: false,
-                          onTap: () => unawaited(
-                            _loadFolderWorks(reset: true),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : _folderWorks.isEmpty
-                ? const Center(
-                    child: Text(
-                      '这个类型里没有符合条件的作品',
-                      style: TextStyle(color: Neon.textDim),
-                    ),
-                  )
-                : GridView.builder(
-                    controller: _folderScroll,
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
-                    itemCount:
-                        _folderWorks.length + (_folderHasMore ? 1 : 0),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 130,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 10,
-                          childAspectRatio: 0.56,
-                        ),
-                    itemBuilder: (context, index) {
-                      if (index >= _folderWorks.length) {
-                        return const Center(
-                          child: CircularProgressIndicator(color: _pk),
-                        );
-                      }
-                      final entry = _folderWorks[index];
-                      return ActressFolderVideoCard(
-                        entry: entry,
-                        onTap: () => unawaited(_openFolderFilm(entry)),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      );
-    }
-    // 2026-11-25 分类/首页归位：分类页未开文件夹时，文件夹网格下面
-    // 恢复胶囊 + 作品网格（改动前只有文件夹网格，用户报颠倒了）。
-    final cats = _allCategories();
-    return Column(
-      children: [
-        _buildTagRow(),
-        Expanded(
-          child: _foldersLoading
-              ? const Center(child: CircularProgressIndicator(color: _pk))
-              : _folders.isEmpty && _foldersLoaded
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        '暂无文件夹：这个数据库没有 type_name 分类',
-                        style: TextStyle(color: Neon.textDim),
-                      ),
-                      const SizedBox(height: 12),
-                      ActressNeonPill(
-                        key: const ValueKey('folder-empty-go-home'),
-                        label: '去首页看作品',
-                        selected: false,
-                        onTap: () => setState(() => _tab = 0),
-                      ),
-                    ],
-                  ),
-                )
-              : SingleChildScrollView(
-                  controller: _categoryScroll,
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 2026-11-25：文件夹标题与汇总从首页搬到分类页
-                      //（原来在首页最顶，用户报颠倒了）。
-                      _sectionTitle('类型文件夹', _foldersSummary()),
-                      ActressTypeFolderGrid(
-                        folders: _folders,
-                        covers: _folderCovers,
-                        onOpen: (name) => unawaited(_openFolder(name)),
-                      ),
-                      if (cats.isNotEmpty)
-                        _categoryChips(
-                          cats,
-                          padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
-                        ),
-                      _sectionTitle(
-                        _currentCategoryLabel(),
-                        _worksSubtitle,
-                      ),
-                      if (_loading)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 40),
-                          child: Center(
-                            child: CircularProgressIndicator(color: _pk),
-                          ),
-                        )
-                      else if (_works.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 40),
-                          child: Center(
-                            child: Text(
-                              '暂时取不到作品',
-                              style: TextStyle(color: Neon.textDim),
-                            ),
-                          ),
-                        )
-                      else
-                        _workGrid(_works, height: null),
-                    ],
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
+  /// 作品网格（2026-11-26 照 AvPlay 截图改三列竖版卡，
+  /// 卡片结构见 [AvWorkCard]）。
   Widget _workGrid(List<Drama> works, {double? height}) {
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: works.length,
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 130,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.56,
-      ),
+      gridDelegate: avWorkGridDelegate,
       itemBuilder: (context, index) => _workCard(works[index]),
     );
   }
 
+  /// 作品卡（2026-11-26 照 AvPlay 列表项摆法）：竖版封面 +
+  /// 标题一行 + 番号酒红（本地库兜底来的带绿字「有资源」、
+  /// 分类带字幕的带橙字「字幕」）+ 日期灰字。列表卡照截图
+  /// 不放中央播放键（详情页海报播放键不动）；收藏星保留在
+  /// 封面右上角（原有功能）。点卡行为不变（走 _play）。
   Widget _workCard(Drama drama) {
     final code = drama.tags.isNotEmpty ? drama.tags.first : '';
     final fav = _isFavorite(drama.id);
-    return InkWell(
+    return AvWorkCard(
       key: ValueKey('nvku-work-${drama.id}'),
+      cover: drama.cover,
+      title: drama.title,
+      code: code,
+      date: drama.onlineDate,
+      hasResource: isWhosLocalDrama(drama),
+      hasSubtitle:
+          drama.category.contains('字幕') ||
+          drama.tags.any((tag) => tag.contains('字幕')),
+      hasHd:
+          drama.category.contains('高清') ||
+          drama.tags.any((tag) => tag.contains('高清')),
       onTap: () => unawaited(_play(drama)),
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Container(
-              decoration: actressNeonCardDecoration(radius: 10),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      color: Neon.surface,
-                      width: double.infinity,
-                      height: double.infinity,
-                      child: drama.cover.isEmpty
-                          ? Center(
-                              child: Text(
-                                code.isEmpty ? 'NV' : code,
-                                style: const TextStyle(
-                                  color: Neon.textDim,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            )
-                          : Image.network(
-                              drama.cover,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) =>
-                                  const SizedBox.shrink(),
-                            ),
-                    ),
-                  ),
-                  // 海报中央透明播放键（2026-11-25）：纯装饰不接手势，
-                  // 点按仍由外层 InkWell 接管，走 _play（点卡行为不变）。
-                  const Positioned.fill(
-                    child: IgnorePointer(
-                      child: Center(child: ActressPosterPlayKey()),
-                    ),
-                  ),
-                  Positioned(
-                    right: 2,
-                    top: 2,
-                    child: GestureDetector(
-                      onTap: () => unawaited(_toggleFavorite(drama)),
-                      child: Container(
-                        padding: const EdgeInsets.all(3),
-                        decoration: const BoxDecoration(
-                          color: Color(0xCC000000),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          fav ? Icons.star : Icons.star_border,
-                          size: 15,
-                          color: fav ? Neon.pink : Neon.textDim,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (drama.onlineDate.isNotEmpty)
-                    Positioned(
-                      left: 4,
-                      bottom: 4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xB3000000),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          drama.onlineDate,
-                          style: const TextStyle(
-                            color: Neon.text,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+      topRight: GestureDetector(
+        onTap: () => unawaited(_toggleFavorite(drama)),
+        child: Container(
+          padding: const EdgeInsets.all(3),
+          decoration: const BoxDecoration(
+            color: Color(0x66000000),
+            shape: BoxShape.circle,
           ),
-          const SizedBox(height: 5),
-          Text(
-            drama.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Neon.text,
-              fontSize: 12,
-              height: 1.3,
-            ),
+          child: Icon(
+            fav ? Icons.star : Icons.star_border,
+            size: 15,
+            color: fav ? AvStyle.accentSoft : Colors.white,
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _actressTab() {
-    return ActressListPage(
-      key: const ValueKey('nvku-actress-list'),
-      repository: widget.repository,
-      store: widget.store,
-      database: widget.database,
-      showTitle: false,
-      // 2026-11-21 用户令：女优页签里不许再冒第二个搜索框——搜索只用
-      // 顶栏那一条，本页监听同一个输入框（搜索框置顶、不随列表滚）。
-      externalSearch: _search,
+    // 2026-11-26 照 AvPlay 截图改浅色：女优列表页本体走
+    // colorScheme，把浅色主题只套在这一页签子树上，本模块
+    // 三屏观感统一（它自带的深色霓虹小部件不在内嵌路径上）。
+    return Theme(
+      data: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AvStyle.accent,
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: AvStyle.bg,
+      ),
+      child: ActressListPage(
+        key: ValueKey('nvku-actress-list-$_dbEpoch'),
+        repository: widget.repository,
+        store: widget.store,
+        database: widget.database,
+        showTitle: false,
+        // 2026-11-21 用户令：女优页签里不许再冒第二个搜索框——搜索只用
+        // 顶栏那一条，本页监听同一个输入框（搜索框置顶、不随列表滚）。
+        externalSearch: _search,
+      ),
     );
   }
 
@@ -1656,19 +1466,14 @@ class _ActressNvkuPageState extends State<ActressNvkuPage> {
       return const Center(
         child: Text(
           '还没有收藏，点卡片右上角的星',
-          style: TextStyle(color: Neon.textDim),
+          style: TextStyle(color: AvStyle.dim),
         ),
       );
     }
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
       itemCount: _favorites.length,
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 130,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.56,
-      ),
+      gridDelegate: avWorkGridDelegate,
       itemBuilder: (context, index) {
         final row = _favorites[index];
         return _workCard(

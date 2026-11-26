@@ -1,12 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import 'actress_av_style.dart';
 import 'actress_database.dart';
 import 'actress_film_library.dart';
 import 'actress_json_fallback.dart';
 import 'actress_models.dart';
-import 'actress_neon.dart';
+import 'actress_online_detail.dart';
+import 'actress_online_parse.dart';
+import 'actress_online_sources.dart';
 import 'actress_tag_sheet.dart';
 import 'actress_widgets.dart';
 import 'whos_json_index.dart';
@@ -16,11 +20,11 @@ import '../detail_screen.dart';
 import '../feed_playability.dart';
 import '../local_store.dart';
 import '../models.dart';
-import '../widgets.dart';
 
 /// 人物详情页：头像、名、标签、作品数 + 作品卡片网格。
 ///
-/// - 作品一律视频卡片（DramaTile，与站内卡片同一形态）：有封面显示
+/// - 作品一律视频卡片（2026-11-26 起照 AvPlay 详情页摆法走
+///   本模块的 AvWorkCard：封面 + 标题/番号/日期）：有封面显示
 ///   封面 + 标题/番号，无封面用占位卡片 + 番号，点卡片才播；
 /// - 作品与首选地址以数据库里为准（2026-11-22 用户令：女优库
 ///   全部播放只走数据库里的数据）：只读库，不走跨站现取、不走
@@ -118,6 +122,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   /// 选了分类也不变（只算入库总数，不受筛选影响）；json 没补上之前
   /// 先显示数据库数，补上后再加。0 表示还没算出来，用人物行的数兜底。
   var _headerTotal = 0;
+
+  /// 作品网格列数切换（2026-11-26 照 AvPlay 详情页右上宫格
+  /// 图标）：false = 三列（默认），true = 两列大卡。
+  var _worksWide = false;
 
   /// 分类筛选：null = 全部；其余为该女优作品里实际存在的分类名。
   /// 头顶“作品 N 部”总数不受筛选影响；进出详情页即重置（状态只
@@ -733,13 +741,15 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     return null;
   }
 
-  /// 点卡秒进详情页播放（2026-11-24 用户令）：
+  /// 点卡秒进详情页播放（2026-11-24 用户令，2026-11-26 扩源）：
   /// 点卡即推 DetailScreen、首条库地址立即播，不等竞速；
-  /// 库里地址与 MissAV 的竞速放后台跑，赢家进会话缓存
-  /// （下次点同一番号直接用已验活地址开页）。
-  /// 首条地址死了不用重进：DetailScreen 的换线回调
-  /// （nextLineOnExhausted）按“库里下一条 → 竞速赢家”顺序
-  /// 自动换线；报错屏点“重试”走 onRetryProbe 重探。
+  /// 四路竞速（库里地址 + who's py 链 + 123AV + PH）放后台
+  /// 跑，全部验活线路按到达顺序进换线链、赢家进会话缓存
+  /// （下次点同一番号直接用已验活地址开页）。首条地址死了
+  /// 不用重进：DetailScreen 的换线回调（nextLineOnExhausted）
+  /// 按“库里下一条 → 已验活线路到达顺序”自动换线；报错屏
+  /// 点“重试”走 onRetryProbe。库里一条地址都没有时才等竞
+  /// 速出第一条验活线路，全灭报「暂无可播线路」。
   /// 以前是等竞速赢了才开页（A 路 3 条 × 13 秒 + B 路 43 秒，
   /// 最坏开页要 40 多秒），现在开页不等竞速。
   Future<void> _playWork(ActressWork work) async {
@@ -774,9 +784,10 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     // setState 进 _fallbackEntries，进页后点卡时基本已在。
     // 池子还没建好（刚进页就点卡）最多等 2 秒，不再等整个池子
     // （第二段多库 LIKE 扫要几分钟；原来等 15 秒）。
-    // 2026-11-22 用户令（只走数据库）：点卡只试库里存的地址，不再
-    // 往下探内置 json/m3u、也不再跨站探活；库里没有这个番号、或库里
-    // 的地址全都验不活，就报“库里暂无播放地址”。
+    // 2026-11-26 用户令（覆盖 2026-11-22“只走数据库”）：库里
+    // 地址仍是第一段与首播默认；库里没有这个番号时不再直接
+    // 拒绝，改走在线竞速找线路（见下方 firstDetail 为空的
+    // 分支）；库里地址全灭时换线链继续出在线验活线路。
     // 库里这个人名下、番号相同的地址行（_fallbackEntries 现在只有 DB 行）。
     // 2026-11-22 修复：作品侧 codeKey 是库里的 vod_id 原样（rki-6042），
     // 兜底条目的 codeKey 是归一化番号（RKI6042）——直接比字符串永远
@@ -816,33 +827,28 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         }
       }
     }
-    if (dbRows.isEmpty) {
-      // 库里没有可播地址（没有这部、没有直链）：只报这一句，
-      // 不落回内置、不探活、不弹去搜索。不进详情页。
-      // 2026-11-23：但视频库模式下本页明明有作品（_works 非空）却一条
-      // 地址都没取到时，不是“库里没地址”，是影视库那路没打开/没查到
-      // ——报实情，别让用户以为库是空的。
-      if (!mounted) return;
-      final noAddressMessage =
-          widget.database.isVideoLibrary && _works.isNotEmpty
-          ? '库里没读出这部作品的地址，MissAV 现查也没找到（先检查 MYTV/db/ 下的库文件）'
-          : '库里暂无播放地址';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(noAddressMessage)));
-      return;
-    }
     final playGeneration = ++_playGeneration;
     final cancel = Completer<void>();
-    // 后台竞速（不堵开页）：库里地址与 MissAV 按番号现查并行跑，
-    // 哪边先出可播地址就先赢，赢家进会话缓存；输的那路丢弃。
-    // 开页不等它——首播地址直接播，竞速只用来换线与下次加速。
+    // 竞速收集：全部验活线路按到达顺序进这张表（第一条就是
+    // 赢家），换线链与会话缓存都从它取；raceSettled 在四路
+    // 全部收尾时完成。
+    final verifiedLines = <DramaDetail>[];
+    final raceSettled = Completer<void>();
+    // 四路竞速（不堵开页）：库里地址 + who's py 链（MissAV
+    // 按番号现查）+ 123AV + PH 并行，哪边先出验活地址哪边
+    // 先赢。开页不等它——首播仍走缓存赢家/库里第一条即开即
+    // 播（早上发布那版的秒开口径），竞速负责换线与下次同番
+    // 号加速；只有库里一条地址都没有时才等竞速出第一条。
     final raceFuture = _racePlayableDetail(
       dbRows: dbRows,
       code: currentWork.codeKey,
       title: currentWork.displayTitle,
       cancel: cancel,
       playGeneration: playGeneration,
+      verifiedLines: verifiedLines,
+      onSettled: () {
+        if (!raceSettled.isCompleted) raceSettled.complete();
+      },
     );
     final cacheKey = normalizeAvCode(currentWork.codeKey);
     unawaited(
@@ -852,18 +858,52 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         }
       }, onError: (_) {}),
     );
-    // 首播地址：这番号竞速赢过就用缓存的已验活地址，否则库里第一条
-    // （不验活，直接播；库里 99% 以上的地址是活的）。
-    // 2026-11-22 主树修法（保留）：探活全失败也拿库里第一条进播放页。
-    // 不少流媒体站只认播放器头、探针拿 403/405，但播放器能播；
-    // 探活不过不等于播不了。
+    // 首播地址：这番号竞速赢过就用缓存的已验活地址，否则库
+    // 里第一条（不验活、直接播；库里 99% 以上的地址是活
+    // 的，早上发布那版就是这个秒开口径）。
     final cached = cacheKey.isEmpty ? null : _verifiedDetailCache[cacheKey];
-    final firstDetail = cached ?? dbRows.first.toDramaDetail();
-    // 换线链：已试过的播放地址（首播那条已在播，换线时跳过）。
-    // DetailScreen 在首播地址耗尽时调 nextLineOnExhausted，
-    // 在报错屏点“重试”时调 onRetryProbe。
+    var firstDetail =
+        cached ?? (dbRows.isNotEmpty ? dbRows.first.toDramaDetail() : null);
+    if (firstDetail == null) {
+      // 库里没有这部片的地址（2026-11-26 用户令改口径，覆盖
+      // 2026-11-22“只走数据库”）：不等死——等在线竞速出第一
+      // 条验活线路就照常进详情页播；四路全灭才如实报「暂无
+      // 可播线路」，不拿未验活地址硬播。2026-11-23 的视频库
+      // 诊断口径保留在全灭文案里。
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('库里没有这部片的地址，正在在线搜索线路…'),
+          duration: Duration(seconds: 40),
+        ),
+      );
+      final winner = await raceFuture.timeout(
+        const Duration(seconds: 40),
+        onTimeout: () => null,
+      );
+      messenger.hideCurrentSnackBar();
+      if (!mounted) return;
+      if (winner == null) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.database.isVideoLibrary && _works.isNotEmpty
+                  ? '库里没读出这部作品的地址，在线源也没找到可播线路（先检查 MYTV/db/ 下的库文件）'
+                  : '暂无可播线路：数据库里没有这部片，在线源也没搜到可播地址',
+            ),
+          ),
+        );
+        if (!cancel.isCompleted) cancel.complete();
+        return;
+      }
+      firstDetail = winner;
+    }
+    // 换线链：已试过的播放地址（首播那条已在播，换线时跳
+    // 过）。DetailScreen 在首播地址耗尽时调
+    // nextLineOnExhausted，在报错屏点“重试”时调 onRetryProbe。
     final triedUrls = <String>{_detailPlayUrl(firstDetail)};
-    var raceWinnerUsed = false;
+    var verifiedCursor = 0;
     Future<DetailNextLine?> nextLine() async {
       // 1. 库里下一条没试过的地址（立即有，不用等）。
       for (final row in dbRows) {
@@ -872,39 +912,45 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         triedUrls.add(url);
         return (detail: row.toDramaDetail(), episodeIndex: 0);
       }
-      // 2. 库里地址都试过了，等后台竞速的赢家（MissAV 或已验活的库地址）。
-      if (!raceWinnerUsed) {
-        raceWinnerUsed = true;
-        final winner = await raceFuture.timeout(
-          const Duration(seconds: 10),
-          onTimeout: () => null,
-        );
-        if (winner != null) {
-          final url = _detailPlayUrl(winner);
-          if (url.isNotEmpty && !triedUrls.contains(url)) {
-            triedUrls.add(url);
-            return (detail: winner, episodeIndex: 0);
-          }
-        }
+      // 2. 已验活线路（竞速四路，落败源的线路也算）按到达顺
+      // 序逐条出；还没有新的就等竞速全部收尾（最多 10 秒）。
+      if (verifiedCursor >= verifiedLines.length &&
+          !raceSettled.isCompleted) {
+        await Future.any([
+          raceSettled.future,
+          Future<void>.delayed(const Duration(seconds: 10)),
+        ]);
+      }
+      while (verifiedCursor < verifiedLines.length) {
+        final line = verifiedLines[verifiedCursor++];
+        final url = _detailPlayUrl(line);
+        if (url.isEmpty || triedUrls.contains(url)) continue;
+        triedUrls.add(url);
+        return (detail: line, episodeIndex: 0);
       }
       // 链耗尽：返回 null，播放器保留原错误界面。
       return null;
     }
 
     Future<DetailNextLine?> retryProbe() async {
-      // 重试：把已试集合清空（允许重播库里地址），再等一次竞速赢家。
+      // 重试（用户在报错屏主动点）：清已试集合，从已验活线路
+      // 第一条重出；还没有就等竞速收尾；再没有回库里第一条
+      // （播放器原地重播同一集本就是兜底）。
       triedUrls.clear();
-      final winner = await raceFuture.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => null,
-      );
-      if (winner != null) {
-        final url = _detailPlayUrl(winner);
-        if (url.isNotEmpty) triedUrls.add(url);
-        return (detail: winner, episodeIndex: 0);
+      verifiedCursor = 0;
+      if (verifiedLines.isEmpty && !raceSettled.isCompleted) {
+        await Future.any([
+          raceSettled.future,
+          Future<void>.delayed(const Duration(seconds: 10)),
+        ]);
       }
-      // 竞速无赢家：回库里第一条再试一次（播放器原地重播同一集
-      // 是兜底，这里给第一条让它换线再试）。
+      while (verifiedCursor < verifiedLines.length) {
+        final line = verifiedLines[verifiedCursor++];
+        final url = _detailPlayUrl(line);
+        if (url.isEmpty) continue;
+        triedUrls.add(url);
+        return (detail: line, episodeIndex: 0);
+      }
       if (dbRows.isNotEmpty) {
         final first = dbRows.first.toDramaDetail();
         final url = _detailPlayUrl(first);
@@ -933,27 +979,36 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     return detail.episodes.first.id;
   }
 
-  /// MissAV+数据库竞速：两路并行，哪边先出可播地址就先播哪边。
-  /// A 路是库里地址逐条 resolve + 验活（最多 3 条）；B 路是 MissAV
-  /// 按番号现查（detail 取 m3u8 → resolve → 验活）。先出非空结果的
-  /// 胜出，另一路丢弃；两边都失败返回 null。点取消或换了代次时两路
-  /// 都尽快收手（返回 null），由 _playWork 按取消处理。
+  /// 四路竞速（2026-11-26 用户令扩源）：A 库里地址、B who's
+  /// py 链（MissAV 按番号现查）、C 123AV、D PH，四路并行，
+  /// 哪边先出经轻验活的可播地址哪边先赢（winner）；全部验活
+  /// 线路按到达顺序收进 [verifiedLines]（落败源不丢弃，供
+  /// 换线链逐条补进线路行）；四路全灭返回 null。点取消或换
+  /// 了代次时各路都尽快收手（返回 null），由 _playWork 按取
+  /// 消处理。[onSettled] 在四路全部收尾时回调一次。
   Future<DramaDetail?> _racePlayableDetail({
     required List<ActressJsonEntry> dbRows,
     required String code,
     required String title,
     required Completer<void> cancel,
     required int playGeneration,
+    required List<DramaDetail> verifiedLines,
+    void Function()? onSettled,
   }) async {
     final winner = Completer<DramaDetail?>();
-    var pending = 2;
+    var pending = 2 + kActressOnlineSources.length;
     void offer(DramaDetail? d) {
-      if (d != null && !winner.isCompleted) {
-        winner.complete(d);
-        return;
+      if (d != null) {
+        verifiedLines.add(d);
+        if (!winner.isCompleted) {
+          winner.complete(d);
+        }
       }
       pending--;
-      if (pending == 0 && !winner.isCompleted) winner.complete(null);
+      if (pending == 0) {
+        if (!winner.isCompleted) winner.complete(null);
+        onSettled?.call();
+      }
     }
 
     unawaited(
@@ -971,7 +1026,82 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         playGeneration: playGeneration,
       ).then(offer, onError: (_) => offer(null)),
     );
+    for (final source in kActressOnlineSources) {
+      unawaited(
+        _raceOnlineSource(
+          source: source,
+          code: code,
+          cancel: cancel,
+          playGeneration: playGeneration,
+        ).then(offer, onError: (_) => offer(null)),
+      );
+    }
     return winner.future;
+  }
+
+  /// C/D 路：123AV / PH 按番号直连搜索 → 命中校验（123AV 比
+  /// 番号、PH 只认标题含番号，对不上不算找到）→ 取流 → 与
+  /// A/B 路同一把轻验活尺子（probeStreamHead +
+  /// feedProbePlayable，只拉播放列表/首段快验）验过才算线
+  /// 路。取不到/对不上/验不活都返回 null，不编线路；全程纯
+  /// HTTP 解析取链，不经网页播放（2026-11-26 16:59 令）。
+  Future<DramaDetail?> _raceOnlineSource({
+    required ActressOnlineSource source,
+    required String code,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    if (code.trim().isEmpty) return null;
+    final fetch = ActressOnlineClient().get;
+    try {
+      final cards = await source
+          .fetchCards(
+            primaryId: source.defaultPrimaryId,
+            secondaryId: source.defaultSecondaryId,
+            query: code,
+            page: 1,
+            fetch: fetch,
+          )
+          .timeout(const Duration(seconds: 25));
+      if (cancel.isCompleted || playGeneration != _playGeneration) {
+        return null;
+      }
+      OnlineVideoCard? hit;
+      for (final card in cards) {
+        if (actressOnlineCardMatches(
+          source: source,
+          card: card,
+          code: code,
+        )) {
+          hit = card;
+          break;
+        }
+      }
+      if (hit == null) return null;
+      final play = await source.resolvePlay(hit, fetch: fetch);
+      if (cancel.isCompleted || playGeneration != _playGeneration) {
+        return null;
+      }
+      final uri = Uri.tryParse(play.streamUrl.trim());
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return null;
+      }
+      final response = await _verifyFetch(
+        play.streamUrl,
+        play.headers,
+        const Duration(seconds: 5),
+      );
+      if (!feedProbePlayable(uri, response)) return null;
+      return actressOnlinePlayDetail(
+        source: source,
+        card: hit,
+        play: play,
+      ).detail;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// A 路：库里地址逐条 resolve + 验活，首条活的返回它的详情。
@@ -1099,17 +1229,44 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final person = _person;
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: actressNeonAppBar(title: Text(person?.displayName ?? '女优详情')),
+      // 2026-11-26 照 AvPlay 详情页截图改浅色：白底 + 返回/
+      // 名字顶栏；右上只放宫格切换一个真动作（作品列数），
+      // AvPlay 的星标/爱心是人物收藏/关注，我们没有对应功能，
+      // 不编假按钮（见报告）。
+      backgroundColor: AvStyle.bg,
+      appBar: AppBar(
+        backgroundColor: AvStyle.bg,
+        foregroundColor: AvStyle.text,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        title: Text(
+          person?.displayName ?? '女优详情',
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 19),
+        ),
+        actions: [
+          IconButton(
+            key: const ValueKey('actress-detail-view-toggle'),
+            tooltip: '切换作品列数',
+            icon: Icon(
+              _worksWide ? Icons.grid_view_rounded : Icons.view_module_rounded,
+            ),
+            onPressed: () => setState(() => _worksWide = !_worksWide),
+          ),
+        ],
+      ),
       body: Stack(
         children: [
           _loading
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(
+                  child: CircularProgressIndicator(color: AvStyle.accent),
+                )
               : person == null
               ? Center(
                   child: Text(
                     _noDatabase
                         ? '未找到外置数据库：请把 女优库.db 放进 MYTV/db/，再点“重新加载数据库”'
                         : '人物不存在',
+                    style: const TextStyle(color: AvStyle.text),
                   ),
                 )
               : CustomScrollView(
@@ -1122,6 +1279,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                     // 里，不产生标签。
                     if (_works.isNotEmpty && _categories.isNotEmpty)
                       SliverToBoxAdapter(child: _buildCategoryFilter()),
+                    if (_works.isNotEmpty)
+                      SliverToBoxAdapter(child: _worksTitle(person)),
                     // 播放地址池一直不显示（2026-11-20 用户定：内置
                     // 播放源不能让别人看出来），只做后台点播用（只读
                     // 女优库.db，见 _playWork）。本地零作品时只显示
@@ -1141,8 +1300,8 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                                       key: const ValueKey(
                                         'actress-detail-load-error',
                                       ),
-                                      style: TextStyle(
-                                        color: colors.onSurfaceVariant,
+                                      style: const TextStyle(
+                                        color: AvStyle.dim,
                                       ),
                                     ),
                                     const SizedBox(height: 12),
@@ -1159,57 +1318,50 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
                               ),
                             )
                           : const SliverFillRemaining(
-                              child: Center(child: Text('暂无作品')),
+                              child: Center(
+                                child: Text(
+                                  '暂无作品',
+                                  style: TextStyle(color: AvStyle.dim),
+                                ),
+                              ),
                             )
                     else
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                         sliver: SliverGrid(
-                          gridDelegate: dramaGridDelegate(
-                            context,
-                            MediaQuery.sizeOf(context).width - 24,
-                          ),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: _worksWide ? 2 : 3,
+                                mainAxisSpacing: 14,
+                                crossAxisSpacing: 10,
+                                childAspectRatio: _worksWide ? 0.60 : 0.53,
+                              ),
                           delegate: SliverChildBuilderDelegate((
                             context,
                             index,
                           ) {
                             if (index >= _works.length) {
                               return const Center(
-                                child: CircularProgressIndicator(),
+                                child: CircularProgressIndicator(
+                                  color: AvStyle.accent,
+                                ),
                               );
                             }
                             final work = _works[index];
-                            // 海报中央透明播放键（2026-11-25）：DramaTile
-                            // 是全站共用卡片，不动它；只在本页叠一层纯
-                            // 装饰键（IgnorePointer，点按仍由卡片接管，
-                            // 走 _playWork 秒进详情页播，行为一字不差）。
-                            // 键只盖海报区（DramaTile 海报 2/3，高 =
-                            // 宽 × 1.5），不盖下面的标题/副标题。
-                            return LayoutBuilder(
-                              builder: (context, constraints) {
-                                return Stack(
-                                  children: [
-                                    DramaTile(
-                                      key: ValueKey('actress-work-${work.id}'),
-                                      drama: actressWorkDrama(work),
-                                      repository: widget.repository,
-                                      subtitle: actressWorkSubtitle(work),
-                                      onTap: () => _playWork(work),
-                                    ),
-                                    Positioned(
-                                      top: 0,
-                                      left: 0,
-                                      right: 0,
-                                      height: constraints.maxWidth * 1.5,
-                                      child: const IgnorePointer(
-                                        child: Center(
-                                          child: ActressPosterPlayKey(),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
+                            // 2026-11-26 照 AvPlay 详情页作品卡：与
+                            // 列表屏同款 AvWorkCard（竖版封面 + 标题
+                            // 一行 + 番号酒红 + 日期灰字），点卡走
+                            // _playWork（行为不变）。原 DramaTile +
+                            // 海报中央播放键叠层随浅色版式撤下（全站
+                            // 共用的 DramaTile 本体不动）。
+                            return AvWorkCard(
+                              key: ValueKey('actress-work-${work.id}'),
+                              cover: work.coverUrl,
+                              title: work.displayTitle,
+                              code: work.codeDisplay,
+                              date: work.date,
+                              hasHd: work.category.contains('高清'),
+                              onTap: () => _playWork(work),
                             );
                           }, childCount: _works.length + (_hasMore ? 1 : 0)),
                         ),
@@ -1222,57 +1374,164 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   }
 
   Widget _buildHeader(ActressPerson person, ColorScheme colors) {
-    final sexLabel = actressSexLabel(person.sex);
+    // 2026-11-26 照 AvPlay 女优详情页截图：大圆形头像在左，
+    // 右边竖排本名 / 别名 / 「N 部影片」（部数取库里实际存数
+    // _headerTotal / displayWorks，不拿站点宣称数）；人物资料
+    // 里带外链时下方一条整宽描边钮（按域名显示服务名），
+    // 没有外链就不放（不编）。
+    final total = _headerTotal > 0 ? _headerTotal : person.displayWorks;
+    final link = _personLink(person);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ActressAvatar(
-            avatarUrl: person.avatarUrl,
-            name: person.displayName,
-            radius: 36,
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  person.displayName,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '作品 ${_headerTotal > 0 ? _headerTotal : person.displayWorks} 部'
-                  '${sexLabel.isEmpty ? '' : ' · $sexLabel'}',
-                  style: TextStyle(color: colors.onSurfaceVariant),
-                ),
-                if (person.aliases.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    '别名：${person.aliases.join(' / ')}',
-                    style: TextStyle(color: colors.onSurfaceVariant),
-                  ),
-                ],
-                if (person.tags.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final tag in person.tags)
-                        Chip(
-                          label: Text(tag),
-                          visualDensity: VisualDensity.compact,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ActressAvatar(
+                avatarUrl: person.avatarUrl,
+                name: person.displayName,
+                radius: 52,
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      person.displayName,
+                      style: const TextStyle(
+                        color: AvStyle.warm,
+                        fontSize: 15.5,
+                        height: 1.35,
+                      ),
+                    ),
+                    if (person.aliases.isNotEmpty)
+                      Text(
+                        person.aliases.join(' / '),
+                        style: const TextStyle(
+                          color: AvStyle.warm,
+                          fontSize: 15.5,
+                          height: 1.35,
                         ),
-                    ],
+                      ),
+                    Text(
+                      '$total 部影片',
+                      style: const TextStyle(
+                        color: AvStyle.warm,
+                        fontSize: 15.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (person.tags.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final tag in person.tags)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: AvStyle.border),
+                    ),
+                    child: Text(
+                      tag,
+                      style: const TextStyle(
+                        color: AvStyle.dim,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
-                ],
               ],
             ),
-          ),
+          ],
+          if (link != null) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                key: const ValueKey('actress-detail-link'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AvStyle.accent,
+                  side: const BorderSide(color: AvStyle.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () => unawaited(_copyPersonLink(link.$1)),
+                child: Text(
+                  link.$2,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  /// 人物资料里的第一条外链（about 字段里值为 http(s) 地址的
+  /// 条目）：返回 (地址, 服务名)；服务名按域名认（twitter/x →
+  /// Twitter、instagram → Instagram），认不出显示「主页」。
+  /// 没有外链返回 null（按钮不放）。
+  (String, String)? _personLink(ActressPerson person) {
+    for (final value in person.about.values) {
+      final url = value.trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        continue;
+      }
+      final host = Uri.tryParse(url)?.host ?? '';
+      final label = host.contains('twitter') || host == 'x.com'
+          ? 'Twitter'
+          : host.contains('instagram')
+          ? 'Instagram'
+          : '主页';
+      return (url, label);
+    }
+    return null;
+  }
+
+  /// 外链钮动作：复制链接（App 内没有现成的外跳浏览器通道，
+  /// 复制后用户可自行粘贴打开），给个明确反馈。
+  Future<void> _copyPersonLink(String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('链接已复制')));
+  }
+
+  /// 作品区标题（照 AvPlay 详情页的“她的作品”）：性别男显示
+  /// 「他的作品」，其余「她的作品」。
+  Widget _worksTitle(ActressPerson person) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          person.sex == 'male' ? '“他的作品”' : '“她的作品”',
+          style: const TextStyle(
+            color: AvStyle.text,
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
       ),
     );
   }
@@ -1362,7 +1621,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
   }) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: ActressNeonPill(
+      child: AvPill(
         key: ValueKey('actress-category-$label'),
         label: label,
         selected: selected,

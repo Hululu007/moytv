@@ -1,17 +1,19 @@
 // 女优库海报透明播放键（2026-11-25）：
 // ① 影视库详情页大海报中央有且仅有一个播放键，“正片”行照常在；
-// ② 女优详情页作品卡片墙每张卡海报中央各一个播放键（与卡片数一致）。
-// 只断言键的存在与个数，不点播、不截图（截图见
+// ② 女优详情页作品卡：2026-11-26 用户发 AvPlay 截图改版式后，
+//    详情页作品墙换成本模块的 AvWorkCard（照截图无中央播放键），
+//    原“每张卡一个播放键”的断言随版式作废，改断言新卡型与个数。
+// 只断言键/卡的存在与个数，不点播、不截图（截图见
 // test/actress_poster_play_preview_test.dart）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_film_library.dart';
 import 'package:moyi/actress/actress_models.dart';
 import 'package:moyi/actress/actress_neon.dart';
 import 'package:moyi/local_store.dart';
-import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -58,7 +60,7 @@ void main() {
     expect(find.text('播放线路'), findsOneWidget);
   });
 
-  testWidgets('女优详情页作品卡片墙每张卡海报中央各一个播放键', (tester) async {
+  testWidgets('女优详情页作品墙是 AvPlay 式卡片、无中央播放键', (tester) async {
     final db = MemoryActressDatabase();
     SharedPreferences.setMockInitialValues({});
     final store = LocalStore(await SharedPreferences.getInstance());
@@ -87,7 +89,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(DramaTile), findsNWidgets(3));
-    expect(find.byType(ActressPosterPlayKey), findsNWidgets(3));
+    expect(find.byType(AvWorkCard), findsNWidgets(3));
+    expect(find.byType(ActressPosterPlayKey), findsNothing);
   });
 }

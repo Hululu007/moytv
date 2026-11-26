@@ -38,7 +38,7 @@ import 'tmdb/tmdb_config.dart';
 import 'tmdb/tmdb_metadata.dart';
 import 'tmdb/tmdb_service.dart';
 import 'viewing_experience_settings.dart';
-import 'actress/actress_widgets.dart';
+import 'actress/actress_online_lines.dart';
 import 'actress/code_meta_section.dart';
 import 'actress/jav_code_meta.dart';
 
@@ -542,6 +542,31 @@ class _DetailScreenState extends State<DetailScreen> {
       if (!mounted || generation != _generation) {
         return;
       }
+      // 2026-11-26：带了候选详情（initialDetail）且仓库详情抛
+      // 错时落候选——演员库在线源（123AV/PH）没在仓库注册，
+      // detail 必然抛错，但点卡时已经把详情与直链集备齐了，
+      // 不该因为查不到站点就整页报错。集数回退口径与上面
+      // “取回为空”分支一致；代码元数据照常后台补（演员行/
+      // 信息卡靠它），其余补充链跳过（都要走仓库）。
+      // JavDB 源例外：它是信息源、点开时本来就没有集数（线
+      // 路靠跨站探活与在线线路区按番号自动搜），集数为空也
+      // 落候选进页，不整页报错。
+      final initial = widget.initialDetail;
+      if (initial != null &&
+          (initial.episodes.isNotEmpty || widget.drama.source == 'javdb')) {
+        setState(() {
+          _detail = initial.withDrama(widget.drama);
+          _loading = false;
+          _episodePage =
+              resumeEpisodeIndex(
+                initial.episodes,
+                widget.store.watched(widget.drama.id),
+              ) ~/
+              episodePageSize;
+        });
+        unawaited(_refreshCodeMeta(widget.drama, generation));
+        return;
+      }
       setState(() {
         _error = error.toString();
         _loading = false;
@@ -785,6 +810,42 @@ class _DetailScreenState extends State<DetailScreen> {
       currentSourceId: drama.source,
       onPlayLine: _playCrossSite,
     );
+  }
+
+  /// 在线线路区（2026-11-26 用户令）：带番号的片自动按番号
+  /// 去 123AV / PH 搜线路、追加成可点行；与跨站区（who's
+  /// py 链等注册站）并行，互不阻塞。无番号不显示。
+  Widget _actressOnlineLinesSection(Drama drama) {
+    final avId = extractAvId(
+      title: drama.title,
+      id: drama.id,
+      sourceId: drama.sourceId,
+    );
+    if (avId == null) return const SizedBox.shrink();
+    return ActressOnlineLinesSection(
+      key: ValueKey('actress-lines-$avId-${drama.source}-${drama.id}'),
+      code: avId,
+      onPlay: (detail) => unawaited(_playActressOnlineLine(detail)),
+    );
+  }
+
+  /// 在线线路起播：解析/嗅探只负责取链，地址连请求头递给
+  /// 正式播放器（pushPlayer），不在网页里播（2026-11-26
+  /// 16:59 令）。这两源未在站点表注册，allowsSource 门不适
+  /// 用，走与在线视图点卡相同的直递播放器路径。
+  Future<void> _playActressOnlineLine(DramaDetail detail) async {
+    _frameService.cancel();
+    await pushPlayer<void>(
+      context,
+      detail: detail,
+      initialIndex: 0,
+      repository: widget.repository,
+      store: widget.store,
+      queue: widget.queue,
+    );
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _closeEmbedded() {
@@ -1058,9 +1119,12 @@ class _DetailScreenState extends State<DetailScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   _overview(drama),
+                                  _infoCard(drama),
+                                  _stillsSection(drama),
                                   _descriptionSection(drama),
                                   _magnetSection(),
                                   _crossSiteSection(drama),
+                                  _actressOnlineLinesSection(drama),
                                   _tmdbEpisodeSection(),
                                   _seriesSection(drama),
                                   _relatedSection(drama),
@@ -1197,6 +1261,10 @@ class _DetailScreenState extends State<DetailScreen> {
                                   child: _overview(drama),
                                 ),
                               ),
+                              SliverToBoxAdapter(child: _infoCard(drama)),
+                              SliverToBoxAdapter(
+                                child: _stillsSection(drama),
+                              ),
                               if (_loading ||
                                   _error != null ||
                                   episodes.isEmpty)
@@ -1257,6 +1325,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                   SliverToBoxAdapter(
                                     child: _crossSiteSection(drama),
                                   ),
+                                SliverToBoxAdapter(
+                                  child: _actressOnlineLinesSection(drama),
+                                ),
                                   SliverToBoxAdapter(
                                     child: _descriptionSection(drama),
                                   ),
@@ -1368,6 +1439,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                 SliverToBoxAdapter(
                                   child: _crossSiteSection(drama),
                                 ),
+                              SliverToBoxAdapter(
+                                child: _actressOnlineLinesSection(drama),
+                              ),
                                 SliverToBoxAdapter(
                                   child: _descriptionSection(drama),
                                 ),
@@ -2154,33 +2228,290 @@ class _DetailScreenState extends State<DetailScreen> {
     return meta.cast.isNotEmpty || meta.director.isNotEmpty;
   }
 
-  /// 演员小头像 + 名字横排（2026-11-24 用户令：显示在“成人影片”
-  /// 下面这一行）。点头像名字走标签搜索（与原来文字标签同一入口）。
+  /// 演员区（2026-11-26 照 AvPlay 详情页截图改卡片排）：标题
+  /// 「演员」+ 横排照片卡（照片 + 底部白条名字），男女演员都
+  /// 列（数据来自番号元数据 castWithAvatars，含男优）；导演
+  /// 放标题行右侧小字。点卡走与原文字标签同一入口
+  /// （_onTagPressed）。原形态是 ActionChip 小头像行
+  /// （2026-11-24），本版按截图换卡片，键与点按行为不变。
   Widget _castChipsRow(Drama drama) {
     final meta = _codeMeta!;
     final cast = meta.castWithAvatars;
+    final colors = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      padding: const EdgeInsets.only(top: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final actor in cast)
-            ActionChip(
-              key: ValueKey('cast-${actor.name}'),
-              avatar: ActressAvatar(
-                avatarUrl: actor.avatarUrl,
-                name: actor.name,
-                radius: 12,
+          Row(
+            children: [
+              const Text(
+                '演员',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
               ),
-              label: Text(actor.name),
-              onPressed: () => _onTagPressed(
-                drama,
-                DetailTag(id: actor.name, name: actor.name),
+              const Spacer(),
+              if (meta.director.isNotEmpty)
+                Text(
+                  '导演：${meta.director}',
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final actor in cast) ...[
+                  _castCard(drama, actor),
+                  const SizedBox(width: 10),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 演员照片卡（规格表 UI_SPEC.md 已证实项：白卡、卡内
+  /// 4dp 内边距、照片 1:1 正方形、名字 13sp SemiBold）：
+  /// 照片下方白条名字，点卡走标签搜索入口。
+  Widget _castCard(Drama drama, ({String name, String avatarUrl}) actor) {
+    Widget placeholder() => ColoredBox(
+      color: const Color(0xFFF1F1F3),
+      child: Center(
+        child: Text(
+          actor.name.isEmpty ? '?' : actor.name.characters.first,
+          style: const TextStyle(
+            color: Color(0xFF8E8E93),
+            fontSize: 26,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+    return InkWell(
+      key: ValueKey('cast-${actor.name}'),
+      onTap: () => _onTagPressed(
+        drama,
+        DetailTag(id: actor.name, name: actor.name),
+      ),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 92,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          color: Colors.white,
+        ),
+        clipBehavior: Clip.antiAlias,
+        padding: const EdgeInsets.all(4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 84,
+                height: 84,
+                child: actor.avatarUrl.isEmpty
+                    ? placeholder()
+                    : Image.network(
+                        actor.avatarUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => placeholder(),
+                      ),
               ),
             ),
-          if (meta.director.isNotEmpty)
-            Chip(label: Text('导演：${meta.director}')),
+            const SizedBox(height: 4),
+            Text(
+              actor.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF191919),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 信息卡（2026-11-26 照 AvPlay 详情页截图）：圆角深色卡里
+  /// 逐行列 番号 / 发行日期 / 长度 / 制作商——只放真有的字段：
+  /// 番号来自番号元数据或番号形标签；日期优先详情自带的
+  /// extraInfo、其次 Drama.onlineDate；其余行全走 extraInfo
+  /// （在线源详情页自带字段、本地库厂牌）。评分与评分人数没
+  /// 有真数据，不放、不编（用户令），截图里的金色缎带评分
+  /// 徽标同理不挂。番号可点复制。没有番号也没有附加信息时
+  /// 整卡不显示（普通剧集不受影响）。
+  Widget _infoCard(Drama drama) {
+    final extra = _detail?.extraInfo ?? const <(String, String)>[];
+    String extraValue(String label) {
+      for (final row in extra) {
+        if (row.$1 == label) return row.$2;
+      }
+      return '';
+    }
+
+    var code = _codeMeta?.code ?? '';
+    if (code.isEmpty) {
+      for (final tag in drama.tags) {
+        final value = tag.trim();
+        if (RegExp(r'^[A-Za-z]{2,}-?[0-9]{2,}').hasMatch(value)) {
+          code = value;
+          break;
+        }
+      }
+    }
+    final rows = <(String, String, bool)>[
+      if (code.isNotEmpty) ('番号', code, true),
+      if (extraValue('发行日期').isNotEmpty)
+        ('发行日期', extraValue('发行日期'), false)
+      else if (drama.onlineDate.isNotEmpty)
+        ('发行日期', drama.onlineDate, false),
+      for (final row in extra)
+        if (row.$1 != '发行日期' && row.$2.isNotEmpty)
+          (row.$1, row.$2, false),
+    ];
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      key: const ValueKey('detail-info-card'),
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final row in rows)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 72,
+                      child: Text(
+                        '${row.$1}：',
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: row.$3
+                          ? InkWell(
+                              key: const ValueKey('detail-info-code'),
+                              onTap: () => unawaited(_copyCode(row.$2)),
+                              child: Text(
+                                row.$2,
+                                style: const TextStyle(
+                                  fontSize: 13.5,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            )
+                          : Text(
+                              row.$2,
+                              style: const TextStyle(fontSize: 13.5),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copyCode(String code) async {
+    await Clipboard.setData(ClipboardData(text: code));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('番号已复制')));
+  }
+
+  /// 剧照区（2026-11-26 照 AvPlay 详情页截图）：标题「剧照」+
+  /// 右侧「全部 N >」+ 横排横构图剧照可滑。数据只认详情自带
+  /// 的 stills（在线源取页内剧照区、py 源取页内剧照）；本地
+  /// 库没有剧照数据时 stills 为空、整区不显示，不拿封面冒
+  /// 充、不编数量（用户令）。头区那条 stills 缩略条是换背景
+  /// 图用的，与本区并存、职能不同。
+  Widget _stillsSection(Drama drama) {
+    final seen = <String>{};
+    final stills = <String>[
+      for (final s in _detail?.stills ?? const <String>[])
+        if (s.isNotEmpty && s != drama.cover && seen.add(s)) s,
+    ];
+    if (stills.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      key: const ValueKey('detail-stills-section'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('剧照', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              if (stills.length > 3)
+                InkWell(
+                  key: const ValueKey('detail-stills-all'),
+                  onTap: () => Navigator.of(context).push(
+                    appPageRoute<void>(
+                      settings: const RouteSettings(name: 'stills'),
+                      builder: (_) => _StillsAllPage(stills: stills),
+                    ),
+                  ),
+                  child: Text(
+                    '全部 ${stills.length} >',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 104,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: stills.length,
+              itemBuilder: (context, index) => Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 10,
+                    child: Image.network(
+                      stills[index],
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          const ColoredBox(color: Colors.black26),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -2303,16 +2634,29 @@ class _DetailScreenState extends State<DetailScreen> {
         if (visibleTags.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final tag in visibleTags.take(12))
-                  ActionChip(
-                    key: ValueKey('detail-tag-${tag.id}'),
-                    label: Text(tag.name),
-                    onPressed: () => _onTagPressed(drama, tag),
-                  ),
+                // 相关分类（2026-11-26 照 AvPlay 详情页 GenreSection
+                // 的标题文案与分区摆法）：标题 + 胶囊横排，点胶囊
+                // 进对应标签列表（原 _onTagPressed 行为不变）。
+                const Text(
+                  '相关分类',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final tag in visibleTags.take(12))
+                      ActionChip(
+                        key: ValueKey('detail-tag-${tag.id}'),
+                        label: Text(tag.name),
+                        onPressed: () => _onTagPressed(drama, tag),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -2381,6 +2725,40 @@ class _DetailScreenState extends State<DetailScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 全部剧照页（详情页剧照区「全部 N >」的落点）：两列网格
+/// 列全这部作品的剧照。
+class _StillsAllPage extends StatelessWidget {
+  const _StillsAllPage({required this.stills});
+
+  final List<String> stills;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('剧照（${stills.length}）')),
+      body: GridView.builder(
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 16 / 10,
+        ),
+        itemCount: stills.length,
+        itemBuilder: (context, index) => ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            stills[index],
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) =>
+                const ColoredBox(color: Colors.black26),
+          ),
+        ),
       ),
     );
   }

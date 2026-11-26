@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_list_page.dart';
@@ -15,7 +16,6 @@ import 'package:moyi/detail_screen.dart';
 import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
-import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -1150,9 +1150,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('女演员甲'), findsNothing);
       expect(find.text('男演员乙'), findsOneWidget);
-      // 性别“全部” chip：不用 find.text('全部')，顶栏站点筛选当前
-      // 项也是“全部”文本，会歧义。
-      await tester.tap(find.widgetWithText(ChoiceChip, '全部'));
+      // 性别“全部”：点性别行自己的钮（键 actress-sex-all）。
+      // 2026-11-26 注：原先这里用 widgetWithText(ChoiceChip,
+      // '全部')，中的是分类行（三册全部）的 ChoiceChip、不是
+      // 性别行——分类行同日照 AvPlay 页签改成 AvTabText 后该
+      // 找法失效，按注释本意改点性别行。
+      await tester.tap(find.byKey(const ValueKey('actress-sex-all')));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('actress-search')),
@@ -1274,7 +1277,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('TST-1'), findsOneWidget);
+      // 2026-11-26 AvWorkCard：无封面无标题的作品，番号同时
+      // 出现在标题位、番号行与封面占位上（都是同一张卡）。
+      expect(find.text('TST-1'), findsWidgets);
       for (var i = 0; i < 60; i++) {
         if (find.text('JUR-487').evaluate().isNotEmpty) break;
         await tester.runAsync(() async {
@@ -1283,6 +1288,17 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
       }
       expect(find.text('JUR-487'), findsOneWidget);
+      // 2026-11-26：AvWorkCard 三列格比基线高，补进来的作品
+      // 排在末尾、第二行起懒加载才建——滚动轮询等它出现
+      // （断言本意是“补进了列表”，不是“一屏全建”）。
+      for (var i = 0; i < 30; i++) {
+        if (find.text('JUVR-316').evaluate().isNotEmpty) break;
+        await tester.drag(
+          find.byType(CustomScrollView),
+          const Offset(0, -500),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(find.text('JUVR-316'), findsOneWidget);
     });
 
@@ -1304,12 +1320,15 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(DramaTile), findsNWidgets(3));
-      expect(find.text('SSIS-00123'), findsOneWidget);
+      expect(find.byType(AvWorkCard), findsNWidgets(3));
+      // 同上：番号在卡上多处可见（标题位/番号行/封面占位）。
+      expect(find.text('SSIS-00123'), findsWidgets);
       expect(find.text('无番号作品标题'), findsOneWidget);
     });
 
-    testWidgets('详情页点卡库里无地址报库里暂无播放地址', (tester) async {
+    testWidgets('详情页点卡库里无地址走在线竞速、全灭报暂无可播线路', (
+      tester,
+    ) async {
       final person = await seedPerson('女演员甲', works: 1);
       await db.upsertWorks(person.localId, const [
         RosterFilm(code: 'SSIS-00123'),
@@ -1325,11 +1344,21 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(DramaTile).first);
-      await tester.pumpAndSettle();
-      // 2026-11-22 只走数据库：这部只有番号、库里没有播放地址，
-      // 不跨站探活、不报站数，只报库里暂无播放地址、不进详情页。
-      expect(find.text('库里暂无播放地址'), findsOneWidget);
+      await tester.tap(find.byType(AvWorkCard).first);
+      // 2026-11-26 16:52 新口径（覆盖 2026-11-22 只走数据库）：
+      // 库里无地址不再直接报死，先四路竞速在线搜线路；测试环
+      // 境里各路都拿不到验活地址，最终如实报「暂无可播线路」、
+      // 不进详情页。竞速是真异步，轮询等结果提示出现。
+      for (var i = 0; i < 40; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 250)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        if (find.textContaining('暂无可播线路').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.textContaining('暂无可播线路'), findsOneWidget);
       expect(find.byType(DetailScreen), findsNothing);
     });
 

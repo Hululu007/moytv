@@ -29,11 +29,20 @@ class PlaybackLoader {
     // 本地库条目的集 id 本身就是可播直链：直接交给播放器。
     // 绕蜘蛛取流时，蜘蛛站换域名/没这个番号就播不出来——本地库
     // 里存着地址却播不了，用户要的就是别绕。
+    // 集里带 headers 时一并透传（2026-11-26 演员库在线源：站点
+    // 签名 m3u8 要带 Referer/UA 才肯放行）；没带的集行为不变。
     final direct = episode.raw['direct'] == true
         ? episode.raw['id']?.toString() ?? episode.id
         : '';
     if (_looksLikeMediaUrl(direct)) {
-      return PlaybackPlan(url: direct, originalUrl: direct);
+      final rawHeaders = episode.raw['headers'];
+      final headers = rawHeaders is Map
+          ? <String, String>{
+              for (final entry in rawHeaders.entries)
+                entry.key.toString(): entry.value.toString(),
+            }
+          : const <String, String>{};
+      return PlaybackPlan(url: direct, originalUrl: direct, headers: headers);
     }
     if (localOnly) {
       final plan = await repository.localPlayback(drama, episode);

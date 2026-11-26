@@ -53,16 +53,24 @@ Drama whosLocalToDrama(WhosLocalWork work, {String source = whosSourceId}) {
 /// 本地作品 → 详情：一条直链集，播放走本地地址，不经过 py。
 DramaDetail whosLocalDetail(Drama drama, WhosLocalWork work) {
   final url = work.playUrl;
-  return DramaDetail(drama, [
-    if (url.isNotEmpty)
-      Episode({
-        'id': url,
-        'title': '正片',
-        'flag': 'whos',
-        'playId': url,
-        'currentEpisode': 1,
-      }, 1),
-  ]);
+  return DramaDetail(
+    drama,
+    [
+      if (url.isNotEmpty)
+        Episode({
+          'id': url,
+          'title': '正片',
+          'flag': 'whos',
+          'playId': url,
+          'currentEpisode': 1,
+        }, 1),
+    ],
+    // 详情页信息卡（2026-11-26）：本地库有厂牌就带上当制作
+    // 商行；库里没有剧照数据，stills 保持空（不拿封面冒充）。
+    extraInfo: [
+      if (work.brand.isNotEmpty) ('制作商', whosBrandLabel(work.brand)),
+    ],
+  );
 }
 
 /// 本地分页结果。hasMore 按剩余条数算，翻到最后一页停住。

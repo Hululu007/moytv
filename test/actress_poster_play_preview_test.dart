@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_film_library.dart';
@@ -296,7 +297,7 @@ void main() {
     await _capture(
       tester,
       name: 'actress_detail_works_play_keys',
-      label: '预览 · 假数据 · 女优详情作品卡片墙 · 每张海报中央透明播放键 · 测试替身封面，非真实封面',
+      label: '预览 · 假数据 · 女优详情作品卡片墙 · 2026-11-26 照 AvPlay 截图换 AvWorkCard（无中央播放键） · 测试替身封面，非真实封面',
       size: const Size(390, 1250),
       buildPage: () => ActressDetailPage(
         localId: personId,
@@ -334,7 +335,8 @@ void main() {
         });
       },
     );
-    // 6 张卡各一个播放键。
-    expect(find.byType(ActressPosterPlayKey), findsNWidgets(6));
+    // 2026-11-26 改版式：作品墙是 AvWorkCard、照截图无播放键。
+    expect(find.byType(AvWorkCard), findsNWidgets(6));
+    expect(find.byType(ActressPosterPlayKey), findsNothing);
   });
 }

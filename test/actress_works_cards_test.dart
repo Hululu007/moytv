@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
+import 'package:moyi/actress/actress_av_style.dart';
 import 'package:moyi/actress/actress_detail_page.dart';
 import 'package:moyi/actress/actress_json_fallback.dart';
 import 'package:moyi/actress/actress_models.dart';
@@ -21,7 +22,6 @@ import 'package:moyi/detail_screen.dart';
 import 'package:moyi/feed_playability.dart';
 import 'package:moyi/local_store.dart';
 import 'package:moyi/models.dart';
-import 'package:moyi/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
@@ -467,7 +467,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       for (var i = 0; i < 60; i++) {
         await tester.pump(const Duration(milliseconds: 100));
         if (find.byType(DetailScreen).evaluate().isNotEmpty) break;
@@ -543,7 +543,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(DramaTile).first);
+      await tester.tap(find.byType(AvWorkCard).first);
       // 只 pump 1 秒（10 × 100ms）：旧流程此时竞速还在等 resolve
       // 超时，详情页不可能出现；新流程点卡即推页，1 秒内必出现。
       for (var i = 0; i < 10; i++) {

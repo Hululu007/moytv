@@ -1,8 +1,9 @@
 // 进库不重载测试（2026-11-24 用户令：每次进演员库所有数据都要
 // 重新加载，这个要修复）。
-// - 第二次进库（全新页实例 + 全新假服务/假仓库）不再重查：文件夹、
-//   标签、封面、分类、作品第一页全走会话缓存，假服务与假仓库的
-//   调用计数不再涨。
+// - 第二次进库（全新页实例 + 全新假服务/假仓库）不再重查：标签、
+//   分类、作品第一页全走会话缓存，假服务与假仓库的调用计数
+//   不再涨。（类型文件夹原经底部「分类」页签在本页加载，该页签
+//   已于 2026-11-26 按用户令撤下，文件夹不再经本页查。）
 // - 手动刷新（顶栏刷新钮）清缓存、重查一遍。
 // - 女优 tab 切走再回来不重建：列表页 State 是同一个对象（切走时
 //   仍挂在树里，只是藏起来），不再重跑 _bootstrap。
@@ -11,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moyi/actress/actress_database.dart';
 import 'package:moyi/actress/actress_film_library.dart';
+import 'package:moyi/actress/actress_list_page.dart';
 import 'package:moyi/actress/actress_generic_db.dart';
 import 'package:moyi/actress/actress_mytv_bind.dart';
 import 'package:moyi/actress/actress_nvku_cache.dart';
@@ -220,31 +222,12 @@ void main() {
         ),
       ),
     );
-    // 等 _boot 全跑完：标签/文件夹/封面都查过一遍、作品那一路已调过
-    // catalog（2026-11-25：文件夹网格从首页移到分类页，首页不再有
-    // “成人影片”文字，沉降条件改成查数计数，不再等文件夹上屏；
-    // 文件夹上屏由调用方切到分类页后断言）。
+    // 等 _boot 全跑完：标签查过一遍、作品那一路已调过 catalog。
     await _settleReal(
       tester,
       until: () =>
-          service.tagsCalls >= 1 &&
-          service.foldersCalls >= 1 &&
-          service.coversCalls >= 1 &&
-          repository.requests.isNotEmpty,
+          service.tagsCalls >= 1 && repository.requests.isNotEmpty,
     );
-  }
-
-  /// 文件夹在分类页（2026-11-25 首页/分类归位）：切到分类页断言
-  /// 文件夹在，再切回首页；切页不触发重查，计数断言不受影响。
-  Future<void> expectFolderOnCategoryTab(WidgetTester tester) async {
-    await tester.tap(find.text('分类'));
-    await _settleReal(
-      tester,
-      until: () => find.text('成人影片').evaluate().isNotEmpty,
-    );
-    expect(find.text('成人影片'), findsOneWidget);
-    await tester.tap(find.text('首页'));
-    await tester.pump(const Duration(milliseconds: 100));
   }
 
   /// 把作品卡滚进视口再断言：首张作品卡常在视口之下、GridView
@@ -260,17 +243,14 @@ void main() {
   }
 
   group('第二次进库不再全量重查', () {
-    testWidgets('全新页实例 + 全新服务/仓库：文件夹/标签/分类/作品都不再查',
+    testWidgets('全新页实例 + 全新服务/仓库：标签/分类/作品都不再查',
         (tester) async {
       final service1 = _CountingFilmService(database: db);
       final repo1 = _CountingRepository();
       await pumpPage(tester, service: service1, repository: repo1);
-      await expectFolderOnCategoryTab(tester);
       await scrollToWorks(tester);
       expect(find.text('测试短剧'), findsOneWidget);
       expect(service1.tagsCalls, 1);
-      expect(service1.foldersCalls, 1);
-      expect(service1.coversCalls, 1);
       expect(repo1.categoriesCalls, 1);
       expect(repo1.requests, hasLength(1));
 
@@ -283,13 +263,10 @@ void main() {
 
       // 数据立刻在（不用等重查），且第二份服务/仓库一次都没被调——
       // 开库本身每次都走（便宜的连接重开），查数据的几路全命中缓存。
-      await expectFolderOnCategoryTab(tester);
       await scrollToWorks(tester);
       expect(find.text('测试短剧'), findsOneWidget);
       expect(service2.openCalls, 1);
       expect(service2.tagsCalls, 0);
-      expect(service2.foldersCalls, 0);
-      expect(service2.coversCalls, 0);
       expect(repo2.categoriesCalls, 0);
       expect(repo2.requests, isEmpty);
     });
@@ -307,16 +284,8 @@ void main() {
       await _settleReal(tester, until: () => service.tagsCalls >= 2);
 
       expect(service.tagsCalls, 2);
-      expect(service.foldersCalls, 2);
-      expect(service.coversCalls, 2);
       expect(repo.categoriesCalls, 2);
       expect(repo.requests, hasLength(2));
-      await tester.tap(find.text('分类'));
-      await _settleReal(
-        tester,
-        until: () => find.text('成人影片').evaluate().isNotEmpty,
-      );
-      expect(find.text('成人影片'), findsOneWidget);
     });
   });
 
@@ -326,23 +295,22 @@ void main() {
       final repo = _CountingRepository();
       await pumpPage(tester, service: service, repository: repo);
 
-      await tester.tap(find.text('女优'));
+      await tester.tap(find.byKey(const ValueKey('nvku-tab-1')));
       await _settleReal(tester);
       // 切走后列表页藏在 IndexedStack 里（offstage、仍挂着），
       // 默认查找器会跳过藏起来的 widget，必须加 skipOffstage: false
       // 才能断言“常驻未卸载”；State 同一性是保活的直接证据。
-      final listKey = find.byKey(
-        const ValueKey('nvku-actress-list'),
-        skipOffstage: false,
-      );
+      // 2026-11-26：列表页 key 带库代次（管理页回来会换 key
+      // 重建），这里改按类型定位，断言口径不变。
+      final listKey = find.byType(ActressListPage, skipOffstage: false);
       expect(listKey, findsOneWidget);
       final firstState = tester.state(listKey);
 
       // 切到首页再切回来：列表页仍挂在树里（只是藏起来），不是重建。
-      await tester.tap(find.text('首页'));
+      await tester.tap(find.byKey(const ValueKey('nvku-tab-0')));
       await _settleReal(tester);
       expect(listKey, findsOneWidget);
-      await tester.tap(find.text('女优'));
+      await tester.tap(find.byKey(const ValueKey('nvku-tab-1')));
       await _settleReal(tester);
       expect(listKey, findsOneWidget);
       final secondState = tester.state(listKey);
