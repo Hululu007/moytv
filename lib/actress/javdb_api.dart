@@ -10,8 +10,15 @@
 // - 签名算法与盐、信封结构、Movie/Actor/Detail 的 JSON 字段
 //   名、图片 XOR 解密、latest 路径：反编译逐字实证。
 // - 其余路径为拼接（API_MAP 注明仅 3 条路径逐字命中）：
-//   search=api/v2/search、详情=api/v1/movies/{id}、演员=
-//   api/v1/actors[/{id}]——演员详情/作品路径未逐字证实。
+//   search=api/v2/search、详情=api/v1/movies/{id}。
+// - 演员列表（2026-11-26 晚补实证）：路径+必传参数由 jar 版
+//   ZakaJavdbAmns 原文实证——GET api/v1/actors?type=0&page=N，
+//   type 必传（漏传服务端回「参数不能为空: type」，即用户
+//   22:43 实报的报错），type=0 即其分类表标注的「女优」；
+//   信封 data.actors、字段 id/name/name_zht/videos_count 同
+//   出该文件。搜索参数名同样照 jar 版实证为 q（旧写 keyword
+//   是推定）。演员作品 api/v1/actors/{id} 仍未证实：AvPlay
+//   与 jar 版演员作品都走网页通道，本路径维持拼接推定。
 // - 登录令牌（api/v1/sessions）需要用户自己的 JavDB 账号，
 //   本批不收集账号：请求只带签名头，接口是否放行未验。
 // - 本机出口连不上 jdforrepam.com：整条源未验（界面照标）。
@@ -155,9 +162,13 @@ class JavdbActor {
   final int gender;
 
   factory JavdbActor.fromJson(Map<String, dynamic> json) {
+    // 名字取值顺序照 jar 版 actorOptions 实证：name 优先、
+    // 空了落 name_zht（繁中名）。
+    var name = _javdbStr(json['name']);
+    if (name.isEmpty) name = _javdbStr(json['name_zht']);
     return JavdbActor(
       id: _javdbStr(json['id']),
-      name: _javdbStr(json['name']),
+      name: name,
       avatarUrl: _javdbStr(json['avatar_url']),
       gender: _javdbInt(json['gender'], fallback: -1),
     );
@@ -501,17 +512,22 @@ class JavdbApiClient {
     return _movieListOf(data);
   }
 
-  /// 搜索作品（api/v2/search，路径拼接、参数名 keyword 有串
-  /// 实证；响应结构宽容解析）。
+  /// 搜索作品（api/v2/search，路径拼接；参数名 q 照 jar 版
+  /// ZakaJavdbAmns 的 searchMovies 原文实证——旧写 keyword
+  /// 是推定、已改）。
   Future<List<JavdbMovie>> searchMovies(String keyword, {int page = 1}) async {
     final q = Uri.encodeQueryComponent(keyword.trim());
-    final data = await _getJson('api/v2/search?keyword=$q&page=$page');
+    final data = await _getJson('api/v2/search?q=$q&page=$page');
     return _movieListOf(data);
   }
 
-  /// 演员列表（api/v1/actors，路径拼接推定、未逐字证实）。
+  /// 演员列表（api/v1/actors?type=0&page=N，路径与必传参数
+  /// type 由 jar 版 ZakaJavdbAmns 原文实证：其分类表「女优」
+  /// 项与 actorOptions() 两处都是 type=0；漏传 type 服务端
+  /// 回「参数不能为空: type」整页报错——2026-11-26 用户实
+  /// 报。信封 data.actors 同其实证）。
   Future<List<JavdbActor>> actors({int page = 1}) async {
-    final data = await _getJson('api/v1/actors?page=$page');
+    final data = await _getJson('api/v1/actors?type=0&page=$page');
     final list = _listOf(data, const ['actors', 'list', 'items']);
     return [
       for (final item in list)
@@ -520,7 +536,10 @@ class JavdbApiClient {
   }
 
   /// 演员作品（api/v1/actors/{id} 详情里的 movies，或
-  /// /movies 子路径——均未逐字证实，宽容解析两处）。
+  /// /movies 子路径——均未逐字证实，宽容解析两处）。注意：
+  /// AvPlay 与 jar 版的演员作品都走网页通道（javdb.com 的
+  /// /actors/{id} 页解析），API 侧无此调用实证；本路径维持
+  /// 拼接推定、未验，见 REPORT_javdb_actors_fix.md。
   Future<List<JavdbMovie>> actorMovies(String actorId, {int page = 1}) async {
     final data = await _getJson('api/v1/actors/$actorId?page=$page');
     return _movieListOf(data);

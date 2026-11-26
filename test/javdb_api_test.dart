@@ -30,7 +30,9 @@ void main() {
   });
 
   test('解析：信封 + 作品/演员字段（snake_case）', () async {
+    final seenUrls = <String>[];
     Future<String> fakeFetch(String url) async {
+      seenUrls.add(url);
       if (url.contains('/actors')) {
         return jsonEncode({
           'success': true,
@@ -77,6 +79,43 @@ void main() {
     final actors = await client.actors();
     expect(actors.single.name, '演员甲');
     expect(actors.single.avatarUrl, contains('avatars/a1.jpg'));
+    // 请求形状照 jar 版 ZakaJavdbAmns 原文实证：演员列表必
+    // 带 type=0（漏带服务端回「参数不能为空: type」）。
+    expect(
+      seenUrls.any((u) => u.contains('api/v1/actors?type=0&page=1')),
+      isTrue,
+    );
+  });
+
+  test('演员列表：名字空时落 name_zht（jar 版取值顺序实证）', () async {
+    final client = JavdbApiClient(
+      fetch: (_) async => jsonEncode({
+        'success': true,
+        'data': {
+          'actors': [
+            {'id': 'a9', 'name': '', 'name_zht': '繁中名', 'avatar_url': ''},
+          ],
+        },
+      }),
+    );
+    final actors = await client.actors();
+    expect(actors.single.name, '繁中名');
+  });
+
+  test('搜索：参数名是 q 不是 keyword（jar 版 searchMovies 实证）', () async {
+    String? seenUrl;
+    final client = JavdbApiClient(
+      fetch: (url) async {
+        seenUrl = url;
+        return jsonEncode({
+          'success': true,
+          'data': {'movies': []},
+        });
+      },
+    );
+    await client.searchMovies('SSIS-001');
+    expect(seenUrl, contains('api/v2/search?q=SSIS-001&page=1'));
+    expect(seenUrl, isNot(contains('keyword=')));
   });
 
   test('解析：success 为假时抛带消息的失败', () async {
