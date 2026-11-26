@@ -37,6 +37,7 @@ import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
 import 'cover_decoder.dart';
+import 'cloud_drive/cloud_115_offline.dart';
 import 'cloud_drive/cloud_credential_store.dart';
 import 'cloud_drive/cloud_drive_engine.dart';
 import 'catalog_updates.dart';
@@ -1514,6 +1515,16 @@ class NativeRepository extends AppRepository {
   Future<CloudDriveEngine>? _cloudEngineFuture;
   Future<CloudDriveEngine> _cloudDriveEngine() =>
       _cloudEngineFuture ??= _createCloudDriveEngine();
+
+  Pan115Gateway? _actressPan115Gateway;
+
+  /// 演员库详情页的 115 网关（懒建、单例）：登录态/搜文件/
+  /// 取直链/离线提交全走网盘引擎的既有 115 登录，不另起
+  /// 登录。演员库各入口在构造 DetailScreen 时注入它。
+  Pan115Gateway actressPan115Gateway() =>
+      _actressPan115Gateway ??= EnginePan115Gateway(
+        engine: _cloudDriveEngine,
+      );
 
   Future<CloudDriveEngine> _createCloudDriveEngine() async {
     final preferences = await SharedPreferences.getInstance();

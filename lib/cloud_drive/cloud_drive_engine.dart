@@ -27,6 +27,7 @@ import 'package:http/http.dart' as http;
 
 import '../core_bridge.dart';
 import '../models.dart';
+import 'cloud_115_offline.dart';
 import 'cloud_credential_store.dart';
 import 'cloud_drive_types.dart';
 import 'cloud_filename.dart';
@@ -187,6 +188,47 @@ class CloudDriveEngine {
       throw AppFailure('该网盘未登录，请先在设置 → 网盘登录里扫码登录');
     }
     return creds;
+  }
+
+  // -------------------------------------------------------------------------
+  // 115 离线接入（演员库详情页，见 cloud_115_offline.dart）
+  // -------------------------------------------------------------------------
+
+  /// 115 是否已登录（存有 cookie 凭证）。
+  bool get pan115LoggedIn {
+    final creds = _credentialStore.load('pan115');
+    return (creds?.fields['cookie'] ?? '').isNotEmpty;
+  }
+
+  /// 115 离线客户端：未登录返回 null（复用既有 qandroid
+  /// 会话 cookie，不另起登录）。
+  Pan115OfflineClient? pan115OfflineClient() {
+    final creds = _credentialStore.load('pan115');
+    final cookie = creds?.fields['cookie'] ?? '';
+    if (cookie.isEmpty) return null;
+    return Pan115OfflineClient(client: _httpClient, cookie: cookie);
+  }
+
+  /// 115 按关键词搜文件（根目录搜索即全盘范围）。
+  Future<List<CloudDriveFile>> searchPan115Files(String keyword) async {
+    final provider = _provider('pan115');
+    if (provider == null) return const [];
+    final credentials = _credentials('pan115');
+    return provider.search(
+      _httpClient,
+      credentials,
+      keyword,
+      provider.rootFolderId,
+    );
+  }
+
+  /// 115 文件取直链（复用 Pan115Provider.directLink 既有链，
+  /// 返回的 headers 已按取链口径组装好）。
+  Future<CloudDirectLink> pan115DirectLink(CloudDriveFile file) async {
+    final provider = _provider('pan115');
+    if (provider == null) throw AppFailure('115 网盘不可用');
+    final credentials = _credentials('pan115');
+    return provider.directLink(_httpClient, credentials, file);
   }
 
   void _remember(String key, CloudDriveFile file, CloudCoverSource coverSource) {

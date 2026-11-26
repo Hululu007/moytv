@@ -858,23 +858,21 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         }
       }, onError: (_) {}),
     );
-    // 首播地址：这番号竞速赢过就用缓存的已验活地址，否则库
-    // 里第一条（不验活、直接播；库里 99% 以上的地址是活
-    // 的，早上发布那版就是这个秒开口径）。
+    // 首播地址：这番号竞速赢过就用缓存的已验活地址；没赢过
+    // 就等本轮竞速出赢家（2026-11-26 20:10 起播口径：115
+    // 短优先窗优先、在线与本地库同尺竞速、第一条验活线路
+    // 起播）。与原「库里第一条未验活即开即播」（早上发布版
+    // 的秒开口径）的差异：库地址不再享未验活直开，改走 A
+    // 路同尺验活后参与竞速——验活只拉播放列表/首段，通常
+    // 仍是亚秒级；换来的是不起播死地址、不硬播。
     final cached = cacheKey.isEmpty ? null : _verifiedDetailCache[cacheKey];
-    var firstDetail =
-        cached ?? (dbRows.isNotEmpty ? dbRows.first.toDramaDetail() : null);
+    var firstDetail = cached;
     if (firstDetail == null) {
-      // 库里没有这部片的地址（2026-11-26 用户令改口径，覆盖
-      // 2026-11-22“只走数据库”）：不等死——等在线竞速出第一
-      // 条验活线路就照常进详情页播；四路全灭才如实报「暂无
-      // 可播线路」，不拿未验活地址硬播。2026-11-23 的视频库
-      // 诊断口径保留在全灭文案里。
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('库里没有这部片的地址，正在在线搜索线路…'),
+          content: Text('正在搜索可播线路…'),
           duration: Duration(seconds: 40),
         ),
       );
@@ -905,15 +903,9 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     final triedUrls = <String>{_detailPlayUrl(firstDetail)};
     var verifiedCursor = 0;
     Future<DetailNextLine?> nextLine() async {
-      // 1. 库里下一条没试过的地址（立即有，不用等）。
-      for (final row in dbRows) {
-        final url = row.playUrl;
-        if (url.isEmpty || triedUrls.contains(url)) continue;
-        triedUrls.add(url);
-        return (detail: row.toDramaDetail(), episodeIndex: 0);
-      }
-      // 2. 已验活线路（竞速四路，落败源的线路也算）按到达顺
-      // 序逐条出；还没有新的就等竞速全部收尾（最多 10 秒）。
+      // 1. 已验活线路（竞速各路，落败方的线路也算）按到达
+      // 顺序逐条出；还没有新的就等竞速全部收尾（最多等
+      // 10 秒）。
       if (verifiedCursor >= verifiedLines.length &&
           !raceSettled.isCompleted) {
         await Future.any([
@@ -927,6 +919,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         if (url.isEmpty || triedUrls.contains(url)) continue;
         triedUrls.add(url);
         return (detail: line, episodeIndex: 0);
+      }
+      // 2. 库里下一条没试过的地址（未验活，只在已验活线路
+      // 耗尽后当换线兜底）。
+      for (final row in dbRows) {
+        final url = row.playUrl;
+        if (url.isEmpty || triedUrls.contains(url)) continue;
+        triedUrls.add(url);
+        return (detail: row.toDramaDetail(), episodeIndex: 0);
       }
       // 链耗尽：返回 null，播放器保留原错误界面。
       return null;
@@ -979,13 +979,18 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     return detail.episodes.first.id;
   }
 
-  /// 四路竞速（2026-11-26 用户令扩源）：A 库里地址、B who's
-  /// py 链（MissAV 按番号现查）、C 123AV、D PH，四路并行，
-  /// 哪边先出经轻验活的可播地址哪边先赢（winner）；全部验活
-  /// 线路按到达顺序收进 [verifiedLines]（落败源不丢弃，供
-  /// 换线链逐条补进线路行）；四路全灭返回 null。点取消或换
-  /// 了代次时各路都尽快收手（返回 null），由 _playWork 按取
-  /// 消处理。[onSettled] 在四路全部收尾时回调一次。
+  /// 起播竞速（2026-11-26 20:10 用户令定版）：115（已登录
+  /// 且网盘已存该番号、取链验活通过）享短优先窗优先——窗
+  /// 口内 115 线路一到即赢；其他路（在线各源 + 本地数据库
+  /// 地址）先验活的先扣住，窗口（2 秒）结束还没等到 115
+  /// 就放扣住的第一名起播。115 没存货/未登录/验活不过时
+  /// 窗口空过，落在线与本地库两方同尺竞速，谁先验活谁先
+  /// 播；还在离线下载中的 115 不算选手（下完后由详情页
+  /// 115 区补进线路行）。全部验活线路按到达顺序收进
+  /// [verifiedLines]（落败方不丢弃，供换线链逐条补进线路
+  /// 行）；全灭返回 null。点取消或换了代次时各路都尽快收
+  /// 手（返回 null），由 _playWork 按取消处理。[onSettled]
+  /// 在各路全部收尾时回调一次。
   Future<DramaDetail?> _racePlayableDetail({
     required List<ActressJsonEntry> dbRows,
     required String code,
@@ -996,17 +1001,30 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     void Function()? onSettled,
   }) async {
     final winner = Completer<DramaDetail?>();
-    var pending = 2 + kActressOnlineSources.length;
-    void offer(DramaDetail? d) {
+    var pending = 3 + kActressOnlineSources.length;
+    DramaDetail? held;
+    var windowOpen = true;
+    final windowTimer = Timer(const Duration(seconds: 2), () {
+      windowOpen = false;
+      if (!winner.isCompleted && held != null) {
+        winner.complete(held);
+      }
+    });
+    void offer(DramaDetail? d, {bool isPan115 = false}) {
       if (d != null) {
         verifiedLines.add(d);
         if (!winner.isCompleted) {
-          winner.complete(d);
+          if (isPan115 || !windowOpen) {
+            winner.complete(d);
+          } else {
+            held ??= d;
+          }
         }
       }
       pending--;
       if (pending == 0) {
-        if (!winner.isCompleted) winner.complete(null);
+        windowTimer.cancel();
+        if (!winner.isCompleted) winner.complete(held);
         onSettled?.call();
       }
     }
@@ -1025,6 +1043,14 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
         cancel: cancel,
         playGeneration: playGeneration,
       ).then(offer, onError: (_) => offer(null)),
+    );
+    unawaited(
+      _racePan115(
+        code: code,
+        title: title,
+        cancel: cancel,
+        playGeneration: playGeneration,
+      ).then((d) => offer(d, isPan115: true), onError: (_) => offer(null)),
     );
     for (final source in kActressOnlineSources) {
       unawaited(
@@ -1193,6 +1219,72 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
     }
   }
 
+  /// E 路（兜底，2026-11-26 用户令）：115 网盘已存该番号文件
+  /// 才参与竞速——按番号搜网盘命中文件 → 取直链 → 同一把轻
+  /// 验活尺子验过才算线路。未登录/没存/取链失败/验不活都回
+  /// null，不编线路；没存的走详情页 115 区的自动离线，不在
+  /// 竞速里提交。
+  Future<DramaDetail?> _racePan115({
+    required String code,
+    required String title,
+    required Completer<void> cancel,
+    required int playGeneration,
+  }) async {
+    final normalized = code.trim();
+    if (normalized.isEmpty) return null;
+    final gateway = actressPan115GatewayOf(widget.repository);
+    if (gateway == null) return null;
+    try {
+      final file = await gateway
+          .findFileByCode(normalized)
+          .timeout(const Duration(seconds: 20));
+      if (file == null ||
+          cancel.isCompleted ||
+          playGeneration != _playGeneration) {
+        return null;
+      }
+      final link = await gateway
+          .directLink(file)
+          .timeout(const Duration(seconds: 15));
+      if (link == null ||
+          cancel.isCompleted ||
+          playGeneration != _playGeneration) {
+        return null;
+      }
+      final uri = Uri.tryParse(link.url.trim());
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return null;
+      }
+      final response = await _verifyFetch(
+        link.url,
+        link.headers,
+        const Duration(seconds: 5),
+      );
+      if (!feedProbePlayable(uri, response)) return null;
+      return DramaDetail(
+        Drama(
+          id: 'pan115:${file.id}',
+          source: 'pan115',
+          sourceId: file.id,
+          title: title,
+          tags: [normalized],
+        ),
+        [
+          Episode({
+            'id': link.url,
+            'title': '正片',
+            'direct': true,
+            'headers': link.headers,
+          }, 1),
+        ],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 库里地址直进详情页：首选线路进页即播（initialDetail 带进去：
   /// 站点详情取回是空的时就用它播）。不接探活链——无链可续，
   /// 播耗尽时详情页只按自身线路走。
@@ -1211,6 +1303,7 @@ class _ActressDetailPageState extends State<ActressDetailPage> {
           drama: detail.drama,
           repository: widget.repository,
           store: widget.store,
+          pan115Gateway: actressPan115GatewayOf(widget.repository),
           autoPlayOnOpen: true,
           autoPlayEpisodeIndex: 0,
           // 候选那条的集数（数据库里存的直链）带进去：站点详情取回

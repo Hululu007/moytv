@@ -15,6 +15,8 @@ import 'crosssite_probe.dart';
 import 'crosssite_probe_section.dart';
 import 'ios_dialogs.dart';
 import 'core_bridge.dart';
+import 'cloud_drive/cloud_115_offline.dart';
+import 'cloud_drive/cloud_drive_types.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'package:media_kit/media_kit.dart';
@@ -88,6 +90,7 @@ class DetailScreen extends StatefulWidget {
     this.playerFactory,
     this.videoBuilder,
     this.javdbStillsClient,
+    this.pan115Gateway,
   });
   final Drama drama;
   final AppRepository repository;
@@ -131,6 +134,12 @@ class DetailScreen extends StatefulWidget {
   /// 磁力/评论/信息卡系列与评分见 _loadJavdbExtras）。只供测试/
   /// 预览注入，不传时用默认客户端走真接口。
   final JavdbApiClient? javdbStillsClient;
+
+  /// 115 网关（演员库详情页的离线/播放接入，见 _startPan115）：
+  /// 演员库入口构造时由 NativeRepository 注入，登录态走网盘
+  /// 引擎既有 115 登录；不传时 115 区不出现，其余行为不变。
+  /// 只供演员库链与测试注入。
+  final Pan115Gateway? pan115Gateway;
   @override
   State<DetailScreen> createState() => _DetailScreenState();
 }
@@ -177,6 +186,21 @@ class _DetailScreenState extends State<DetailScreen> {
   /// JavDB 按番号补的评论（_loadJavdbExtras 填）：空时评论区
   /// 不显示，只读展示。
   List<JavdbReview> _javdbReviews = const [];
+
+  /// 115 区状态（_startPan115 / _pollPan115 维护）：未登录只
+  /// 显示一行提示；网盘已存该番号文件时出播放行；已自动离
+  /// 线未下完时显示进度，下完转播放行；都没命中整区不显示。
+  bool _pan115LoginHint = false;
+  CloudDriveFile? _pan115File;
+  bool _pan115Submitted = false;
+  double? _pan115Percent;
+
+  /// 已启动过 115 流程（防重复进入）；_pan115Checked 在
+  /// 「已登录且网盘无文件、无在跑任务」确认后置真，磁力到
+  /// 齐后 _maybeSubmitPan115 只在此后才许提交。
+  bool _pan115Started = false;
+  bool _pan115Checked = false;
+  Timer? _pan115Timer;
 
   /// 推荐视频（本站同分类优先）：空时推荐区隐藏，不留空壳。
   List<Drama> _recommended = const [];
@@ -237,6 +261,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    _pan115Timer?.cancel();
     _frameService.dispose();
     _detailScroll.dispose();
     widget.store.removeListener(_onStoreChanged);
@@ -405,6 +430,245 @@ class _DetailScreenState extends State<DetailScreen> {
         }
       }
     });
+    // 磁力到齐后 115 自动离线才有提交对象（_startPan115 已
+    // 确认网盘无文件/无在跑任务时才真提交，去重在方法内）。
+    unawaited(_maybeSubmitPan115(avId, generation));
+  }
+
+  /// 115 区启动（2026-11-26）：与 JavDB 补充同一处后台链。
+  /// 未登录只出一行提示、不提交不报错；网盘已存该番号文件
+  /// 直接出播放行；有同番号/同 hash 的离线任务在跑就显示
+  /// 进度并轮询，下完转播放行；都没有时置 _pan115Checked，
+  /// 等磁力到齐由 _maybeSubmitPan115 自动提交一次。没磁力
+  /// 也没文件时整区不显示。全程不挡页、不弹窗、不跳网盘页。
+  Future<void> _startPan115(Drama drama, int generation) async {
+    final gateway = widget.pan115Gateway;
+    if (gateway == null || _pan115Started) return;
+    final avId = extractAvId(
+      title: drama.title,
+      id: drama.id,
+      sourceId: drama.sourceId,
+    );
+    if (avId == null) return;
+    _pan115Started = true;
+    try {
+      if (!await gateway.isLoggedIn()) {
+        if (!mounted || generation != _generation) return;
+        setState(() => _pan115LoginHint = true);
+        return;
+      }
+      final file = await gateway
+          .findFileByCode(avId)
+          .timeout(const Duration(seconds: 20), onTimeout: () => null);
+      if (!mounted || generation != _generation) return;
+      if (file != null) {
+        setState(() => _pan115File = file);
+        return;
+      }
+      final task = await _pan115TaskFor(gateway, avId);
+      if (!mounted || generation != _generation) return;
+      if (task != null && !task.done) {
+        setState(() {
+          _pan115Submitted = true;
+          _pan115Percent = task.percent;
+        });
+        _startPan115Polling(avId, generation);
+        return;
+      }
+      _pan115Checked = true;
+      await _maybeSubmitPan115(avId, generation);
+    } catch (_) {
+      // 115 链任何失败都只让本区不显示，不挡详情页。
+    }
+  }
+
+  /// 在离线任务里找这部作品的任务：磁力 hash 命中或任务名
+  /// 含番号（归一化）任一成立。找不到回 null。
+  Future<Pan115OfflineTask?> _pan115TaskFor(
+    Pan115Gateway gateway,
+    String avId,
+  ) async {
+    final tasks = await gateway
+        .listOfflineTasks()
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () => const <Pan115OfflineTask>[],
+        );
+    final key = pan115CodeKeyOf(avId);
+    final hashes = {
+      for (final magnet in _javdbMagnets) pan115InfoHashOf(magnet.url),
+    }..remove('');
+    for (final task in tasks) {
+      if (task.infoHash.isNotEmpty && hashes.contains(task.infoHash)) {
+        return task;
+      }
+      if (key.isNotEmpty && pan115CodeKeyOf(task.name).contains(key)) {
+        return task;
+      }
+    }
+    return null;
+  }
+
+  /// 自动离线提交（用户「磁力自动离线 115」口径）：只在
+  /// _startPan115 确认过「已登录、网盘无此文件、无在跑任务」
+  /// 后、且本页已有 JavDB 磁力时提交排名第一条（movieMagnets
+  /// 已照 jar 版 rankMagnets 排序去重，第一条即第一名）。
+  /// 去重三道：
+  /// ①本地已提交记录里有同 hash 不再提交（转入进度跟随）；
+  /// ②提交前再查任务列表，同 hash 在列不提交；③网盘已有
+  /// 文件不提交（_startPan115 已查、提交前再兜一次）。
+  /// 提交成功记本地记录、页面明示「已提交 115 离线」并
+  /// 轮询进度；失败整区回落不显示，不报错不弹窗。
+  Future<void> _maybeSubmitPan115(String avId, int generation) async {
+    final gateway = widget.pan115Gateway;
+    if (gateway == null || !_pan115Checked) return;
+    if (_pan115File != null || _pan115Submitted) return;
+    if (_javdbMagnets.isEmpty) return;
+    try {
+      final magnet = _javdbMagnets.first;
+      final hash = pan115InfoHashOf(magnet.url);
+      if (await gateway.findFileByCode(avId) != null) return;
+      final submitted = await gateway.submittedHashes();
+      if (hash.isNotEmpty && submitted.contains(hash)) {
+        await _followPan115Task(gateway, avId, generation);
+        return;
+      }
+      final existing = await _pan115TaskFor(gateway, avId);
+      if (existing != null) {
+        if (!existing.done) {
+          await _followPan115Task(gateway, avId, generation);
+        }
+        return;
+      }
+      final ok = await gateway
+          .submitOffline(magnet.url)
+          .timeout(const Duration(seconds: 15), onTimeout: () => false);
+      if (!ok) return;
+      await gateway.recordSubmitted(hash);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _pan115Submitted = true;
+        _pan115Percent = null;
+      });
+      _startPan115Polling(avId, generation);
+    } catch (_) {
+      // 提交失败不提示、不挡页（磁力区仍可手动复制）。
+    }
+  }
+
+  /// 转入进度跟随：显示已提交与当前进度并开始轮询。
+  Future<void> _followPan115Task(
+    Pan115Gateway gateway,
+    String avId,
+    int generation,
+  ) async {
+    final task = await _pan115TaskFor(gateway, avId);
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _pan115Submitted = true;
+      _pan115Percent = task?.percent;
+    });
+    _startPan115Polling(avId, generation);
+  }
+
+  void _startPan115Polling(String avId, int generation) {
+    _pan115Timer?.cancel();
+    _pan115Timer = Timer.periodic(const Duration(seconds: 10), (_) {
+      unawaited(_pollPan115(avId, generation));
+    });
+  }
+
+  /// 轮询：文件出现（下载完成）即转播放行并停轮询；还在
+  /// 跑就刷新进度。失败下轮再来，不提示。
+  Future<void> _pollPan115(String avId, int generation) async {
+    final gateway = widget.pan115Gateway;
+    if (gateway == null) return;
+    try {
+      final file = await gateway
+          .findFileByCode(avId)
+          .timeout(const Duration(seconds: 20), onTimeout: () => null);
+      if (!mounted || generation != _generation) return;
+      if (file != null) {
+        _pan115Timer?.cancel();
+        setState(() {
+          _pan115File = file;
+          _pan115Submitted = false;
+          _pan115Percent = null;
+        });
+        return;
+      }
+      final task = await _pan115TaskFor(gateway, avId);
+      if (!mounted || generation != _generation) return;
+      if (task != null) {
+        setState(() => _pan115Percent = task.percent);
+      }
+    } catch (_) {
+      // 轮询失败不提示。
+    }
+  }
+
+  /// 115 播放：取直链后在本页直达正式播放器（与在线线路
+  /// 同一条 pushPlayer 路径），不跳网盘页找文件（2026-11-26
+  /// 用户令）。
+  Future<void> _playPan115Line() async {
+    final gateway = widget.pan115Gateway;
+    final file = _pan115File;
+    if (gateway == null || file == null) return;
+    final link = await gateway.directLink(file);
+    if (link == null || !mounted) return;
+    final drama = widget.drama;
+    final detail = DramaDetail(
+      Drama(
+        id: 'pan115:${file.id}',
+        source: 'pan115',
+        sourceId: file.id,
+        title: drama.title,
+        cover: drama.cover,
+        tags: drama.tags,
+      ),
+      [
+        Episode({
+          'id': link.url,
+          'title': '正片',
+          'direct': true,
+          'headers': link.headers,
+        }, 1),
+      ],
+    );
+    await _playActressOnlineLine(detail);
+  }
+
+  /// 海报点按（2026-11-26 直达口径）：115 已存该番号文件
+  /// 时优先落 115 线路（20:10 起播口径：115 正常优先），
+  /// 否则播当前详情线路（竞速赢家/库线路已在详情里），都
+  /// 在本页直达播放器、不跳别页；115 还在下载中时照 jar
+  /// 版 waitPlayable 等不完的口径给百分比提示，不硬播、
+  /// 过会儿再点即秒开。
+  void _playFromPoster(int resumeIndex) {
+    final episodes = _detail?.episodes ?? const <Episode>[];
+    if (_pan115File != null) {
+      unawaited(_playPan115Line());
+    } else if (episodes.isNotEmpty) {
+      _play(resumeIndex, resume: true);
+    } else if (_pan115Submitted) {
+      _showPan115WaitHint();
+    }
+  }
+
+  /// 115 下载中点按提示（照 jar 版等不完的回话）：带当前
+  /// 百分比，明示过 1~2 分钟再点就是秒开。
+  void _showPan115WaitHint() {
+    final percent = _pan115Percent;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          percent == null
+              ? '正在存到 115，过 1~2 分钟再点一次就是秒开'
+              : '正在存到 115（已 ${(percent * 100).round()}%），'
+                    '过 1~2 分钟再点一次就是秒开',
+        ),
+      ),
+    );
   }
 
   Future<void> _loadTmdb(Drama drama) async {
@@ -668,6 +932,7 @@ class _DetailScreenState extends State<DetailScreen> {
       unawaited(_refreshCodeMeta(merged, generation));
       unawaited(_loadJavdbStills(merged, generation));
       unawaited(_loadJavdbExtras(merged, generation));
+      unawaited(_startPan115(merged, generation));
       if (_isFolderDrama(merged)) {
         unawaited(_loadFolder(reset: true));
       }
@@ -725,6 +990,7 @@ class _DetailScreenState extends State<DetailScreen> {
         unawaited(_refreshCodeMeta(widget.drama, generation));
         unawaited(_loadJavdbStills(widget.drama, generation));
         unawaited(_loadJavdbExtras(widget.drama, generation));
+        unawaited(_startPan115(widget.drama, generation));
         return;
       }
       setState(() {
@@ -1115,6 +1381,7 @@ class _DetailScreenState extends State<DetailScreen> {
           drama: drama,
           repository: widget.repository,
           store: widget.store,
+          pan115Gateway: widget.pan115Gateway,
         ),
       ),
     );
@@ -1134,6 +1401,7 @@ class _DetailScreenState extends State<DetailScreen> {
           drama: peer.withPeers(peers),
           repository: widget.repository,
           store: widget.store,
+          pan115Gateway: widget.pan115Gateway,
         ),
       ),
     );
@@ -1286,6 +1554,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                   _crossSiteSection(drama),
                                   _actressOnlineLinesSection(drama),
                                   _javdbMagnetSection(),
+                                  _pan115Section(),
                                   _tmdbEpisodeSection(),
                                   _seriesSection(drama),
                                   _relatedSection(drama),
@@ -1408,7 +1677,15 @@ class _DetailScreenState extends State<DetailScreen> {
                                     // 海报点按只认“有可播的集”：重载/刷新中的
                                     // 瞬时加载态不许卡死海报播放入口（与已删
                                     // 底部钮的行为一致，_play 自带空详情守卫）。
-                                    ready: allowed && episodes.isNotEmpty,
+                                    // 演员库作品一部集数都没有但 115 已存该
+                                    // 番号文件时也放行，点按落 115 线路直达
+                                    // 播放器；115 下载中也放行，点按给百分
+                                    // 比提示（_playFromPoster）。
+                                    ready:
+                                        allowed &&
+                                        (episodes.isNotEmpty ||
+                                            _pan115File != null ||
+                                            _pan115Submitted),
                                     resumeIndex: resumeIndex,
                                   ),
                                 ),
@@ -1492,6 +1769,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                 ),
                                   SliverToBoxAdapter(
                                     child: _javdbMagnetSection(),
+                                  ),
+                                  SliverToBoxAdapter(
+                                    child: _pan115Section(),
                                   ),
                                   SliverToBoxAdapter(
                                     child: _descriptionSection(drama),
@@ -1614,6 +1894,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                   child: _javdbMagnetSection(),
                                 ),
                                 SliverToBoxAdapter(
+                                  child: _pan115Section(),
+                                ),
+                                SliverToBoxAdapter(
                                   child: _descriptionSection(drama),
                                 ),
                                 SliverToBoxAdapter(child: _magnetSection()),
@@ -1668,7 +1951,7 @@ class _DetailScreenState extends State<DetailScreen> {
           color: Colors.transparent,
           child: InkWell(
             key: const ValueKey('detail-poster-play'),
-            onTap: ready ? () => _play(resumeIndex, resume: true) : null,
+            onTap: ready ? () => _playFromPoster(resumeIndex) : null,
           ),
         ),
       );
@@ -1946,6 +2229,92 @@ class _DetailScreenState extends State<DetailScreen> {
               trailing: const Icon(Icons.copy_outlined, size: 18),
               onTap: () => unawaited(_copyMagnet(magnet.url)),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 115 区（在线线路区附近，磁力区下面）：未登录只出一行
+  /// 提示；网盘已存该番号文件出「115 播放」行，点按在本页
+  /// 直达正式播放器（_playPan115Line，不跳网盘页）；已自动
+  /// 离线未下完显示「已提交 115 离线」与进度，下完自动转
+  /// 播放行。没存也没磁力时整区不显示（_startPan115 维护）。
+  Widget _pan115Section() {
+    final colors = Theme.of(context).colorScheme;
+    if (_pan115LoginHint) {
+      return Padding(
+        key: const ValueKey('actress-pan115-section'),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 18,
+              color: colors.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                // 轻提示口径（2026-11-26 用户令）：115 不是播放
+                // 前置条件，未登录只留这一行、不弹窗不挡播放；
+                // 登录入口指向 App 现行网盘页登录，演员库不另
+                // 建登录界面。
+                '115 未登录，登录后可自动离线并在本页播放（去网盘页登录）；未登录不影响在线与本地线路播放',
+                style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12.5),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final file = _pan115File;
+    if (file == null && !_pan115Submitted) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      key: const ValueKey('actress-pan115-section'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('115', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (file != null)
+            ListTile(
+              key: const ValueKey('actress-pan115-play'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.play_circle_outline_rounded),
+              title: Text(
+                file.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: const Text('115 网盘 · 点按播放'),
+              onTap: () => unawaited(_playPan115Line()),
+            )
+          else ...[
+            InkWell(
+              onTap: _showPan115WaitHint,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.cloud_download_outlined,
+                    size: 18,
+                    color: colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _pan115Percent == null
+                        ? '已提交 115 离线，正在下载…'
+                        : '已提交 115 离线，下载中 ${(_pan115Percent! * 100).round()}%',
+                    style: const TextStyle(fontSize: 13.5),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: _pan115Percent),
+          ],
         ],
       ),
     );
@@ -2382,6 +2751,7 @@ class _DetailScreenState extends State<DetailScreen> {
           drama: target,
           repository: widget.repository,
           store: widget.store,
+          pan115Gateway: widget.pan115Gateway,
           onTagTap: widget.onTagTap,
           queue: PlaybackQueue.around(related, target),
           autoPlayOnOpen: wasPlaying,

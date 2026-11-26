@@ -74,7 +74,7 @@ void main() {
         magnetsById: {
           'm1': [
             {
-              'hash': 'ABCDEF0123',
+              'hash': 'ABCDEF0123456789ABCDEF0123456789ABCDEF01',
               'name': 'SSIS-001 HD',
               'size': 2048,
               'created_at': '2024-06-15T00:00:00.000Z',
@@ -87,7 +87,11 @@ void main() {
       final magnets = await fake.client.movieMagnets('m1');
       expect(magnets, hasLength(1));
       final magnet = magnets.single;
-      expect(magnet.url, 'magnet:?xt=urn:btih:ABCDEF0123');
+      expect(
+        magnet.url,
+        'magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01'
+        '&dn=${Uri.encodeComponent('[javdb.com]SSIS-001 HD')}',
+      );
       expect(magnet.name, 'SSIS-001 HD');
       expect(magnet.sizeLabel, '2 GB');
       expect(magnet.date, '20240615');
@@ -99,10 +103,23 @@ void main() {
         searchResults: const [],
         magnetsById: {
           'm1': [
-            {'hash': 'H1', 'name': '甲', 'size': '850 MB'},
-            {'hash': 'H2', 'name': '乙', 'size': 850},
+            {
+              'hash': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+              'name': '甲',
+              'size': '850 MB',
+              'seeders': 9,
+            },
+            {
+              'hash': 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+              'name': '乙',
+              'size': 850,
+            },
             {'name': '无 hash 也无链接', 'size': 100},
-            {'magnet': 'magnet:?xt=urn:btih:DIRECT', 'name': '丙'},
+            {
+              'magnet':
+                  'magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+              'name': '丙',
+            },
           ],
         },
       );
@@ -110,7 +127,54 @@ void main() {
       expect(magnets, hasLength(3));
       expect(magnets[0].sizeLabel, '850 MB');
       expect(magnets[1].sizeLabel, '850 MB');
-      expect(magnets[2].url, 'magnet:?xt=urn:btih:DIRECT');
+      expect(
+        magnets[2].url,
+        'magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+      );
+    });
+
+    test('排序照 jar rankMagnets：做种主导、同 hash 去重留分高、坏 hash 丢弃', () async {
+      final fake = _FakeJavdbExtra(
+        searchResults: const [],
+        magnetsById: {
+          'm1': [
+            {
+              'hash': '2222222222222222222222222222222222222222',
+              'name': '乙 中文字幕',
+              'size': 2048,
+              'cnsub': true,
+              'hd': true,
+            },
+            {
+              'hash': '1111111111111111111111111111111111111111',
+              'name': '甲',
+              'size': 300,
+              'seeders': 3,
+            },
+            {
+              'hash': '2222222222222222222222222222222222222222',
+              'name': '乙 无字幕小文件',
+              'size': 100,
+            },
+            {'hash': 'NOTHEX', 'name': '坏行'},
+          ],
+        },
+      );
+      final magnets = await fake.client.movieMagnets('m1');
+      expect(magnets, hasLength(2));
+      expect(magnets[0].name, '甲');
+      expect(magnets[1].name, '乙 中文字幕');
+    });
+
+    test('hash 归一：磁力链抽 btih 转小写、认不出回空', () {
+      expect(
+        javdbNormHashOf(
+          'magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=x',
+        ),
+        'abcdef0123456789abcdef0123456789abcdef01',
+      );
+      expect(javdbNormHashOf('ABCDEF0123'), isEmpty);
+      expect(javdbNormHashOf(''), isEmpty);
     });
 
     test('接口出错时抛错、由调用方兜底（与既有方法同口径）', () async {
@@ -254,7 +318,7 @@ void main() {
       magnetsById: {
         'm1': [
           {
-            'hash': 'ABCDEF0123',
+            'hash': 'ABCDEF0123456789ABCDEF0123456789ABCDEF01',
             'name': 'SSIS-001 HD',
             'size': 2048,
             'created_at': '2024-06-15',
@@ -313,11 +377,12 @@ void main() {
         isTrue,
       );
       expect(find.text('SSIS-001 HD'), findsOneWidget);
-      await tester.tap(
-        find.byKey(const ValueKey('javdb-magnet-magnet:?xt=urn:btih:ABCDEF0123')),
-      );
+      final magnetUrl =
+          'magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01'
+          '&dn=${Uri.encodeComponent('[javdb.com]SSIS-001 HD')}';
+      await tester.tap(find.byKey(ValueKey('javdb-magnet-$magnetUrl')));
       await tester.pump(const Duration(milliseconds: 300));
-      expect(clipboardText, 'magnet:?xt=urn:btih:ABCDEF0123');
+      expect(clipboardText, magnetUrl);
       expect(find.text('磁力链接已复制'), findsOneWidget);
       // 评论区在最下方。
       expect(

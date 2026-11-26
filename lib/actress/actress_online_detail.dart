@@ -1,7 +1,17 @@
+import '../cloud_drive/cloud_115_offline.dart';
+import '../core_bridge.dart';
 import '../models.dart';
 import 'actress_online_parse.dart';
 import 'actress_online_sources.dart';
 import 'javdb_api.dart';
+
+/// 演员库各入口共用：从仓库取 115 网关（只有生产仓库
+/// NativeRepository 有；测试假仓库回 null，115 区/竞速 115
+/// 路不出现，其余行为不变）。
+Pan115Gateway? actressPan115GatewayOf(AppRepository repository) =>
+    repository is NativeRepository
+    ? repository.actressPan115Gateway()
+    : null;
 
 /// 在线源一张卡 + 已取流结果 → 可直接进详情页/播放器的详情。
 /// 在线视图点卡、详情页在线线路区、女优详情页竞速三处共用同

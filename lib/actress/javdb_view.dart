@@ -16,6 +16,7 @@ import '../detail_screen.dart';
 import '../local_store.dart';
 import '../models.dart';
 import 'actress_av_style.dart';
+import 'actress_online_detail.dart';
 import 'javdb_api.dart';
 import 'javdb_image.dart';
 
@@ -71,6 +72,7 @@ Future<void> openJavdbWork(
         drama: drama,
         repository: repository,
         store: store,
+        pan115Gateway: actressPan115GatewayOf(repository),
         initialDetail: detail,
       ),
     ),

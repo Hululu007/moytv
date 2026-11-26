@@ -239,12 +239,122 @@ class JavdbReview {
   }
 }
 
-/// 磁力一条 → 通用 MagnetLink（照 AvPlay JavDbApiMagnet 实证
-/// 字段拼：hash 必填、链接 = magnet:?xt=urn:btih:{hash}；
-/// size 是 JsonElement，数字按 MB 读（asMegabyteSizeText），
-/// 字符串照原样；created_at 归一成 YYYYMMDD 给 metaLabel
-/// 拼日期；hd → quality 'HD'，cnsub → 标签「字幕」）。
-/// hash 与现成磁力链接都拿不到时返回 null（不编链接）。
+/// hash 归一（照 jar 版 normHash）：磁力链接里抽 btih，只认
+/// 40 位十六进制、转小写；认不出回空（这类条目排序时丢弃）。
+String javdbNormHashOf(String raw) {
+  var text = raw.trim();
+  if (text.toLowerCase().startsWith('magnet:')) {
+    final match = RegExp(
+      r'xt=urn:btih:([0-9a-fA-F]{40})',
+      caseSensitive: false,
+    ).firstMatch(text);
+    text = match?.group(1) ?? '';
+  }
+  return RegExp(r'^[0-9a-fA-F]{40}$').hasMatch(text) ? text.toLowerCase() : '';
+}
+
+double _javdbNumOf(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final value = json[key];
+    if (value is num) return value.toDouble();
+    final parsed = double.tryParse(value?.toString() ?? '');
+    if (parsed != null) return parsed;
+  }
+  return 0;
+}
+
+/// 磁力打分（照 jar 版 score() 逐项对照）：做种数（seeders/
+/// seeds/heat/popularity 首个有值）×1e9 主导；中文字幕
+/// （cnsub 标记或名含 中文字幕/中字/中文/chinese/chs/cht）
+/// +1e7；高清（hd 标记或名含 2160p/4k/1080p/高清/hd）+1e6；
+/// 大小在 500–8000 MB 区间 +1e5；日期（created_at/
+/// release_date 的年月日拼数）×0.001；最后减 |大小MB-2500|
+/// ×1e-6 当近似平局的微调。size 数字按 MB 读（与 jar 的
+/// num(size) 同口径）。
+double javdbMagnetScoreOf(Map<String, dynamic> json) {
+  final seeders = _javdbNumOf(json, const [
+    'seeders',
+    'seeds',
+    'heat',
+    'popularity',
+  ]);
+  final name = _javdbStr(json['name']).toLowerCase();
+  final cnsub =
+      _javdbBool(json['cnsub']) ||
+      name.contains('中文字幕') ||
+      name.contains('中字') ||
+      name.contains('中文') ||
+      name.contains('chinese') ||
+      name.contains('chs') ||
+      name.contains('cht');
+  final hd =
+      _javdbBool(json['hd']) ||
+      name.contains('2160p') ||
+      name.contains('4k') ||
+      name.contains('1080p') ||
+      name.contains('高清') ||
+      name.contains('hd');
+  final sizeMb = _javdbNumOf(json, const ['size']);
+  final sizeInRange = sizeMb >= 500 && sizeMb <= 8000;
+  var dateValue = 0.0;
+  final dateText = _javdbStr(json['created_at']).isNotEmpty
+      ? _javdbStr(json['created_at'])
+      : _javdbStr(json['release_date']);
+  final dateMatch = RegExp(
+    r'(20\d{2})[-/]?(\d{2})?[-/]?(\d{2})?',
+  ).firstMatch(dateText);
+  if (dateMatch != null) {
+    dateValue =
+        (int.parse(dateMatch.group(1)!) * 10000 +
+                int.parse(dateMatch.group(2) ?? '0') * 100 +
+                int.parse(dateMatch.group(3) ?? '0'))
+            .toDouble();
+  }
+  return seeders * 1e9 +
+      (cnsub ? 1e7 : 0) +
+      (hd ? 1e6 : 0) +
+      (sizeInRange ? 1e5 : 0) +
+      dateValue * 0.001 -
+      (sizeMb - 2500).abs() * 1e-6;
+}
+
+/// 磁力排序（照 jar 版 rankMagnets）：按 normHash 去重（同
+/// hash 只留分高的一条，hash 认不出的条目丢弃），按分降序。
+List<Map<String, dynamic>> javdbRankMagnetJsons(
+  List<Map<String, dynamic>> items,
+) {
+  final byHash = <String, (Map<String, dynamic>, double)>{};
+  for (final item in items) {
+    // hash 候选键与 javdbMagnetLinkOf 的链接来源键一致：
+    // hash 本体优先，其次现成磁力链接字段（normHash 从链
+    // 里抽 btih）。jar 版只读 hash/url 两键，我们多容磁力
+    // 键名变体，认不出的照样丢弃。
+    var candidate = '';
+    for (final key in const ['hash', 'magnet', 'magnet_url', 'url', 'link']) {
+      final value = _javdbStr(item[key]);
+      if (value.isNotEmpty) {
+        candidate = value;
+        break;
+      }
+    }
+    final hash = javdbNormHashOf(candidate);
+    if (hash.isEmpty) continue;
+    final score = javdbMagnetScoreOf(item);
+    final existing = byHash[hash];
+    if (existing == null || score > existing.$2) {
+      byHash[hash] = (item, score);
+    }
+  }
+  final ranked = byHash.values.toList()
+    ..sort((a, b) => b.$2.compareTo(a.$2));
+  return [for (final entry in ranked) entry.$1];
+}
+
+/// 磁力一条 → 通用 MagnetLink（字段照 jar 版 magnets 实证：
+/// hash/name/size（MB）/created_at/hd/cnsub；链接拼法照
+/// jar 版 magnetUri：magnet:?xt=urn:btih:{hash}，有名时带
+/// &dn={编码后的「[javdb.com]」+名}；url 字段已是现成磁力
+/// 链接时照原样）。hash 与现成链接都拿不到回 null（不编）。
 MagnetLink? javdbMagnetLinkOf(Map<String, dynamic> json) {
   var url = '';
   for (final key in const ['magnet', 'magnet_url', 'url', 'link']) {
@@ -258,6 +368,13 @@ MagnetLink? javdbMagnetLinkOf(Map<String, dynamic> json) {
   if (url.isEmpty) {
     if (hash.isEmpty) return null;
     url = 'magnet:?xt=urn:btih:$hash';
+    final rawName = _javdbStr(json['name']);
+    if (rawName.isNotEmpty) {
+      final dn = rawName.startsWith('[javdb.com]')
+          ? rawName
+          : '[javdb.com]$rawName';
+      url = '$url&dn=${Uri.encodeComponent(dn)}';
+    }
   }
   var name = _javdbStr(json['name']);
   if (name.isEmpty) name = _javdbStr(json['title']);
@@ -363,10 +480,14 @@ class JavdbApiClient {
       throw AppFailure('JavDB 接口返回异常，请稍后再试');
     }
     final success = decoded['success'];
+    // 成功门：success 明确为真最稳；没给 success 字段时以
+    // data 在场为准（jar 版 ZakaJavdbAmns 的 api() 就是只认
+    // data 对象在场）；success 明确为假照旧拒绝。
     final ok =
         success == true ||
         success == 1 ||
-        success?.toString().toLowerCase() == 'true';
+        success?.toString().toLowerCase() == 'true' ||
+        (success == null && decoded.containsKey('data'));
     if (!ok) {
       final message = _javdbStr(decoded['message']);
       throw AppFailure(message.isNotEmpty ? message : 'JavDB 接口拒绝了请求');
@@ -453,16 +574,21 @@ class JavdbApiClient {
     );
   }
 
-  /// 磁力列表（api/v1/movies/{id}/magnets，路径拼接推定，
-  /// API_MAP 只逐字证实到 …/magnets）。信封照 AvPlay 模型
-  /// JavDbApiMagnetsData 的 {magnets:[...]}，另宽容 list /
-  /// items / 列表本体。坏行跳过、拿不到回空表。
+  /// 磁力列表（GET api/v1/movies/{id}/magnets，路径与信封
+  /// data.magnets 由 jar 版 ZakaJavdbAmns 原文实证，不再是
+  /// 拼接推定；另宽容 list / items / 列表本体）。返回前照
+  /// jar 版 rankMagnets 排序去重：第一条即自动离线该提交的
+  /// 第一名。坏行跳过、拿不到回空表。
   Future<List<MagnetLink>> movieMagnets(String movieId) async {
     final data = await _getJson('api/v1/movies/$movieId/magnets');
     final list = _listOf(data, const ['magnets', 'list', 'items']);
-    return [
+    final raw = [
       for (final item in list)
-        if (item is Map<String, dynamic>) ?javdbMagnetLinkOf(item),
+        if (item is Map<String, dynamic>) item,
+    ];
+    return [
+      for (final item in javdbRankMagnetJsons(raw))
+        ?javdbMagnetLinkOf(item),
     ];
   }
 

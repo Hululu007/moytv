@@ -203,6 +203,7 @@ class ActressOnlineSourceViewState extends State<ActressOnlineSourceView> {
             drama: built.drama,
             repository: widget.repository,
             store: widget.store,
+            pan115Gateway: actressPan115GatewayOf(widget.repository),
             initialDetail: built.detail,
           ),
         ),
