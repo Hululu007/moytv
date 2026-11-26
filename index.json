@@ -1287,6 +1287,33 @@
       "adult": true,
       "description": "黄果短剧HGTV（hgtv.im）。14 个固定分类与原 py 完全一致（首页/经典魔改/家庭伦理/都市爱情/特殊趣味/校园记忆/古装玄幻/现代惊悚/域外传奇/经典动漫/AI演示/特殊口味/异能穿越/二次元区，不删减），服务端渲染 HTML 列表/详情/搜索；详情照原 py 取 JSON-LD 字段与 /watch/ 选集、单线路「在线播放」；播放照原 py 链：/watch 页 data-src（默认 /play/{sid}_{ep}.html）取播放地址，播放端点回内联主清单时在 play 内预解析到子清单。播放端点须带会话 cookie（原 py 靠 cookie 罐），插件侧由宿主按插件隔离的自动 cookie 罐承接。由内置 py 蜘蛛改写。",
       "manifest": "hgtvim/hgtvim.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.hongluo",
+      "name": "红裸短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "红裸短剧（hongluo.co）。分类与原 py 1:1：全部/仙侠玄幻/都市情感/奇幻异能/古装宫廷/悬疑犯罪/大学校园/家庭剧情/职场商战/灵异惊悚共 10 类，目录走 /api/catalog JSON 接口，详情解析剧集页分集，播放页现取 video 直链。由内置 py 蜘蛛改写。",
+      "manifest": "hongluo/hongluo.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.huai",
+      "name": "欢爱",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "欢爱。17 个分类与站导航一致，接口自动注册取令牌，列表/详情/搜索走站点 JSON 接口；播放先验试看，短预告时按原 py 流程领邀请奖励购片解锁完整版。由内置 py 蜘蛛改写。",
+      "manifest": "huai/huai.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.huangguazy",
+      "name": "黄瓜资源",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "黄瓜资源（wap.huangguazy7.cc，镜像 gua.huangguazy8.cc）。7 个分类与站导航 1:1（黄瓜/番号/不卡/玉兔/裤子/森林/163 资源），网页解析取 player_aaaa 的 m3u8 播放，master 清单在 play 内预解析。由内置 py 蜘蛛改写。",
+      "manifest": "huangguazy/huangguazy.idjplugin"
     }
   ],
   "cms": []
