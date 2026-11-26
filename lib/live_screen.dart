@@ -1217,15 +1217,16 @@ class _LiveScreenState extends State<LiveScreen> {
     );
   }
 
-  /// 左下角「+」导入钮：悬浮固定在页面左下角的独立层上——
+  /// 右下角「+」导入钮：悬浮固定在页面右下角的独立层上——
   /// 不在频道列表的布局里、不随列表上下滑动而动，滑动时纹丝
-  /// 不动；位置在列表区左下角，不挡信息行左槽的预览帧（那行
-  /// 在列表区顶部）。点开给两个入口：导入本地文件 / 添加远程
-  /// 链接（见 _showImportMenu）。
+  /// 不动；位置在列表区右下角（2026-11-26 用户令从左下角挪
+  /// 过来，边距规格与原来镜像一致），不挡信息行左槽的预览
+  /// 帧（那行在列表区顶部）。点开给两个入口：导入本地文件 /
+  /// 添加远程链接（见 _showImportMenu）。
   Widget _importButton(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Positioned(
-      left: 12,
+      right: 12,
       bottom: 12,
       child: Tooltip(
         message: '导入直播源',

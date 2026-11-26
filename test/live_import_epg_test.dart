@@ -5,7 +5,7 @@
 // - XMLTV：解析、对台（tvg-id 与显示名两路）、正在/下一条；
 // - 节目单服务：gzip 内容能解、缓存目录走测试注入；
 // - 回看地址生成：append 模板与 default 模板；
-// - 组件：左下角「+」固定不动（滚列表不跟）、点开菜单两项齐；
+// - 组件：右下角「+」固定不动（滚列表不跟）、点开菜单两项齐；
 //   带节目单的源信息行显示真节目名，节目单里过去的节目点回看
 //   按模板地址起播。
 import 'dart:convert';
@@ -334,12 +334,12 @@ void main() {
   });
 
   group('直播页「+」与节目单', () {
-    testWidgets('「+」固定左下角：滚列表不动，点开菜单两项齐', (tester) async {
+    testWidgets('「+」固定右下角：滚列表不动，点开菜单两项齐', (tester) async {
       await _pumpLivePage(tester);
       final button = find.byKey(const ValueKey('live-import-add'));
       expect(button, findsOneWidget);
       final before = tester.getRect(button);
-      expect(before.left, 12);
+      expect(before.right, closeTo(390 - 12, 1));
       expect(before.bottom, closeTo(844 - 12, 1));
       await tester.drag(
         find.byKey(const ValueKey('live-grid')),
