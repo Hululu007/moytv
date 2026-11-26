@@ -17,11 +17,12 @@ import 'mini_app_store.dart';
 import 'haikuo/haikuo_home_page.dart';
 import '../idj_plugin_store.dart';
 import 'idj_plugin_tab.dart';
+import 'haikuo/haikuo_rule_market.dart';
 
 /// 小程序首页。
 ///
 /// 结构对齐参考实现：紧凑单行顶栏（标签页 + 新建 / 视图切换 / 设置并作
-/// 一行）+「已安装 / 市场 / 海阔 / 插件」四标签 + 四列图标网格。图标用名称首字 + 按
+/// 一行）+「已安装 / 市场 / 海阔 / 插件 / 海阔规则」五标签 + 四列图标网格。图标用名称首字 + 按
 /// appId 取色的圆角方块，与参考实现的视觉一致，也不依赖小程序包内提供图标资源。
 /// 海阔小程序有自己的独立标签（海阔规则列表与导入入口都在那页里），
 /// 不再以固定卡片挂在「已安装」列表顶部。
@@ -567,7 +568,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           // 紧凑单行顶栏：标签页与动作钮并作一行（对标官方密度），
@@ -594,6 +595,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
               Tab(text: '市场', height: 38),
               Tab(text: '海阔', height: 38),
               Tab(text: '插件', height: 38),
+              Tab(text: '海阔规则', height: 38),
             ],
           ),
           actions: [
@@ -640,6 +642,11 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
                   // iDuanJu 插件市场（设计 §4）：已安装 / 安装入口 /
                   // 订阅 / 更新检查四区，装好的插件落片库当站用。
                   IdjPluginTab(key: _idjTabKey, store: _idjStore),
+                  // 海阔规则仓库（皇帝影院海阔规则仓库）：拉索引 →
+                  // 点安装走海阔既有导入链路落 HaikuoStore，与插件
+                  // 条目分区呈现，不走 .idjplugin 安装器。加在末尾，
+                  // 既有四个 tab 的序号不变。
+                  const HaikuoRuleMarketView(),
                 ],
               ),
       ),
