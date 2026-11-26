@@ -1386,6 +1386,33 @@
       "adult": true,
       "description": "JAVSiri（javsiri.cc）。7 个分类与原 py 蜘蛛 CATS 1:1 对应，列表走站内 HTML 卡片解析，详情页 flashvar 现取 video_url（get_file mp4），play 把详情响应下发的 kt_acctoken 饼干随流 headers 交给播放器、经 302 落 cloud CDN 播放。由内置 py 蜘蛛改写。",
       "manifest": "javsiri/javsiri.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jin18",
+      "name": "18禁乐园",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "18禁乐园（18jin1109.lol）。分类与站导航 1:1（首页实时解析、原 py 15 分类兜底），MacCMS 详情页取播放页 player_aaaa 地址直连 HLS，play 内预解析主清单到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "jin18/jin18.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jiuseduanju",
+      "name": "九色短剧",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "九色短剧（jiuseai.top）。72 个分类与站点导航 1:1（动态解析、兜底同原 py），列表卡片直达播放页，详情与播放均读播放页 player_aaaa 现取直链，master 清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "jiuseduanju/jiuseduanju.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jptt",
+      "name": "JPTT禁片天堂",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JPTT禁片天堂（jptt.tv）。17 个分类与原 py 完全一致（tid 标签类 + fid 厂牌类），详情页现取 m3u8 直链播放，play 内预解析 master 清单到子清单。由内置 py 蜘蛛改写。",
+      "manifest": "jptt/jptt.idjplugin"
     }
   ],
   "cms": []
