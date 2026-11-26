@@ -1602,6 +1602,15 @@
       "adult": true,
       "description": "伊人AV（yiren234.cc）。分类与原 py 蜘蛛 1:1（动态解析 /categories，失败时静态表兜底），播放为详情页 JSON-LD VideoObject 的 contentUrl 直链，master 清单在 play 内预解析到子清单。由内置 py 蜘蛛改写。",
       "manifest": "yiren/yiren.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.youtube",
+      "name": "YouTube",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": false,
+      "description": "YouTube（www.youtube.com，Innertube 接口）。21 个分类与原 py CLASSES 1:1（动漫/短剧/电视剧/电影/战争片/沙雕动漫/新闻/首页/Shorts/音乐/直播/学习/纪录片/综艺/体育/科技/时尚/科普/新闻直播/4K/直播台；原 py 登录三类仅在配 cookie 时出现，插件无登录配置、与原 py 无 cookie 时一致未列），含 91 个直播台直列；列表解析、标题清洗、合集去重与季度分组、筛选转查询、详情（player+oembed 兜底+相关视频线）与播放（VISIONOS HLS/多端回退、主清单预解析到子清单）均与原 py 一致。由内置 py 蜘蛛改写。",
+      "manifest": "youtube/youtube.idjplugin"
     }
   ],
   "cms": []
