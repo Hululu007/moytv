@@ -254,13 +254,14 @@ void main() {
     expect(LiveDecoderMode.software.next, LiveDecoderMode.auto);
   });
 
-  testWidgets('视频区顶栏：只有频道名、无信息钮、无设置齿轮、无分辨率、无网速', (tester) async {
+  testWidgets('视频区顶栏：整个撤掉、无频道名、无信息钮、无设置齿轮、无分辨率、无网速', (tester) async {
     await _pumpLive(tester);
-    // 截图版式顶栏：只剩左频道名；信息钮与分辨率读数已按用户
-    // 口径整个撤掉；设置齿轮也早已撤掉（解码/睡眠/恢复默认
-    // 三项挪进软件设置页「直播设置」节）；网速无数据时不
-    // 显示；时钟已随版式撤掉。
-    expect(find.byKey(const ValueKey('live-video-title')), findsOneWidget);
+    // 顶栏已按用户 2026-11-26 令整个撤掉：频道名也不在视频区
+    // 顶部显示（只在下方节目卡与频道格里出现）；信息钮与分辨
+    // 率读数上一批已撤；设置齿轮更早已撤（解码/睡眠/恢复默认
+    // 三项在软件设置页「直播设置」节）；网速无数据时不显示；
+    // 时钟已随版式撤掉。
+    expect(find.byKey(const ValueKey('live-video-title')), findsNothing);
     expect(find.text('频道一'), findsWidgets);
     expect(find.byKey(const ValueKey('live-video-info')), findsNothing);
     expect(find.byKey(const ValueKey('live-video-settings')), findsNothing);

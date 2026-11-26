@@ -48,10 +48,15 @@ const _videoOverlayStyle = TextStyle(
   shadows: [Shadow(color: Color(0xCC000000), blurRadius: 4)],
 );
 
-/// 选中态文字色：用户定的“选中变黄”口径保留这一项；其余配色
-/// （面板、卡、格、未选中文字）全部跟随应用主题——改版时写死的
-/// 灰绿整页一色已按用户口径删除恢复。
+/// 选中态文字色：用户定的“选中变黄”口径保留这一项。其余配色
+/// 只在直播页内套深色（见 _liveDarkTheme），全应用主题不动。
 const _liveSelectedText = Color(0xFFFFDF00);
+
+/// 直播页深色底与卡面（用户 2026-11-26 令：直播页在浅色主题下
+/// 整页灰白，只限直播页改深）：页面近黑、卡面深灰。套法见
+/// _LiveScreenState._liveDarkTheme。
+const _livePageBackground = Color(0xFF0D0E10);
+const _liveCardSurface = Color(0xFF232529);
 
 class LiveScreen extends StatefulWidget {
   const LiveScreen({
@@ -1096,36 +1101,92 @@ class _LiveScreenState extends State<LiveScreen> {
     if (source != null) _changeSource(source);
   }
 
+  /// 直播页专属深色（用户 2026-11-26 令：浅色主题下整页灰白，
+  /// 只限直播页改深）：从应用主题派生，只换取色——页面近黑、
+  /// 卡面/胶囊/列表行深灰、主文字白、次文字浅灰、分隔线低对比
+  /// 深色；选中胶囊底换深紫衬黄字（选中文字色是单独常量，不
+  /// 变），+ 钮仍用主题主色（饱和紫，在黑底上是强调点不是浅色
+  /// 块）。全应用主题与其他页面一律不动；选源弹窗、节目单、
+  /// 导入菜单这些走根导航器的弹层不在这层里，保持跟随应用
+  /// 主题（选源弹窗是共用件，按口径不动）。
+  ThemeData _liveDarkTheme(BuildContext context) {
+    final base = Theme.of(context);
+    final scheme = base.colorScheme.copyWith(
+      brightness: Brightness.dark,
+      surface: const Color(0xFF17181B),
+      surfaceContainerLowest: _livePageBackground,
+      surfaceContainerLow: const Color(0xFF17181B),
+      surfaceContainer: const Color(0xFF1D1E22),
+      surfaceContainerHigh: const Color(0xFF26282D),
+      surfaceContainerHighest: _liveCardSurface,
+      onSurface: Colors.white,
+      onSurfaceVariant: const Color(0xFFB9BDC6),
+      outlineVariant: const Color(0xFF2E3036),
+      primaryContainer: const Color(0xFF372A52),
+      onPrimaryContainer: Colors.white,
+    );
+    return base.copyWith(
+      brightness: Brightness.dark,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: _livePageBackground,
+      dividerColor: const Color(0xFF2E3036),
+      dividerTheme: base.dividerTheme.copyWith(
+        color: const Color(0xFF2E3036),
+      ),
+      iconTheme: base.iconTheme.copyWith(color: Colors.white),
+      textTheme: base.textTheme.apply(
+        bodyColor: Colors.white,
+        displayColor: Colors.white,
+      ),
+      primaryTextTheme: base.primaryTextTheme.apply(
+        bodyColor: Colors.white,
+        displayColor: Colors.white,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
-    final Widget content;
-    if (_source == null) {
-      content = StatusPanel(
-        key: const ValueKey('live-green-empty'),
-        title: '暂无可用直播源',
-        message: '当前没有可用的直播源。',
-        icon: Icons.verified_user_outlined,
-      );
-    } else {
-      content = Column(
-        children: [
-          Expanded(
-            flex: television ? _tvPlaybackShare : _playbackShare,
-            child: _video(context, television),
-          ),
-          Expanded(
-            flex: television ? _tvListShare : _listShare,
-            child: _panel(context, television),
-          ),
-        ],
-      );
-    }
-    // 没有 LocalStore（测试注入缺省）时不挂导入钮，页面与原来一致。
-    if (widget.appStore == null) return content;
-    return Stack(
-      fit: StackFit.expand,
-      children: [content, _importButton(context)],
+    // 整页套直播页深色层 + 近黑底；内容改用 Builder 的 context
+    // 构建，下面各方法里 Theme.of 读到的才是这一层深色。
+    return Theme(
+      data: _liveDarkTheme(context),
+      child: Material(
+        color: _livePageBackground,
+        child: Builder(
+          builder: (context) {
+            final Widget content;
+            if (_source == null) {
+              content = StatusPanel(
+                key: const ValueKey('live-green-empty'),
+                title: '暂无可用直播源',
+                message: '当前没有可用的直播源。',
+                icon: Icons.verified_user_outlined,
+              );
+            } else {
+              content = Column(
+                children: [
+                  Expanded(
+                    flex: television ? _tvPlaybackShare : _playbackShare,
+                    child: _video(context, television),
+                  ),
+                  Expanded(
+                    flex: television ? _tvListShare : _listShare,
+                    child: _panel(context, television),
+                  ),
+                ],
+              );
+            }
+            // 没有 LocalStore（测试注入缺省）时不挂导入钮，页面与原来一致。
+            if (widget.appStore == null) return content;
+            return Stack(
+              fit: StackFit.expand,
+              children: [content, _importButton(context)],
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -1479,46 +1540,11 @@ class _LiveScreenState extends State<LiveScreen> {
                 ),
               ),
             ),
-          // 手机端播放区：中间居中转圈/速率 + 顶部频道名。
-          // 顶栏画在错误遮罩之上；中间层只在无错时显示。
-          if (!television) ...[
-            if (error == null) _videoCenterOverlay(context),
-            _videoHeader(context),
-          ],
+          // 手机端播放区：只有中间居中转圈/速率。顶栏（频道名）
+          // 已按用户 2026-11-26 令整个撤掉，视频区顶部彻底干净；
+          // 中间层只在无错时显示。
+          if (!television && error == null) _videoCenterOverlay(context),
         ],
-      ),
-    );
-  }
-
-  /// 截图播放区顶栏：只剩左边的频道名。分辨率/帧率读数与右上角
-  /// 频道信息钮（及其信息单）已按用户口径整个撤掉；设置齿轮也早
-  /// 已撤掉：解码模式/睡眠定时/恢复默认三项挪进软件设置页「直播
-  /// 设置」节（见 live_settings.dart）。顶栏本身不拦手势，点按
-  /// 仍落到下面的全屏手势层。
-  Widget _videoHeader(BuildContext context) {
-    final channel = _playback.channel;
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 4, 0),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                channel?.name ?? _source?.name ?? '直播',
-                key: const ValueKey('live-video-title'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: _videoOverlayStyle.copyWith(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1731,9 +1757,8 @@ class _LiveScreenState extends State<LiveScreen> {
         ],
       );
     }
-    // 配色恢复改版前口径：面板不铺自己的底色，透出页面背景跟随
-    // 应用主题。改版时写死的灰绿渐变（_livePanelTop/_livePanelBottom）
-    // 让整页下半部一个颜色，用户明确说没让改成一样的，已删。
+    // 面板不铺自己的底色：页面底色由 build 的直播页深色层统一
+    // 给（近黑），面板透出它即可。
     return Column(
       children: [
         _infoCards(context),
@@ -1760,7 +1785,7 @@ class _LiveScreenState extends State<LiveScreen> {
   /// “正在播放”= 当前条目标题（subtitle 是另一份真实信息且
   /// 与标题不同才拼在后面），“即将播放”= 频道列表里下一条的
   /// 标题，列表到尾、没有下一条才写“暂无节目信息”。绝不编
-  /// 节目名。卡面与文字跟随应用主题（改版前口径）。
+  /// 节目名。卡面与文字走直播页深色（见 _liveDarkTheme）。
   Widget _infoCards(BuildContext context) {
     final theme = Theme.of(context);
     final cardColor = theme.colorScheme.surfaceContainerHighest;
