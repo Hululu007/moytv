@@ -1746,6 +1746,24 @@
       "adult": true,
       "description": "七猫短剧（JSON 接口站，公开接口无需登录）。12 个分类与原内置蜘蛛导航 1:1（热门榜/最新上线/全部短剧/魔改愿望榜 + /categories 动态线路 8 条），列表走 /browse 分页、详情走 /dramas。VIP 处置：原蜘蛛靠媒体 key 拼造付费集地址绕过金币/VIP 付费墙，本插件不复刻拼造——只提供接口本身下发 seoContentUrl 的免费集，付费集不给址、列表与详情如实标注免费集数。由内置 jar 蜘蛛 ZakaQmdjAmns 改写。",
       "manifest": "qmdj/qmdj.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.jav380",
+      "name": "JAV380┃無碼",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAV380┃無碼（www.jav380.com）。30 个分类与原 jar 蜘蛛 ZakaJav380Amns 的 CATS 表 1:1 对应（最新/无修正/修正/海外 + 26 个标签），列表/搜索走 WordPress HTML 卡片解析，详情页取 player iframe，play 经播放页 get3G.php 移位解码现取 m3u8/mp4 直链（master 清单在 play 内预解析）。由内置 jar 蜘蛛改写。",
+      "manifest": "jav380/jav380.idjplugin"
+    },
+    {
+      "id": "com.idj.ext.javmap",
+      "name": "JAVMAP┃日本AV大全",
+      "version": "1.0.0",
+      "type": "video",
+      "adult": true,
+      "description": "JAVMAP┃日本AV大全（javmap.com，帝国CMS 站）。19 个分类与内置蜘蛛硬编码导航表 1:1（最新/热门/有码/无码/素人/欧美/中文字幕 + 12 个标签类），列表卡片、搜索（帝国CMS 搜索 POST 跳转）、详情（vid/cid、线路 data-pathid、标签）与播放全链照蜘蛛复刻：播放经 /e/DownSys/Player/ 取 iframe 播放页、解 Dean-Edwards 混淆包取 links 的 hls3/hls4/hls2/hls1 线路、候选清单逐个验 #EXTM3U、主清单在 play 内预解析到子清单后直递播放器（带 iframe 源站 Referer）。由内置 jar 蜘蛛 ZakaJavmapAmns 改写。",
+      "manifest": "javmap/javmap.idjplugin"
     }
   ],
   "cms": []
