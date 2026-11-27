@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 
 import 'adult_scrape_service.dart';
 import 'cloud_drive/cloud_cover_scrape.dart';
+import 'cloud_drive/cloud_drive_engine.dart' show cloudDriveAllCategory;
 import 'cloud_drive/cloud_filename.dart';
 import 'core_bridge.dart';
 import 'local_store.dart';
@@ -285,10 +286,17 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
   }
 
   /// 后台刮削：先出文件名条目，再逐条补海报/标题/简介；任何失败
-  /// 都静默回落（保留原条目），绝不阻塞列表、不抛错。
+  /// 都静默回落（保留原条目），绝不阻塞列表、不抛错。文件夹同样
+  /// 参与（2026-11-27 问题 4b）：文件夹名常是片名/番号，标题刮削
+  /// （成人链 → TMDB）此前把文件夹排除在外，文件夹只剩番号链一
+  /// 条腿；补上后与文件同一套优先级。虚拟“全部”夹不刮（点了是
+  /// 聚合视图，刮个封面没意义且名字必误命中）。
   Future<void> _enrich(List<Drama> items, int generation) async {
     final candidates = items
-        .where((drama) => !drama.isFolder)
+        .where(
+          (drama) =>
+              !drama.isFolder || drama.folderId != cloudDriveAllCategory,
+        )
         .take(_enrichCap)
         .toList();
     if (candidates.isEmpty) return;
