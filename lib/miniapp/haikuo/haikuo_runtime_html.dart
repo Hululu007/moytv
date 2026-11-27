@@ -3910,14 +3910,95 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
     esc = esc.replace(/‘([^’]*)’/g, '<span class="hl-orange">$1</span>');
     return esc;
   }
+  // 富文本清洗：站方页面片段经规则进入 rich_text / avatar 描述后会在
+  // 本页 innerHTML 渲染，本页带原生桥（写文件/下载/导入规则等），
+  // 片段里的脚本一旦执行即等于桥被站方数据劫持。旧版是正则清洗，
+  // 绕过面多（iframe srcdoc、meta refresh、<svg/onload> 的斜杠属性、
+  // 未加引号的 javascript: 链接、未闭合标签等）。改走 DOM 解析清洗：
+  // 用 DOMParser 在非活动文档里解析（解析期不加载子资源、不跑脚本），
+  // 逐节点删活动元素、逐属性剥事件与危险协议，再序列化回字符串；
+  // 解析不可用或异常时 fail-closed 回纯文本转义，绝不放行原文。
+  function richBadUrl(value) {
+    var s = String(value == null ? '' : value)
+      .replace(/[\x00-\x20]+/g, '').toLowerCase();
+    if (s.indexOf('javascript:') === 0) return true;
+    if (s.indexOf('vbscript:') === 0) return true;
+    if (s.indexOf('data:') === 0 && s.indexOf('data:image/') !== 0) {
+      return true;
+    }
+    return false;
+  }
+  function richDomClean(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    if (!doc || !doc.body) return null;
+    var kill = {
+      SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, FORM: 1,
+      META: 1, LINK: 1, BASE: 1, TITLE: 1, FRAME: 1, FRAMESET: 1,
+      APPLET: 1, INPUT: 1, TEXTAREA: 1, SELECT: 1, BUTTON: 1,
+      KEYGEN: 1, NOSCRIPT: 1, TEMPLATE: 1
+    };
+    var urlAttrs = {
+      href: 1, src: 1, action: 1, formaction: 1, poster: 1,
+      background: 1, cite: 1, data: 1, 'xlink:href': 1
+    };
+    function cleanAttrs(el) {
+      var attrs = el.attributes;
+      if (!attrs) return;
+      var drop = [];
+      for (var i = 0; i < attrs.length; i++) {
+        var name = attrs[i].name;
+        var lname = name.toLowerCase();
+        var val = attrs[i].value || '';
+        if (lname.indexOf('on') === 0 || lname === 'srcdoc') {
+          drop.push(name);
+          continue;
+        }
+        if (urlAttrs[lname] && richBadUrl(val)) {
+          drop.push(name);
+          continue;
+        }
+        if (lname === 'style' &&
+            /expression\s*\(|javascript:|-moz-binding/i.test(val)) {
+          drop.push(name);
+        }
+      }
+      for (var j = 0; j < drop.length; j++) el.removeAttribute(drop[j]);
+    }
+    function walk(node) {
+      var child = node.firstChild;
+      while (child) {
+        var next = child.nextSibling;
+        if (child.nodeType === 1) {
+          var tag = (child.localName || '').toUpperCase();
+          if (kill[tag]) {
+            node.removeChild(child);
+            child = next;
+            continue;
+          }
+          cleanAttrs(child);
+          walk(child);
+        } else if (child.nodeType === 8) {
+          node.removeChild(child);
+        }
+        child = next;
+      }
+    }
+    if (doc.head) walk(doc.head);
+    walk(doc.body);
+    return doc.body.innerHTML;
+  }
   function sanitizeRichHtml(raw) {
     var html = String(raw || '');
-    html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
-    html = html.replace(/<style[\s\S]*?<\/style>/gi, '');
-    html = html.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-    html = html.replace(/href\s*=\s*("javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
+    var cleaned = null;
+    try {
+      cleaned = richDomClean(html);
+    } catch (e) {
+      cleaned = null;
+    }
+    if (cleaned == null) cleaned = escapeHtml(html);
     // #originalSize#：图片按原尺寸显示（去掉旗标 + 取消最大宽度限制）。
-    html = html.replace(/<img\b[^>]*>/gi, function (tag) {
+    // 旗标骑在 img 的 src 地址里（属性值不经解析改大小写），清洗后仍在。
+    cleaned = cleaned.replace(/<img\b[^>]*>/gi, function (tag) {
       if (tag.indexOf('#originalSize#') < 0) return tag;
       var t = tag.replace(/#originalSize#/g, '');
       if (/style\s*=\s*"/.test(t)) {
@@ -3929,7 +4010,7 @@ const String haikuoRuntimeHtml = r'''<!doctype html>
       }
       return t;
     });
-    return html;
+    return cleaned;
   }
   function cardHtml(it, index, marquee) {
     var pic = itemPic(it);
