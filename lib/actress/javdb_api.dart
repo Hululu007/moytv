@@ -6,22 +6,34 @@
 // 口，点开作品后播放走既定番号竞速模型（DetailScreen 的跨站
 // 探活 + 在线线路区），本文件不造播放链。
 //
-// 实证程度（照 API_MAP 如实分级）：
-// - 签名算法与盐、信封结构、Movie/Actor/Detail 的 JSON 字段
-//   名、图片 XOR 解密、latest 路径：反编译逐字实证。
-// - 其余路径为拼接（API_MAP 注明仅 3 条路径逐字命中）：
-//   search=api/v2/search、详情=api/v1/movies/{id}。
-// - 演员列表（2026-11-26 晚补实证）：路径+必传参数由 jar 版
-//   ZakaJavdbAmns 原文实证——GET api/v1/actors?type=0&page=N，
-//   type 必传（漏传服务端回「参数不能为空: type」，即用户
-//   22:43 实报的报错），type=0 即其分类表标注的「女优」；
-//   信封 data.actors、字段 id/name/name_zht/videos_count 同
-//   出该文件。搜索参数名同样照 jar 版实证为 q（旧写 keyword
-//   是推定）。演员作品 api/v1/actors/{id} 仍未证实：AvPlay
-//   与 jar 版演员作品都走网页通道，本路径维持拼接推定。
-// - 登录令牌（api/v1/sessions）需要用户自己的 JavDB 账号，
-//   本批不收集账号：请求只带签名头，接口是否放行未验。
-// - 本机出口连不上 jdforrepam.com：整条源未验（界面照标）。
+// 实证程度（照 API_MAP 与 jar 版 ZakaJavdbAmns 原文分级）：
+// - 2026-11-27 对齐 jar 版已验证路线（用户手机实报三件后）：
+//   ①API 域名以 jar 版的 apidd.spthgb.com 为主（AvPlay 的
+//   jdforrepam.com 留作网络失败时的兜底）；②先 POST
+//   api/v1/sessions 登录换令牌（字段照 jar 版常量，base85
+//   编码存放、运行时解码），请求带 Authorization，信封
+//   success≠1 就清令牌重登重试一次（jar 版 api() 原逻辑）；
+//   ③签名头名全小写 jdsignature、UA 照 jar 版 Dart/3.5；
+//   ④详情走 api/v4/movies/{id} 取 data.movie（旧 v1 详情本
+//   机实测 404、v4 无令牌回 JWTVerificationError，两头都拿
+//   不到——这是详情页海报/剧照/演员缺失的根因之一）；
+//   ⑤女优作品没有 API：网页通道 /actors/{id} 镜像轮换 +
+//   parseWebCards 正则（jar 版逐字移植，本机实测 javdb.pw
+//   可通、解析出 40 卡）。jar 版还有过盾/中继两级兜底，壳内
+//   没有等价接口，本客户端只做镜像轮换、报告里已注明。
+// - 演员列表：GET api/v1/actors?type=0&page=N，type 必传
+//   （漏传服务端回「参数不能为空: type」，即用户 22:43 实
+//   报的报错）；信封 data.actors、字段 id/name/name_zht/
+//   videos_count 照 jar 版原文。搜索参数名同样照 jar 版为 q。
+// - duration 字段单位是分钟（本机实测 latest 列表 ADN-821
+//   回 150、MGNL-199 回 63——按秒解则正片只有 2~3 分钟，
+//   与用户实报详情页「长度 3 分钟」的错误形态互证）。
+// - 图片：tp.spfcas.com 与 c0.jdbstatic.com 的字节同为 XOR
+//   加密（2026-11-27 实测 spfcas 封面首字节异或后正是 JPEG
+//   魔数）；拉图带 Referer（jar 版 picProxy 口径）。
+// - 本机出口时通时断：latest/actors GET 与 javdb.pw 网页通
+//   道实测通过；登录 POST 与 v4 详情在本机未跑通（整波超
+//   时），按 jar 版实证实现、手机终验为准（界面照标未验）。
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -31,7 +43,14 @@ import '../content_http.dart';
 import '../core_bridge.dart';
 import '../models.dart';
 
-const javdbApiBase = 'https://jdforrepam.com';
+/// API 主域名：jar 版 ZakaJavdbAmns 的 BASE_URL（已验证能
+/// 跑的路线，2026-11-27 对齐）。
+const javdbApiBase = 'https://apidd.spthgb.com';
+
+/// API 兜底域名：AvPlay 的接口域名。本机实测它对免登录的
+/// latest/actors 也放行；主域名网络层失败（连不上/超时）时
+/// 客户端自动切过来重试，登录令牌与域名绑定、切换即重登。
+const javdbApiBaseFallback = 'https://jdforrepam.com';
 
 /// 写死盐（JavDbApiSignature，API_MAP 逐字实证）。
 const _javdbSalt =
@@ -44,6 +63,57 @@ String javdbSignature(int timestampSeconds) {
       .toString();
   return '$timestampSeconds.lpw6vgqzsp.$digest';
 }
+
+/// base85 解码（jar 版 ZakaJavdbAmns 的 b85decode 逐字移植：
+/// 字母表 0-9A-Za-z + 标点；不在表里的字符跳过；每 5 字符
+/// 还原 4 字节，尾组 n 字符还原 n-1 字节、缺位按 84 补）。
+const _javdbB85Alphabet =
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+    '!#\$%&()*+-;<=>?@^_`{|}~';
+
+String javdbB85Decode(String encoded) {
+  final values = <int>[];
+  for (final unit in encoded.codeUnits) {
+    if (unit >= 128) continue;
+    final index = _javdbB85Alphabet.indexOf(String.fromCharCode(unit));
+    if (index >= 0) values.add(index);
+  }
+  final bytes = <int>[];
+  for (var i = 0; i < values.length; i += 5) {
+    final take = values.length - i >= 5 ? 5 : values.length - i;
+    var value = 0;
+    for (var j = 0; j < 5; j++) {
+      value = value * 85 + (j < take ? values[i + j] : 84);
+    }
+    final group = [
+      (value >> 24) & 0xFF,
+      (value >> 16) & 0xFF,
+      (value >> 8) & 0xFF,
+      value & 0xFF,
+    ];
+    bytes.addAll(take == 5 ? group : group.sublist(0, take - 1));
+  }
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+/// 登录字段（jar 版 LOGIN_FIELDS_B85 原文照抄，值是 base85
+/// 编码、运行时才解码；明文不落任何文件/日志）。
+const _javdbLoginFieldsB85 = <(String, String)>[
+  ('username', 'Y;1XTW@T<?HZVCrXKi6=Y%XJOZ2'),
+  ('password', 'ad%~MG&3?W'),
+  ('device_uuid', 'H#lQuFgY<aEjKYRWi2&0GBhn=FfuePHDWn2VmLNsIWRJ2'),
+  ('device_name', 'N;WVyMg'),
+  ('device_model', 'Ol59wc5g3CWo~bFZy;1cElM^pHbw'),
+];
+
+/// 登录固定字段（jar 版 login() 原文）。
+const _javdbLoginFixedFields = <(String, String)>[
+  ('platform', 'android'),
+  ('system_version', '11'),
+  ('app_channel', 'official'),
+  ('app_version', 'official'),
+  ('app_version_number', '1.9.35'),
+];
 
 /// 封面/头像 XOR 解密（JavDbImageDecryptor 逐字实证）：字节
 /// 不以 JPEG/PNG/GIF/WEBP 魔数开头即判定加密——首字节是钥
@@ -59,13 +129,20 @@ Uint8List javdbDecryptImageBytes(Uint8List bytes) {
   return out;
 }
 
-/// 是不是 JavDB 图床的图（API_MAP 实证图床域名
-/// c0.jdbstatic.com）：封面/头像/剧照都走它，字节带 XOR
-/// 加密，显示必须走 JavdbImage 的解密路径（见
-/// javdb_image.dart），普通网络图组件解不出。
+/// 是不是 JavDB 图床的图：封面/头像/剧照走 c0.jdbstatic.com
+/// 与 tp.spfcas.com 两家（API 列表的 thumb_url/cover_url/
+/// preview_images 都在 spfcas 上），字节同带 XOR 加密，显示
+/// 必须走 JavdbImage 的解密路径（见 javdb_image.dart），普
+/// 通网络图组件解不出。此前只认 jdbstatic，spfcas 的封面在
+/// 详情页落到通用封面链解不出、只剩占位图（2026-11-27 用户
+/// 实报详情页无海报的根因之一，本机实测 spfcas 封面字节首
+/// 字节异或后正是 JPEG 魔数）。
 bool javdbIsImageUrl(String url) {
   final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
-  return host == 'jdbstatic.com' || host.endsWith('.jdbstatic.com');
+  return host == 'jdbstatic.com' ||
+      host.endsWith('.jdbstatic.com') ||
+      host == 'spfcas.com' ||
+      host.endsWith('.spfcas.com');
 }
 
 bool _hasImageMagic(Uint8List b) {
@@ -109,11 +186,12 @@ class JavdbMovie {
     required this.title,
     this.thumbUrl = '',
     this.coverUrl = '',
-    this.durationSeconds = 0,
+    this.durationMinutes = 0,
     this.releaseDate = '',
     this.hasCnsub = false,
     this.magnetsCount = 0,
     this.score = '',
+    this.previewImages = const [],
   });
 
   final String id;
@@ -121,11 +199,20 @@ class JavdbMovie {
   final String title;
   final String thumbUrl;
   final String coverUrl;
-  final int durationSeconds;
+
+  /// 时长（分钟）：接口 duration 字段就是分钟（2026-11-27
+  /// 实测互证，见文件头）。旧实现误当秒再除以 60 显示，正
+  /// 片只剩「3 分钟」——用户实报的错误形态。
+  final int durationMinutes;
   final String releaseDate;
   final bool hasCnsub;
   final int magnetsCount;
   final String score;
+
+  /// 剧照（列表/搜索信封自带的 preview_images，取 large_url、
+  /// 没有落 thumb_url）：详情页剧照区的免登录真数据来源
+  /// （详情接口 v4 要令牌、v1 直接 404，见文件头）。
+  final List<String> previewImages;
 
   String get poster => coverUrl.isNotEmpty ? coverUrl : thumbUrl;
 
@@ -136,13 +223,31 @@ class JavdbMovie {
       title: _javdbStr(json['title']),
       thumbUrl: _javdbStr(json['thumb_url']),
       coverUrl: _javdbStr(json['cover_url']),
-      durationSeconds: _javdbInt(json['duration']),
+      durationMinutes: _javdbInt(json['duration']),
       releaseDate: _javdbStr(json['release_date']),
       hasCnsub: _javdbBool(json['has_cnsub']),
       magnetsCount: _javdbInt(json['magnets_count']),
       score: _javdbStr(json['score']),
+      previewImages: _javdbPreviewUrls(json['preview_images']),
     );
   }
+}
+
+/// preview_images 数组 → 剧照地址表（元素是 {large_url,
+/// thumb_url} 对象或纯字符串，两种都认；large 优先）。
+List<String> _javdbPreviewUrls(Object? raw) {
+  if (raw is! List) return const [];
+  final urls = <String>[];
+  for (final item in raw) {
+    if (item is Map) {
+      var url = _javdbStr(item['large_url']);
+      if (url.isEmpty) url = _javdbStr(item['thumb_url']);
+      if (url.isNotEmpty) urls.add(url);
+    } else if (item is String && item.isNotEmpty) {
+      urls.add(item);
+    }
+  }
+  return urls;
 }
 
 /// 一名演员（JavDbApiActor：id / name / avatar_url / gender）。
@@ -166,10 +271,13 @@ class JavdbActor {
     // 空了落 name_zht（繁中名）。
     var name = _javdbStr(json['name']);
     if (name.isEmpty) name = _javdbStr(json['name_zht']);
+    // 头像取值照 jar 版：avatar_url 优先、cover_url 兜底。
+    var avatar = _javdbStr(json['avatar_url']);
+    if (avatar.isEmpty) avatar = _javdbStr(json['cover_url']);
     return JavdbActor(
       id: _javdbStr(json['id']),
       name: name,
-      avatarUrl: _javdbStr(json['avatar_url']),
+      avatarUrl: avatar,
       gender: _javdbInt(json['gender'], fallback: -1),
     );
   }
@@ -183,9 +291,14 @@ class JavdbMovieExtra {
     this.extraInfo = const [],
     this.score = '',
     this.scoreCount = 0,
+    this.poster = '',
   });
 
   final List<JavdbActor> actors;
+
+  /// 详情自带的封面（cover_url 优先、thumb_url 兜底）：点开
+  /// 作品时列表卡封面缺失/是小图时用它把详情页海报补上。
+  final String poster;
 
   /// 预览图（preview_images 的 large_url）——详情页剧照真数据。
   final List<String> stills;
@@ -453,31 +566,200 @@ bool _javdbBool(Object? value) {
   return text == 'true' || text == '1';
 }
 
+/// 网页通道镜像（jar 版 WEB_MIRRORS 原文顺序）。
+const javdbWebMirrors = [
+  'https://javdb580.com',
+  'https://javdb.com',
+  'https://javdb.pw',
+];
+
+/// 演员页有效性判定（jar 版 looksLikeActorPage 逐字移植）。
+bool javdbLooksLikeActorPage(String html) =>
+    html.length > 2000 && html.contains('movie-list') && html.contains('/v/');
+
+/// 卡片正则（jar 版 parseWebCards 逐字移植：主式带番号
+/// <strong>，解不出时落宽式、番号留空）。
+final _javdbCardPattern = RegExp(
+  r'href="/v/([^"]+)"[^>]*class="box"[^>]*title="([^"]*)"[\s\S]{0,700}?<img[^>]*src="([^"]+)"[\s\S]{0,400}?<strong>([^<]*)</strong>',
+);
+final _javdbCardPatternLoose = RegExp(
+  r'href="/v/([^"]+)"[^>]*class="box"[^>]*title="([^"]*)"[\s\S]{0,700}?<img[^>]*src="([^"]+)"',
+);
+
+/// HTML 实体反转义（jar 版 htmlUnesc 逐字移植）。
+String javdbHtmlUnescape(String raw) {
+  if (!raw.contains('&')) return raw;
+  return raw
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#039;', "'")
+      .replaceAll('&#39;', "'")
+      .replaceAll('&apos;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&nbsp;', ' ');
+}
+
+/// 图片地址归一（jar 版 webAbs 逐字移植）：协议相对地址补 https。
+String javdbWebAbs(String raw) {
+  final text = javdbHtmlUnescape(raw).trim();
+  return text.startsWith('//') ? 'https:$text' : text;
+}
+
+/// 演员页 HTML → 作品卡列表（jar 版 parseWebCards 逐字移植；
+/// 网页卡没有日期字段，releaseDate 留空、界面按空日期处理）。
+List<JavdbMovie> javdbParseActorWorksHtml(String html) {
+  if (html.length < 100) return const [];
+  final movies = <JavdbMovie>[];
+  for (final match in _javdbCardPattern.allMatches(html)) {
+    final pic = javdbWebAbs(match.group(3)!);
+    movies.add(
+      JavdbMovie(
+        id: match.group(1)!,
+        number: javdbHtmlUnescape(match.group(4)!),
+        title: javdbHtmlUnescape(match.group(2)!),
+        thumbUrl: pic,
+        coverUrl: pic,
+      ),
+    );
+  }
+  if (movies.isEmpty) {
+    for (final match in _javdbCardPatternLoose.allMatches(html)) {
+      final pic = javdbWebAbs(match.group(3)!);
+      movies.add(
+        JavdbMovie(
+          id: match.group(1)!,
+          number: '',
+          title: javdbHtmlUnescape(match.group(2)!),
+          thumbUrl: pic,
+          coverUrl: pic,
+        ),
+      );
+    }
+  }
+  return movies;
+}
+
 /// 可注入取数（测试用）：给 URL 回响应文本。
 typedef JavdbFetch = Future<String> Function(String url);
 
-/// JavDB API 客户端：每请求现算签名头；不带令牌（无账号）。
+/// 可注入 POST（测试用）：URL + 正文 + Content-Type 回响应文本。
+typedef JavdbPostFetch =
+    Future<String> Function(String url, String body, String contentType);
+
+/// JavDB API 客户端（2026-11-27 对齐 jar 版 ZakaJavdbAmns 已
+/// 验证路线）：先登录换令牌、每请求现算签名头（全小写
+/// jdsignature）、信封 success≠1 清令牌重登重试一次；主域名
+/// 网络层失败自动切兜底域名。令牌只存内存、不落盘不打日志。
 class JavdbApiClient {
-  JavdbApiClient({JavdbFetch? fetch, ContentHttp? http})
+  JavdbApiClient({JavdbFetch? fetch, JavdbPostFetch? post, ContentHttp? http})
     : _fetch = fetch,
+      _postFetch = post,
       _http = http ?? ContentHttp();
 
   final JavdbFetch? _fetch;
+  final JavdbPostFetch? _postFetch;
   final ContentHttp _http;
+
+  String _base = javdbApiBase;
+  String _token = '';
 
   Map<String, String> _headers() {
     final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     return {
-      'jdSignature': javdbSignature(ts),
-      'User-Agent':
-          'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
-          '(KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36',
+      // 头名照 jar 版 appHeaders 全小写 jdsignature（旧写
+      // jdSignature 大小写混排，服务端可能不认）。
+      'jdsignature': javdbSignature(ts),
+      // UA 照 jar 版 APP_UA 原文。
+      'User-Agent': 'Dart/3.5 (dart:io)',
+      'Accept-Language': 'zh-TW',
       'Accept': 'application/json',
+      if (_token.isNotEmpty) 'Authorization': 'Bearer $_token',
     };
   }
 
-  Future<dynamic> _getJson(String path) async {
-    final url = '$javdbApiBase/$path';
+  /// 登录换令牌（jar 版 login() 逐字移植）：POST
+  /// api/v1/sessions，multipart 表单 = base85 字段解码值 +
+  /// 五个固定字段；success=1 且 data.token 长度 ≥8 才算成。
+  /// 失败回 false、不抛错——免登录能放行的接口照旧裸跑。
+  Future<bool> _login() async {
+    // 测试只注入了 GET 取数时不假装登录（夹具按 URL 分发，
+    // 也不该被登录请求消耗）。
+    if (_fetch != null && _postFetch == null) return false;
+    final boundary =
+        '----javdb-tvbox-'
+        '${md5.convert(utf8.encode('${DateTime.now().microsecondsSinceEpoch}')).toString().substring(0, 24)}';
+    final body = StringBuffer();
+    void field(String name, String value) {
+      body.write(
+        '--$boundary\r\n'
+        'Content-Disposition: form-data; name="$name"\r\n\r\n'
+        '$value\r\n',
+      );
+    }
+
+    for (final (name, encoded) in _javdbLoginFieldsB85) {
+      field(name, javdbB85Decode(encoded));
+    }
+    for (final (name, value) in _javdbLoginFixedFields) {
+      field(name, value);
+    }
+    body.write('--$boundary--\r\n');
+    final contentType = 'multipart/form-data; boundary=$boundary';
+    try {
+      final String text;
+      if (_postFetch != null) {
+        text = await _postFetch(
+          '$_base/api/v1/sessions',
+          body.toString(),
+          contentType,
+        );
+      } else {
+        text = await _http
+            .postRaw(
+              '$_base/api/v1/sessions',
+              body.toString(),
+              headers: {
+                'User-Agent': 'Dart/3.5 (dart:io)',
+                'Accept-Language': 'zh-TW',
+                'Accept': 'application/json',
+                'Content-Type': contentType,
+                'jdsignature': javdbSignature(
+                  DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                ),
+              },
+            )
+            .timeout(const Duration(seconds: 25));
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic> &&
+          (decoded['success'] == 1 || decoded['success'] == true)) {
+        final data = decoded['data'];
+        final token = data is Map ? _javdbStr(data['token']) : '';
+        if (token.length >= 8) {
+          _token = token;
+          return true;
+        }
+      }
+    } catch (_) {
+      // 登录失败不挡免登录接口，调用方照旧裸跑。
+    }
+    return false;
+  }
+
+  bool _envelopeOk(Map<String, dynamic> envelope) {
+    final success = envelope['success'];
+    // 成功门：success 明确为真最稳；没给 success 字段时以
+    // data 在场为准；success 明确为假就是假。
+    return success == true ||
+        success == 1 ||
+        success?.toString().toLowerCase() == 'true' ||
+        (success == null && envelope.containsKey('data'));
+  }
+
+  Future<Map<String, dynamic>> _requestEnvelopeOnce(String path) async {
+    if (_token.isEmpty) await _login();
+    final url = '$_base/$path';
     final String text;
     if (_fetch != null) {
       text = await _fetch(url);
@@ -490,20 +772,36 @@ class JavdbApiClient {
     if (decoded is! Map<String, dynamic>) {
       throw AppFailure('JavDB 接口返回异常，请稍后再试');
     }
-    final success = decoded['success'];
-    // 成功门：success 明确为真最稳；没给 success 字段时以
-    // data 在场为准（jar 版 ZakaJavdbAmns 的 api() 就是只认
-    // data 对象在场）；success 明确为假照旧拒绝。
-    final ok =
-        success == true ||
-        success == 1 ||
-        success?.toString().toLowerCase() == 'true' ||
-        (success == null && decoded.containsKey('data'));
-    if (!ok) {
-      final message = _javdbStr(decoded['message']);
+    return decoded;
+  }
+
+  Future<Map<String, dynamic>> _requestEnvelope(String path) async {
+    try {
+      return await _requestEnvelopeOnce(path);
+    } catch (_) {
+      // 主域名网络层失败（连不上/超时）：切兜底域名、清令牌
+      // 重登后重试一次。测试注入模式保持单域名语义、不重试。
+      if (_fetch != null || _base == javdbApiBaseFallback) rethrow;
+      _base = javdbApiBaseFallback;
+      _token = '';
+      return _requestEnvelopeOnce(path);
+    }
+  }
+
+  Future<dynamic> _getJson(String path) async {
+    var envelope = await _requestEnvelope(path);
+    if (!_envelopeOk(envelope)) {
+      // jar 版 api() 原逻辑：success 不是 1 就清 token 重登
+      // 再重试一次（令牌过期/未登录时详情、磁力、搜索都靠它）。
+      _token = '';
+      await _login();
+      envelope = await _requestEnvelope(path);
+    }
+    if (!_envelopeOk(envelope)) {
+      final message = _javdbStr(envelope['message']);
       throw AppFailure(message.isNotEmpty ? message : 'JavDB 接口拒绝了请求');
     }
-    return decoded['data'];
+    return envelope['data'];
   }
 
   /// 最新作品（路径逐字实证：api/v1/movies/latest）。
@@ -535,23 +833,65 @@ class JavdbApiClient {
     ];
   }
 
-  /// 演员作品（api/v1/actors/{id} 详情里的 movies，或
-  /// /movies 子路径——均未逐字证实，宽容解析两处）。注意：
-  /// AvPlay 与 jar 版的演员作品都走网页通道（javdb.com 的
-  /// /actors/{id} 页解析），API 侧无此调用实证；本路径维持
-  /// 拼接推定、未验，见 REPORT_javdb_actors_fix.md。
+  /// 女优作品（网页通道，jar 版 actorWorksHtml 逐字移植）：
+  /// API 侧根本没有这个端点——旧实现打 api/v1/actors/{id}
+  /// 解析 movies，本机实测该端点只回演员信息（share_info/
+  /// tags 等）、没有作品列表，解析必然回空（2026-11-27 用户
+  /// 实报「点女优头像没有作品」的根因）。正解是 GET 镜像站
+  /// /actors/{id} 页 HTML、判定有效后正则解卡。jar 版还有
+  /// 过盾抓取与中继代理两级兜底，壳内没有等价接口，这里只
+  /// 做镜像直连轮换（本机实测 javdb.pw 可通、解出 40 卡）。
   Future<List<JavdbMovie>> actorMovies(String actorId, {int page = 1}) async {
-    final data = await _getJson('api/v1/actors/$actorId?page=$page');
-    return _movieListOf(data);
+    final path =
+        '/actors/${Uri.encodeComponent(actorId)}'
+        '${page > 1 ? '?page=$page' : ''}';
+    for (final mirror in javdbWebMirrors) {
+      final String html;
+      try {
+        html = await _fetchWebPage('$mirror$path', mirror);
+      } catch (_) {
+        continue;
+      }
+      if (!javdbLooksLikeActorPage(html)) continue;
+      return javdbParseActorWorksHtml(html);
+    }
+    return const [];
   }
 
-  /// 作品详情补充（api/v1/movies/{id}，路径实证）：演员、剧
-  /// 照（预览图）、导演/制作商等——只取接口真返回的。
+  /// 网页通道取页（jar 版 webHeaders：桌面 Chrome UA +
+  /// zh-TW + Referer=镜像根）。
+  Future<String> _fetchWebPage(String url, String mirror) {
+    if (_fetch != null) return _fetch(url);
+    return _http
+        .get(
+          url,
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/126.0 Safari/537.36',
+            'Accept':
+                'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+            'Referer': '$mirror/',
+          },
+        )
+        .timeout(const Duration(seconds: 25));
+  }
+
+  /// 作品详情补充（api/v4/movies/{id}，jar 版 detailContent
+  /// 逐字实证：取 data.movie、没有就 data 本体）：演员、剧
+  /// 照（预览图）、封面、导演/制作商等——只取接口真返回的。
+  /// 旧走 v1 详情：本机实测 v1 回 404、v4 无令牌回
+  /// JWTVerificationError，两头都拿不到，详情页补充全空
+  /// （2026-11-27 用户实报无海报/剧照/演员的根因之一）。
   Future<JavdbMovieExtra> movieExtra(String movieId) async {
-    final data = await _getJson('api/v1/movies/$movieId');
+    final data = await _getJson('api/v4/movies/$movieId');
     if (data is! Map<String, dynamic>) return const JavdbMovieExtra();
+    final rawMovie = data['movie'];
+    final map = rawMovie is Map<String, dynamic> ? rawMovie : data;
     final actors = <JavdbActor>[];
-    final rawActors = data['actors'];
+    final rawActors = map['actors'];
     if (rawActors is List) {
       for (final item in rawActors) {
         if (item is Map<String, dynamic>) {
@@ -559,37 +899,28 @@ class JavdbApiClient {
         }
       }
     }
-    final stills = <String>[];
-    final rawImages = data['preview_images'];
-    if (rawImages is List) {
-      for (final item in rawImages) {
-        if (item is Map<String, dynamic>) {
-          final url = _javdbStr(item['large_url']);
-          if (url.isNotEmpty) stills.add(url);
-        } else if (item is String && item.isNotEmpty) {
-          stills.add(item);
-        }
-      }
-    }
     final extra = <(String, String)>[
-      if (_javdbStr(data['director_name']).isNotEmpty)
-        ('导演', _javdbStr(data['director_name'])),
-      if (_javdbStr(data['maker_name']).isNotEmpty)
-        ('制作商', _javdbStr(data['maker_name'])),
-      if (_javdbStr(data['publisher_name']).isNotEmpty)
-        ('发行商', _javdbStr(data['publisher_name'])),
-      if (_javdbStr(data['series_name']).isNotEmpty)
-        ('系列', _javdbStr(data['series_name'])),
+      if (_javdbStr(map['director_name']).isNotEmpty)
+        ('导演', _javdbStr(map['director_name'])),
+      if (_javdbStr(map['maker_name']).isNotEmpty)
+        ('制作商', _javdbStr(map['maker_name'])),
+      if (_javdbStr(map['publisher_name']).isNotEmpty)
+        ('发行商', _javdbStr(map['publisher_name'])),
+      if (_javdbStr(map['series_name']).isNotEmpty)
+        ('系列', _javdbStr(map['series_name'])),
     ];
-    var scoreCount = _javdbInt(data['score_count']);
-    if (scoreCount <= 0) scoreCount = _javdbInt(data['score_users']);
-    if (scoreCount <= 0) scoreCount = _javdbInt(data['reviews_count']);
+    var scoreCount = _javdbInt(map['score_count']);
+    if (scoreCount <= 0) scoreCount = _javdbInt(map['score_users']);
+    if (scoreCount <= 0) scoreCount = _javdbInt(map['reviews_count']);
+    var poster = _javdbStr(map['cover_url']);
+    if (poster.isEmpty) poster = _javdbStr(map['thumb_url']);
     return JavdbMovieExtra(
       actors: actors,
-      stills: stills,
+      stills: _javdbPreviewUrls(map['preview_images']),
       extraInfo: extra,
-      score: _javdbStr(data['score']),
+      score: _javdbStr(map['score']),
       scoreCount: scoreCount,
+      poster: poster,
     );
   }
 

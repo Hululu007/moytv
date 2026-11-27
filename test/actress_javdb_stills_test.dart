@@ -40,13 +40,16 @@ class _FakeJavdb {
     if (url.contains('api/v2/search')) {
       return _envelope({'movies': searchResults});
     }
-    if (url.contains('api/v1/movies/')) {
-      final id = url.split('api/v1/movies/').last;
+    if (url.contains('api/v4/movies/')) {
+      final id = url.split('api/v4/movies/').last;
       final stills = stillsById[id] ?? const <String>[];
+      // v4 详情信封照 jar 版：data.movie 才是作品本体。
       return _envelope({
-        'preview_images': [
-          for (final s in stills) {'large_url': s},
-        ],
+        'movie': {
+          'preview_images': [
+            for (final s in stills) {'large_url': s},
+          ],
+        },
       });
     }
     throw StateError('未预期的网址：$url');
@@ -78,8 +81,8 @@ void main() {
         'https://c0.jdbstatic.com/samples/s2.jpg',
       ]);
       // 只对命中那部取详情补充，别片的详情不碰。
-      expect(fake.requested.where((u) => u.contains('api/v1/movies/m1')), hasLength(1));
-      expect(fake.requested.where((u) => u.contains('api/v1/movies/m2')), isEmpty);
+      expect(fake.requested.where((u) => u.contains('api/v4/movies/m1')), hasLength(1));
+      expect(fake.requested.where((u) => u.contains('api/v4/movies/m2')), isEmpty);
     });
 
     test('近似番号不认：只差一位数不算找到', () async {
@@ -96,7 +99,7 @@ void main() {
         client: fake.client,
       );
       expect(stills, isEmpty);
-      expect(fake.requested.where((u) => u.contains('api/v1/movies/')), isEmpty);
+      expect(fake.requested.where((u) => u.contains('api/v4/movies/')), isEmpty);
     });
 
     test('番号写法不同但归一后相等也认（小写/无分隔符）', () async {

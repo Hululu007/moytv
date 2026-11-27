@@ -45,23 +45,31 @@ Future<void> openJavdbWork(
     }
   }
   if (!context.mounted) return;
+  // 海报：详情自带封面优先（列表卡可能只有小图/缺图），
+  // 没有再用列表卡的 poster。
+  final cover = extra.poster.isNotEmpty ? extra.poster : movie.poster;
   final drama = Drama(
     id: movie.number.isNotEmpty ? movie.number : movie.id,
     source: 'javdb',
     sourceId: movie.id,
     title: movie.title.isNotEmpty ? movie.title : movie.number,
-    cover: movie.poster,
+    cover: cover,
     onlineDate: movie.releaseDate,
     tags: [if (movie.number.isNotEmpty) movie.number],
   );
   final detail = DramaDetail(
     drama,
     const [],
-    stills: extra.stills,
+    backdrop: cover,
+    // 剧照：v4 详情的预览图优先；详情没拉到时用列表信封
+    // 自带的 preview_images（免登录真数据，2026-11-27 实测
+    // latest 列表每条都带）——此前两路都没接，剧照区恒空。
+    stills: extra.stills.isNotEmpty ? extra.stills : movie.previewImages,
     extraInfo: [
       if (movie.releaseDate.isNotEmpty) ('发行日期', movie.releaseDate),
-      if (movie.durationSeconds > 0)
-        ('长度', '${(movie.durationSeconds / 60).round()} 分钟'),
+      // 接口 duration 单位就是分钟，直接显示（旧实现误当
+      // 秒除以 60，正片只剩「3 分钟」）。
+      if (movie.durationMinutes > 0) ('长度', '${movie.durationMinutes} 分钟'),
       ...extra.extraInfo,
     ],
   );

@@ -66,6 +66,9 @@ class _JavdbImageState extends State<JavdbImage> {
     try {
       final raw = await (widget.http ?? ContentHttp()).getBytes(
         url,
+        // 拉图带 Referer（jar 版 picProxy 口径：Referer=API
+        // 域名根），图床对无 Referer 的请求可能回绝/回假图。
+        headers: const {'Referer': '$javdbApiBase/'},
         timeout: const Duration(seconds: 20),
       );
       final decoded = javdbDecryptImageBytes(raw);

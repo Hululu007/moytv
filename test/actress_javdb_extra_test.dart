@@ -56,9 +56,10 @@ class _FakeJavdbExtra {
       final id = url.split('api/v1/movies/').last.split('/').first;
       return _envelope({'reviews': reviewsById[id] ?? const []});
     }
-    if (url.contains('api/v1/movies/')) {
-      final id = url.split('api/v1/movies/').last;
-      return _envelope(detailById[id] ?? const {});
+    if (url.contains('api/v4/movies/')) {
+      final id = url.split('api/v4/movies/').last;
+      // v4 详情信封照 jar 版：data.movie 才是作品本体。
+      return _envelope({'movie': detailById[id] ?? const {}});
     }
     throw StateError('未预期的网址：$url');
   }

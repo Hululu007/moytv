@@ -194,6 +194,56 @@ class ContentHttp {
     preserveEmptyHeaders: preserveEmptyHeaders,
   );
 
+  /// POST 原始字符串正文，Content-Type 由 headers 里的
+  /// Content-Type 决定（multipart 表单等场景；_send 的 POST
+  /// 写死 urlencoded 形状，盖不住）。错误语义与 postJson 同。
+  Future<String> postRaw(
+    String url,
+    String body, {
+    Map<String, String> headers = const {},
+    Duration timeout = contentTimeout,
+  }) async {
+    final client = _currentClient;
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      throw AppFailure('内容源地址无效');
+    }
+    try {
+      final request = await client.postUrl(uri).timeout(timeout);
+      request.followRedirects = true;
+      _applyHeaders(request, headers);
+      final contentType = headers['Content-Type'] ?? headers['content-type'];
+      if (contentType != null && contentType.isNotEmpty) {
+        request.headers.contentType = ContentType.parse(contentType);
+      }
+      request.write(body);
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode != HttpStatus.ok) {
+        await response.drain<void>().timeout(timeout);
+        throw AppFailure('内容源返回 ${response.statusCode}');
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response.timeout(timeout)) {
+        builder.add(chunk);
+        if (builder.length > _maxContentBytes) {
+          throw AppFailure('内容源返回的数据过大');
+        }
+      }
+      final bytes = builder.takeBytes();
+      try {
+        return utf8.decode(bytes);
+      } on FormatException {
+        return utf8.decode(bytes, allowMalformed: true);
+      }
+    } on AppFailure {
+      rethrow;
+    } on TimeoutException {
+      throw AppFailure('内容源连接超时');
+    } on SocketException {
+      throw AppFailure('无法连接内容源');
+    }
+  }
+
   Future<String> postJson(
     String url,
     Map<String, dynamic> json, {

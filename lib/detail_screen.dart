@@ -298,6 +298,9 @@ class _DetailScreenState extends State<DetailScreen> {
       sourceId: drama.sourceId,
     );
     if (!mounted || generation != _generation) return;
+    // 本地元数据没查到时不要把 JavDB 补充链（_loadJavdbExtras）
+    // 已经补上的演员行冲掉：两条链并发，先到先得、都不编数据。
+    if (meta == null && _codeMeta != null) return;
     setState(() => _codeMeta = meta);
   }
 
@@ -404,7 +407,36 @@ class _DetailScreenState extends State<DetailScreen> {
     setState(() {
       if (magnets.isNotEmpty) _javdbMagnets = magnets;
       if (reviews.isNotEmpty) _javdbReviews = reviews;
-      final detail = _detail;
+      // JavDB v4 详情的演员/剧照并进页面（2026-11-27）：本地
+      // 番号元数据没查到（_codeMeta 为空）时用接口演员补头区
+      // 演员行（头像+名字，照 _castChipsRow 的数据形状合成
+      // CodeMeta）；详情页自带剧照为空时用接口预览图补剧照
+      // 区。此前 extra.actors 取回来根本没往页面上传、剧照
+      // 补充链又对 javdb 源跳过，JavDB 详情页恒无演员无剧照。
+      if (extra.actors.isNotEmpty && _codeMeta == null) {
+        var director = '';
+        for (final row in extra.extraInfo) {
+          if (row.$1 == '导演') director = row.$2;
+        }
+        _codeMeta = CodeMeta(
+          code: avId,
+          title: '',
+          titleAlts: const [],
+          year: null,
+          director: director,
+          maker: '',
+          female: [for (final actor in extra.actors) actor.name],
+          male: const [],
+          femaleAvatars: [
+            for (final actor in extra.actors) actor.avatarUrl,
+          ],
+        );
+      }
+      var detail = _detail;
+      if (detail != null && extra.stills.isNotEmpty && detail.stills.isEmpty) {
+        detail = detail.withStills(extra.stills);
+        _detail = detail;
+      }
       if (detail != null) {
         var series = '';
         for (final row in extra.extraInfo) {
