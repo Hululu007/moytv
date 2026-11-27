@@ -20,6 +20,7 @@ import 'nexhub_scraper/network/network_config_service.dart';
 import 'cloud_drive/cloud_drive_screen.dart';
 import 'app_update_screen.dart';
 import 'app_icon_picker_page.dart';
+import 'bottom_nav_manager_page.dart';
 import 'audio_capsule.dart';
 import 'floating_window.dart';
 import 'custom_headers_screen.dart';
@@ -475,6 +476,16 @@ class _SettingsScreenState extends State<SettingsScreen>
           title: '界面模式',
           detail: _displayModeLabel(store.displayMode),
           onTap: _chooseDisplayMode,
+        ),
+        _SettingsItem(
+          keyName: 'bottom-nav-entry',
+          icon: Icons.view_sidebar_outlined,
+          lucide: LucideIcons.menu,
+          title: '底部导航管理',
+          detail: '恢复被隐藏的页签 · 重置默认布局（排序在底部栏长按拖动）',
+          onTap: () => _push(
+            BottomNavManagerPage(preferences: store.preferences),
+          ),
         ),
       ]),
       _SettingsGroup('网络与连接', [

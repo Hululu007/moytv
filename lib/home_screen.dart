@@ -11,6 +11,7 @@ import 'game_zone_page.dart';
 import 'app_layout.dart';
 import 'auto_refresh_gate.dart';
 import 'back_history.dart';
+import 'bottom_nav_config.dart';
 import 'liquid_glass.dart';
 import 'site_icon.dart';
 import 'site_thumb_cache.dart';
@@ -303,6 +304,12 @@ class _HomeScreenState extends State<HomeScreen>
   Timer? _cacheRefreshTimer;
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
+
+  /// 底部导航布局（用户排序 + 隐藏名单，用户 2026-11-27 令可编辑）：
+  /// initState 从偏好读入，编辑后即时存回；设置-底部导航管理改完、
+  /// 回到首页时经 didPopNext 重读。
+  BottomNavLayout _navLayout = BottomNavLayout.defaults();
+  bool _navEditing = false;
   bool _showRecommendations = false;
   bool _catalogLoadScheduled = false;
   // 首屏自动补拉：站源晚于页面就绪时，等它就绪后自动请求一次，用户不用手动下拉。
@@ -1275,6 +1282,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
     _source = SourceSite.byId(widget.store.source);
     _zone = HomeZone.library;
+    _navLayout = BottomNavLayout.load(widget.store.preferences);
     _allSources = widget.store.catalogView.allSources;
     if (_librarySources.isNotEmpty) {
       final remembered = _rememberedForCurrentZone();
@@ -1875,35 +1883,111 @@ class _HomeScreenState extends State<HomeScreen>
     _setZone(zone);
   }
 
+  /// 系统门禁隐藏的页签（与用户自己的隐藏名单分开，各自独立）：
+  /// 当前没有页签级门禁，留空集；日后若加，只改这一处——门禁集合
+  /// 只在渲染时叠加过滤，不写进用户的排序/隐藏偏好，门禁解除后
+  /// 页签按用户顺序原位回来。
+  Set<BottomNavTab> get _gateHiddenNavTabs => const {};
+
+  /// 当前实际显示的底部页签（用户布局叠加门禁过滤后的结果）。
+  List<BottomNavTab> get _visibleNavTabs =>
+      _navLayout.displayVisible(gateHidden: _gateHiddenNavTabs);
+
+  void _enterNavEdit() {
+    if (_navEditing) return;
+    setState(() => _navEditing = true);
+  }
+
+  void _exitNavEdit() {
+    if (!_navEditing) return;
+    setState(() => _navEditing = false);
+  }
+
+  /// 拖动排序落点（可见序列下标）：松手即落位并存偏好，重启保留。
+  void _onNavReorder(int from, int to) {
+    setState(() => _navLayout.moveVisible(from, to));
+    unawaited(_navLayout.save(widget.store.preferences));
+  }
+
+  /// 编辑态点减号隐藏页签：只是不显示、进「已隐藏」池可恢复（设置
+  /// → 底部导航管理），不是真删；藏到最后一个时被布局层拦下。
+  void _onNavRemoveTab(int position) {
+    final visible = _visibleNavTabs;
+    if (position < 0 || position >= visible.length) return;
+    final tab = visible[position];
+    if (!_navLayout.hide(tab)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('至少保留一个页签')));
+      return;
+    }
+    setState(() {});
+    unawaited(_navLayout.save(widget.store.preferences));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已隐藏「${tab.label}」，可在设置 → 底部导航管理里恢复')),
+    );
+  }
+
   /// 底部标签样式的霓虹胶囊壳：只在手机端显示；电视/桌面走各自导航，
   /// 选片模式下隐藏。全部主题共用同一壳子（见 NeonCapsuleBar），只换
-  /// 主题配色。中间播放键固定居中（centerAfter: 4，左右各 4 个等宽
-  /// 页签，圆钮落在网盘与小程序之间，用户 2026-11-19 令），点开
-  /// 全屏推荐流，无内容时变暗不响应。
+  /// 主题配色。页签与顺序取用户的导航布局（默认即出厂布局：片库/
+  /// 直播/听读/网盘/小程序/演员库/游戏区/我的，“我的”默认最后一位，
+  /// 用户 2026-11-19 令；2026-11-27 起用户可长按进编辑态拖动排序、
+  /// 隐藏，默认不变）。中间播放键是中锚：不参与拖动，位置按可见
+  /// 页签数取中（默认 8 个时 centerAfter 为 4，左右各 4、圆钮落在
+  /// 网盘与小程序之间），页签增减后其余页签自动回流补位、间距均匀。
+  /// 圆钮点开全屏推荐流，无内容时变暗不响应。
   Widget? _bottomTabBar({required bool television, required bool desktop}) {
     if (television || desktop || _selectionMode) {
       return null;
     }
-    const entries = <(Object, String)>[
-      (LucideIcons.clapperboard, '片库'),
-      (LucideIcons.tv, '直播'),
-      (LucideIcons.bookHeadphones, '听读'),
-      (LucideIcons.hardDrive, '网盘'),
-      (LucideIcons.layoutGrid, '小程序'),
-      (LucideIcons.users, '演员库'),
-      (LucideIcons.gamepad2, '游戏区'),
-      // “我的”固定最后一位（用户 2026-11-19 令，非 Windows 主题）。
-      (LucideIcons.user, '我的'),
+    final visible = _visibleNavTabs;
+    final entries = <(Object, String)>[
+      for (final tab in visible) (tab.icon, tab.label),
     ];
-    return NeonCapsuleBar(
+    final currentTab = BottomNavTab.values[_bottomTabIndex];
+    final bar = NeonCapsuleBar(
       entries: entries,
-      index: _bottomTabIndex,
-      onSelect: _onBottomTab,
-      onCenter: _openFullscreenFeed,
-      centerAfter: 4,
+      index: visible.indexOf(currentTab),
+      onSelect: (position) => _onBottomTab(visible[position].index),
+      onCenter: _navEditing ? () {} : _openFullscreenFeed,
+      centerAfter: (visible.length / 2).ceil(),
       centerEnabled: _feedCenterEnabled,
       tabKeyPrefix: 'shell-tab',
       centerKey: 'shell-center',
+      editing: _navEditing,
+      onLongPressTab: (_) => _enterNavEdit(),
+      onReorder: _onNavReorder,
+      onRemoveTab: _onNavRemoveTab,
+      removeEnabled: visible.length > 1,
+    );
+    if (!_navEditing) return bar;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 6, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '编辑底部导航：长按拖动排序，点 − 隐藏',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Theme.of(context).hintColor,
+                  ),
+                ),
+              ),
+              TextButton(
+                key: const ValueKey('nav-edit-done'),
+                onPressed: _exitNavEdit,
+                child: const Text('完成'),
+              ),
+            ],
+          ),
+        ),
+        bar,
+      ],
     );
   }
 
@@ -1954,7 +2038,18 @@ class _HomeScreenState extends State<HomeScreen>
     _returnGraceTimer = Timer(_returnGrace, () {
       if (mounted) _justReturned = false;
     });
+    _reloadNavLayout();
     _consumeSubscriptionEntryRequest();
+  }
+
+  /// 从偏好重读底部导航布局（设置-底部导航管理里改完返回时生效）。
+  void _reloadNavLayout() {
+    if (!mounted) return;
+    final loaded = BottomNavLayout.load(widget.store.preferences);
+    if (loaded.orderRaw != _navLayout.orderRaw ||
+        loaded.hiddenRaw != _navLayout.hiddenRaw) {
+      setState(() => _navLayout = loaded);
+    }
   }
 
   /// 消费订阅双入口的待办请求（订阅行点“影视/直播”后退回首页时）：

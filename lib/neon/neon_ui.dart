@@ -717,6 +717,11 @@ class NeonCapsuleBar extends StatelessWidget {
     this.centerEnabled = true,
     this.tabKeyPrefix,
     this.centerKey,
+    this.editing = false,
+    this.onLongPressTab,
+    this.onReorder,
+    this.onRemoveTab,
+    this.removeEnabled = true,
   });
 
   /// 页签条目：（图标或 emoji 字符，文字）。emoji 字符（如 🎞️）直接
@@ -731,6 +736,18 @@ class NeonCapsuleBar extends StatelessWidget {
   final bool centerEnabled;
   final String? tabKeyPrefix;
   final String? centerKey;
+
+  /// 编辑态（外层壳底部栏「像手机桌面一样可编辑」，用户 2026-11-27
+  /// 令）：为真时页签可长按拖动排序（[onReorder] 回传可见序列里的
+  /// 起止下标）、右上角出减号徽标（点按走 [onRemoveTab]），点按不再
+  /// 切区；非编辑态时长按页签走 [onLongPressTab]（外层壳据此进编辑
+  /// 态）。默认全关，短剧内层栏等其他用家不受影响。[removeEnabled]
+  /// 为假时减号变灰（只剩最后一个可见页签、点按由调用方拦下提示）。
+  final bool editing;
+  final ValueChanged<int>? onLongPressTab;
+  final void Function(int from, int to)? onReorder;
+  final ValueChanged<int>? onRemoveTab;
+  final bool removeEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -750,7 +767,10 @@ class NeonCapsuleBar extends StatelessWidget {
           decoration: BoxDecoration(
             color: config.surfaceColor.withValues(alpha: .94),
             borderRadius: BorderRadius.circular(31),
-            border: Border.all(color: config.dividerColor),
+            border: Border.all(
+              color: editing ? config.primaryColor : config.dividerColor,
+              width: editing ? 1.6 : 1.0,
+            ),
             boxShadow: [
               BoxShadow(
                 color: config.primaryColor.withValues(alpha: .22),
@@ -763,7 +783,7 @@ class NeonCapsuleBar extends StatelessWidget {
             children: [
               for (var i = 0; i < before.length; i++)
                 _item(before[i], i, config),
-              SizedBox(width: 52, child: _center(config)),
+              SizedBox(width: 52, child: _centerSlot(before.length, config)),
               for (var i = 0; i < after.length; i++)
                 _item(after[i], before.length + i, config),
             ],
@@ -773,35 +793,157 @@ class NeonCapsuleBar extends StatelessWidget {
     );
   }
 
-  Widget _item((Object, String) entry, int entryIndex, AppThemeConfig config) {
+  Widget _itemContent(
+    (Object, String) entry,
+    int entryIndex,
+    AppThemeConfig config,
+  ) {
     final selected = index == entryIndex;
     final glyph = entry.$1;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (glyph is String)
+          Text(glyph, style: const TextStyle(fontSize: 19, height: 1.0))
+        else
+          Icon(
+            glyph as IconData,
+            size: 19,
+            color: selected ? config.primaryColor : config.textSecondary,
+          ),
+        const SizedBox(height: 3),
+        Text(
+          entry.$2,
+          style: TextStyle(
+            fontSize: 9.5,
+            height: 1.0,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? config.primaryColor : config.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 中央圆钮槽位：编辑态时它只作拖放落点（落在圆钮上＝把页签移到
+  /// 圆钮前的位置，即跨过中锚），圆钮本身不参与拖动、位置不动。
+  Widget _centerSlot(int beforeCount, AppThemeConfig config) {
+    if (!editing || onReorder == null) return _center(config);
+    return DragTarget<int>(
+      onWillAcceptWithDetails: (details) => details.data != beforeCount,
+      onAcceptWithDetails: (details) => onReorder!(details.data, beforeCount),
+      builder: (context, candidate, rejected) => _center(config),
+    );
+  }
+
+  Widget _item((Object, String) entry, int entryIndex, AppThemeConfig config) {
+    final itemKey = tabKeyPrefix == null
+        ? null
+        : ValueKey('$tabKeyPrefix-$entryIndex');
+    if (!editing) {
+      return Expanded(
+        child: GestureDetector(
+          key: itemKey,
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onSelect(entryIndex),
+          onLongPress: onLongPressTab == null
+              ? null
+              : () => onLongPressTab!(entryIndex),
+          child: _itemContent(entry, entryIndex, config),
+        ),
+      );
+    }
+    final badged = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        _itemContent(entry, entryIndex, config),
+        if (onRemoveTab != null)
+          Positioned(
+            top: 4,
+            right: 4,
+            child: GestureDetector(
+              key: tabKeyPrefix == null
+                  ? null
+                  : ValueKey('$tabKeyPrefix-remove-$entryIndex'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onRemoveTab!(entryIndex),
+              child: Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: removeEnabled
+                      ? config.primaryColor
+                      : config.textSecondary.withValues(alpha: .45),
+                ),
+                child: const Icon(
+                  LucideIcons.minus,
+                  size: 13,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
     return Expanded(
-      child: GestureDetector(
-        key: tabKeyPrefix == null
-            ? null
-            : ValueKey('$tabKeyPrefix-$entryIndex'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onSelect(entryIndex),
+      child: DragTarget<int>(
+        onWillAcceptWithDetails: (details) => details.data != entryIndex,
+        onAcceptWithDetails: (details) =>
+            onReorder?.call(details.data, entryIndex),
+        builder: (context, candidate, rejected) {
+          return LongPressDraggable<int>(
+            data: entryIndex,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _dragFeedback(entry, config),
+            childWhenDragging: Opacity(opacity: .35, child: badged),
+            child: GestureDetector(
+              key: itemKey,
+              behavior: HitTestBehavior.opaque,
+              onTap: () {},
+              child: badged,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 拖动中的页签影子：小胶囊（图标 + 文字），跟手移动。
+  Widget _dragFeedback((Object, String) entry, AppThemeConfig config) {
+    final glyph = entry.$1;
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 64,
+        height: 56,
+        decoration: BoxDecoration(
+          color: config.surfaceColor.withValues(alpha: .96),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: config.primaryColor, width: 1.4),
+          boxShadow: [
+            BoxShadow(
+              color: config.primaryColor.withValues(alpha: .3),
+              blurRadius: 14,
+              spreadRadius: -2,
+            ),
+          ],
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (glyph is String)
               Text(glyph, style: const TextStyle(fontSize: 19, height: 1.0))
             else
-              Icon(
-                glyph as IconData,
-                size: 19,
-                color: selected ? config.primaryColor : config.textSecondary,
-              ),
+              Icon(glyph as IconData, size: 19, color: config.primaryColor),
             const SizedBox(height: 3),
             Text(
               entry.$2,
               style: TextStyle(
                 fontSize: 9.5,
                 height: 1.0,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? config.primaryColor : config.textSecondary,
+                fontWeight: FontWeight.w700,
+                color: config.primaryColor,
               ),
             ),
           ],
