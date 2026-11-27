@@ -106,23 +106,21 @@ void main() {
     await drain(tester);
   });
 
-  testWidgets('warm market list shows without spinner', (tester) async {
-    MiniAppHomeCache.warmForTest(
-      settings: const MiniAppSettings(),
-      market: const [
-        MiniAppMarketItem(
-          appId: 'com.example.future',
-          name: '上游新应用',
-          url: 'https://example.com/future.zip',
-        ),
-      ],
-      marketLoaded: true,
-    );
+  // 2026-11-27 用户令：蚂蚁自带「市场」页签删除、原「海阔规则」
+  // 改名「市场」、小程序区齿轮入口删除。页签行只剩四项且无齿轮。
+  testWidgets('tab row is 已安装/海阔/插件/市场 with no settings gear', (
+    tester,
+  ) async {
+    MiniAppHomeCache.warmForTest(settings: const MiniAppSettings());
     await pumpPage(tester);
     await tester.pump();
-    await tester.tap(find.text('市场'));
+    final tabBar = tester.widget<TabBar>(find.byType(TabBar));
+    expect(
+      tabBar.tabs.map((tab) => (tab as Tab).text).toList(),
+      ['已安装', '海阔', '插件', '市场'],
+    );
+    expect(find.text('海阔规则'), findsNothing);
+    expect(find.byIcon(Icons.settings_outlined), findsNothing);
     await drain(tester);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.text('上游新应用'), findsOneWidget);
   });
 }

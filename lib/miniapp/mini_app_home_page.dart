@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../core_bridge.dart';
 import 'mini_app_builtin.dart';
@@ -12,7 +10,6 @@ import 'mini_app_host_page.dart';
 import 'mini_app_manifest.dart';
 import 'mini_app_runtime.dart';
 import 'mini_app_settings.dart';
-import 'mini_app_settings_screen.dart';
 import 'mini_app_store.dart';
 import 'haikuo/haikuo_home_page.dart';
 import '../idj_plugin_store.dart';
@@ -21,8 +18,8 @@ import 'haikuo/haikuo_rule_market.dart';
 
 /// 小程序首页。
 ///
-/// 结构对齐参考实现：紧凑单行顶栏（标签页 + 新建 / 视图切换 / 设置并作
-/// 一行）+「已安装 / 市场 / 海阔 / 插件 / 海阔规则」五标签 + 四列图标网格。图标用名称首字 + 按
+/// 结构对齐参考实现：紧凑单行顶栏（标签页 + 新建 / 视图切换并作
+/// 一行）+「已安装 / 海阔 / 插件 / 市场」四标签 + 四列图标网格。图标用名称首字 + 按
 /// appId 取色的圆角方块，与参考实现的视觉一致，也不依赖小程序包内提供图标资源。
 /// 海阔小程序有自己的独立标签（海阔规则列表与导入入口都在那页里），
 /// 不再以固定卡片挂在「已安装」列表顶部。
@@ -45,48 +42,29 @@ enum MiniAppViewMode { grid, list }
 class MiniAppHomeCache {
   static MiniAppSettings? settings;
   static List<MiniAppManifest> installed = const [];
-  static List<MiniAppMarketItem> market = const [];
-  static bool marketLoaded = false;
 
   static bool get isWarm => settings != null;
 
   static void remember({
     required MiniAppSettings settings,
     required List<MiniAppManifest> installed,
-    List<MiniAppMarketItem>? market,
-    bool? marketLoaded,
   }) {
     MiniAppHomeCache.settings = settings;
     MiniAppHomeCache.installed = List.unmodifiable(installed);
-    if (market != null) {
-      MiniAppHomeCache.market = List.unmodifiable(market);
-    }
-    if (marketLoaded != null) {
-      MiniAppHomeCache.marketLoaded = marketLoaded;
-    }
   }
 
   @visibleForTesting
   static void resetForTest() {
     settings = null;
     installed = const [];
-    market = const [];
-    marketLoaded = false;
   }
 
   @visibleForTesting
   static void warmForTest({
     required MiniAppSettings settings,
     List<MiniAppManifest> installed = const [],
-    List<MiniAppMarketItem> market = const [],
-    bool marketLoaded = false,
   }) {
-    remember(
-      settings: settings,
-      installed: installed,
-      market: market,
-      marketLoaded: marketLoaded,
-    );
+    remember(settings: settings, installed: installed);
   }
 }
 
@@ -94,10 +72,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
   MiniAppSettings? _settings;
   MiniAppRuntime? _runtime;
   List<MiniAppManifest> _installed = const [];
-  List<MiniAppMarketItem> _market = const [];
-  String _marketState = 'idle';
-  String _marketError = '';
-  final Set<String> _installing = {};
   bool _busy = false;
   MiniAppViewMode _viewMode = MiniAppViewMode.grid;
 
@@ -116,10 +90,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       _settings = settings;
       _runtime = MiniAppRuntime(store: MiniAppStore(), settings: settings);
       _installed = MiniAppHomeCache.installed;
-      _market = MiniAppHomeCache.market;
-      _marketState = MiniAppHomeCache.marketLoaded
-          ? (_market.isEmpty ? 'empty' : 'ready')
-          : 'idle';
     }
     _load();
   }
@@ -143,7 +113,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       _runtime = runtime;
       _installed = installed;
     });
-    await _loadMarket();
   }
 
   Future<void> _refreshInstalled() async {
@@ -155,63 +124,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       MiniAppHomeCache.remember(settings: settings, installed: installed);
     }
     if (mounted) setState(() => _installed = installed);
-  }
-
-  Future<void> _loadMarket() async {
-    final settings = _settings;
-    if (settings == null) return;
-    // 已有市场列表时静默刷新：不翻“加载中”，不挡界面转圈。
-    final silent = _market.isNotEmpty;
-    if (!silent) {
-      setState(() {
-        _marketState = 'loading';
-        _marketError = '';
-      });
-    }
-    try {
-      final response = await http
-          .get(Uri.parse(settings.marketUrl))
-          .timeout(const Duration(seconds: 30));
-      if (response.statusCode != 200) {
-        throw HttpException('HTTP ${response.statusCode}');
-      }
-      final items = filterRemovedMarketItems(
-        parseMiniAppMarketJson(utf8.decode(response.bodyBytes)),
-      );
-      if (!mounted) return;
-      MiniAppHomeCache.remember(
-        settings: settings,
-        installed: _installed,
-        market: items,
-        marketLoaded: true,
-      );
-      setState(() {
-        _market = items;
-        _marketState = items.isEmpty ? 'empty' : 'ready';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      // 静默刷新失败时留着旧列表，不翻错误页。
-      if (silent) return;
-      setState(() {
-        _market = const [];
-        _marketState = 'error';
-        _marketError = error.toString();
-      });
-    }
-  }
-
-  Future<void> _openSettings() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(builder: (_) => const MiniAppSettingsScreen()),
-    );
-    final settings = await MiniAppSettings.load();
-    final runtime = _runtime;
-    if (runtime != null) runtime.settings = settings;
-    if (!mounted) return;
-    setState(() => _settings = settings);
-    await _loadMarket();
   }
 
   Future<void> _openApp(MiniAppManifest manifest) async {
@@ -403,14 +315,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
                 unawaited(_installIdjFromPaste(parentContext));
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.refresh_rounded),
-              title: const Text('刷新市场'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _loadMarket();
-              },
-            ),
           ],
         ),
       ),
@@ -428,7 +332,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
         : await IdjPluginActions.installFromFile(parentContext, _idjStore);
     if (ok && mounted) {
       await _idjTabKey.currentState?.refreshAll();
-      DefaultTabController.of(parentContext).animateTo(3);
+      DefaultTabController.of(parentContext).animateTo(2);
     }
   }
 
@@ -442,7 +346,7 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
           );
     if (ok && mounted) {
       await _idjTabKey.currentState?.refreshAll();
-      DefaultTabController.of(parentContext).animateTo(3);
+      DefaultTabController.of(parentContext).animateTo(2);
     }
   }
 
@@ -530,45 +434,11 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
     }
   }
 
-  Future<void> _installMarketItem(MiniAppMarketItem item) async {
-    if (_installing.contains(item.appId)) return;
-    setState(() => _installing.add(item.appId));
-    try {
-      final runtime = _runtime!;
-      await runtime.store.installFromUrl(
-        item.url,
-        expectedMd5: item.md5,
-        expectedSize: item.size,
-      );
-      await _refreshInstalled();
-      if (mounted) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(SnackBar(content: Text('已安装「${item.name}」')));
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(SnackBar(content: Text('安装失败：$error')));
-      }
-    } finally {
-      if (mounted) setState(() => _installing.remove(item.appId));
-    }
-  }
-
-  MiniAppManifest? _installedById(String appId) {
-    for (final manifest in _installed) {
-      if (manifest.appId == appId) return manifest;
-    }
-    return null;
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return DefaultTabController(
-      length: 5,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           // 紧凑单行顶栏：标签页与动作钮并作一行（对标官方密度），
@@ -592,10 +462,11 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
             ),
             tabs: const [
               Tab(text: '已安装', height: 38),
-              Tab(text: '市场', height: 38),
               Tab(text: '海阔', height: 38),
               Tab(text: '插件', height: 38),
-              Tab(text: '海阔规则', height: 38),
+              // 2026-11-27 用户令：原「海阔规则」页签改名「市场」，
+              // 蚂蚁小程序自带的那个「市场」页签删除。
+              Tab(text: '市场', height: 38),
             ],
           ),
           actions: [
@@ -621,11 +492,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
                     : MiniAppViewMode.grid,
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: '小程序设置',
-              onPressed: _settings == null ? null : _openSettings,
-            ),
             const SizedBox(width: 4),
           ],
         ),
@@ -634,18 +500,17 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
             : TabBarView(
                 children: [
                   Builder(builder: _installedTab),
-                  _marketTab(),
                   // 海阔小程序独立界面：规则列表与导入入口都在这页里。
-                  // tabIndex 与上面 tabs 顺序对应（海阔是第 3 个），
+                  // tabIndex 与上面 tabs 顺序对应（海阔是第 2 个），
                   // 供剪贴板自动检测判断海阔页是否可见。
-                  const HaikuoHomePage(embedded: true, tabIndex: 2),
+                  const HaikuoHomePage(embedded: true, tabIndex: 1),
                   // iDuanJu 插件市场（设计 §4）：已安装 / 安装入口 /
                   // 订阅 / 更新检查四区，装好的插件落片库当站用。
                   IdjPluginTab(key: _idjTabKey, store: _idjStore),
-                  // 海阔规则仓库（皇帝影院海阔规则仓库）：拉索引 →
-                  // 点安装走海阔既有导入链路落 HaikuoStore，与插件
-                  // 条目分区呈现，不走 .idjplugin 安装器。加在末尾，
-                  // 既有四个 tab 的序号不变。
+                  // 「市场」页签（原海阔规则仓库，2026-11-27 按用户
+                  // 令改名）：拉索引 → 点安装走海阔既有导入链路落
+                  // HaikuoStore，与插件条目分区呈现，不走
+                  // .idjplugin 安装器。
                   const HaikuoRuleMarketView(),
                 ],
               ),
@@ -665,9 +530,9 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       return _EmptyState(
         icon: Icons.widgets_outlined,
         title: '还没有安装小程序',
-        description: '右上角「+」可从 zip 包、文件夹或链接安装，也可以去「市场」挑一个',
-        actionLabel: '去市场看看',
-        onAction: () => DefaultTabController.of(tabContext).animateTo(1),
+        description: '右上角「+」可从 zip 包、文件夹或链接安装，也可以去「插件」页签装插件',
+        actionLabel: '去插件看看',
+        onAction: () => DefaultTabController.of(tabContext).animateTo(2),
       );
     }
     if (_viewMode == MiniAppViewMode.list) {
@@ -710,142 +575,6 @@ class _MiniAppHomePageState extends State<MiniAppHomePage> {
       },
     );
   }
-
-  Widget _marketTab() {
-    if (_marketState == 'loading') {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_marketState == 'error') {
-      return _EmptyState(
-        icon: Icons.cloud_off_rounded,
-        title: '市场拉取失败',
-        description: _marketError,
-        actionLabel: '重试',
-        onAction: _loadMarket,
-      );
-    }
-    if (_marketState == 'empty' || _market.isEmpty) {
-      return _EmptyState(
-        icon: Icons.storefront_outlined,
-        title: '市场暂时是空的',
-        description: '可以在「小程序设置」里换一个市场地址',
-        actionLabel: '重新拉取',
-        onAction: _loadMarket,
-      );
-    }
-    if (_viewMode == MiniAppViewMode.list) {
-      return RefreshIndicator(
-        onRefresh: _loadMarket,
-        child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-          itemCount: _market.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 6),
-          itemBuilder: (context, index) {
-            final item = _market[index];
-            final installed = _installedById(item.appId) != null;
-            final installing = _installing.contains(item.appId);
-            return _MiniAppListRow(
-              name: item.name,
-              subtitle: [
-                if (item.version.isNotEmpty) item.version,
-                if (item.author.isNotEmpty) item.author,
-                if (item.description.isNotEmpty) item.description,
-              ].join(' · '),
-              seed: item.appId,
-              trailing: _marketAction(item, installed, installing),
-              onTap: () => _onMarketTap(item, installed, installing),
-            );
-          },
-        ),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _loadMarket,
-      child: GridView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 28),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 4,
-          mainAxisSpacing: 18,
-          crossAxisSpacing: 8,
-          childAspectRatio: 0.74,
-        ),
-        itemCount: _market.length,
-        itemBuilder: (context, index) {
-          final item = _market[index];
-          final installed = _installedById(item.appId) != null;
-          final installing = _installing.contains(item.appId);
-          return _MiniAppTile(
-            name: item.name,
-            seed: item.appId,
-            badge: installing
-                ? '…'
-                : installed
-                ? '✓'
-                : null,
-            onTap: () => _onMarketTap(item, installed, installing),
-            onLongPress: () => _showMarketInfo(item),
-          );
-        },
-      ),
-    );
-  }
-
-  void _onMarketTap(MiniAppMarketItem item, bool installed, bool installing) {
-    if (installed) {
-      final manifest = _installedById(item.appId);
-      if (manifest != null) _openApp(manifest);
-      return;
-    }
-    if (installing) return;
-    _installMarketItem(item);
-  }
-
-  Widget _marketAction(
-    MiniAppMarketItem item,
-    bool installed,
-    bool installing,
-  ) {
-    return FilledButton(
-      onPressed: installing
-          ? null
-          : () => _onMarketTap(item, installed, installing),
-      child: Text(
-        installed
-            ? '打开'
-            : installing
-            ? '安装中…'
-            : '安装',
-      ),
-    );
-  }
-
-  void _showMarketInfo(MiniAppMarketItem item) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(item.name),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('应用 ID：${item.appId}'),
-            if (item.version.isNotEmpty) Text('版本：${item.version}'),
-            if (item.author.isNotEmpty) Text('作者：${item.author}'),
-            if (item.description.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(item.description),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// 参考实现里的图标方块：圆角正方形 + 名称首字 + 名称两行。
@@ -855,14 +584,12 @@ class _MiniAppTile extends StatelessWidget {
     required this.seed,
     required this.onTap,
     this.onLongPress,
-    this.badge,
   });
 
   final String name;
   final String seed;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
-  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -906,30 +633,6 @@ class _MiniAppTile extends StatelessWidget {
                   ),
                 ),
               ),
-              if (badge != null)
-                Positioned(
-                  right: -4,
-                  top: -4,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 1,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colors.surface,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: color.withValues(alpha: 0.55)),
-                    ),
-                    child: Text(
-                      badge!,
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        color: color,
-                      ),
-                    ),
-                  ),
-                ),
             ],
           ),
           const SizedBox(height: 7),
@@ -958,7 +661,6 @@ class _MiniAppListRow extends StatelessWidget {
     required this.seed,
     required this.onTap,
     this.onLongPress,
-    this.trailing,
   });
 
   final String name;
@@ -966,7 +668,6 @@ class _MiniAppListRow extends StatelessWidget {
   final String seed;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1011,7 +712,6 @@ class _MiniAppListRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
               ),
-        trailing: trailing,
       ),
     );
   }
