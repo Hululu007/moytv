@@ -578,6 +578,28 @@ ActressWork videoLibraryWorkFromRow(
 }
 
 /// sqflite 实现：独立 actress.db，不动 app.db 的版本与表结构。
+/// 按视频主分类筛人的名字集合条件（2026-11-27 问题 5）：旧
+/// 写法是逐人相关 EXISTS（子查询里按 name 关联 actresses，
+/// name 无索引、规划器逐行全表扫 actresses，3 万人 × 3 万行
+/// 量级，定版库实测分钟级——手机上首屏超时、页面保留旧名单，
+/// 观感就是“点分类没反应、名单不变”）。改成集合先行：从
+/// video_category 的 main_category 索引出发一趟算出“名下有
+/// 该分类作品的人名集合”，外层 IN 由 SQLite 一次物化，语
+/// 义与旧 EXISTS 完全一致（同名多行合并口径不变；旧子查询
+/// 里 JOIN videos 不带任何使用列，一并去掉）。
+String actressNameInCategorySql(String outerName) =>
+    '$outerName IN (SELECT a9.name FROM video_category vc9 '
+    'JOIN video_actress va9 ON va9.vod_id = vc9.vod_id '
+    'JOIN actresses a9 ON a9.cate_id = va9.cate_id '
+    "WHERE COALESCE(vc9.main_category, '') = ?)";
+
+/// 按作品标签筛人的名字集合条件（问题 5，同上口径）。
+String actressNameInTagSql(String outerName) =>
+    '$outerName IN (SELECT a9.name FROM video_tag vt9 '
+    'JOIN video_actress va9 ON va9.vod_id = vt9.vod_id '
+    'JOIN actresses a9 ON a9.cate_id = va9.cate_id '
+    'WHERE vt9.tag_name = ?)';
+
 class SqfliteActressDatabase implements ActressDatabase {
   SqfliteActressDatabase._();
 
@@ -1503,49 +1525,30 @@ class SqfliteActressDatabase implements ActressDatabase {
           conditions.add('r.name LIKE ?');
         }
         if (sex == ActressSexFilter.male) {
+          // 集合先行（问题 5）：男优名集合一次物化，不逐人
+          // 相关扫 actresses。
           conditions.add(
-            "EXISTS (SELECT 1 FROM actresses ax WHERE ax.name = r.name "
-            "AND ax.sex = 'male')",
+            "r.name IN (SELECT name FROM actresses WHERE sex = 'male')",
           );
         } else if (sex == ActressSexFilter.female) {
           conditions.add(
-            "NOT EXISTS (SELECT 1 FROM actresses ax WHERE ax.name = r.name "
-            "AND ax.sex = 'male')",
+            'r.name NOT IN (SELECT name FROM actresses '
+            "WHERE sex = 'male' AND name IS NOT NULL)",
           );
         }
         if (category.isNotEmpty) {
           args.add(category);
-          conditions.add(
-            'EXISTS (SELECT 1 FROM actresses a2 '
-            'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
-            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
-            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-            'WHERE a2.name = r.name '
-            "AND COALESCE(vc2.main_category, '') = ?)",
-          );
+          conditions.add(actressNameInCategorySql('r.name'));
         }
         if (tag.isNotEmpty) {
           // 2026-11-24 册别筛按视频主分类筛人（guochang 口径，
           // 见无 actresses 表分支的注释）；tag 值就是主分类名。
           args.add(tag);
-          conditions.add(
-            'EXISTS (SELECT 1 FROM actresses a2 '
-            'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
-            'JOIN videos v2 ON v2.vod_id = va2.vod_id '
-            'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-            'WHERE a2.name = r.name '
-            "AND COALESCE(vc2.main_category, '') = ?)",
-          );
+          conditions.add(actressNameInCategorySql('r.name'));
         }
         if (useVideoTag) {
           args.add(videoTag);
-          conditions.add(
-            'EXISTS (SELECT 1 FROM actresses a2 '
-            'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
-            'JOIN video_tag vt2 ON vt2.vod_id = va2.vod_id '
-            'WHERE a2.name = r.name '
-            'AND vt2.tag_name = ?)',
-          );
+          conditions.add(actressNameInTagSql('r.name'));
         }
         final where = conditions.isEmpty
             ? ''
@@ -1558,9 +1561,8 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 2026-11-23：性别未知不再冒充“女”——没有男优行只说明没确认
         // 过，不等于女；女筛（见上）仍按“非男”留人，显示只认确认值。
         final sexExpr = hasSex
-            ? "(SELECT CASE WHEN EXISTS(SELECT 1 FROM actresses a4 "
-                  "WHERE a4.name = r.name AND a4.sex = 'male') "
-                  "THEN 'male' ELSE '' END) AS sex"
+            ? "(CASE WHEN r.name IN (SELECT name FROM actresses "
+                  "WHERE sex = 'male') THEN 'male' ELSE '' END) AS sex"
             : "'' AS sex";
         final rows = await db.rawQuery(
           'SELECT r.first_rowid AS id, r.name AS display_name, '
@@ -1588,39 +1590,19 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 一份（COALESCE(main_category, type_name, '')），点分类
         // 标签筛出来的人与标签数一致。
         args.add(category);
-        conditions.add(
-          'EXISTS (SELECT 1 FROM video_actress va2 '
-          'JOIN videos v2 ON v2.vod_id = va2.vod_id '
-          'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-          'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
-          'WHERE a3.name = a.name '
-          "AND COALESCE(vc2.main_category, '') = ?)",
-        );
+        conditions.add(actressNameInCategorySql('a.name'));
       }
       if (tag.isNotEmpty) {
         // 2026-11-24 册别筛按视频主分类筛人（guochang 口径，
         // 见无 actresses 表分支的注释）；tag 值就是主分类名。
         args.add(tag);
-        conditions.add(
-          'EXISTS (SELECT 1 FROM video_actress va2 '
-          'JOIN videos v2 ON v2.vod_id = va2.vod_id '
-          'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-          'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
-          'WHERE a3.name = a.name '
-          "AND COALESCE(vc2.main_category, '') = ?)",
-        );
+        conditions.add(actressNameInCategorySql('a.name'));
       }
       if (useVideoTag) {
-        // 该人有该标签的作品才留（与分类同一口径：EXISTS 半连接，
-        // 不走大 JOIN 逐行回表）。
+        // 该人有该标签的作品才留（与分类同一口径：名字集合
+        // 先行，见 actressNameInTagSql）。
         args.add(videoTag);
-        conditions.add(
-          'EXISTS (SELECT 1 FROM video_actress va2 '
-          'JOIN video_tag vt2 ON vt2.vod_id = va2.vod_id '
-          'JOIN actresses a3 ON a3.cate_id = va2.cate_id '
-          'WHERE a3.name = a.name '
-          'AND vt2.tag_name = ?)',
-        );
+        conditions.add(actressNameInTagSql('a.name'));
       }
       final where = conditions.isEmpty
           ? ''
@@ -1749,24 +1731,11 @@ class SqfliteActressDatabase implements ActressDatabase {
         // 2026-11-24 册别筛按视频主分类计数（guochang 口径，
         // 见 listPersons 无 actresses 表分支的注释）。
         args.add(tag);
-        conditions.add(
-          'EXISTS (SELECT 1 FROM actresses a2 '
-          'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
-          'JOIN videos v2 ON v2.vod_id = va2.vod_id '
-          'LEFT JOIN video_category vc2 ON vc2.vod_id = va2.vod_id '
-          'WHERE a2.name = actresses.name '
-          "AND COALESCE(vc2.main_category, '') = ?)",
-        );
+        conditions.add(actressNameInCategorySql('actresses.name'));
       }
       if (useVideoTag) {
         args.add(videoTag);
-        conditions.add(
-          'EXISTS (SELECT 1 FROM actresses a2 '
-          'JOIN video_actress va2 ON va2.cate_id = a2.cate_id '
-          'JOIN video_tag vt2 ON vt2.vod_id = va2.vod_id '
-          'WHERE a2.name = actresses.name '
-          'AND vt2.tag_name = ?)',
-        );
+        conditions.add(actressNameInTagSql('actresses.name'));
       }
       final where = conditions.isEmpty
           ? ''
