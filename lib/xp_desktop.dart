@@ -34,10 +34,19 @@ abstract final class XpTheme {
 }
 
 /// 桌面：绿色山丘墙纸 + 左侧图标区（竖排，满一列换一列）。桌面本身没有任何导航。
-class XpDesktop extends StatelessWidget {
+/// 长按图标进编辑态（与 Win7 同一套：互换/空格落位/同一份存盘顺序），
+/// 编辑态顶栏出「完成」钮退出。
+class XpDesktop extends StatefulWidget {
   const XpDesktop({super.key, required this.onIconTap});
 
   final ValueChanged<Win7WindowKind> onIconTap;
+
+  @override
+  State<XpDesktop> createState() => _XpDesktopState();
+}
+
+class _XpDesktopState extends State<XpDesktop> {
+  bool _editing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +67,9 @@ class XpDesktop extends StatelessWidget {
             bottom: 0,
             child: DesktopIconColumn(
               keyPrefix: 'xp-desktop-icon',
-              onIconTap: onIconTap,
+              onIconTap: widget.onIconTap,
+              editing: _editing,
+              onEnterEdit: () => setState(() => _editing = true),
               iconBuilder: (kind) => Column(
                 children: [
                   DesktopIconBadge(kind: kind),
@@ -81,6 +92,15 @@ class XpDesktop extends StatelessWidget {
               ),
             ),
           ),
+          if (_editing)
+            Positioned(
+              top: 8,
+              right: 12,
+              child: DesktopEditBar(
+                doneKey: const ValueKey('xp-desktop-edit-done'),
+                onDone: () => setState(() => _editing = false),
+              ),
+            ),
         ],
       ),
     );

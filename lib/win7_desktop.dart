@@ -525,17 +525,22 @@ abstract final class Win7Theme {
   ];
 }
 
-/// 桌面图标列（Win7/XP 共用）：按列排图标，点按开窗口，长按拖拽
-/// 换位置；换完的顺序立刻存下来，下次打开还在。一列排满后换下
-/// 一列继续排（和真电脑桌面一样）。图标本体（图标 + 标题两行）
-/// 由调用方按各自风格提供；拖拽手势、顺序状态与持久化
-/// 都收在这里，两边行为一致。
+/// 桌面图标列（Win7/XP 共用）：按列排图标，点按开窗口；长按进
+/// 编辑态（用户 2026-11-27 令，与底部导航同一套编辑语言），编辑
+/// 态里拖动图标换位——拖到另一个图标上松手是两者互换格子、拖到
+/// 空格子是移过去，落位立刻存盘、重启与切主题都不乱；退出编辑态
+/// 由桌面壳的「完成」钮负责（[editing]/[onEnterEdit] 由壳传入）。
+/// 非编辑态点按行为不变。一列排满后换下一列继续排（和真电脑
+/// 桌面一样）。图标本体（图标 + 标题两行）由调用方按各自风格
+/// 提供；拖拽手势、顺序状态与持久化都收在这里，两边行为一致。
 class DesktopIconColumn extends StatefulWidget {
   const DesktopIconColumn({
     super.key,
     required this.keyPrefix,
     required this.onIconTap,
     required this.iconBuilder,
+    this.editing = false,
+    this.onEnterEdit,
   });
 
   /// 图标 InkWell 的 key 前缀：Win7 用 'win7-desktop-icon'，XP 用
@@ -546,6 +551,11 @@ class DesktopIconColumn extends StatefulWidget {
 
   /// 图标本体：图标 + 标题两行（Win7 素色、XP 带阴影，各自画法）。
   final Widget Function(Win7WindowKind kind) iconBuilder;
+
+  /// 编辑态：为真时图标可拖动换位、点按不开窗口；为假时长按图标
+  /// 走 [onEnterEdit] 进编辑态。
+  final bool editing;
+  final VoidCallback? onEnterEdit;
 
   @override
   State<DesktopIconColumn> createState() => _DesktopIconColumnState();
@@ -566,16 +576,31 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
     setState(() => _order = order);
   }
 
-  /// 把 [dragged] 挪到 [target] 所在的位置（目标及之后的图标顺延），
-  /// 立刻存盘。拖到自己身上不做事。
-  void _move(Win7WindowKind dragged, Win7WindowKind target) {
+  /// 编辑态把 [dragged] 与 [target] 两者互换格子（桌面图标调换的
+  /// 习惯做法），立刻存盘。拖到自己身上不做事。
+  void _swap(Win7WindowKind dragged, Win7WindowKind target) {
     if (dragged == target) return;
+    final order = List.of(_order);
+    final from = order.indexOf(dragged);
+    final to = order.indexOf(target);
+    if (from < 0 || to < 0) return;
+    order[from] = target;
+    order[to] = dragged;
+    setState(() => _order = order);
+    unawaited(saveDesktopIconOrder(order));
+  }
+
+  /// 编辑态把 [dragged] 移到线性位置 [targetIndex]（拖到空格子时
+  /// 用：空格子都在最后一列尾部，落点即排到那一带），立刻存盘。
+  void _moveToIndex(Win7WindowKind dragged, int targetIndex) {
     final order = List.of(_order);
     final from = order.indexOf(dragged);
     if (from < 0) return;
     order.removeAt(from);
-    final to = order.indexOf(target);
-    if (to < 0) return;
+    var to = targetIndex;
+    if (to > order.length) to = order.length;
+    if (to < 0) to = 0;
+    if (to == from) return;
     order.insert(to, dragged);
     setState(() => _order = order);
     unawaited(saveDesktopIconOrder(order));
@@ -588,15 +613,25 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
       // 刚好不被任务栏盖住（24 时标题被盖）。
       padding: const EdgeInsets.only(bottom: 20),
       child: Container(
-        decoration: hovered
+        decoration: hovered || widget.editing
             ? BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
+                color: Colors.white.withValues(
+                  alpha: widget.editing ? 0.10 : 0.18,
+                ),
                 borderRadius: BorderRadius.circular(8),
+                border: widget.editing
+                    ? Border.all(
+                        color: Colors.white.withValues(alpha: 0.35),
+                      )
+                    : null,
               )
             : null,
         child: InkWell(
           key: ValueKey('${widget.keyPrefix}-${kind.name}'),
-          onTap: () => widget.onIconTap(kind),
+          // 编辑态点按不开窗口（防误触）；非编辑态照常打开。
+          onTap: widget.editing ? () {} : () => widget.onIconTap(kind),
+          // 非编辑态长按进编辑态；编辑态长按由外层拖拽接管。
+          onLongPress: widget.editing ? null : widget.onEnterEdit,
           child: widget.iconBuilder(kind),
         ),
       ),
@@ -604,9 +639,10 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
   }
 
   Widget _dragTarget(Win7WindowKind kind) {
+    if (!widget.editing) return _item(kind, hovered: false);
     return DragTarget<Win7WindowKind>(
       onWillAcceptWithDetails: (details) => details.data != kind,
-      onAcceptWithDetails: (details) => _move(details.data, kind),
+      onAcceptWithDetails: (details) => _swap(details.data, kind),
       builder: (context, candidateData, rejectedData) {
         return LongPressDraggable<Win7WindowKind>(
           data: kind,
@@ -628,12 +664,38 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
     );
   }
 
+  /// 编辑态最后一列尾部的空格子：淡色描边占位，拖到它上面松手
+  /// 即把图标移过去（见 [_moveToIndex]）。
+  Widget _emptySlot(int linearIndex, BuildContext context) {
+    return DragTarget<Win7WindowKind>(
+      onWillAcceptWithDetails: (details) => true,
+      onAcceptWithDetails: (details) =>
+          _moveToIndex(details.data, linearIndex),
+      builder: (context, candidateData, rejectedData) {
+        return Container(
+          key: ValueKey('${widget.keyPrefix}-empty-$linearIndex'),
+          width: 60,
+          height: desktopIconItemHeight(context),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(
+              alpha: candidateData.isNotEmpty ? 0.16 : 0.05,
+            ),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.35),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 满列换列（和真电脑桌面一样）：用布局实测的可用高度除以
     // 单项高度，算出一列能放几个，排满一列再排下一列。一列能
-    // 放下时只有一列，外观与原来一字不差；多列时每项仍是
-    // DragTarget，拖拽换位逻辑（_move）不改。
+    // 放下时只有一列，外观与原来一字不差；编辑态的互换/空格
+    // 落位逻辑（_swap/_moveToIndex）对列数无感。
     return LayoutBuilder(
       builder: (context, constraints) {
         final perColumn = desktopItemsPerColumn(
@@ -652,6 +714,14 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   for (final kind in columns[i]) _dragTarget(kind),
+                  // 编辑态：最后一列没排满时补空格子作落点。
+                  if (widget.editing && i == columns.length - 1)
+                    for (
+                      var row = columns[i].length;
+                      row < perColumn;
+                      row++
+                    )
+                      _emptySlot(i * perColumn + row, context),
                 ],
               ),
             ],
@@ -662,11 +732,68 @@ class _DesktopIconColumnState extends State<DesktopIconColumn> {
   }
 }
 
+/// 桌面图标编辑态顶栏（Win7/XP 共用）：一句提示 + 「完成」钮，
+/// 挂在桌面右上角；编辑态的视觉标记与退出都收在这里。
+class DesktopEditBar extends StatelessWidget {
+  const DesktopEditBar({super.key, required this.doneKey, required this.onDone});
+
+  final Key doneKey;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '拖动图标换位',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            shadows: [
+              Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 1)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        Material(
+          color: Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            key: doneKey,
+            borderRadius: BorderRadius.circular(16),
+            onTap: onDone,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+              child: Text(
+                '完成',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// 桌面：蓝渐变墙纸 + 左侧图标区（竖排，满一列换一列）。桌面本身没有任何导航。
-class Win7Desktop extends StatelessWidget {
+/// 长按图标进编辑态（本壳自持状态），编辑态顶栏出「完成」钮退出。
+class Win7Desktop extends StatefulWidget {
   const Win7Desktop({super.key, required this.onIconTap});
 
   final ValueChanged<Win7WindowKind> onIconTap;
+
+  @override
+  State<Win7Desktop> createState() => _Win7DesktopState();
+}
+
+class _Win7DesktopState extends State<Win7Desktop> {
+  bool _editing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -690,7 +817,9 @@ class Win7Desktop extends StatelessWidget {
             bottom: 0,
             child: DesktopIconColumn(
               keyPrefix: 'win7-desktop-icon',
-              onIconTap: onIconTap,
+              onIconTap: widget.onIconTap,
+              editing: _editing,
+              onEnterEdit: () => setState(() => _editing = true),
               iconBuilder: (kind) => Column(
                 children: [
                   DesktopIconBadge(kind: kind),
@@ -713,6 +842,15 @@ class Win7Desktop extends StatelessWidget {
               ),
             ),
           ),
+          if (_editing)
+            Positioned(
+              top: 8,
+              right: 12,
+              child: DesktopEditBar(
+                doneKey: const ValueKey('win7-desktop-edit-done'),
+                onDone: () => setState(() => _editing = false),
+              ),
+            ),
         ],
       ),
     );

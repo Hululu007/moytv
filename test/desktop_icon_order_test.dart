@@ -141,10 +141,21 @@ void main() {
       expect(tapped, Win7WindowKind.live);
     });
 
-    testWidgets('长按拖拽换位置并存盘', (tester) async {
+    testWidgets('长按进编辑态、拖到图标上互换格子并存盘', (tester) async {
       SharedPreferences.setMockInitialValues({});
       await pumpDesktop(tester);
-      // “游戏”拖到“听读”身上：应挪到听读上面。
+      // 先长按任意图标进编辑态（完成钮出现）。
+      await tester.longPress(
+        find.byKey(const ValueKey('win7-desktop-icon-game')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.byKey(const ValueKey('win7-desktop-edit-done')),
+        findsOneWidget,
+      );
+      // 编辑态把“游戏”拖到“听读”身上：两者互换格子（用户
+      // 2026-11-27 令的互换语义，取代旧的插入顺延）。
       final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(const ValueKey('win7-desktop-icon-game'))),
       );
@@ -158,10 +169,13 @@ void main() {
       await gesture.up();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
-      expect(top(tester, 'game'), lessThan(top(tester, 'listenRead')));
-      expect(top(tester, 'listenRead'), lessThan(top(tester, 'library')));
+      // 游戏去了听读的格子（第 2 位），听读去了游戏的格子（第 7 位）。
+      expect(top(tester, 'game'), lessThan(top(tester, 'library')));
+      expect(top(tester, 'listenRead'), greaterThan(top(tester, 'actress')));
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getStringList(desktopIconOrderKey)?[1], 'game');
+      final stored = prefs.getStringList(desktopIconOrderKey);
+      expect(stored?[1], 'game');
+      expect(stored?[6], 'listenRead');
     });
   });
 
