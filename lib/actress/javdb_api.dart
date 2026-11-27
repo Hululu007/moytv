@@ -292,9 +292,30 @@ class JavdbMovieExtra {
     this.score = '',
     this.scoreCount = 0,
     this.poster = '',
+    this.originTitle = '',
+    this.tags = const [],
+    this.relativeMovies = const [],
+    this.actorMovies = const [],
   });
 
   final List<JavdbActor> actors;
+
+  /// 原标题（origin_title）：与列表标题（title）不同时，详情
+  /// 页大标题旁出「翻译」切换（AvPlay 版式）；接口没给/相同
+  /// 就是空/同值，页面不显示切换、不编造。
+  final String originTitle;
+
+  /// 相关分类名（tags[].name，AvPlay 详情模型 JavDbApiTag
+  /// 实证只有 id/name 两字段）：详情页标签行用。
+  final List<String> tags;
+
+  /// 相关推荐（relative_movies，详情模型实证字段）：详情页
+  /// 「你可能也喜欢」真数据；没返回就是空、整区不出。
+  final List<JavdbMovie> relativeMovies;
+
+  /// 本片演员的其他作品（actor_movies，详情模型实证字段）：
+  /// 详情页「她们还演出过」真数据；没返回就是空、整区不出。
+  final List<JavdbMovie> actorMovies;
 
   /// 详情自带的封面（cover_url 优先、thumb_url 兜底）：点开
   /// 作品时列表卡封面缺失/是小图时用它把详情页海报补上。
@@ -914,6 +935,31 @@ class JavdbApiClient {
     if (scoreCount <= 0) scoreCount = _javdbInt(map['reviews_count']);
     var poster = _javdbStr(map['cover_url']);
     if (poster.isEmpty) poster = _javdbStr(map['thumb_url']);
+    final tags = <String>[];
+    final rawTags = map['tags'];
+    if (rawTags is List) {
+      for (final item in rawTags) {
+        if (item is Map<String, dynamic>) {
+          final name = _javdbStr(item['name']);
+          if (name.isNotEmpty && !tags.contains(name)) tags.add(name);
+        } else if (item is String && item.isNotEmpty) {
+          if (!tags.contains(item)) tags.add(item);
+        }
+      }
+    }
+    List<JavdbMovie> moviesOf(String key) {
+      final out = <JavdbMovie>[];
+      final raw = map[key];
+      if (raw is List) {
+        for (final item in raw) {
+          if (item is Map<String, dynamic>) {
+            out.add(JavdbMovie.fromJson(item));
+          }
+        }
+      }
+      return out;
+    }
+
     return JavdbMovieExtra(
       actors: actors,
       stills: _javdbPreviewUrls(map['preview_images']),
@@ -921,6 +967,10 @@ class JavdbApiClient {
       score: _javdbStr(map['score']),
       scoreCount: scoreCount,
       poster: poster,
+      originTitle: _javdbStr(map['origin_title']),
+      tags: tags,
+      relativeMovies: moviesOf('relative_movies'),
+      actorMovies: moviesOf('actor_movies'),
     );
   }
 

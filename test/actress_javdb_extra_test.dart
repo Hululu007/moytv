@@ -396,6 +396,68 @@ void main() {
       expect(find.text('画质很好'), findsOneWidget);
     });
 
+    testWidgets('AvPlay 版式：评分缎带/相关分类/她们还演出过/你可能也喜欢/翻译切换', (
+      tester,
+    ) async {
+      final fake = _FakeJavdbExtra(
+        searchResults: [_movieJson('m1', 'SSIS-001')],
+        detailById: {
+          'm1': {
+            'score': 4.5,
+            'reviews_count': 123,
+            'series_name': 'S1 NO.1 STYLE',
+            'origin_title': '原題のタイトル',
+            'tags': [
+              {'id': 't1', 'name': '秘书'},
+              {'id': 't2', 'name': '巨乳'},
+            ],
+            'relative_movies': [_movieJson('m9', 'SSIS-999')],
+            'actor_movies': [
+              _movieJson('m1', 'SSIS-001'),
+              _movieJson('m8', 'SSIS-888'),
+            ],
+            'preview_images': const [],
+          },
+        },
+      );
+      await pumpDetail(tester, client: fake.client);
+      // 先验页面上半区（waitFor 会一路下拖，顶部区先查）。
+      // 翻译切换：点后大标题换原标题。
+      expect(
+        await waitFor(
+          tester,
+          find.byKey(const ValueKey('detail-title-translate')),
+        ),
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('detail-title-translate')));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('原題のタイトル'), findsOneWidget);
+      // 相关分类胶囊（JavDB tags 并进标签行）。
+      expect(
+        await waitFor(tester, find.byKey(const ValueKey('detail-tag-秘书'))),
+        isTrue,
+      );
+      expect(find.byKey(const ValueKey('detail-tag-巨乳')), findsOneWidget);
+      // 评分缎带挂信息卡右上角，数字照接口原值。
+      expect(
+        await waitFor(tester, find.byKey(const ValueKey('detail-score-ribbon'))),
+        isTrue,
+      );
+      expect(find.text('4.5'), findsWidgets);
+      // 她们还演出过：本片剔除、只剩另一部。
+      expect(
+        await waitFor(
+          tester,
+          find.byKey(const ValueKey('detail-javdb-actor-movies')),
+        ),
+        isTrue,
+      );
+      expect(find.text('SSIS-888'), findsOneWidget);
+      // 你可能也喜欢（relative_movies 补的相关推荐改名）。
+      expect(await waitFor(tester, find.text('你可能也喜欢')), isTrue);
+    });
+
     testWidgets('番号没命中时磁力/评论/评分全都不出现', (tester) async {
       final fake = _FakeJavdbExtra(
         searchResults: [_movieJson('m9', 'SSIS-999')],

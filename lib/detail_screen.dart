@@ -188,6 +188,19 @@ class _DetailScreenState extends State<DetailScreen> {
   /// 不显示，只读展示。
   List<JavdbReview> _javdbReviews = const [];
 
+  /// AvPlay 版式（2026-11-27 问题 3 扩围）：JavDB v4 详情的
+  /// 原标题——与当前标题不同才有值，大标题旁出「翻译」切换。
+  String _javdbOriginTitle = '';
+  bool _showOriginTitle = false;
+
+  /// 「她们还演出过」：v4 详情 actor_movies（已剔本片）；
+  /// 空时整区不出。存 JavdbMovie 本体，卡片要番号+标题两行。
+  List<JavdbMovie> _javdbActorMovies = const [];
+
+  /// 本页「相关推荐」是不是 JavDB relative_movies 补的：
+  /// 是则区标题照 AvPlay 叫「你可能也喜欢」。
+  bool _relatedFromJavdb = false;
+
   /// 115 区状态（_startPan115 / _pollPan115 维护）：未登录只
   /// 显示一行提示；网盘已存该番号文件时出播放行；已自动离
   /// 线未下完时显示进度，下完转播放行；都没命中整区不显示。
@@ -337,6 +350,17 @@ class _DetailScreenState extends State<DetailScreen> {
     });
   }
 
+  /// JavDB 作品摘要 → 详情页用的 Drama（身份走 javdb 源，
+  /// 点开后新详情页会按 sourceId 直接走 v4 详情补充链）。
+  Drama _javdbMovieDrama(JavdbMovie movie) => Drama(
+    id: 'javdb:${movie.id}',
+    source: 'javdb',
+    sourceId: movie.id,
+    title: movie.title.isNotEmpty ? movie.title : movie.number,
+    cover: movie.poster,
+    onlineDate: movie.releaseDate,
+  );
+
   /// JavDB 补充第二路（2026-11-26）：磁力区 + 评论区 + 信息卡
   /// 的系列/评分，与 _loadJavdbStills 同一处后台补充链。按番
   /// 号精确命中 JavDB 作品后并行取三路（磁力、评论、详情），
@@ -461,6 +485,41 @@ class _DetailScreenState extends State<DetailScreen> {
             ...additions,
           ]);
         }
+        // AvPlay 版式补齐（2026-11-27）：相关分类并进标签行、
+        // 相关推荐空时用 relative_movies 补、原标题与演员其
+        // 他作品存状态供大标题切换与「她们还演出过」区用。
+        // 全部只认接口真返回，本地已有的一律优先不覆盖。
+        var current = _detail ?? detail;
+        if (extra.tags.isNotEmpty) {
+          final have = current.tags.map((t) => t.name.trim()).toSet();
+          final merged = <DetailTag>[
+            ...current.tags,
+            for (final name in extra.tags)
+              if (!have.contains(name.trim())) DetailTag(id: name, name: name),
+          ];
+          if (merged.length != current.tags.length) {
+            current = current.withTags(merged);
+            _detail = current;
+          }
+        }
+        if (extra.relativeMovies.isNotEmpty && current.related.isEmpty) {
+          _detail = current.withRelated([
+            for (final movie in extra.relativeMovies.take(12))
+              _javdbMovieDrama(movie),
+          ]);
+          _relatedFromJavdb = true;
+        }
+      }
+      if (extra.originTitle.isNotEmpty && extra.originTitle != drama.title) {
+        _javdbOriginTitle = extra.originTitle;
+      }
+      if (extra.actorMovies.isNotEmpty) {
+        _javdbActorMovies = [
+          for (final movie in extra.actorMovies)
+            if (movie.id != movieId &&
+                actressCodeKey(movie.number) != actressCodeKey(avId))
+              movie,
+        ].take(12).toList();
       }
     });
     // 磁力到齐后 115 自动离线才有提交对象（_startPan115 已
@@ -1592,6 +1651,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                   _pan115Section(),
                                   _tmdbEpisodeSection(),
                                   _seriesSection(drama),
+                                  _javdbActorMoviesSection(),
                                   _relatedSection(drama),
                                   _javdbReviewsSection(),
                                 ],
@@ -1813,6 +1873,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                   ),
                                   SliverToBoxAdapter(child: _magnetSection()),
                                   SliverToBoxAdapter(
+                                    child: _javdbActorMoviesSection(),
+                                  ),
+                                  SliverToBoxAdapter(
                                     child: _relatedSection(drama),
                                   ),
                                   SliverToBoxAdapter(
@@ -1935,6 +1998,9 @@ class _DetailScreenState extends State<DetailScreen> {
                                   child: _descriptionSection(drama),
                                 ),
                                 SliverToBoxAdapter(child: _magnetSection()),
+                                SliverToBoxAdapter(
+                                  child: _javdbActorMoviesSection(),
+                                ),
                                 SliverToBoxAdapter(
                                   child: _relatedSection(drama),
                                 ),
@@ -2729,6 +2795,80 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  /// 「她们还演出过」（AvPlay 版式，2026-11-27）：本片演员
+  /// 的其他作品横排卡（海报 + 番号 + 标题），数据是 JavDB
+  /// v4 详情的 actor_movies；空时整区不出、不占位。点卡进
+  /// 该作品详情页（走 _openRelated 同一条导航）。
+  Widget _javdbActorMoviesSection() {
+    final movies = _javdbActorMovies;
+    if (movies.isEmpty) return const SizedBox.shrink();
+    final dramas = [for (final movie in movies) _javdbMovieDrama(movie)];
+    return Padding(
+      key: const ValueKey('detail-javdb-actor-movies'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('她们还演出过', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 196,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: movies.length,
+              itemBuilder: (context, index) {
+                final movie = movies[index];
+                return Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: SizedBox(
+                    width: 104,
+                    child: InkWell(
+                      onTap: () => _openRelated(dramas, dramas[index]),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          AspectRatio(
+                            aspectRatio: 2 / 3,
+                            child: DramaCover(
+                              drama: dramas[index],
+                              repository: widget.repository,
+                              radius: 10,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            movie.number,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            movie.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _relatedSection(Drama drama) {
     final related = _detail?.related ?? const <Drama>[];
     if (related.isEmpty) return const SizedBox.shrink();
@@ -2737,7 +2877,10 @@ class _DetailScreenState extends State<DetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('相关推荐', style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            _relatedFromJavdb ? '你可能也喜欢' : '相关推荐',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 12),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -3121,16 +3264,26 @@ class _DetailScreenState extends State<DetailScreen> {
     ];
     if (rows.isEmpty) return const SizedBox.shrink();
     final colors = Theme.of(context).colorScheme;
+    // 评分缎带（AvPlay 版式，2026-11-27）：评分行带真分数时，
+    // 数字另以橙色缎带挂信息卡右上角；没分数整带不出。
+    var scoreRibbon = '';
+    for (final row in extra) {
+      if (row.$1 != '评分') continue;
+      final match = RegExp(r'^\s*(\d+(?:\.\d+)?)').firstMatch(row.$2);
+      if (match != null) scoreRibbon = match.group(1)!;
+    }
     return Padding(
       key: const ValueKey('detail-info-card'),
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: colors.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
+      child: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (final row in rows)
@@ -3170,8 +3323,44 @@ class _DetailScreenState extends State<DetailScreen> {
                   ],
                 ),
               ),
-          ],
-        ),
+            ],
+            ),
+          ),
+          if (scoreRibbon.isNotEmpty)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Container(
+                key: const ValueKey('detail-score-ribbon'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF59E0B),
+                  borderRadius: BorderRadius.only(
+                    topRight: Radius.circular(14),
+                    bottomLeft: Radius.circular(12),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.star, size: 13, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text(
+                      scoreRibbon,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -3309,11 +3498,29 @@ class _DetailScreenState extends State<DetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    drama.title,
+                    _showOriginTitle && _javdbOriginTitle.isNotEmpty
+                        ? _javdbOriginTitle
+                        : drama.title,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
+                  if (_javdbOriginTitle.isNotEmpty)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: const ValueKey('detail-title-translate'),
+                        onPressed: () => setState(
+                          () => _showOriginTitle = !_showOriginTitle,
+                        ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 30),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(_showOriginTitle ? '还原' : '翻译'),
+                      ),
+                    ),
                   const SizedBox(height: 10),
                   Text(
                     meta.join(' · '),
