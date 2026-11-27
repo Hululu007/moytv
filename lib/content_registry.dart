@@ -39,6 +39,26 @@ class ContentRegistry {
       assetPath: 'assets/audio_spiders/tingyou.py',
     ),
     PyContentSource(
+      id: 'bilibili',
+      name: '哔哩哔哩听书',
+      assetPath: 'assets/audio_spiders/bilibili.py',
+    ),
+    PyContentSource(
+      id: 'yuntu',
+      name: '云图听书',
+      assetPath: 'assets/audio_spiders/yuntu.py',
+    ),
+    PyContentSource(
+      id: 'shuyinfm',
+      name: '书音FM',
+      assetPath: 'assets/audio_spiders/shuyinfm.py',
+    ),
+    PyContentSource(
+      id: 'bookan',
+      name: '博看听书',
+      assetPath: 'assets/audio_spiders/bookan.py',
+    ),
+    PyContentSource(
       id: 'hysxs',
       name: '🔞H有声小说',
       assetPath: 'assets/audio_spiders/hysxs.py',
