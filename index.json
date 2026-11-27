@@ -49,19 +49,19 @@
     {
       "id": "com.idj.ext.321av",
       "name": "321AV",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "type": "video",
       "adult": true,
-      "description": "321AV（321av.cc）。有码影片/无码影片/中文字幕/女优，MacCMS。播放走 rmissav 取流（站内接线 /private-getvideo 已 404，本机出口未验通，待手机终验）。摸站手写。",
+      "description": "321AV（321av.cc）。有码影片/无码影片/中文字幕/女优，MacCMS。播放走 rmissav 取流（站内接线 /private-getvideo 已 404，本机出口未验通，待手机终验）。摸站手写。v1.0.1：play 的 rmissav 取流改纯文本解析、删 eval 分支（沙箱禁用写法），其余逻辑未动。",
       "manifest": "321av/321av.idjplugin"
     },
     {
       "id": "com.idj.ext.rouav",
       "name": "rouAV",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "type": "video",
       "adult": true,
-      "description": "rouAV（肉视频，site2.321av.cc；99dh 的“肉视频”与“rouAV”为同一站）。国产AV/日本/自拍流出/探花/OnlyFans/其他。播放走 rou123.top→rou666.net 真 m3u8。2026-11-25 复核全链实测通过（列表/详情/播放），封面为站方图床原样签名地址。摸站手写。",
+      "description": "rouAV（肉视频，site2.321av.cc；99dh 的“肉视频”与“rouAV”为同一站）。国产AV/日本/自拍流出/探花/OnlyFans/其他。播放走 rou123.top→rou666.net 真 m3u8。2026-11-27 返工复检全链再验通过（列表/分类翻页/搜索/详情/真播首分片）；v1.0.2 删未验通的 eval 兜底分支、media 清单补现行图床与分片 CDN 池。封面为站方图床原样签名地址。摸站手写。",
       "manifest": "rouav/rouav.idjplugin"
     },
     {
@@ -1858,10 +1858,10 @@
     {
       "id": "com.idj.ext.591av",
       "name": "591AV┃亚洲素人",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "type": "video",
       "adult": true,
-      "description": "591AV┃亚洲素人（591av.ws，KVS 模板 HTML 站）。分类与站导航 1:1：最新更新+33 个分类（原 jar 蜘蛛 ZakaKvsAmns 静态表 24 个与站现行 /categories/ 全表并集，含站点新增 9 个）+搜索热榜；列表 /new/<页>/、分类 /categories/<slug>/<页>/、搜索 /search/?q=&page= 正则解卡；详情页 var stream 的 jmpres m3u8 直取（302 跳旋转 CDN 由播放器跟随），<source>/mp4 兜底照原蜘蛛。由内置 jar 蜘蛛 ZakaKvsAmns 的 591av 分支改写。",
+      "description": "591AV┃亚洲素人（591av.ws，KVS 模板 HTML 站）。分类与站导航 1:1：最新更新+33 个分类（原 jar 蜘蛛 ZakaKvsAmns 静态表 24 个与站现行 /categories/ 全表并集，含站点新增 9 个）+搜索热榜；列表 /new/<页>/、分类 /categories/<slug>/<页>/、搜索 /search/?q=&page= 正则解卡；详情页 var stream 的 jmpres m3u8 直取（302 跳旋转 CDN 由播放器跟随），<source>/mp4 兜底照原蜘蛛。由内置 jar 蜘蛛 ZakaKvsAmns 的 591av 分支改写。 v1.0.1：manifest 域名清单补入流媒体旋转 CDN 池 *.vcjuligi.com（jmpres m3u8 经 302 跳转后的清单/分片/密钥实际落点，两次实测均为该后缀随机子域；原清单只有 591av.ws 与图床 *.vcwinford.cc，播放器跟随跳转后取分片可能被域名清单拦截）",
       "manifest": "591av/591av.idjplugin"
     },
     {
@@ -1894,10 +1894,10 @@
     {
       "id": "com.idj.ext.xhy11",
       "name": "🔞小黄鸭┃xhy11",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "type": "video",
       "adult": true,
-      "description": "🔞小黄鸭┃xhy11（www.xhy11.cc，MacCMS 站）。分类与内置 jar 蜘蛛 ZakaXhyAmns 1:1 写死 24 个（全部视频/自拍偷拍/伦理禁忌/…/重口猎奇）；页面正文经 atob 混淆下发，插件内解混淆后按原蜘蛛正则解析列表/搜索；详情与播放走播放页 player_aaaa（vod_data/poster/url），m3u8 为 AES-128 加密 HLS（密钥在播放列表内、播放器原生解）；主域空列表时按原蜘蛛换镜像 xhy.one 兜底。由内置 jar 蜘蛛 ZakaXhyAmns 改写。",
+      "description": "🔞小黄鸭┃xhy11（www.xhy11.cc，MacCMS 站）。分类与内置 jar 蜘蛛 ZakaXhyAmns 1:1 写死 24 个（全部视频/自拍偷拍/伦理禁忌/…/重口猎奇）；页面正文经 atob 混淆下发，插件内解混淆后按原蜘蛛正则解析列表/搜索；详情与播放走播放页 player_aaaa（vod_data/poster/url），m3u8 为 AES-128 加密 HLS（密钥在播放列表内、播放器原生解）；主域空列表时按原蜘蛛换镜像 xhy.one 兜底。由内置 jar 蜘蛛 ZakaXhyAmns 改写。 v1.0.1：manifest 域名清单补入现行流/封面 CDN fqm3u8.com 与 fqm3u8.vip（play 实回 m3u8 在 fqm3u8.com、个别封面在 fqm3u8.vip，原清单只有已不用的 fqm3u8.cc，宿主按清单放行会拦真流）",
       "manifest": "xhy11/xhy11.idjplugin"
     },
     {
