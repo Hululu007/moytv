@@ -4,8 +4,10 @@
 // 版 ZakaJavdbAmns 逐字移植；夹具卡片结构照 2026-11-27 本
 // 机从 javdb.pw 实拉的演员页真卡）；
 // ②详情走 api/v4/movies/{id} 取 data.movie（旧 v1 本机实测
-// 404），且要先登录换令牌（sessions POST + success≠1 清
-// 令牌重登重试一次，jar 版 api()/login() 原逻辑）；
+// 404）；取数主通道是签名头、不预先登录——只有 v4 这类接
+// 口明确回 JWT 错误时才机会性登录一次重试（2026-11-27
+// 用户纠正后回读 jar 源码实证：login() 不看返回值、没令
+// 牌只带签名照样取数、只有个别分类要 JWT）；
 // ③duration 单位是分钟、spfcas 图床同样是 XOR 图、列表信
 // 封自带 preview_images 要解出来给详情页剧照区。
 // 真接口在本机出口时通时断：登录/v4 只验请求形状与解析，
@@ -144,7 +146,7 @@ expect(seen.first, contains('/actors/kzx6?page=3'));
 });
 
 group('登录 + v4 详情', () {
-test('先登录拿令牌、success≠1 清令牌重登再重试一次', () async {
+test('先凭签名直取、回 JWT 错误才登录拿令牌重试一次', () async {
 final calls = <String>[];
 var detailAttempts = 0;
 final client = JavdbApiClient(
@@ -191,11 +193,12 @@ return jsonEncode({
 },
 );
 final extra = await client.movieExtra('m1');
-// 顺序：登录 → 详情(被拒) → 重登 → 详情(成功)。
-expect(calls[0], startsWith('POST https://apidd.spthgb.com/api/v1/sessions'));
-expect(calls[1], contains('api/v4/movies/m1'));
-expect(calls[2], startsWith('POST '));
-expect(calls[3], contains('api/v4/movies/m1'));
+// 顺序：详情(只带签名、被回 JWT 错误) → 登录 → 详情(成功)。
+// 不许一上来先登录——签名才是数据主通道。
+expect(calls, hasLength(3));
+expect(calls[0], contains('api/v4/movies/m1'));
+expect(calls[1], startsWith('POST https://apidd.spthgb.com/api/v1/sessions'));
+expect(calls[2], contains('api/v4/movies/m1'));
 expect(extra.actors, hasLength(2));
 expect(extra.actors[0].name, '演员甲');
 expect(extra.actors[0].avatarUrl, contains('avatars/a.jpg'));
@@ -223,6 +226,87 @@ final movies = await client.latestMovies();
 expect(movies.single.number, 'ADN-821');
 // duration 单位是分钟：150 就是 150 分钟，不许再除 60。
 expect(movies.single.durationMinutes, 150);
+});
+
+test('登录接口抛错/超时也不挡数据：演员与最新凭签名直取、且不触发登录', () async {
+var postCalls = 0;
+final client = JavdbApiClient(
+fetch: (url) async {
+if (url.contains('api/v1/actors')) {
+return _envelope({
+'actors': [
+{'id': 'a1', 'name': '演员甲', 'avatar_url': ''},
+],
+});
+}
+return _envelope({
+'movies': [
+{'id': 'm1', 'number': 'ADN-821', 'title': '标题', 'duration': 150},
+],
+});
+},
+post: (url, body, contentType) async {
+postCalls++;
+// 登录端点抛错等价于超时/连不上（_login 内部同一条
+// catch 路径）：绝不能因此挡住签名直取的数据。
+throw Exception('login endpoint timeout');
+},
+);
+final actors = await client.actors();
+expect(actors.single.name, '演员甲');
+final movies = await client.latestMovies();
+expect(movies.single.number, 'ADN-821');
+// 信封成功就根本不该碰登录接口。
+expect(postCalls, 0);
+});
+
+test('非 JWT 的拒绝不触发登录（签名错误照原样报错）', () async {
+var postCalls = 0;
+final client = JavdbApiClient(
+fetch: (url) async =>
+jsonEncode({'success': 0, 'message': 'invalid signature'}),
+post: (url, body, contentType) async {
+postCalls++;
+return jsonEncode({
+'success': 1,
+'data': {'token': 'test-token-123456'},
+});
+},
+);
+await expectLater(client.latestMovies(), throwsA(anything));
+expect(postCalls, 0);
+});
+
+test('JWT 错误但登录失败：只登录一次、只挡该分类，其它接口随后照常', () async {
+var postCalls = 0;
+final client = JavdbApiClient(
+fetch: (url) async {
+if (url.contains('api/v4/movies/')) {
+return jsonEncode({
+'success': 0,
+'action': 'JWTVerificationError',
+'message': '請登錄帳號',
+});
+}
+return _envelope({
+'movies': [
+{'id': 'm1', 'number': 'ADN-821', 'title': '标题', 'duration': 150},
+],
+});
+},
+post: (url, body, contentType) async {
+postCalls++;
+return jsonEncode({'success': 0, 'message': 'bad credentials'});
+},
+);
+// v4 详情要令牌、登录又失败：该分类报错收尾……
+await expectLater(client.movieExtra('m1'), throwsA(anything));
+// ……但登录只许尝试一次（旧实现一次失败请求能连登三次）。
+expect(postCalls, 1);
+// 其它分类不许被连累：随后 latest 凭签名照常取数、不再登。
+final movies = await client.latestMovies();
+expect(movies.single.number, 'ADN-821');
+expect(postCalls, 1);
 });
 });
 

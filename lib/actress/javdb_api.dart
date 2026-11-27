@@ -9,10 +9,14 @@
 // 实证程度（照 API_MAP 与 jar 版 ZakaJavdbAmns 原文分级）：
 // - 2026-11-27 对齐 jar 版已验证路线（用户手机实报三件后）：
 //   ①API 域名以 jar 版的 apidd.spthgb.com 为主（AvPlay 的
-//   jdforrepam.com 留作网络失败时的兜底）；②先 POST
-//   api/v1/sessions 登录换令牌（字段照 jar 版常量，base85
-//   编码存放、运行时解码），请求带 Authorization，信封
-//   success≠1 就清令牌重登重试一次（jar 版 api() 原逻辑）；
+//   jdforrepam.com 留作网络失败时的兜底）；②数据主通道是
+//   签名头——不预先登录，没令牌只带签名照样取数；只有个
+//   别分类回 JWT 类错误时才机会性 POST api/v1/sessions
+//   换令牌（字段照 jar 版常量，base85 编码存放、运行时解
+//   码）重试一次，登录失败不挡其它分类（2026-11-27 用户
+//   纠正后回读 jar 源码实证：api() 调 login() 不看返回值、
+//   appHeaders() 仅令牌非空才加 Bearer、failHint 明说只有
+//   个别分类要 JWT）；
 //   ③签名头名全小写 jdsignature、UA 照 jar 版 Dart/3.5；
 //   ④详情走 api/v4/movies/{id} 取 data.movie（旧 v1 详情本
 //   机实测 404、v4 无令牌回 JWTVerificationError，两头都拿
@@ -32,8 +36,9 @@
 //   加密（2026-11-27 实测 spfcas 封面首字节异或后正是 JPEG
 //   魔数）；拉图带 Referer（jar 版 picProxy 口径）。
 // - 本机出口时通时断：latest/actors GET 与 javdb.pw 网页通
-//   道实测通过；登录 POST 与 v4 详情在本机未跑通（整波超
+//   道实测通过；apidd 域名与 v4 详情在本机未跑通（整波超
 //   时），按 jar 版实证实现、手机终验为准（界面照标未验）。
+//   未验的是连通性，不是登录——用户从没下过 JavDB 登录令。
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -669,9 +674,13 @@ typedef JavdbPostFetch =
     Future<String> Function(String url, String body, String contentType);
 
 /// JavDB API 客户端（2026-11-27 对齐 jar 版 ZakaJavdbAmns 已
-/// 验证路线）：先登录换令牌、每请求现算签名头（全小写
-/// jdsignature）、信封 success≠1 清令牌重登重试一次；主域名
-/// 网络层失败自动切兜底域名。令牌只存内存、不落盘不打日志。
+/// 验证路线）：数据主通道是每请求现算的签名头（全小写
+/// jdsignature）——不预先登录，请求只带签名照样发（有令牌
+/// 才顺带 Bearer）；只有接口明确回 JWT 类错误时，才机会性
+/// 登录一次、拿到令牌后重试一次，登录失败不报错、不挡其
+/// 它接口取数（jar 版 failHint 口径：只有个别分类要 JWT，
+/// 其它分类正常）。主域名网络层失败自动切兜底域名。令牌
+/// 只存内存、不落盘不打日志；用户侧没有任何登录界面/提示。
 class JavdbApiClient {
   JavdbApiClient({JavdbFetch? fetch, JavdbPostFetch? post, ContentHttp? http})
     : _fetch = fetch,
@@ -779,7 +788,10 @@ class JavdbApiClient {
   }
 
   Future<Map<String, dynamic>> _requestEnvelopeOnce(String path) async {
-    if (_token.isEmpty) await _login();
+    // 不预先登录：签名是数据主通道，没令牌照样发请求（对齐
+    // jar 版 api()/appHeaders()——登录是机会性的，失败/没
+    // 有令牌都不挡数据）。登录只由 _getJson 在接口明确回
+    // JWT 类错误时触发一次。
     final url = '$_base/$path';
     final String text;
     if (_fetch != null) {
@@ -801,7 +813,8 @@ class JavdbApiClient {
       return await _requestEnvelopeOnce(path);
     } catch (_) {
       // 主域名网络层失败（连不上/超时）：切兜底域名、清令牌
-      // 重登后重试一次。测试注入模式保持单域名语义、不重试。
+      // 后重试一次（重试本身不触发登录）。测试注入模式保持
+      // 单域名语义、不重试。
       if (_fetch != null || _base == javdbApiBaseFallback) rethrow;
       _base = javdbApiBaseFallback;
       _token = '';
@@ -809,18 +822,44 @@ class JavdbApiClient {
     }
   }
 
+  /// 是不是「缺/坏 JWT 令牌」类错误：信封的 action / error /
+  /// code / message 任一字段明说 JWT、未授权或未登录才算。
+  /// 其它业务拒绝（如签名不对、参数错误）不算——不许拿登录
+  /// 去重试，更不许让登录挡住本来只靠签名就能取的数据。
+  bool _looksLikeJwtError(Map<String, dynamic> envelope) {
+    for (final key in const ['action', 'error', 'code', 'message']) {
+      final text = _javdbStr(envelope[key]).toLowerCase();
+      if (text.contains('jwt') ||
+          text.contains('unauthorized') ||
+          text.contains('登錄') ||
+          text.contains('登录')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<dynamic> _getJson(String path) async {
     var envelope = await _requestEnvelope(path);
-    if (!_envelopeOk(envelope)) {
-      // jar 版 api() 原逻辑：success 不是 1 就清 token 重登
-      // 再重试一次（令牌过期/未登录时详情、磁力、搜索都靠它）。
+    if (!_envelopeOk(envelope) && _looksLikeJwtError(envelope)) {
+      // 只有明确回 JWT 类错误才机会性登录：清掉旧令牌、登
+      // 一次；登上了带新令牌重试一次，登不上就按下面的失
+      // 败处理收尾——整个过程最多登录一次，且不影响其它
+      // 接口（它们根本走不到这一步）。
       _token = '';
-      await _login();
-      envelope = await _requestEnvelope(path);
+      if (await _login()) {
+        envelope = await _requestEnvelope(path);
+      }
     }
     if (!_envelopeOk(envelope)) {
       final message = _javdbStr(envelope['message']);
-      throw AppFailure(message.isNotEmpty ? message : 'JavDB 接口拒绝了请求');
+      if (message.isNotEmpty) throw AppFailure(message);
+      if (_looksLikeJwtError(envelope)) {
+        // 照 jar 版 failHint 口径：只是这个分类要令牌，其它
+        // 分类正常，不要说成整个 JavDB 都用不了。
+        throw AppFailure('JavDB 此分类需要登录令牌，暂时拿不到；其它分类正常');
+      }
+      throw AppFailure('JavDB 接口拒绝了请求');
     }
     return envelope['data'];
   }
