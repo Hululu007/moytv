@@ -236,7 +236,7 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
       if (clearFirst) _items = const [];
     });
     try {
-      final page = await _fetchPage(query);
+      final page = await _fetchPage(query, force: forceRefresh);
       if (!mounted || generation != _generation) return;
       _cachePage(key, page);
       setState(() {
@@ -296,27 +296,38 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
   }
 
   /// 取一页：下钻中只取所在夹；否则按选中网盘取，或聚合全部网盘。
-  Future<CatalogPage> _fetchPage(String query) async {
+  /// [force] 是手动刷新：透传到引擎，绕过目录页缓存现拉（问题 6
+  /// 的“refresh 强刷”口径，此前 force 到不了引擎、刷新也吃缓存）。
+  Future<CatalogPage> _fetchPage(String query, {bool force = false}) async {
     if (_drillStack.isNotEmpty) {
       final top = _drillStack.last;
       return widget.repository.catalog(
         top.source,
         category: top.category,
         query: query,
+        force: force,
       );
     }
     final targets = _selectedSource.isEmpty
         ? widget.driveSites.map((s) => s.id).toList()
         : [_selectedSource];
     if (targets.length == 1) {
-      return widget.repository.catalog(targets.first, query: query);
+      return widget.repository.catalog(
+        targets.first,
+        query: query,
+        force: force,
+      );
     }
     final items = <Drama>[];
     final seen = <String>{};
     final warnings = <String>[];
     for (final source in targets) {
       try {
-        final page = await widget.repository.catalog(source, query: query);
+        final page = await widget.repository.catalog(
+          source,
+          query: query,
+          force: force,
+        );
         for (final item in page.items) {
           if (seen.add(item.id)) items.add(item);
         }

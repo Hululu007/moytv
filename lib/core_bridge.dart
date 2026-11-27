@@ -2531,6 +2531,7 @@ class NativeRepository extends AppRepository {
         page: page,
         query: query,
         category: category,
+        force: force,
       );
     }
     final haijiaoGo = JarHaijiaoTakeover.goSourceForJarSite(source);

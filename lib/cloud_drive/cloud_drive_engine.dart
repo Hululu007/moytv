@@ -289,8 +289,34 @@ class CloudDriveEngine {
   // 目录页缓存（问题 6）
   // -------------------------------------------------------------------------
 
-  String _pageKey(String providerId, String folderId, int page) =>
-      '$providerId|$folderId|$page';
+  /// 缓存键里的账号段（开源目录缓存的通行口径：键＝账号＋cid）：
+  /// 凭证内容的 FNV 哈希，不落明文。换账号后键自然不同，旧账号
+  /// 的缓存页不会被新账号读到（整表清理是第二道防线）。
+  String _accountSeed(CloudCredentials credentials) {
+    final keys = credentials.fields.keys.toList()..sort();
+    return _fnv1aHex([for (final k in keys) '$k=${credentials.fields[k]}'].join('&'));
+  }
+
+  String _pageKey(
+    String providerId,
+    String accountSeed,
+    String folderId,
+    int page,
+  ) => '$providerId|$accountSeed|$folderId|$page';
+
+  /// 后台列表请求限频闸（问题 6）：刷新/预取这类不挡界面的请求
+  /// 彼此至少间隔 300ms，避免一波预取把 115 的 405 限频打出来；
+  /// 前台请求（用户正等着的）不走闸、不受影响。
+  int _lastBackgroundListMs = 0;
+
+  Future<void> _backgroundGate() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final wait = _lastBackgroundListMs + 300 - now;
+    if (wait > 0) {
+      await Future<void>.delayed(Duration(milliseconds: wait));
+    }
+    _lastBackgroundListMs = DateTime.now().millisecondsSinceEpoch;
+  }
 
   void _rememberFolderPage(String key, _FolderPageEntry entry) {
     _folderPages.remove(key);
@@ -395,12 +421,16 @@ class CloudDriveEngine {
     if (!_refreshingPages.add(key)) return;
     unawaited(() async {
       try {
+        await _backgroundGate();
         final result = await provider.listFolder(
           _httpClient,
           credentials,
           folderId,
           page,
         );
+        // 空结果不进缓存、也不覆盖已有缓存（开源目录缓存口径：
+        // 空页多半是临时抽风，钉住会把真文件夹显示成空的）。
+        if (result.files.isEmpty) return;
         _rememberFolderPage(
           key,
           _FolderPageEntry(result.files, result.hasMore),
@@ -429,6 +459,7 @@ class CloudDriveEngine {
   void _prefetchChildren(
     CloudDriveProvider provider,
     CloudCredentials credentials,
+    String accountSeed,
     List<CloudDriveFile> files,
   ) {
     final targets = <String>[
@@ -441,20 +472,23 @@ class CloudDriveEngine {
     Future<void> worker() async {
       while (index < limited.length) {
         final folderId = limited[index++];
-        final key = _pageKey(provider.id, folderId, 1);
+        final key = _pageKey(provider.id, accountSeed, folderId, 1);
         if (_folderPages.containsKey(key)) continue;
         if (!_refreshingPages.add(key)) continue;
         try {
+          await _backgroundGate();
           final result = await provider.listFolder(
             _httpClient,
             credentials,
             folderId,
             1,
           );
-          _rememberFolderPage(
-            key,
-            _FolderPageEntry(result.files, result.hasMore),
-          );
+          if (result.files.isNotEmpty) {
+            _rememberFolderPage(
+              key,
+              _FolderPageEntry(result.files, result.hasMore),
+            );
+          }
         } catch (_) {
           // 预取失败静默，用户点进去时照常现拉。
         } finally {
@@ -475,6 +509,7 @@ class CloudDriveEngine {
     required int page,
     required String query,
     required String category,
+    bool force = false,
   }) async {
     final providerId = providerIdOf(source);
     final provider = _provider(providerId);
@@ -485,17 +520,18 @@ class CloudDriveEngine {
         return await _search(provider, credentials, query.trim(), category, page);
       }
       await _ensureDiskLoaded();
+      final accountSeed = _accountSeed(credentials);
       if (category == cloudDriveAllCategory) {
-        return await _aggregateCatalog(provider, credentials);
+        return await _aggregateCatalog(provider, credentials, accountSeed, force);
       }
       final folderId = category.isEmpty ? provider.rootFolderId : category;
-      final key = _pageKey(providerId, folderId, page);
+      final key = _pageKey(providerId, accountSeed, folderId, page);
       final isRoot = folderId == provider.rootFolderId && page == 1;
-      final memory = _folderPages[key];
+      final memory = force ? null : _folderPages[key];
       if (memory != null) {
         // 热开：内存有这一页，先出画，后台静默刷新换新数据。
         _refreshFolderPage(provider, credentials, folderId, page, key, isRoot);
-        _prefetchChildren(provider, credentials, memory.files);
+        _prefetchChildren(provider, credentials, accountSeed, memory.files);
         return _toCatalogPage(
           providerId: providerId,
           files: memory.files,
@@ -504,7 +540,7 @@ class CloudDriveEngine {
           isRoot: isRoot,
         );
       }
-      final disk = _diskPages[key];
+      final disk = force ? null : _diskPages[key];
       if (disk != null) {
         // 重启后第一开：落盘页先出画，后台刷新回填内存层。
         _refreshFolderPage(provider, credentials, folderId, page, key, isRoot);
@@ -516,7 +552,6 @@ class CloudDriveEngine {
         folderId,
         page,
       );
-      _rememberFolderPage(key, _FolderPageEntry(result.files, result.hasMore));
       final catalogPage = _toCatalogPage(
         providerId: providerId,
         files: result.files,
@@ -524,8 +559,14 @@ class CloudDriveEngine {
         page: page,
         isRoot: isRoot,
       );
-      _rememberDiskPage(key, catalogPage);
-      _prefetchChildren(provider, credentials, result.files);
+      if (result.files.isNotEmpty) {
+        _rememberFolderPage(
+          key,
+          _FolderPageEntry(result.files, result.hasMore),
+        );
+        _rememberDiskPage(key, catalogPage);
+      }
+      _prefetchChildren(provider, credentials, accountSeed, result.files);
       return catalogPage;
     } on CloudDriveException catch (e) {
       throw AppFailure(e.message);
@@ -583,24 +624,28 @@ class CloudDriveEngine {
   Future<CatalogPage> _aggregateCatalog(
     CloudDriveProvider provider,
     CloudCredentials credentials,
+    String accountSeed,
+    bool force,
   ) async {
-    final key = _pageKey(provider.id, cloudDriveAllCategory, 1);
-    final memory = _folderPages[key];
+    final key = _pageKey(provider.id, accountSeed, cloudDriveAllCategory, 1);
+    final memory = force ? null : _folderPages[key];
     if (memory != null) {
       _refreshAggregate(provider, credentials, key);
       // 聚合键的条目里 hasMore 槽存的是“是否触顶”（见
       // _fetchAggregate 返回值），不是分页语义。
       return _aggregatePage(provider.id, memory.files, memory.hasMore);
     }
-    final disk = _diskPages[key];
+    final disk = force ? null : _diskPages[key];
     if (disk != null) {
       _refreshAggregate(provider, credentials, key);
       return disk;
     }
     final (videos, hitCap) = await _fetchAggregate(provider, credentials);
-    _rememberFolderPage(key, _FolderPageEntry(videos, hitCap));
     final page = _aggregatePage(provider.id, videos, hitCap);
-    _rememberDiskPage(key, page);
+    if (videos.isNotEmpty) {
+      _rememberFolderPage(key, _FolderPageEntry(videos, hitCap));
+      _rememberDiskPage(key, page);
+    }
     return page;
   }
 
@@ -612,7 +657,9 @@ class CloudDriveEngine {
     if (!_refreshingPages.add(key)) return;
     unawaited(() async {
       try {
+        await _backgroundGate();
         final (videos, hitCap) = await _fetchAggregate(provider, credentials);
+        if (videos.isEmpty) return;
         _rememberFolderPage(key, _FolderPageEntry(videos, hitCap));
         _rememberDiskPage(key, _aggregatePage(provider.id, videos, hitCap));
       } catch (_) {

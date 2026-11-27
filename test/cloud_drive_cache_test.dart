@@ -88,13 +88,14 @@ CloudDriveFile _folder(String id, String name) =>
 Future<CloudDriveEngine> _engine(
   _FakeProvider fake, {
   Future<Directory> Function()? cacheDir,
+  String cookie = 'UID=x',
 }) async {
   SharedPreferences.setMockInitialValues({});
   final prefs = await SharedPreferences.getInstance();
   final store = CloudCredentialStore(prefs);
   await store.save(
     'pan115',
-    const CloudCredentials(fields: {'cookie': 'UID=x'}, savedAtMs: 1),
+    CloudCredentials(fields: {'cookie': cookie}, savedAtMs: 1),
   );
   return CloudDriveEngine(
     credentialStore: store,
@@ -149,7 +150,8 @@ void main() {
         query: '',
         category: '',
       );
-      await _settle();
+      // 预取走后台限频闸（间隔 300ms），等两笔都落地。
+      await Future<void>.delayed(const Duration(milliseconds: 700));
       // 根 1 次 + 预取 f1/f2 各 1 次（f1a 是预取的预取，不级联）。
       expect(fake.listCalls, 3);
 
@@ -170,7 +172,8 @@ void main() {
         query: '',
         category: 'f1',
       );
-      await _settle();
+      // f1 命中时预取 f1a，同样要过限频闸，等它落地。
+      await Future<void>.delayed(const Duration(milliseconds: 700));
       fake.failAll = true;
       final deep = await engine.catalog(
         source: 'cloud:pan115',
@@ -201,6 +204,90 @@ void main() {
         category: cloudDriveAllCategory,
       );
       expect(second.items.length, 2);
+    });
+
+    test('force 强刷绕过缓存现拉（手动刷新口径）', () async {
+      final fake = _FakeProvider();
+      fake.folders['0'] = [_file('v1', '正片.mp4')];
+      final engine = await _engine(fake);
+      await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+      );
+      fake.folders['0'] = [_file('v1', '正片.mp4'), _file('v2', '新片.mp4')];
+      final cached = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+      );
+      // 根页首卡是虚拟「全部」，其余应仍是缓存里的旧数据。
+      expect(
+        cached.items.map((d) => d.title),
+        containsAll(['全部', '正片.mp4']),
+      );
+      expect(cached.items.map((d) => d.title), isNot(contains('新片.mp4')));
+      final forced = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+        force: true,
+      );
+      expect(forced.items.map((d) => d.title), contains('新片.mp4'));
+    });
+
+    test('空结果不进缓存：空夹后来放入文件，下一开就见', () async {
+      final fake = _FakeProvider();
+      fake.folders['e1'] = [];
+      final engine = await _engine(fake);
+      final empty = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: 'e1',
+      );
+      expect(empty.items, isEmpty);
+      fake.folders['e1'] = [_file('v9', '后来放入.mp4')];
+      final filled = await engine.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: 'e1',
+      );
+      expect(filled.items.map((d) => d.title), contains('后来放入.mp4'));
+    });
+
+    test('落盘缓存按账号隔离：换账号读不到旧账号的落盘页', () async {
+      final dir = await Directory.systemTemp.createTemp('cloud_cache_acct');
+      addTearDown(() => dir.delete(recursive: true));
+      Future<Directory> cacheDir() async => dir;
+
+      final fakeA = _FakeProvider();
+      fakeA.folders['0'] = [_file('v1', '甲账号的片.mp4')];
+      final engineA = await _engine(fakeA, cacheDir: cacheDir, cookie: 'UID=a');
+      await engineA.catalog(
+        source: 'cloud:pan115',
+        page: 1,
+        query: '',
+        category: '',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      final fakeB = _FakeProvider()..failAll = true;
+      final engineB = await _engine(fakeB, cacheDir: cacheDir, cookie: 'UID=b');
+      // 乙账号断网：若落盘不分账号，会把甲的页顶出来；必须抛错。
+      await expectLater(
+        engineB.catalog(
+          source: 'cloud:pan115',
+          page: 1,
+          query: '',
+          category: '',
+        ),
+        throwsA(anything),
+      );
     });
 
     test('落盘缓存：新引擎（模拟重启）断网也能先出画', () async {

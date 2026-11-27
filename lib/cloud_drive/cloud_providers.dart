@@ -580,7 +580,10 @@ class Pan115Provider implements CloudDriveProvider {
   // 已改绑 qandroid（一期），配套成立。web 路要 web 绑会话、我们没有，
   // 不做。取地址与播放必须用同一个 UA（Mozilla/5.0）。
   static const _videoPlayUrl = 'https://proapi.115.com/android/2.0/video/play';
-  static const _pageSize = 40;
+  // 分页大小（2026-11-27 问题 6）：40 条/页时大文件夹要拉很多
+  // 页才出齐，改 200 条/页（网页口实测可承受的量级，开源实现
+  // 常用 200-1000）；hasMore/offset 都按本常量推导，自动跟随。
+  static const _pageSize = 200;
 
   /// 登录过期三码：凭证无效 / 已退出 / 会话已退出。命中才算凭证失效；
   /// HTTP 405 是限频信号，不当凭证失效。
