@@ -223,6 +223,9 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
         });
         unawaited(_enrich(cached.items, generation));
         unawaited(_enrichCovers(cached.items, generation));
+        // 命中先出画之外再静默刷新一遍（2026-11-27 问题 6）：
+        // 此前命中就直接返回、数据永远停在第一次拉到的样子。
+        unawaited(_refreshInBackground(key, query, generation));
         return;
       }
     }
@@ -250,6 +253,46 @@ class _MultimediaScreenState extends State<MultimediaScreen> {
         _error = error.toString();
       });
     }
+  }
+
+  /// 缓存命中后的静默刷新：现拉一页与缓存比对，有变化才换上
+  /// 并回写缓存；没变化/失败都不动界面（问题 6）。
+  Future<void> _refreshInBackground(
+    String key,
+    String query,
+    int generation,
+  ) async {
+    try {
+      final page = await _fetchPage(query);
+      if (!mounted || generation != _generation) return;
+      final cached = _pageCache[key];
+      if (cached == null || _samePage(cached, page)) return;
+      _cachePage(key, page);
+      setState(() {
+        _items = page.items;
+        _warning = page.warning;
+      });
+      unawaited(_enrich(page.items, generation));
+      unawaited(_enrichCovers(page.items, generation));
+    } catch (_) {
+      // 静默刷新失败：继续显示缓存页。
+    }
+  }
+
+  bool _samePage(CatalogPage a, CatalogPage b) {
+    if (a.items.length != b.items.length) return false;
+    for (var i = 0; i < a.items.length; i++) {
+      final x = a.items[i];
+      final y = b.items[i];
+      if (x.id != y.id ||
+          x.title != y.title ||
+          x.cover != y.cover ||
+          x.kind != y.kind ||
+          x.folderId != y.folderId) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// 取一页：下钻中只取所在夹；否则按选中网盘取，或聚合全部网盘。

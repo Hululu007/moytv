@@ -1298,7 +1298,14 @@ class Drama {
           fresh.releaseStatus.isEmpty || fresh.releaseStatus == 'unknown'
           ? releaseStatus
           : fresh.releaseStatus,
-      kind: fresh.kind,
+      // 文件夹性粘住（2026-11-27 问题 6）：kind 只许往“是文件
+      // 夹”并，不许被不懂类型的合并方（详情/封面更新重建出的
+      // kind='' 条目）冲掉——folderId 本来就是空才回退，kind
+      // 此前无条件取新值，文件夹卡被合并一次就变回普通条目、
+      // 点按改走详情，观感就是“文件夹点了没反应”。
+      kind: isFolder || fresh.isFolder
+          ? 'folder'
+          : (fresh.kind.isEmpty ? kind : fresh.kind),
       folderId: fresh.folderId.isEmpty ? folderId : fresh.folderId,
       peers: fresh.peers.isEmpty ? peers : fresh.peers,
     );

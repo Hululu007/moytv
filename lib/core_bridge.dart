@@ -1532,6 +1532,11 @@ class NativeRepository extends AppRepository {
       credentialStore: CloudCredentialStore(preferences),
       httpClient: http.Client(),
       showSuspectedAds: () => access?.showSuspectedAdVideos ?? false,
+      // 目录页落盘缓存目录（问题 6 秒开）：重启后先出画再刷新。
+      catalogCacheDir: () async {
+        final support = await getApplicationSupportDirectory();
+        return Directory(path.join(support.path, 'cloud_catalog_cache'));
+      },
     );
   }
 

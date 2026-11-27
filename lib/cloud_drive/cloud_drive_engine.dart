@@ -21,7 +21,9 @@
 /// 绝不删文件。
 library;
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -51,6 +53,13 @@ class _AggregateCaps {
 
 /// “全部”聚合视图的虚拟分类 id（文件夹卡的 folderId）。
 const cloudDriveAllCategory = '__all__';
+
+/// 目录页内存缓存条目：一个文件夹一页的原始文件列表。
+class _FolderPageEntry {
+  const _FolderPageEntry(this.files, this.hasMore);
+  final List<CloudDriveFile> files;
+  final bool hasMore;
+}
 
 /// 目录里一条卡片的缓存条目（详情/播放时取回文件信息与封面来源）。
 class _CachedEntry {
@@ -120,14 +129,17 @@ class CloudDriveEngine {
     required http.Client httpClient,
     required bool Function() showSuspectedAds,
     Map<String, CloudDriveProvider>? providers,
+    Future<Directory> Function()? catalogCacheDir,
   }) : _credentialStore = credentialStore,
        _httpClient = httpClient,
        _showSuspectedAds = showSuspectedAds,
+       _catalogCacheDir = catalogCacheDir,
        _providers = providers ??
            {for (final p in createCloudDriveProviders()) p.id: p} {
     for (final provider in _providers.values) {
       provider.onCredentialsRefreshed = (providerId, credentials) {
         _credentialStore.save(providerId, credentials);
+        _clearCatalogCaches();
       };
       provider.onSessionExpired = (providerId, expiredCookie) {
         // 只清「存着的正是那份过期凭证」的情况：在途旧请求的过期
@@ -136,6 +148,7 @@ class CloudDriveEngine {
         if (stored != null &&
             (stored.fields['cookie'] ?? '') == expiredCookie) {
           _credentialStore.clear(providerId);
+          _clearCatalogCaches();
         }
       };
     }
@@ -155,6 +168,26 @@ class CloudDriveEngine {
 
   /// 光盘条目缓存（卡片 id → 光盘文件夹信息），与 [_cache] 同口径 FIFO。
   final Map<String, _DiscEntry> _discs = {};
+
+  /// 目录页缓存（2026-11-27 问题 6「文件夹秒开」）：片库站入口
+  /// 与网盘页都经本引擎取目录，此前零缓存、每次点文件夹都现拉
+  /// 网络，弱网下点完长时间没动静。两级缓存：
+  /// - 内存层存原始文件页（键 '<盘>|<文件夹>|<页>'），命中后
+  ///   照常走 _toCatalogPage 转换（文件条目/分组/光盘缓存一并
+  ///   重建），同时后台静默刷新，数据变了下一开就是新的；
+  /// - 落盘层存转换后的条目页精简字段（Drama 的 JSON：标题/
+  ///   封面/类型/文件夹 id 等展示字段，不含凭证与取链私有字
+  ///   段），重启软件后第一开也能先出画、再后台刷新回填。
+  /// 凭证刷新/会话过期即整表清掉，不给换账号后看旧账号目录
+  /// 的机会。落盘目录由构造方注入（测试不注入即禁用落盘）。
+  final Map<String, _FolderPageEntry> _folderPages = {};
+  static const _folderPageCap = 96;
+  final Set<String> _refreshingPages = {};
+  final Map<String, CatalogPage> _diskPages = {};
+  static const _diskPageCap = 128;
+  Future<void>? _diskLoadFuture;
+  Timer? _diskWriteTimer;
+  final Future<Directory> Function()? _catalogCacheDir;
 
   /// STRM 内容读取上限（指针文件只有几行，8KB 足够；超了也只取前 8KB）。
   static const _strmMaxBytes = 8192;
@@ -253,6 +286,187 @@ class CloudDriveEngine {
   }
 
   // -------------------------------------------------------------------------
+  // 目录页缓存（问题 6）
+  // -------------------------------------------------------------------------
+
+  String _pageKey(String providerId, String folderId, int page) =>
+      '$providerId|$folderId|$page';
+
+  void _rememberFolderPage(String key, _FolderPageEntry entry) {
+    _folderPages.remove(key);
+    _folderPages[key] = entry;
+    while (_folderPages.length > _folderPageCap) {
+      _folderPages.remove(_folderPages.keys.first);
+    }
+  }
+
+  void _clearCatalogCaches() {
+    _folderPages.clear();
+    _diskPages.clear();
+    _scheduleDiskWrite();
+  }
+
+  Future<File?> _diskCacheFile() async {
+    final dirFn = _catalogCacheDir;
+    if (dirFn == null) return null;
+    try {
+      final dir = await dirFn();
+      return File('${dir.path}/cloud_catalog_pages.json');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _ensureDiskLoaded() {
+    return _diskLoadFuture ??= () async {
+      final file = await _diskCacheFile();
+      if (file == null) return;
+      try {
+        if (!await file.exists()) return;
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is! Map) return;
+        for (final entry in decoded.entries) {
+          final value = entry.value;
+          if (value is! Map) continue;
+          _diskPages[entry.key as String] = CatalogPage(
+            [
+              for (final row in value['items'] as List? ?? const [])
+                Drama.fromJson(Map<String, dynamic>.from(row as Map)),
+            ],
+            hasMore: value['hasMore'] == true,
+            warning: value['warning'] as String? ?? '',
+            page: (value['page'] as num?)?.toInt() ?? 1,
+          );
+        }
+      } catch (_) {
+        // 缓存文件损坏就当没有，网络现拉为准。
+      }
+    }();
+  }
+
+  void _rememberDiskPage(String key, CatalogPage page) {
+    if (_catalogCacheDir == null) return;
+    _diskPages.remove(key);
+    _diskPages[key] = page;
+    while (_diskPages.length > _diskPageCap) {
+      _diskPages.remove(_diskPages.keys.first);
+    }
+    _scheduleDiskWrite();
+  }
+
+  void _scheduleDiskWrite() {
+    if (_catalogCacheDir == null) return;
+    _diskWriteTimer?.cancel();
+    _diskWriteTimer = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_writeDiskPages());
+    });
+  }
+
+  Future<void> _writeDiskPages() async {
+    final file = await _diskCacheFile();
+    if (file == null) return;
+    try {
+      await file.parent.create(recursive: true);
+      final data = <String, dynamic>{
+        for (final entry in _diskPages.entries)
+          entry.key: {
+            'items': [for (final drama in entry.value.items) drama.toJson()],
+            'hasMore': entry.value.hasMore,
+            'warning': entry.value.warning,
+            'page': entry.value.page,
+          },
+      };
+      await file.writeAsString(jsonEncode(data), flush: true);
+    } catch (_) {
+      // 落盘失败不影响内存缓存继续顶。
+    }
+  }
+
+  /// 后台静默刷新一页目录：成功就换掉内存/落盘两级缓存，
+  /// 失败静默（旧缓存继续顶着，下次打开再试）。
+  void _refreshFolderPage(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+    String folderId,
+    int page,
+    String key,
+    bool isRoot,
+  ) {
+    if (!_refreshingPages.add(key)) return;
+    unawaited(() async {
+      try {
+        final result = await provider.listFolder(
+          _httpClient,
+          credentials,
+          folderId,
+          page,
+        );
+        _rememberFolderPage(
+          key,
+          _FolderPageEntry(result.files, result.hasMore),
+        );
+        _rememberDiskPage(
+          key,
+          _toCatalogPage(
+            providerId: provider.id,
+            files: result.files,
+            hasMore: result.hasMore,
+            page: page,
+            isRoot: isRoot,
+          ),
+        );
+      } catch (_) {
+        // 静默：刷新失败不打扰正在看的旧页。
+      } finally {
+        _refreshingPages.remove(key);
+      }
+    }());
+  }
+
+  /// 子文件夹预取：当前页出来后，把每个子文件夹的第一页悄悄
+  /// 拉进内存缓存（并发 2、最多 6 个、失败静默、不级联），
+  /// 用户点哪个子夹都是热开。
+  void _prefetchChildren(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+    List<CloudDriveFile> files,
+  ) {
+    final targets = <String>[
+      for (final file in files)
+        if (file.isFolder) file.id,
+    ];
+    if (targets.isEmpty) return;
+    final limited = targets.length > 6 ? targets.sublist(0, 6) : targets;
+    var index = 0;
+    Future<void> worker() async {
+      while (index < limited.length) {
+        final folderId = limited[index++];
+        final key = _pageKey(provider.id, folderId, 1);
+        if (_folderPages.containsKey(key)) continue;
+        if (!_refreshingPages.add(key)) continue;
+        try {
+          final result = await provider.listFolder(
+            _httpClient,
+            credentials,
+            folderId,
+            1,
+          );
+          _rememberFolderPage(
+            key,
+            _FolderPageEntry(result.files, result.hasMore),
+          );
+        } catch (_) {
+          // 预取失败静默，用户点进去时照常现拉。
+        } finally {
+          _refreshingPages.remove(key);
+        }
+      }
+    }
+
+    unawaited(Future.wait([worker(), worker()]));
+  }
+
+  // -------------------------------------------------------------------------
   // 目录
   // -------------------------------------------------------------------------
 
@@ -270,23 +484,49 @@ class CloudDriveEngine {
       if (query.trim().isNotEmpty) {
         return await _search(provider, credentials, query.trim(), category, page);
       }
+      await _ensureDiskLoaded();
       if (category == cloudDriveAllCategory) {
-        return await _aggregate(provider, credentials);
+        return await _aggregateCatalog(provider, credentials);
       }
       final folderId = category.isEmpty ? provider.rootFolderId : category;
+      final key = _pageKey(providerId, folderId, page);
+      final isRoot = folderId == provider.rootFolderId && page == 1;
+      final memory = _folderPages[key];
+      if (memory != null) {
+        // 热开：内存有这一页，先出画，后台静默刷新换新数据。
+        _refreshFolderPage(provider, credentials, folderId, page, key, isRoot);
+        _prefetchChildren(provider, credentials, memory.files);
+        return _toCatalogPage(
+          providerId: providerId,
+          files: memory.files,
+          hasMore: memory.hasMore,
+          page: page,
+          isRoot: isRoot,
+        );
+      }
+      final disk = _diskPages[key];
+      if (disk != null) {
+        // 重启后第一开：落盘页先出画，后台刷新回填内存层。
+        _refreshFolderPage(provider, credentials, folderId, page, key, isRoot);
+        return disk;
+      }
       final result = await provider.listFolder(
         _httpClient,
         credentials,
         folderId,
         page,
       );
-      return _toCatalogPage(
+      _rememberFolderPage(key, _FolderPageEntry(result.files, result.hasMore));
+      final catalogPage = _toCatalogPage(
         providerId: providerId,
         files: result.files,
         hasMore: result.hasMore,
         page: page,
-        isRoot: folderId == provider.rootFolderId && page == 1,
+        isRoot: isRoot,
       );
+      _rememberDiskPage(key, catalogPage);
+      _prefetchChildren(provider, credentials, result.files);
+      return catalogPage;
     } on CloudDriveException catch (e) {
       throw AppFailure(e.message);
     }
@@ -338,46 +578,58 @@ class CloudDriveEngine {
     return catalogPage;
   }
 
-  /// “全部”聚合：广度优先遍历文件夹，汇总视频（上限见 [_AggregateCaps]）。
-  Future<CatalogPage> _aggregate(
+  /// “全部”聚合目录：与其他目录页同一套两级缓存（问题 6）——
+  /// 命中先出画、后台静默刷新；未命中才真遍历。
+  Future<CatalogPage> _aggregateCatalog(
     CloudDriveProvider provider,
     CloudCredentials credentials,
   ) async {
-    final videos = <CloudDriveFile>[];
-    final queue = <({String folderId, int depth})>[
-      (folderId: provider.rootFolderId, depth: 1),
-    ];
-    var visitedFolders = 0;
-    var hitCap = false;
-    while (queue.isNotEmpty && videos.length < _AggregateCaps.maxVideos) {
-      final current = queue.removeAt(0);
-      if (visitedFolders >= _AggregateCaps.maxFolders) {
-        hitCap = true;
-        break;
-      }
-      visitedFolders++;
-      for (var page = 1; page <= _AggregateCaps.maxPagesPerFolder; page++) {
-        final result = await provider.listFolder(
-          _httpClient,
-          credentials,
-          current.folderId,
-          page,
-        );
-        for (final file in result.files) {
-          if (file.isFolder) {
-            if (current.depth < _AggregateCaps.maxDepth) {
-              queue.add((folderId: file.id, depth: current.depth + 1));
-            }
-          } else if (file.kind == CloudFileKind.video) {
-            if (videos.length < _AggregateCaps.maxVideos) videos.add(file);
-          }
-        }
-        if (!result.hasMore) break;
-      }
+    final key = _pageKey(provider.id, cloudDriveAllCategory, 1);
+    final memory = _folderPages[key];
+    if (memory != null) {
+      _refreshAggregate(provider, credentials, key);
+      // 聚合键的条目里 hasMore 槽存的是“是否触顶”（见
+      // _fetchAggregate 返回值），不是分页语义。
+      return _aggregatePage(provider.id, memory.files, memory.hasMore);
     }
-    if (queue.isNotEmpty) hitCap = true;
+    final disk = _diskPages[key];
+    if (disk != null) {
+      _refreshAggregate(provider, credentials, key);
+      return disk;
+    }
+    final (videos, hitCap) = await _fetchAggregate(provider, credentials);
+    _rememberFolderPage(key, _FolderPageEntry(videos, hitCap));
+    final page = _aggregatePage(provider.id, videos, hitCap);
+    _rememberDiskPage(key, page);
+    return page;
+  }
+
+  void _refreshAggregate(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+    String key,
+  ) {
+    if (!_refreshingPages.add(key)) return;
+    unawaited(() async {
+      try {
+        final (videos, hitCap) = await _fetchAggregate(provider, credentials);
+        _rememberFolderPage(key, _FolderPageEntry(videos, hitCap));
+        _rememberDiskPage(key, _aggregatePage(provider.id, videos, hitCap));
+      } catch (_) {
+        // 静默：刷新失败不打扰正在看的旧页。
+      } finally {
+        _refreshingPages.remove(key);
+      }
+    }());
+  }
+
+  CatalogPage _aggregatePage(
+    String providerId,
+    List<CloudDriveFile> videos,
+    bool hitCap,
+  ) {
     final catalogPage = _toCatalogPage(
-      providerId: provider.id,
+      providerId: providerId,
       files: videos,
       hasMore: false,
       page: 1,
@@ -390,11 +642,74 @@ class CloudDriveEngine {
             '${_AggregateCaps.maxVideos} 条视频、${_AggregateCaps.maxDepth} 层），'
             '超出部分请进文件夹逐个查看',
     ];
-    return CatalogPage(
-      catalogPage.items,
-      warning: notes.join(' '),
-      page: 1,
-    );
+    return CatalogPage(catalogPage.items, warning: notes.join(' '), page: 1);
+  }
+
+  /// “全部”聚合的真遍历：广度优先汇总视频（上限见
+  /// [_AggregateCaps]）。原来逐个文件夹串行拉满才出画，弱网下
+  /// 长时间没动静；改成一波 3 个文件夹并行（同一文件夹的分页
+  /// 仍按页串行），返回值第二项是“是否触顶”。
+  Future<(List<CloudDriveFile>, bool)> _fetchAggregate(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+  ) async {
+    final videos = <CloudDriveFile>[];
+    final queue = <({String folderId, int depth})>[
+      (folderId: provider.rootFolderId, depth: 1),
+    ];
+    var visitedFolders = 0;
+    var hitCap = false;
+    while (queue.isNotEmpty && videos.length < _AggregateCaps.maxVideos) {
+      final wave = <({String folderId, int depth})>[];
+      while (queue.isNotEmpty && wave.length < 3) {
+        if (visitedFolders + wave.length >= _AggregateCaps.maxFolders) {
+          hitCap = true;
+          break;
+        }
+        wave.add(queue.removeAt(0));
+      }
+      if (wave.isEmpty) break;
+      visitedFolders += wave.length;
+      final results = await Future.wait([
+        for (final current in wave)
+          _listFolderAllPages(provider, credentials, current.folderId),
+      ]);
+      for (var i = 0; i < wave.length; i++) {
+        final current = wave[i];
+        for (final file in results[i]) {
+          if (file.isFolder) {
+            if (current.depth < _AggregateCaps.maxDepth) {
+              queue.add((folderId: file.id, depth: current.depth + 1));
+            }
+          } else if (file.kind == CloudFileKind.video) {
+            if (videos.length < _AggregateCaps.maxVideos) videos.add(file);
+          }
+        }
+      }
+    }
+    if (queue.isNotEmpty) hitCap = true;
+    return (videos, hitCap);
+  }
+
+  /// 聚合遍历里单个文件夹的全部页（按页串行，页数上限见
+  /// [_AggregateCaps.maxPagesPerFolder]）。
+  Future<List<CloudDriveFile>> _listFolderAllPages(
+    CloudDriveProvider provider,
+    CloudCredentials credentials,
+    String folderId,
+  ) async {
+    final files = <CloudDriveFile>[];
+    for (var page = 1; page <= _AggregateCaps.maxPagesPerFolder; page++) {
+      final result = await provider.listFolder(
+        _httpClient,
+        credentials,
+        folderId,
+        page,
+      );
+      files.addAll(result.files);
+      if (!result.hasMore) break;
+    }
+    return files;
   }
 
   /// 文件列表 → 目录页：文件夹卡在前、视频卡在后；封面三级兜底；

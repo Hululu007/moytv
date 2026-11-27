@@ -117,7 +117,7 @@ void main() {
     expect(find.text('夹内视频.mkv'), findsOneWidget);
   });
 
-  testWidgets('返回再进同一文件夹走缓存，不重拉', (tester) async {
+  testWidgets('返回再进同一文件夹走缓存秒出，静默刷新不挡界面', (tester) async {
     final repository = await pumpScreen(tester);
 
     await tester.tap(find.text('目标文件夹'));
@@ -133,10 +133,12 @@ void main() {
 
     await tester.tap(find.text('目标文件夹'));
     await tester.pump();
-    // 命中缓存：内容直接在，没有加载圈，也没有第二次请求。
+    // 命中缓存：内容直接在、没有加载圈（秒开的用户可见保证）。
+    // 2026-11-27 问题 6 定版改口径：命中后允许后台静默刷新一
+    // 遍（数据变了才换），不再断言“绝不发第二次请求”——旧断言
+    // 与“命中后不刷新、数据永远停在第一次”同源，已被定版取代。
     expect(find.text('夹内视频.mkv'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(repository.calls['fd1'], 1);
   });
 
   testWidgets('手动刷新绕过缓存现拉', (tester) async {
