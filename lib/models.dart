@@ -812,6 +812,17 @@ class SourceSite {
       '演员库 115 已存 / 离线线路',
       section: sectionVideo,
     ),
+    // 本地女优库里 vod_play_from='lsp' 的那批作品（定版库
+    // 107,844 部、占 24%）：toDramaDetail 对它不做映射、原样
+    // 当 Drama.source，此前全仓零登记，点开必落「当前用户
+    // 无权访问」面板（2026-11-27 用户实报）。它只是库内数据
+    // 来源标记、不是片库可切换站点，故只进这张专用登记表。
+    'lsp': SourceSite(
+      'lsp',
+      '本地库',
+      '演员库本地库数据来源',
+      section: sectionVideo,
+    ),
   };
 
   /// py 导入站的蜘蛛文件名（应用文档目录 imported_spiders/ 下），key 为站点 id。
